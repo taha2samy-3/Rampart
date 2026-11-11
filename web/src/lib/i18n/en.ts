@@ -63,7 +63,7 @@ export const en = {
       },
       next: {
         '401': 'Check them and try again.',
-        '429': 'Wait a few minutes, or reset the password with `rampart admin set-password`.',
+        '429': 'Wait a few minutes, or reset the password with: rampart admin set-password',
         '403': 'Ask an administrator to enable the local administrator.',
         default: 'Try again in a moment.',
       },
