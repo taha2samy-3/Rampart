@@ -54,7 +54,9 @@ else
   admin_hash=$(bcrypt "$DEMO_ADMIN_PASSWORD")
   viewer_hash=$(bcrypt "$DEMO_VIEWER_PASSWORD")
   sed -e "s|@DEMO_ADMIN_HASH@|$admin_hash|" -e "s|@DEMO_VIEWER_HASH@|$viewer_hash|" dex/config.yaml.tpl > dex/config.yaml
-  chmod 600 dex/config.yaml
+  # Dex runs as another user inside its container, so the file must be readable. It holds bcrypt hashes
+  # of random demo passwords, not secrets, and the stack is bound to 127.0.0.1 only.
+  chmod 644 dex/config.yaml
   echo "Wrote dex/config.yaml"
 fi
 
