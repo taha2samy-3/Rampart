@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,9 +60,9 @@ func TestSessionCookieCannotBeForgedOrMovedAcrossTenants(t *testing.T) {
 	st := ingest.NewMemoryStore()
 	sm, _ := auth.NewSessionManager(st, auth.SessionConfig{Key: []byte(strings.Repeat("k", 32))})
 	a, b := domain.NewID(), domain.NewID()
-	uid, _ := st.UpsertUser(nil, auth.User{Issuer: "i", Subject: "s", Email: "e@x"})
-	_ = st.UpsertMember(nil, a, uid, auth.RoleViewer)
-	value, _, err := sm.Create(nil, a, uid)
+	uid, _ := st.UpsertUser(context.Background(), auth.User{Issuer: "i", Subject: "s", Email: "e@x"})
+	_ = st.UpsertMember(context.Background(), a, uid, auth.RoleViewer)
+	value, _, err := sm.Create(context.Background(), a, uid)
 	if err != nil {
 		t.Fatal(err)
 	}

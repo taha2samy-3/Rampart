@@ -34,10 +34,12 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64.8
-          args: --timeout=5m ./...
+      # Built with this job's Go instead of downloading a release binary: a linter built with an older
+      # Go refuses to load a module that targets a newer one (this is what broke the first CI run).
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          golangci-lint run ./...
 
   # The Go suites run as separate jobs, in parallel, each with only the services it needs. Split by
   # dependency, not by size: a failure says at once whether code, the database or Kubernetes broke.
@@ -52,8 +54,8 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
       - name: Race detector, shuffled order
         run: |
-          pkgs=$(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
-          go test -race -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic $pkgs
+          mapfile -t pkgs < <(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
+          go test -race -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic "${pkgs[@]}"
       - uses: actions/upload-artifact@v4
         with: {name: coverage-unit, path: coverage-unit.out}
 
@@ -160,8 +162,8 @@ jobs:
           test "$size" -le 250000
       - name: index.html has no inline script or inline style (CSP)
         run: |
-          ! grep -Eq '<script(\s[^>]*)?>[^<]' dist/index.html
-          ! grep -Eq ' style="| on[a-z]+="' dist/index.html
+          if grep -Eq '<script(\s[^>]*)?>[^<]' dist/index.html; then echo "index.html has an inline script"; exit 1; fi
+          if grep -Eq ' style="| on[a-z]+="' dist/index.html; then echo "index.html has an inline style or event handler"; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist

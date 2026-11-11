@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -80,7 +81,7 @@ func newEnv(t *testing.T, policy auth.RolePolicy) *env {
 	idp := newFakeIdP(t)
 	st := ingest.NewMemoryStore()
 	tenant := domain.NewID()
-	_ = st.CreateTenant(nil, &domain.Tenant{ID: tenant, Slug: "default", DisplayName: "Default"})
+	_ = st.CreateTenant(context.Background(), &domain.Tenant{ID: tenant, Slug: "default", DisplayName: "Default"})
 	sm, err := auth.NewSessionManager(st, auth.SessionConfig{Key: []byte(strings.Repeat("k", 32))})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +282,7 @@ func TestSessionTimeoutsAndTenantSwitch(t *testing.T) {
 	e3 := newEnv(t, auth.RolePolicy{DefaultRole: auth.RoleViewer})
 	_, s3 := e3.signIn(t, "/")
 	other := domain.NewID()
-	_ = e3.store.CreateTenant(nil, &domain.Tenant{ID: other, Slug: "other", DisplayName: "Other"})
+	_ = e3.store.CreateTenant(context.Background(), &domain.Tenant{ID: other, Slug: "other", DisplayName: "Other"})
 	csrf := func(c *http.Cookie) string {
 		var b struct {
 			CSRFToken string `json:"csrfToken"`
@@ -301,13 +302,11 @@ func TestSessionTimeoutsAndTenantSwitch(t *testing.T) {
 		t.Fatalf("switching into a tenant without membership must be 403, got %d", rec.Code)
 	}
 	userID := func() uuid.UUID {
-		l, _ := e3.store.ListUserTenants(nil, uuid.Nil)
-		_ = l
 		var b struct{ User struct{ ID string } }
 		_ = json.Unmarshal(e3.do("GET", "/auth/session", []*http.Cookie{s3}, nil).Body.Bytes(), &b)
 		return uuid.MustParse(b.User.ID)
 	}()
-	_ = e3.store.UpsertMember(nil, other, userID, auth.RoleAdmin)
+	_ = e3.store.UpsertMember(context.Background(), other, userID, auth.RoleAdmin)
 	rec := post(s3, "other")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("switch: %d %s", rec.Code, rec.Body.String())
@@ -321,7 +320,7 @@ func TestSessionTimeoutsAndTenantSwitch(t *testing.T) {
 			fresh = c
 		}
 	}
-	if fresh == nil || !strings.Contains(string(e3.do("GET", "/auth/session", []*http.Cookie{fresh}, nil).Body.Bytes()), `"slug":"other"`) {
+	if fresh == nil || !strings.Contains(e3.do("GET", "/auth/session", []*http.Cookie{fresh}, nil).Body.String(), `"slug":"other"`) {
 		t.Fatalf("the new session must be in the other tenant")
 	}
 }

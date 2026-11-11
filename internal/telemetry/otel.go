@@ -114,9 +114,6 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 	return otelhttp.NewHandler(next, "http.server",
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return r.Method + " " + routeOf(r) }),
 		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != "/healthz" && r.URL.Path != "/readyz" }),
-		otelhttp.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
-			return []attribute.KeyValue{attribute.String("http.route", routeOf(r))}
-		}),
 	)
 }
 

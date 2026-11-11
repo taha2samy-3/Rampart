@@ -1,0 +1,6 @@
+# golangci-lint v2. CI builds the linter with the job's own Go toolchain (see ci.yml), because a
+# linter built with an older Go refuses to load a module that targets a newer one.
+version: "2"
+
+run:
+  timeout: 5m
