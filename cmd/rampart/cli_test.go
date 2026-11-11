@@ -136,3 +136,22 @@ func TestCLIMigrateValidation(t *testing.T) {
 		t.Errorf("expected timeout error on unreachable wait, got %v", err)
 	}
 }
+
+// The new password never comes from argv, and weak or missing input is refused before any database
+// connection is attempted.
+func TestAdminSetPasswordValidatesBeforeTouchingTheDatabase(t *testing.T) {
+	t.Setenv("RAMPART_DATABASE_SYSTEM_URL", "postgres://unreachable.invalid/db")
+	if _, err := handleCLI([]string{"admin"}); err == nil {
+		t.Error("admin without a subcommand must be an error")
+	}
+	if err := runAdmin([]string{"set-password"}, strings.NewReader("short\n")); err == nil || !strings.Contains(err.Error(), "at least 12") {
+		t.Errorf("a weak password must be refused: %v", err)
+	}
+	t.Setenv("RAMPART_DATABASE_SYSTEM_URL", "")
+	if err := runAdmin([]string{"set-password"}, strings.NewReader("a-long-enough-secret\n")); err == nil || !strings.Contains(err.Error(), "database URL is required") {
+		t.Errorf("a missing database URL must be explained: %v", err)
+	}
+	if err := runAdmin([]string{"set-password", "--password", "x"}, strings.NewReader("")); err == nil {
+		t.Error("there must be no --password flag: it would show up in process listings")
+	}
+}

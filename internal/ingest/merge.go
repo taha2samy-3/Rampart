@@ -1117,6 +1117,11 @@ func (m *MemoryStore) SetLocalAdminPassword(ctx context.Context, tenantID uuid.U
 		return store.ErrNotFound
 	}
 	a.PasswordHash, a.FailedAttempts, a.LockedUntil = passwordHash, 0, nil
+	for k, sess := range m.sessions { // a password change ends the account's sessions
+		if sess.TenantID == tenantID && sess.UserID == a.UserID {
+			delete(m.sessions, k)
+		}
+	}
 	return nil
 }
 

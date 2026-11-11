@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -365,5 +366,118 @@ func TestPostgres_IdentityAndSessions(t *testing.T) {
 	}
 	if _, err := sm.Principal(req); err == nil {
 		t.Fatal("a disabled user's session must not authenticate")
+	}
+}
+
+// The break-glass local administrator on PostgreSQL: row-level security, an atomic failure counter,
+// recovery, and the audit log (D3, doc 14).
+func TestPostgres_LocalAdminAndAudit(t *testing.T) {
+	ctx := context.Background()
+	app, sys := setupStores(t, ctx)
+	a, b := newTenant(t, ctx, sys, "la"), newTenant(t, ctx, sys, "lb")
+	uid, _ := app.UpsertUser(ctx, auth.User{Issuer: auth.LocalIssuer, Subject: "admin-" + uuid.NewString()[:6], Name: "Local administrator"})
+	hash, _ := auth.HashPassword("a-long-enough-secret")
+	adm := auth.LocalAdmin{ID: uuid.New(), TenantID: a, UserID: uid, Username: "admin", PasswordHash: hash}
+
+	if created, err := app.CreateLocalAdmin(ctx, adm); err != nil || !created {
+		t.Fatalf("create: %v %v", created, err)
+	}
+	if created, err := app.CreateLocalAdmin(ctx, adm); err != nil || created {
+		t.Fatalf("a second create must be a no-op, got %v %v", created, err)
+	}
+	got, err := app.GetLocalAdmin(ctx, a, "admin")
+	if err != nil || got == nil || got.PasswordHash != hash || got.UserID != uid {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if other, _ := app.GetLocalAdmin(ctx, b, "admin"); other != nil {
+		t.Fatal("tenant B must not see tenant A's local administrator (RLS)")
+	}
+	var n int
+	_ = app.Pool().QueryRow(ctx, `SELECT count(*) FROM local_admin`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("no tenant context must see no accounts, saw %d", n)
+	}
+
+	// 7 simultaneous wrong guesses with a limit of 5: the counter must not lose updates, so the
+	// account locks exactly once and 2 failures are left over.
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	for i := 0; i < 7; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := app.RecordLocalLogin(ctx, a, adm.ID, false, now, 5, 15*time.Minute); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	got, _ = app.GetLocalAdmin(ctx, a, "admin")
+	if got.FailedAttempts != 2 || got.LockedUntil == nil || !got.LockedUntil.After(now) {
+		t.Fatalf("after 7 concurrent failures want 2 left over and a lock, got attempts=%d locked=%v", got.FailedAttempts, got.LockedUntil)
+	}
+	if _, err := app.RecordLocalLogin(ctx, a, adm.ID, true, now, 5, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = app.GetLocalAdmin(ctx, a, "admin")
+	if got.FailedAttempts != 0 || got.LockedUntil != nil {
+		t.Fatalf("a success resets the counter and the lock: %+v", got)
+	}
+
+	// the fifth failure returns the lock time, earlier ones do not
+	var lockedAt *time.Time
+	for i := 1; i <= 5; i++ {
+		lockedAt, _ = app.RecordLocalLogin(ctx, a, adm.ID, false, now, 5, 15*time.Minute)
+		if (i < 5) != (lockedAt == nil) {
+			t.Fatalf("failure %d: lock=%v", i, lockedAt)
+		}
+	}
+
+	// recovery with the CLI path clears the lock, swaps the hash, and ends the account's sessions
+	sm, _ := auth.NewSessionManager(app, auth.SessionConfig{Key: []byte(strings.Repeat("k", 32))})
+	_ = app.UpsertMember(ctx, a, uid, auth.RoleAdmin)
+	cookie, _, err := sm.Create(ctx, a, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sreq := httptest.NewRequest("GET", "/", nil)
+	sreq.AddCookie(&http.Cookie{Name: sm.CookieName(), Value: cookie})
+	if _, err := sm.Principal(sreq); err != nil {
+		t.Fatalf("the session works before the change: %v", err)
+	}
+	newHash, _ := auth.HashPassword("another-long-secret")
+	if err := app.SetLocalAdminPassword(ctx, a, "admin", newHash); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = app.GetLocalAdmin(ctx, a, "admin")
+	if got.PasswordHash != newHash || got.LockedUntil != nil || got.FailedAttempts != 0 {
+		t.Fatalf("recovery: %+v", got)
+	}
+	if _, err := sm.Principal(sreq); err == nil {
+		t.Fatal("a password change must end the account's existing sessions")
+	}
+	if err := app.SetLocalAdminPassword(ctx, a, "nobody", newHash); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an unknown account: %v", err)
+	}
+
+	// audit log: partitioned table, INET address, tenant isolation
+	if err := app.RecordAudit(ctx, auth.AuditEvent{TenantID: a, Actor: "local:admin", Action: "local_login_failed", ResourceType: "session",
+		ResourceID: "local", Detail: map[string]any{"reason": "wrong_password"}, IP: "203.0.113.7", UserAgent: "test", RequestID: "req-1"}); err != nil {
+		t.Fatal(err)
+	}
+	var action, ip string
+	if err := sys.Pool().QueryRow(ctx, `SELECT action, host(ip) FROM audit_event WHERE tenant_id = $1 AND request_id = 'req-1'`, a).Scan(&action, &ip); err != nil {
+		t.Fatal(err)
+	}
+	if action != "local_login_failed" || ip != "203.0.113.7" {
+		t.Fatalf("audit row: %s %s", action, ip)
+	}
+	_ = app.Pool().QueryRow(ctx, `SELECT count(*) FROM audit_event`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("audit_event under no tenant context must be empty, saw %d", n)
+	}
+	// an unparseable address is stored as NULL rather than failing the audit write
+	if err := app.RecordAudit(ctx, auth.AuditEvent{TenantID: a, Actor: "anonymous", Action: "x", ResourceType: "session", ResourceID: "local", IP: "not-an-ip"}); err != nil {
+		t.Fatalf("a bad address must not break auditing: %v", err)
 	}
 }

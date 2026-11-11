@@ -71,14 +71,22 @@ func (s *PostgresStore) RecordLocalLogin(ctx context.Context, tenantID, id uuid.
 	return locked, err
 }
 
-// SetLocalAdminPassword replaces the hash and clears the lock (CLI recovery).
+// SetLocalAdminPassword replaces the hash, clears the lock, and ends every session of the account in
+// the same transaction: after a password change nobody keeps a session opened with the old one.
 func (s *PostgresStore) SetLocalAdminPassword(ctx context.Context, tenantID uuid.UUID, username, passwordHash string) error {
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `
+		var userID *uuid.UUID
+		err := tx.QueryRow(ctx, `
 			UPDATE local_admin SET password_hash = $3, failed_attempts = 0, locked_until = NULL, password_changed_at = now()
-			WHERE tenant_id = $1 AND username = $2`, tenantID, username, passwordHash)
-		if err == nil && tag.RowsAffected() == 0 {
+			WHERE tenant_id = $1 AND username = $2 RETURNING user_id`, tenantID, username, passwordHash).Scan(&userID)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if userID != nil {
+			_, err = tx.Exec(ctx, `DELETE FROM session WHERE tenant_id = $1 AND user_id = $2`, tenantID, *userID)
 		}
 		return err
 	})

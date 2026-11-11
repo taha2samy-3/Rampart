@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"rampart/internal/auth"
 	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 	"rampart/internal/graph"
@@ -66,6 +68,9 @@ func handleCLI(args []string) (bool, error) {
 
 	case "migrate":
 		return true, runMigrate(args[1:])
+
+	case "admin":
+		return true, runAdmin(args[1:], os.Stdin)
 
 	default:
 		return false, fmt.Errorf("unknown command %q", cmd)
@@ -650,4 +655,68 @@ func resolveToken(explicit string) string {
 		}
 	}
 	return ""
+}
+
+// runAdmin implements `rampart admin set-password`: recovery for the break-glass local administrator
+// (D3). It talks to the database directly as rampart_system, so it works when nobody can sign in. The
+// new password is read from a file or from standard input, never from the command line (argv shows up
+// in process listings and shell history).
+func runAdmin(args []string, stdin io.Reader) error {
+	if len(args) == 0 || args[0] != "set-password" {
+		return fmt.Errorf("admin: subcommand required: 'set-password'")
+	}
+	fs := flag.NewFlagSet("admin set-password", flag.ContinueOnError)
+	tenantSlug := fs.String("tenant", "default", "tenant slug")
+	username := fs.String("username", "admin", "local administrator username")
+	pwFile := fs.String("password-file", "", "file holding the new password (default: read standard input)")
+	dbURL := fs.String("db-system-url", "", "PostgreSQL URL of rampart_system (default: $RAMPART_DATABASE_SYSTEM_URL)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	conn := *dbURL
+	if conn == "" {
+		conn = os.Getenv("RAMPART_DATABASE_SYSTEM_URL")
+	}
+	if conn == "" {
+		return fmt.Errorf("admin set-password: the rampart_system database URL is required (--db-system-url or RAMPART_DATABASE_SYSTEM_URL)")
+	}
+
+	var raw []byte
+	var err error
+	if *pwFile != "" {
+		raw, err = os.ReadFile(*pwFile)
+	} else {
+		raw, err = io.ReadAll(io.LimitReader(stdin, 4096))
+	}
+	if err != nil {
+		return fmt.Errorf("admin set-password: reading the new password: %w", err)
+	}
+	password := strings.TrimRight(string(raw), "\r\n")
+	if len(password) < auth.MinPasswordLength {
+		return auth.ErrWeakPassword
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, err := store.ConnectPostgres(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("admin set-password: %w", err)
+	}
+	defer st.Close()
+	tenant, err := st.GetTenantBySlug(ctx, *tenantSlug)
+	if err != nil || tenant == nil {
+		return fmt.Errorf("admin set-password: tenant %q not found", *tenantSlug)
+	}
+	if err := st.SetLocalAdminPassword(ctx, tenant.ID, *username, hash); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("admin set-password: there is no local administrator %q in tenant %q; start the server with auth.bootstrapAdmin.passwordFile first", *username, *tenantSlug)
+		}
+		return err
+	}
+	fmt.Printf("Password changed for %s in tenant %s. Its sessions were ended and any lock was cleared.\n", *username, *tenantSlug)
+	return nil
 }
