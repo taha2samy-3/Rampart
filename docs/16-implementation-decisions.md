@@ -36,7 +36,7 @@ Consequences:
 - `-target=all` starts the operator only when in-cluster config or `--kubeconfig` is present (`--operator=auto|on|off`).
 - Docker Compose mounts `/etc/rampart/resources/*.yaml`; the `all` target applies them at boot and re-applies on file change. The quick-start ships a default tenant, one `ScanSource` and default policies.
 - Status in file mode is stored in Postgres and shown by `rampart get <kind>`.
-- **Break-glass admin**: on first boot, if `auth.bootstrapAdmin.passwordFile` is set, a `local_admin` row is created (argon2id). Local login is refused once any identity provider is `Ready`, unless `auth.bootstrapAdmin.keepEnabled=true`. Every use is audited.
+- **First administrator and break-glass** (built, see D33 and doc 14 section 11): on first boot, if `auth.bootstrapAdmin.passwordFile` is set, a `local_admin` row is created (argon2id) from that password, or from a generated one written to the file. Local login is refused once an identity provider is configured, unless `auth.bootstrapAdmin.keepEnabled=true`. Every use is audited.
 
 ## D4. Database roles, RLS, migrations (closes B4, M7)
 
@@ -79,7 +79,9 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `ingest.batchRows` | `5000` | |
 | `auth.oidc.issuer`, `.clientId`, `.clientSecretFile`, `.scopes`, `.groupsClaim` | — | static IdP for Phase 1 and for file mode |
 | `auth.session.keyFile` | — | 32-byte key for cookie and envelope encryption (or `kms.keyUri`) |
-| `auth.bootstrapAdmin.passwordFile` | — | break-glass |
+| `auth.bootstrapAdmin.passwordFile` | — | the first administrator's password (generated into it when missing). Setting it enables the account |
+| `auth.bootstrapAdmin.username` / `.tenant` | `admin` / `default` | |
+| `auth.bootstrapAdmin.keepEnabled` | `false` | keep password sign-in on next to single sign-on |
 | `auth.bootstrapAdminTokenFile` | — | Phase 1: file the first admin API token is written to (0600). Never logged (D30) |
 | `feeds.nvd.url`, `feeds.osv.url`, `feeds.epss.url`, `feeds.kev.url`, `feeds.cwe.url`, `feeds.<x>.schedule` | public endpoints | overridden by a `ClusterFeedMirror` when one exists |
 | `feeds.egress` | `allow` | `deny` blocks every non-mirror call |
@@ -513,7 +515,7 @@ These were found by running the code against PostgreSQL and the HTTP API. Each c
 - A person may read their own memberships across tenants through the `member_reads_own` policy on `tenant_member` (SELECT only, keyed on `app.user_id`); writes still need the tenant context. That is how the tenant switcher lists tenants without a bypass role.
 - Failure goes back to the SPA as `/login?error=<code>` with codes `invalid_state`, `idp_error`, `email_unverified`, `tenant_not_found`, `no_access`, `internal`.
 - Endpoints: `GET /api/v1/ui-config` (public), `GET /auth/login`, `GET /auth/oidc/{idp}/callback`, `GET /auth/session`, `POST /auth/logout`, `POST /auth/tenant`, `GET /api/v1/me`, `/me/tenants`, `/me/permissions`. Every problem response carries `request_id`.
-- Local sign-in: only the single break-glass admin of D3 is in scope of these documents (doc 14 section 1). Regular local users with passwords are not supported: password policy and MFA belong to the IdP.
+- Local sign-in: only the single first administrator of D3 (see D33). Regular local users with passwords are not supported: password policy and MFA belong to the IdP.
 
 **Operator (D1, D3, D20, D21).**
 - The reconcilers run on controller-runtime against the real API server (tested with envtest and in CI on kind). A status write happens only when the status changed. A resource waiting for a Tenant or a Secret is retried, and a Tenant appearing or changing its namespaces requeues the resources in them.
@@ -528,3 +530,20 @@ These were found by running the code against PostgreSQL and the HTTP API. Each c
 **Configuration file (D6).** The YAML keys are the documented ones (`server.http.addr`, `database.directUrl`, `auth.oidc.*`); the environment form is `RAMPART_` plus the key path joined with `_`.
 
 **CI.** The Go suites run as separate parallel jobs by dependency (no services, PostgreSQL, a real API server), then Helm, the web build, and a kind job that installs the chart, applies a Tenant, an Application and a ScanSource, checks `Ready=True`, the RBAC limits, encrypted secret material, upgrade and rollback. `hack/e2e/kind.sh` refuses to run on anything but a local kind cluster.
+
+## D33. The first administrator, Dex in the quick start, and the web and CI tooling
+
+**First administrator (D3, doc 14 section 11).** Built as specified there. Decisions worth recording:
+- Schema: migration `00002_local_admin.sql` adds `user_id`, `failed_attempts`, `locked_until`, `last_login` and `password_changed_at` to `local_admin`. The account signs in as an `app_user` row with issuer `rampart:local`, so sessions, membership and audit work exactly as for single sign-on. `CurrentExpectedSchemaVersion` is 2 and the chart's `database.minSchemaVersion` is 2.
+- The failure counter and the lock are one `UPDATE ... RETURNING` (no read-modify-write), tested with simultaneous guesses on PostgreSQL.
+- `audit_event` is now written (it was only a table): `Store.RecordAudit` (partitioned table, `inet` address stored as NULL when unparseable so auditing never fails a request).
+- A password change ends the account's sessions in the same transaction.
+- The route and the form are JSON only. The cookie, CSRF and revocation rules are those of D32.
+- Helm: the Secret `<release>-admin` holds `username` and a generated `password` (kept across upgrades through `lookup`), mounted as a file; `NOTES.txt` prints how to read it. `auth.bootstrapAdmin.enabled` (default true), `.username`, `.keepEnabled`.
+- Compose: `deploy/compose/init.sh` writes `.env` with random values for every secret (mode 0600), and renders `dex/config.yaml` from `dex/config.yaml.tpl` with bcrypt hashes of two random demo passwords. Nothing is a default credential.
+
+**Dex in the quick start.** The `mockCallback` connector (which signs anyone in without credentials) is gone. Dex runs with `enablePasswordDB` and two `staticPasswords` users created by hand: `ada@example.com` (bound to `admin`) and `grace@example.com` (a viewer). Dex's password database returns no groups, so roles are bound by e-mail. Dex storage is `memory` in the quick start and must be `kubernetes` or `postgres` in production. The Rampart container shares Dex's network namespace so that `http://localhost:5556/dex` is the same issuer URL for the browser and for the server, with no `/etc/hosts` entry. Dex's config file is mode 0644 because Dex runs as another user in its container; it holds hashes only.
+
+**Web tooling.** The web UI is built and tested with **Bun** (`bun install --frozen-lockfile`, `bun --bun run build|test|lint|typecheck`; lockfile `web/bun.lock`; version pinned in `packageManager` and in CI). The Dockerfiles build the UI in a Bun stage and copy `web/dist` into the Go build, so every image embeds the UI.
+
+**CI.** Parallel jobs after lint: three Go suites by dependency (no services, PostgreSQL, a real kube-apiserver), Helm, the web build, and the Compose quick start (builds the image, starts Dex, PostgreSQL and the object store, signs in both ways); then the kind end-to-end test; then publish and sign. Lessons fixed on the way, kept here so they are not repeated: the linter is built with the job's Go (`go install golangci-lint/v2`), because a linter built with an older Go refuses a module that targets a newer one; `go mod tidy` must leave no diff (CI checks it); a bare `! grep` in a shell step does not fail the step, so negative checks use `if grep ...; then exit 1; fi`; every workflow is checked with `actionlint` and every script with `shellcheck`.

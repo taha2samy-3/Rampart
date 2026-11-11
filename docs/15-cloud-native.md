@@ -135,7 +135,7 @@ Indicative sizing (starting points, tuned by load tests):
 ## 11. Delivery and GitOps
 
 - Artifacts: image and Helm chart as OCI artifacts, signed with cosign (keyless), SBOM and SLSA provenance attached. A sample Kyverno or Sigstore policy-controller rule verifies them at admission.
-- Install: `helm install rampart oci://…/charts/rampart --set mode=monolithic`. Values schema (`values.schema.json`) validates input.
+- Install: `helm install rampart oci://…/charts/rampart --set mode=monolithic`. Values schema (`values.schema.json`) validates input. The notes printed at the end say where the first administrator's password is (the Secret `<release>-admin`, generated once and kept across upgrades); sign in with it, configure single sign-on (`auth.oidc.*`), and the account switches itself off unless `auth.bootstrapAdmin.keepEnabled` is set (doc 14 section 11). The same install brings its own PostgreSQL (CloudNativePG, role passwords generated into Secrets), SeaweedFS, the CRDs, the operator's RBAC and the migration Job.
 - GitOps: Argo CD or Flux manage the chart and all Rampart CRs (applications, sources, policies, connectors, identity providers). Custom health checks for Argo CD read the `Ready` condition.
 - Upgrades: migration Job first (expand), rolling update of targets, later release contracts the schema. One minor version of skew is supported, so rollback is `helm rollback` without restoring the database.
 - Canary: gateway and query-api can be progressively delivered (Argo Rollouts) because they are stateless and backward compatible within a minor.

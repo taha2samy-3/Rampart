@@ -8,6 +8,21 @@ Rewritten after the design review. Assumes a team of **four to five engineers** 
 | **v1.0** | Phase 4 (week 29) | Every P1 feature. Replaces DefectDojo in production, including Dependency-Track |
 | v1.x | Phase 5 | P2 features |
 
+## Status (2026-11-12)
+
+What is built and tested, against the phases below. Everything marked built has automated tests and runs in CI; the kind end-to-end job is written but has not yet run on GitHub.
+
+| Area | State |
+|---|---|
+| Phase 0: repository, config (D6), logging, OpenTelemetry, ops port | built |
+| Phase 0: schema v1 with four roles, RLS, migrations Job, `migrate wait`, partition maintenance | built |
+| Phase 0: River jobs (own schema), `internal/config/apply`, operator on controller-runtime (envtest), secret sync (encrypted), Helm chart, Docker Compose | built |
+| Phase 0: CI (lint, parallel test suites, envtest, Helm, web, Compose, kind e2e, signing, SBOM, provenance) | built; e2e and publish not yet run on GitHub |
+| Phase 0: web shell, login, empty workbench; OIDC sign-in; first administrator | built and verified in a real browser against Dex and PostgreSQL |
+| Phase 0: operator finalizers (D21), per-tenant `ScanSource` revocation, network policies, `ServiceMonitor` | not built |
+| Phase 1: upload API (direct), SARIF and CycloneDX parsers, normalization, fingerprints, merge and close, tracks, ephemeral runs, query API with the grammar (in memory), roles and API tokens | built; the query API still filters in memory |
+| Phase 1: presigned upload with a parse worker, object storage client, feed sync (OSV, KEV, EPSS), SQL query builder with signed cursors, ingest benchmark | not built |
+
 ## Phase −1 — Decisions and spikes (week 1)
 
 - Confirm the decisions that get baked into code: name, API group, module path, license, minimum Kubernetes and PostgreSQL ([16](16-implementation-decisions.md) D7).

@@ -16,7 +16,7 @@
 | In-cluster callers | Kubernetes ServiceAccount projected tokens, verified against the issuing cluster's OIDC JWKS | P1 | for `ScheduledScan` jobs and sidecars |
 | Automation | API tokens (scoped, expiring, hashed) | P0 | |
 | MCP clients | OAuth 2.1 authorization code with PKCE against the same IdP | P2 | |
-| Break-glass | one local admin, bootstrap secret, disabled by default once an IdP is `Ready` | P0 | audited, alerting on use |
+| First administrator and break-glass | one local admin per tenant, bootstrap secret, switches itself off once an IdP is configured unless `keepEnabled` | P0, built | audited, alerting on use. See section 11 |
 
 Identity providers verified by conformance tests or documented setup guides: Okta, Microsoft Entra ID, Google Workspace, Keycloak, Auth0, Ping Identity, OneLogin, JumpCloud, GitLab, Authentik, Zitadel, Dex. GitHub (OAuth without OIDC ID tokens) and LDAP/Active Directory are supported through Dex or Keycloak as a broker; we do not implement LDAP binds ourselves.
 
@@ -166,6 +166,20 @@ Authentication yields a principal: user, token, CI workload or service account. 
 - `return_to` restricted to same-origin relative paths.
 - Session id rotated at login and at privilege change.
 - Cookies use the `__Host-` prefix; no domain-wide cookies.
-- Login, token, SCIM and callback endpoints rate limited per IP and per account.
+- Login, token, SCIM and callback endpoints rate limited per IP and per account. (Built for local sign-in: 10 attempts per address per minute and a lock after 5 wrong passwords; OIDC callbacks are protected by `state`.)
 - All authentication events in the audit log: login success and failure (with reason), logout, session revocation, token create and revoke, SCIM changes, break-glass use.
 - Clock skew tolerance 60 s; the operator reports skew against the IdP `Date` header.
+
+## 11. The first administrator (break-glass)
+
+Single sign-on needs an identity provider, and a fresh installation has none. Like Argo CD's initial admin, Rampart creates one local administrator at first start so that someone can sign in, configure the provider, and hand out roles. It is not a user directory.
+
+- **Created once.** On first start, if `auth.bootstrapAdmin.passwordFile` is set, the account is created in the tenant `auth.bootstrapAdmin.tenant` (default `default`) with the username `auth.bootstrapAdmin.username` (default `admin`) and the role `admin`. The password is read from that file. If the file does not exist, a random 24-character password is generated into it (mode 0600, created exclusively). Helm and Compose generate it into a Secret or `.env` instead. An existing account is never touched on later starts.
+- **Never logged.** The password appears nowhere in logs, status or events. The hash is argon2id (64 MiB, 3 passes, 2 lanes, random 16-byte salt), stored as a PHC string.
+- **Off when single sign-on is on.** Password sign-in is refused (`403`) once `auth.oidc.issuer` is set, unless `auth.bootstrapAdmin.keepEnabled=true`. `GET /api/v1/ui-config` lists the `password` method only when it is usable, and the UI offers it below the single sign-on button as a secondary action.
+- **One endpoint.** `POST /auth/local/login` takes JSON `{tenant?, username, password}` and answers `204` with the session cookie. It accepts only `application/json` (a cross-site form cannot send it), caps the body at 4 KiB and the password at 1024 characters, and answers `401` with the same body for a wrong password and for an unknown user, doing the same amount of work in both cases.
+- **Guessing is slowed twice.** 10 attempts per client address per minute (`429` with `Retry-After`), and a lock in the database after 5 consecutive wrong passwords for 15 minutes. The counter is updated in one SQL statement, so simultaneous guesses cannot slip past it, and a locked account refuses even the right password. A success resets the counter.
+- **Audited and visible.** Every attempt writes `audit_event` rows (`local_login_success`, `local_login_failed` with the reason, `local_login_locked`) with the address and the request id. A successful sign-in and a lock are also logged at WARN, so the "alerting on use" of section 1 is a log or metric rule (`rampart_auth_logins_total{method="local",result=...}`).
+- **Recovery.** `rampart admin set-password [--tenant] [--username]` reads the new password from standard input or `--password-file` (never from the command line, which would show in process listings), connects as `rampart_system`, replaces the hash, clears any lock, and ends every session of the account. It works when nobody can sign in. Minimum length is 12 characters.
+- **Removing it.** Delete the person's membership in the tenant or disable the person: the session lookup joins both, so the account stops working immediately. Deleting the Secret alone does not remove an account that already exists.
+- **What it is not.** There are no other local users, no self-service password change, no password reset by e-mail and no MFA in Rampart. Those belong to the identity provider (section 1). For a small installation without a corporate provider, run Dex with `staticPasswords` (the Compose quick start does) or Keycloak.

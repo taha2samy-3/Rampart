@@ -90,6 +90,12 @@ services:
     # namespace makes http://localhost:5556/dex reach Dex from inside this container too, so no
     # /etc/hosts entry is needed. (Ports are published on the dex service above.)
     network_mode: "service:dex"
+    healthcheck:
+      # Ready means the database is reachable (the ops port checks it).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
     depends_on:
       dex:
         condition: service_started

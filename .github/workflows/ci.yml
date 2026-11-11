@@ -210,6 +210,57 @@ jobs:
         if: always()
         run: shellcheck -S warning hack/e2e/kind.sh deploy/compose/init.sh
 
+  compose:
+    # The quick start from a clean checkout: init.sh, build the image (UI included), start Dex, PostgreSQL
+    # and the object store, then sign in both ways. This also proves the Dockerfiles build.
+    name: Docker Compose quick start
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: deploy/compose
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate secrets and the Dex config
+        run: ./init.sh
+      - name: Build and start
+        run: docker compose up -d --build --wait --wait-timeout 420
+      - name: Both sign-in methods are offered and the UI is served
+        run: |
+          cfg=$(curl -fsS http://localhost:8080/api/v1/ui-config)
+          echo "$cfg"
+          echo "$cfg" | grep -q '"type":"oidc"'
+          echo "$cfg" | grep -q '"type":"password"'
+          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsSI http://localhost:8080/ | grep -qi "^content-security-policy: default-src 'self'"
+          curl -fsS http://localhost:5556/dex/.well-known/openid-configuration | grep -q '"issuer": "http://localhost:5556/dex"'
+      - name: The first administrator signs in, and a wrong password does not
+        run: |
+          set -a; . ./.env; set +a
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"username":"admin","password":"not-the-password-1"}' http://localhost:8080/auth/local/login)" = 401
+          jar=$(mktemp)
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$RAMPART_ADMIN_PASSWORD\"}" http://localhost:8080/auth/local/login)" = 204
+          curl -fsS -b "$jar" http://localhost:8080/api/v1/me/permissions | grep -q '"role":"admin"'
+      - name: Dex sign-in is wired (the authorization request reaches Dex)
+        run: |
+          loc=$(curl -s -o /dev/null -w '%{redirect_url}' "http://localhost:8080/auth/login?tenant=default")
+          echo "$loc"
+          case "$loc" in http://localhost:5556/dex/auth*code_challenge_method=S256*) ;; *) echo "unexpected redirect"; exit 1 ;; esac
+      - name: Passwords never reach the logs
+        run: |
+          set -a; . ./.env; set +a
+          if docker compose logs 2>&1 | grep -qF -e "$RAMPART_ADMIN_PASSWORD" -e "$DEMO_ADMIN_PASSWORD" -e "$RAMPART_SESSION_KEY"; then echo "a secret is in the logs"; exit 1; fi
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=120
+      - name: The root Dockerfile builds too
+        working-directory: .
+        run: docker build -f Dockerfile -t rampart:ci .
+      - name: Down
+        if: always()
+        run: docker compose down -v
+
   build:
     name: Build, SBOM
     needs: [test-unit, test-store, test-operator, web]

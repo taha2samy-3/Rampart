@@ -9,7 +9,23 @@
 
 A Kubernetes-native Application Security Posture Management platform. It takes the output of every security scanner, deduplicates it, ties it to applications, scores risk with real context, enforces deadlines, pushes fixes into developer tools, and reports posture. It covers the DefectDojo and ArmorCode use case as one Go binary with its own CRDs and operator, PostgreSQL, and object storage, and it integrates with Dependency-Track as a first-class source.
 
-Status: **design phase, reviewed**. There is no code yet. The name is a working proposal.
+Status: **Phase 0 and the core of Phase 1 are built** (ingest, merge, PostgreSQL with row-level security, sign-in, operator, Helm chart, web UI shell). The rest follows the [roadmap](docs/09-roadmap.md); see its status section for what is done and what is not. The name is a working proposal.
+
+## Quick start (Docker Compose)
+
+```bash
+cd deploy/compose
+./init.sh                       # random secrets into .env, demo users into dex/config.yaml
+docker compose up -d --build    # PostgreSQL, object store, Dex, Rampart (UI included)
+```
+
+Open http://localhost:8080. `init.sh` prints the accounts: two demo users in Dex (single sign-on) and the first administrator inside Rampart. Details in [deploy/compose/README.md](deploy/compose/README.md). On Kubernetes, `deploy/helm/rampart` installs the same thing; the notes printed by `helm install` say where the first administrator's password is.
+
+## How people sign in
+
+- **Single sign-on (OIDC)** is the way for everyone: Okta, Entra ID, Keycloak, Dex and the rest ([doc 14](docs/14-sso-and-identity.md)). Roles come from bindings in the configuration, never straight from the provider.
+- **The first administrator**, like Argo CD's initial admin, exists so that you can sign in before any identity provider does. Its password is generated, never logged, and the account switches itself off when single sign-on is configured unless you keep it on. Regular users with passwords are deliberately not stored in Rampart: password policy and MFA belong to the identity provider (use Dex with static passwords for a small installation).
+- **API tokens** for automation and CI.
 
 ![System context](docs/images/system-context.svg)
 
