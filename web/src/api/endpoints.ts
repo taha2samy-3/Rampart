@@ -23,6 +23,13 @@ export const getTenants = async () => (await get<TenantRef[] | null>('/api/v1/me
 export const switchTenant = (slug: string) => post<void>('/auth/tenant', { tenant: slug });
 export const logout = () => post<void>('/auth/logout');
 
+/**
+ * Break-glass local administrator sign-in (docs/16 D3). JSON only; a 204 means the session cookie
+ * is set. Failures are problems: 401 wrong credentials, 429 locked or throttled, 403 turned off.
+ */
+export const localLogin = (body: { tenant?: string; username: string; password: string }) =>
+  post<void>('/auth/local/login', body);
+
 /** Browser navigation target for sign-in; never fetched. */
 export function loginUrl(tenant: string, returnTo: string, idp?: string): string {
   const sp = new URLSearchParams();

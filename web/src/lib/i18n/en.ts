@@ -48,6 +48,26 @@ export const en = {
     positioning: 'Every finding from every scanner in one queue, with the reason for each score.',
     legend: 'Scanner severity, threat intelligence, exposure and context. Controls that lower risk are outlined.',
     sessionEnded: 'Your session ended. Sign in again.',
+    password: {
+      or: 'Or sign in as the local administrator',
+      intro: 'The administrator created when Rampart first started. Use it to set up single sign-on, then sign in through your provider.',
+      username: 'Username',
+      password: 'Password',
+      submit: 'Sign in',
+      failedTitle: 'Sign-in failed',
+      errors: {
+        '401': 'Wrong username or password.',
+        '429': 'Too many attempts.',
+        '403': 'Local sign-in is turned off. Use single sign-on.',
+        default: 'Rampart could not sign you in.',
+      },
+      next: {
+        '401': 'Check them and try again.',
+        '429': 'Wait a few minutes, or reset the password with `rampart admin set-password`.',
+        '403': 'Ask an administrator to enable the local administrator.',
+        default: 'Try again in a moment.',
+      },
+    },
   },
   shell: {
     product: 'rampart',
