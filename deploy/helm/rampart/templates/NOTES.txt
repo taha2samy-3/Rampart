@@ -1,0 +1,23 @@
+Rampart {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+{{- if .Values.auth.bootstrapAdmin.enabled }}
+
+The first administrator was created. Its password is in the Secret {{ include "rampart.fullname" . }}-admin:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "rampart.fullname" . }}-admin -o jsonpath='{.data.password}' | base64 -d; echo
+
+Username: {{ .Values.auth.bootstrapAdmin.username }}
+{{- if .Values.auth.oidc.issuer }}
+{{- if not .Values.auth.bootstrapAdmin.keepEnabled }}
+
+Single sign-on is configured, so password sign-in is OFF (docs/14). Set auth.bootstrapAdmin.keepEnabled=true to keep it.
+{{- end }}
+{{- else }}
+
+Sign in with it, then set up single sign-on (auth.oidc.*) for everyone else. Once an identity provider is
+configured, this account switches itself off unless auth.bootstrapAdmin.keepEnabled is true.
+{{- end }}
+
+Lost the password? Set a new one with:  rampart admin set-password  (reads the new password from stdin)
+{{- end }}
+
+Open the UI:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rampart.fullname" . }} 8080:8080   then http://localhost:8080

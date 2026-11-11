@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 1
+  minSchemaVersion: 2
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -96,6 +96,13 @@ server:
   publicUrl: ""
 
 auth:
+  # The first administrator, like Argo CD's initial admin (docs/16 D3, docs/14 section 1). It lets you sign
+  # in when no identity provider exists yet. Its password is generated into the Secret <release>-admin.
+  bootstrapAdmin:
+    enabled: true
+    username: admin
+    # With single sign-on configured the account switches itself off; true keeps it as break-glass access.
+    keepEnabled: false
   oidc:
     # Leave issuer empty to run without browser sign-in (API tokens still work).
     issuer: ""

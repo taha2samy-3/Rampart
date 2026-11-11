@@ -74,6 +74,16 @@ spec:
               value: {{ .Values.server.publicUrl | quote }}
             - name: RAMPART_AUTH_SESSION_KEY_FILE
               value: /etc/rampart/secrets/session.key
+            {{- if .Values.auth.bootstrapAdmin.enabled }}
+            # The first administrator (D3), like Argo CD's initial admin: created once at first start from a
+            # generated Secret. With single sign-on configured it switches itself off unless keepEnabled.
+            - name: RAMPART_AUTH_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.auth.bootstrapAdmin.username | quote }}
+            - name: RAMPART_AUTH_BOOTSTRAP_ADMIN_PASSWORD_FILE
+              value: /etc/rampart/secrets/admin-password
+            - name: RAMPART_AUTH_BOOTSTRAP_ADMIN_KEEP_ENABLED
+              value: {{ .Values.auth.bootstrapAdmin.keepEnabled | quote }}
+            {{- end }}
             {{- if .Values.auth.oidc.issuer }}
             - name: RAMPART_AUTH_OIDC_ISSUER
               value: {{ .Values.auth.oidc.issuer | quote }}
@@ -127,6 +137,11 @@ spec:
               - secret:
                   name: {{ include "rampart.fullname" . }}-session
                   items: [{key: session.key, path: session.key}]
+              {{- if .Values.auth.bootstrapAdmin.enabled }}
+              - secret:
+                  name: {{ include "rampart.fullname" . }}-admin
+                  items: [{key: password, path: admin-password}]
+              {{- end }}
               {{- if .Values.auth.oidc.issuer }}
               - secret:
                   name: {{ required "auth.oidc.clientSecretName is required with auth.oidc.issuer" .Values.auth.oidc.clientSecretName }}

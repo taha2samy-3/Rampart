@@ -63,7 +63,7 @@
         },
         "minSchemaVersion": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 2
         },
         "cnpg": {
           "type": "object",
@@ -128,6 +128,22 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "bootstrapAdmin": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "keepEnabled": {
+              "type": "boolean"
             }
           }
         }
