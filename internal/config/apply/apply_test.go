@@ -21,7 +21,8 @@ func TestApplyDeclarativeResources(t *testing.T) {
 			"name": "acme"
 		},
 		"spec": {
-			"displayName": "Acme Corporation"
+			"displayName": "Acme Corporation",
+			"namespaces": ["acme"]
 		}
 	}`)
 

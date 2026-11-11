@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 	"rampart/internal/auth"
+	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 )
 
@@ -85,23 +83,9 @@ func (s *PostgresStore) Pool() *pgxpool.Pool {
 	return s.pool
 }
 
-// AutoMigrate applies goose migrations against the database URL (D4, D6).
+// AutoMigrate applies migrations against the database URL (D4, D6).
 func AutoMigrate(ctx context.Context, dbURL string) error {
-	db, err := sql.Open("pgx", dbURL)
-	if err != nil {
-		return fmt.Errorf("store: goose open failed: %w", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("store: goose set dialect failed: %w", err)
-	}
-	goose.SetBaseFS(MigrationsFS)
-
-	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
-		return fmt.Errorf("store: goose up migrations failed: %w", err)
-	}
-	return nil
+	return MigrateUp(ctx, dbURL)
 }
 
 // withTenantTx executes a transaction with 'app.tenant_id' set locally (normative D4).
@@ -1178,9 +1162,9 @@ func (s *PostgresStore) CreateTenant(ctx context.Context, tenant *domain.Tenant)
 	query := `
 		INSERT INTO tenant (id, slug, display_name, k8s_namespace, created_at)
 		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (slug) DO UPDATE SET
 			display_name = EXCLUDED.display_name,
-			slug = EXCLUDED.slug`
+			k8s_namespace = EXCLUDED.k8s_namespace`
 
 	createdAt := tenant.CreatedAt
 	if createdAt.IsZero() {
@@ -1203,4 +1187,124 @@ func (s *PostgresStore) GetTenant(ctx context.Context, tenantID uuid.UUID) (*dom
 		return nil, err
 	}
 	return &t, nil
+}
+
+// SaveTenant implements apply.ConfigStore.
+func (s *PostgresStore) SaveTenant(ctx context.Context, tenant domain.Tenant) error {
+	return s.CreateTenant(ctx, &tenant)
+}
+
+// GetTenantBySlug implements apply.ConfigStore.
+func (s *PostgresStore) GetTenantBySlug(ctx context.Context, slug string) (*domain.Tenant, error) {
+	query := `SELECT id, slug, display_name, coalesce(k8s_namespace, ''), created_at FROM tenant WHERE slug = $1`
+	var t domain.Tenant
+	err := s.pool.QueryRow(ctx, query, slug).Scan(&t.ID, &t.Slug, &t.DisplayName, &t.K8sNamespace, &t.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+// ClaimNamespace binds a namespace to a tenant (D20). A namespace has one owner.
+// Written by rampart_system only (the operator path).
+func (s *PostgresStore) ClaimNamespace(ctx context.Context, tenantID uuid.UUID, namespace string) error {
+	var owner uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO tenant_namespace (namespace, tenant_id) VALUES ($1, $2)
+		ON CONFLICT (namespace) DO UPDATE SET namespace = EXCLUDED.namespace
+		RETURNING tenant_id`, namespace, tenantID).Scan(&owner)
+	if err != nil {
+		return err
+	}
+	if owner != tenantID {
+		return apply.ErrNamespaceOwned
+	}
+	return nil
+}
+
+// GetTenantByNamespace returns the tenant that lists the namespace in spec.namespaces (D20).
+func (s *PostgresStore) GetTenantByNamespace(ctx context.Context, namespace string) (*domain.Tenant, error) {
+	var t domain.Tenant
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.id, t.slug, t.display_name, coalesce(t.k8s_namespace, ''), t.created_at
+		FROM tenant_namespace n JOIN tenant t ON t.id = n.tenant_id WHERE n.namespace = $1`, namespace).
+		Scan(&t.ID, &t.Slug, &t.DisplayName, &t.K8sNamespace, &t.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// SaveApplication implements apply.ConfigStore.
+func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Application) error {
+	return s.CreateApplication(ctx, &app)
+}
+
+// GetApplicationBySlug implements apply.ConfigStore.
+func (s *PostgresStore) GetApplicationBySlug(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error) {
+	app, err := s.LookupApplication(ctx, tenantID, slug)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return app, nil
+}
+
+// SaveScanSource implements apply.ConfigStore.
+func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		query := `
+			INSERT INTO scan_source (id, tenant_id, name, type, scanner_family, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (tenant_id, name) DO UPDATE SET
+				scanner_family = EXCLUDED.scanner_family
+			RETURNING id`
+		scanType := scannerFamily
+		if scanType == "" {
+			scanType = "generic"
+		}
+		newID := domain.NewID()
+		return tx.QueryRow(ctx, query, newID, tenantID, name, scanType, scannerFamily, time.Now().UTC()).Scan(&id)
+	})
+	return id, err
+}
+
+// SaveSecretMaterial stores encrypted credentials into secret_material (D4 line 30).
+func (s *PostgresStore) SaveSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string, encryptedValue []byte) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		query := `
+			INSERT INTO secret_material (id, tenant_id, key, encrypted_value, version, created_at)
+			VALUES ($1, $2, $3, $4, 1, $5)
+			ON CONFLICT (tenant_id, key) DO UPDATE SET
+				encrypted_value = EXCLUDED.encrypted_value,
+				version = secret_material.version + 1`
+		_, err := tx.Exec(ctx, query, domain.NewID(), tenantID, key, encryptedValue, time.Now().UTC())
+		return err
+	})
+}
+
+// GetSecretMaterial retrieves encrypted credentials from secret_material (D4 line 30).
+func (s *PostgresStore) GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error) {
+	var val []byte
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		query := `SELECT encrypted_value FROM secret_material WHERE tenant_id = $1 AND key = $2`
+		err := tx.QueryRow(ctx, query, tenantID, key).Scan(&val)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return nil
+	})
+	return val, err
 }

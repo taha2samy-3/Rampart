@@ -9,7 +9,7 @@
 ```
                       ┌──────────────────────────── Kubernetes cluster ────────────────────────────┐
                       │                                                                             │
-  CI / scanners ──────┼──► ingest-gateway ──► object storage (S3/MinIO)                            │
+  CI / scanners ──────┼──► ingest-gateway ──► object storage (S3 API)                            │
   (SARIF, CDX, ...)   │        │                     ▲                                              │
                       │        │ outbox/job          │ fetch raw                                    │
   kubectl / GitOps ───┼──► operator ◄── CRDs        │                                              │
@@ -104,7 +104,7 @@ Key properties:
 
 | Mode | What runs | Infra | When |
 |---|---|---|---|
-| **monolithic** | one Deployment, `-target=all` | Postgres (bundled CNPG or external), object storage (bundled MinIO or S3), optional Valkey | eval, small teams, air-gapped single node, local dev (`docker compose`) |
+| **monolithic** | one Deployment, `-target=all` | Postgres (bundled CNPG or external), object storage (bundled SeaweedFS or any S3 API), optional Valkey | eval, small teams, air-gapped single node, local dev (`docker compose`) |
 | **simple-scalable** | `write` (gateway+parser+enrich+policy+notify+sync+scheduler), `read` (query-api+web-ui), `operator` | same | mid-size |
 | **distributed** | one Deployment per target, KEDA scaling of worker targets, read replicas, NATS JetStream optional | CNPG HA, S3, Valkey, NATS | large / multi-tenant SaaS |
 

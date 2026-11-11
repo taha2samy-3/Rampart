@@ -119,7 +119,7 @@ Priority legend, tied to the roadmap in [09-roadmap.md](09-roadmap.md): **P0** =
 | H5 | Append-only audit log with export API | P0 | |
 | H6 | Rate limiting and per-token quotas | P1 | |
 | H7 | Retention policies (`RetentionPolicy` CRD); partition drops; S3 lifecycle | P0 (occurrence and event retention job) / P1 (`RetentionPolicy` CRD P2) | |
-| H8 | Helm chart (umbrella: CNPG, MinIO, NATS, Valkey optional) + Kustomize | P0 | |
+| H8 | Helm chart (umbrella: CNPG, SeaweedFS, NATS, Valkey optional) + Kustomize | P0 | |
 | H9 | Deployment modes: monolithic (`-target=all`), distributed; KEDA autoscaling | P0 (monolithic) / P1 (simple-scalable) / P2 (distributed, KEDA) | |
 | H10 | Operator: reconcile all CRDs, status conditions, finalizers | P0 for the kinds in scope of each phase | |
 | H11 | Observability: OpenTelemetry traces/metrics/logs, Prometheus, health/readiness, Grafana dashboards | P0 (metrics, traces, health) / P1 (dashboards, alert rules) | |

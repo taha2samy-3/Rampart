@@ -1,0 +1,34 @@
+{{- if .Values.database.cnpg.enabled -}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "rampart.cnpgName" . }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.cnpg.instances }}
+  imageName: {{ .Values.database.cnpg.image }}
+  bootstrap:
+    initdb:
+      database: rampart
+      owner: rampart_owner
+  # D4: the runtime roles are created by the platform with Secret-backed passwords.
+  # The migration only guarantees they exist; it never sets a password.
+  managed:
+    roles:
+      - name: rampart_app
+        ensure: present
+        login: true
+        passwordSecret:
+          name: {{ include "rampart.fullname" . }}-db-app
+      - name: rampart_system
+        ensure: present
+        login: true
+        bypassrls: true
+        passwordSecret:
+          name: {{ include "rampart.fullname" . }}-db-system
+  storage:
+    size: {{ .Values.database.cnpg.storage.size }}
+  monitoring:
+    enablePodMonitor: {{ .Values.database.cnpg.podMonitor }}
+{{- end }}

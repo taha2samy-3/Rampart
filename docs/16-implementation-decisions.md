@@ -88,7 +88,7 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `telemetry.otlpEndpoint`, `log.level`, `log.format` | —, `info`, `json` | |
 | `operator.mode` | `auto` | `auto`, `on`, `off` |
 
-Helm values skeleton: `mode`, `image`, `config` (the tree above), `bundled.postgres.enabled`, `bundled.minio.enabled`, `bundled.valkey.enabled`, `bundled.nats.enabled`, `ingress|gateway`, `targets.<name>.{replicas,resources,autoscaling}`, `keda.enabled`, `networkPolicy.enabled`, `serviceMonitor.enabled`.
+Helm values skeleton: `mode`, `image`, `config` (the tree above), `bundled.postgres.enabled`, `bundled.seaweedfs.enabled`, `bundled.valkey.enabled`, `bundled.nats.enabled`, `ingress|gateway`, `targets.<name>.{replicas,resources,autoscaling}`, `keda.enabled`, `networkPolicy.enabled`, `serviceMonitor.enabled`.
 
 Feed sync ownership: the **scheduler enqueues** feed jobs; the **enrich** target executes them.
 
@@ -115,7 +115,7 @@ These are baked into module paths, CRD groups, labels and token prefixes, so the
 
 ## D9. Presigned uploads (closes B15)
 
-- `objectStorage.externalEndpoint` is the host placed in presigned URLs. With bundled MinIO the chart exposes it through its own route (`/s3` path or a dedicated hostname).
+- `objectStorage.externalEndpoint` is the host placed in presigned URLs. With the bundled object store (SeaweedFS) the chart exposes it through its own route (`/s3` path or a dedicated hostname).
 - The client declares `sizeBytes` at `POST /uploads`. The gateway rejects sizes above the tenant limit and signs `Content-Length` into the presigned PUT, so a different size fails at the storage layer.
 - The parser verifies size and SHA-256 while streaming and fails the run on mismatch before any merge.
 - Object key: `tenants/<tenant_id>/uploads/<yyyy>/<mm>/<dd>/<upload_id>`. Presigned URLs expire after 15 minutes.
@@ -493,3 +493,10 @@ These were found by running the code against PostgreSQL and the HTTP API. Each c
 - **Scan sources are configuration (D3, D10).** An upload names a source by id or name; empty means the tenant's built-in `default` source, created on first use. Any other unknown source is `404 not-found`.
 - **Event partitions.** `finding_event` and `audit_event` get a default partition so a row outside the pre-created ranges cannot fail the pipeline; the scheduler's maintenance job still creates monthly partitions ahead of time.
 - **PgBouncer.** The pgx pool uses `QueryExecModeCacheDescribe`: no server-side prepared statements, as required by transaction pooling.
+
+## D31. Bundled object storage is SeaweedFS, not MinIO
+
+- MinIO's community edition is in maintenance mode and no longer ships maintained images, so it is not a base to build on. The application only needs the S3 API (D9, doc 15), so the bundled default is **SeaweedFS** (Apache-2.0; one `weed` binary with an S3 gateway), pinned to a version tag. Any other S3 API (AWS S3, GCS interop, Ceph RGW, Garage) is configured through `objectStorage.endpoint` with the bundled store switched off.
+- Checked against SeaweedFS 4.53 with the exact calls the gateway needs: bucket creation; a SigV4 presigned `PUT` with `Content-Length` signed in (a body of a different size is rejected with 403, D9); a tampered presigned URL is rejected; object round trip with matching SHA-256; bucket lifecycle rules (retention, doc 15).
+- Credentials come from the environment (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`), supplied by a Secret in Helm and by `.env` in Compose. No identity file is mounted.
+- Helm: `seaweedfs.enabled` (default true) deploys a standalone StatefulSet running as a non-root user; its keys are generated once and kept across upgrades. Compose: the `objectstore` service.

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {"type": "integer", "minimum": 1},
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {"repository": {"type": "string", "minLength": 1}, "tag": {"type": "string"}}
+    },
+    "operator": {
+      "type": "object",
+      "properties": {"enabled": {"type": "boolean"}, "mode": {"enum": ["auto", "on", "off"]}}
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {"logLevel": {"enum": ["debug", "info", "warn", "error"]}, "logFormat": {"enum": ["json", "text"]}}
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "existingSecret": {"type": "string"},
+        "minSchemaVersion": {"type": "integer", "minimum": 1},
+        "cnpg": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "instances": {"type": "integer", "minimum": 1}}}
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -57,7 +58,7 @@ func TestSARIFFromAnotherToolDoesNotCloseFindings(t *testing.T) {
 	if res.Closed != 0 {
 		t.Fatalf("a trivy report closed %d semgrep finding(s)", res.Closed)
 	}
-	fs, _ := gw.Store().ListFindings(nil, tenant)
+	fs, _ := gw.Store().ListFindings(context.Background(), tenant)
 	open := 0
 	for _, f := range fs {
 		if f.State == "open" {

@@ -19,6 +19,8 @@ import (
 var (
 	ErrUnsupportedKind = errors.New("apply: unsupported resource kind")
 	ErrInvalidYAML     = errors.New("apply: invalid resource definition")
+	// ErrNamespaceOwned is returned when a namespace is already listed by another Tenant (D20).
+	ErrNamespaceOwned = errors.New("apply: namespace is owned by another tenant")
 )
 
 // ResourceHeader captures generic Kubernetes/Rampart CRD metadata.
@@ -37,6 +39,11 @@ type ResourceHeader struct {
 type ConfigStore interface {
 	SaveTenant(ctx context.Context, tenant domain.Tenant) error
 	GetTenantBySlug(ctx context.Context, slug string) (*domain.Tenant, error)
+	// ClaimNamespace binds a namespace to a tenant (D20). It fails with ErrNamespaceOwned when
+	// another tenant already owns it.
+	ClaimNamespace(ctx context.Context, tenantID uuid.UUID, namespace string) error
+	// GetTenantByNamespace returns the tenant that owns the namespace, or nil (D20).
+	GetTenantByNamespace(ctx context.Context, namespace string) (*domain.Tenant, error)
 	SaveApplication(ctx context.Context, app domain.Application) error
 	GetApplicationBySlug(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
 	SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error)
@@ -76,7 +83,8 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 	switch strings.ToLower(header.Kind) {
 	case "tenant":
 		var spec struct {
-			DisplayName string `json:"displayName"`
+			DisplayName string   `json:"displayName"`
+			Namespaces  []string `json:"namespaces"`
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 		displayName := spec.DisplayName
@@ -101,6 +109,11 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		if err := a.store.SaveTenant(ctx, t); err != nil {
 			return "", err
 		}
+		for _, ns := range spec.Namespaces {
+			if err := a.store.ClaimNamespace(ctx, t.ID, ns); err != nil {
+				return "", fmt.Errorf("apply: tenant %q cannot claim namespace %q: %w", t.Slug, ns, err)
+			}
+		}
 		return fmt.Sprintf("tenant.rampart.aspm.dev/%s configured", t.Slug), nil
 
 	case "application":
@@ -112,13 +125,10 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 
-		tenantSlug := header.Metadata.Namespace
-		if tenantSlug == "" {
-			tenantSlug = "default"
-		}
-		tenant, err := a.store.GetTenantBySlug(ctx, tenantSlug)
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
 		if err != nil || tenant == nil {
-			return "", fmt.Errorf("apply: tenant %q not found for application", tenantSlug)
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
 		}
 
 		existing, _ := a.store.GetApplicationBySlug(ctx, tenant.ID, header.Metadata.Name)
@@ -159,13 +169,10 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 
-		tenantSlug := header.Metadata.Namespace
-		if tenantSlug == "" {
-			tenantSlug = "default"
-		}
-		tenant, err := a.store.GetTenantBySlug(ctx, tenantSlug)
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
 		if err != nil || tenant == nil {
-			return "", fmt.Errorf("apply: tenant %q not found for scan source", tenantSlug)
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
 		}
 
 		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily)
@@ -179,12 +186,55 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 	}
 }
 
+// ApplyMultiDocument decodes and applies one or more YAML or JSON resource definitions in sequence.
+func (a *Applier) ApplyMultiDocument(ctx context.Context, raw []byte) ([]string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var list []json.RawMessage
+		if err := json.Unmarshal(trimmed, &list); err == nil {
+			var results []string
+			for _, item := range list {
+				res, err := a.ApplyDocument(ctx, item)
+				if err != nil {
+					return results, err
+				}
+				results = append(results, res)
+			}
+			return results, nil
+		}
+	}
+
+	docs := bytes.Split(raw, []byte("\n---"))
+	var results []string
+	for _, doc := range docs {
+		doc = bytes.TrimSpace(doc)
+		if len(doc) == 0 {
+			continue
+		}
+		res, err := a.ApplyDocument(ctx, doc)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+// defaultNamespace is the namespace of a resource applied without one (file mode).
+func defaultNamespace(ns string) string {
+	if ns == "" {
+		return "default"
+	}
+	return ns
+}
+
 // MemoryConfigStore provides an in-memory implementation of ConfigStore.
 type MemoryConfigStore struct {
 	mu           sync.RWMutex
 	tenants      map[string]domain.Tenant
 	applications map[string]domain.Application
 	scanSources  map[string]uuid.UUID
+	namespaces   map[string]uuid.UUID
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -193,6 +243,7 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		tenants:      make(map[string]domain.Tenant),
 		applications: make(map[string]domain.Application),
 		scanSources:  make(map[string]uuid.UUID),
+		namespaces:   make(map[string]uuid.UUID),
 	}
 }
 
@@ -246,3 +297,29 @@ func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UU
 
 // Ensure interface compatibility
 var _ = io.Reader(bytes.NewBuffer(nil))
+
+func (m *MemoryConfigStore) ClaimNamespace(ctx context.Context, tenantID uuid.UUID, namespace string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if owner, ok := m.namespaces[namespace]; ok && owner != tenantID {
+		return ErrNamespaceOwned
+	}
+	m.namespaces[namespace] = tenantID
+	return nil
+}
+
+func (m *MemoryConfigStore) GetTenantByNamespace(ctx context.Context, namespace string) (*domain.Tenant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	owner, ok := m.namespaces[namespace]
+	if !ok {
+		return nil, nil
+	}
+	for _, t := range m.tenants {
+		if t.ID == owner {
+			cp := t
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}

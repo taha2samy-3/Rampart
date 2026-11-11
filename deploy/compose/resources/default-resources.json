@@ -6,7 +6,8 @@
       "name": "default"
     },
     "spec": {
-      "displayName": "Default Organization"
+      "displayName": "Default Organization",
+      "namespaces": ["default"]
     }
   },
   {

@@ -1,0 +1,179 @@
+name: CI & Supply Chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: every job gets only what it needs. Jobs that sign or push say so below.
+permissions:
+  contents: read
+
+env:
+  # The Go version comes from go.mod so CI cannot drift from the code.
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Unformatted files:"; echo "$UNFORMATTED"; exit 1
+          fi
+      - run: go vet ./...
+      - name: go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          args: --timeout=5m ./...
+
+  test:
+    name: Unit, Integration, RLS & Leak Tests
+    needs: lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rampart_owner
+          POSTGRES_PASSWORD: rampart_password
+          POSTGRES_DB: rampart
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U rampart_owner -d rampart"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Test with race detector
+        env:
+          # The owner URL. The tests derive the rampart_app and rampart_system URLs from it:
+          # a superuser bypasses row-level security, so isolation is never tested as the owner.
+          RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+      - name: A skipped Postgres suite is a failure in CI
+        run: |
+          go test -count=1 -v ./internal/store/ 2>&1 | tee /tmp/store.txt
+          ! grep -q -- "--- SKIP" /tmp/store.txt
+        env:
+          RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
+
+  helm:
+    name: Helm & CRDs
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Chart CRDs match deploy/crds
+        run: diff -r deploy/crds deploy/helm/rampart/crds
+      - name: helm lint
+        run: helm lint deploy/helm/rampart
+      - name: helm template (bundled CNPG and SeaweedFS)
+        run: helm template t deploy/helm/rampart --namespace rampart > /dev/null
+      - name: helm template (external database and S3)
+        run: |
+          helm template t deploy/helm/rampart \
+            --set database.cnpg.enabled=false --set database.existingSecret=db \
+            --set seaweedfs.enabled=false --set objectStorage.endpoint=https://s3.example.com > /dev/null
+      - name: helm template (upgrade renders the pre-upgrade hook)
+        run: |
+          helm template t deploy/helm/rampart --is-upgrade | grep -q 'helm.sh/hook": pre-upgrade'
+
+  build:
+    name: Build, SBOM
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - run: |
+          mkdir -p bin
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/rampart ./cmd/rampart
+      - uses: ko-build/setup-ko@v0.8
+      - name: ko build (local, no push)
+        run: KO_DOCKER_REPO=ko.local ko build --bare ./cmd/rampart
+      - uses: anchore/sbom-action/download-syft@v0.17.9
+      - name: SBOM (CycloneDX and SPDX)
+        run: |
+          syft dir:. -o cyclonedx-json=bin/sbom.cdx.json
+          syft dir:. -o spdx-json=bin/sbom.spdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rampart-dist
+          path: bin/
+
+  publish:
+    # Only on main: push the image by digest, sign it keyless with cosign, attach the SBOM
+    # attestation (docs/15). SLSA provenance is produced by the next job.
+    name: Publish & Sign
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, helm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # keyless cosign signing (OIDC)
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: ko-build/setup-ko@v0.8
+      - uses: sigstore/cosign-installer@v3.7.0
+      - uses: anchore/sbom-action/download-syft@v0.17.9
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: push
+        env:
+          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
+        run: |
+          REF=$(ko build --bare --tags "${GITHUB_SHA}" ./cmd/rampart)
+          echo "image=${REF%@*}" >> "$GITHUB_OUTPUT"
+          echo "digest=${REF#*@}" >> "$GITHUB_OUTPUT"
+          echo "$REF" > image-ref.txt
+      - name: Sign (keyless)
+        run: cosign sign --yes "$(cat image-ref.txt)"
+      - name: Attach SBOM attestation
+        run: |
+          syft "$(cat image-ref.txt)" -o cyclonedx-json=sbom.cdx.json
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$(cat image-ref.txt)"
+
+  provenance:
+    name: SLSA provenance
+    needs: publish
+    permissions:
+      actions: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ${{ needs.publish.outputs.image }}
+      digest: ${{ needs.publish.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

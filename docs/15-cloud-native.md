@@ -95,7 +95,7 @@ Indicative sizing (starting points, tuned by load tests):
 ## 6. Data services
 
 - **PostgreSQL** through **CloudNativePG**: `Cluster` with 3 instances across zones, synchronous replica optional, `-rw` and `-ro` Services, `Pooler` (PgBouncer, transaction mode), Barman backups to object storage, point-in-time recovery, `ScheduledBackup`, monitored by its PodMonitor. An external managed Postgres (RDS, Cloud SQL, AlloyDB, Azure Flexible Server) is supported by URL; required extensions: `ltree`, `pg_trgm`, `btree_gin`.
-- **Object storage**: any S3 API. Buckets: `raw` (reports), `exports`, `backups`. Lifecycle rules match `RetentionPolicy`. Access by **workload identity** (IRSA on EKS, Workload Identity on GKE, Azure Workload Identity) so no static keys; static keys from a Secret remain possible for MinIO.
+- **Object storage**: any S3 API. Buckets: `raw` (reports), `exports`, `backups`. Lifecycle rules match `RetentionPolicy`. Access by **workload identity** (IRSA on EKS, Workload Identity on GKE, Azure Workload Identity) so no static keys; static keys from a Secret remain possible for SeaweedFS and other self-hosted stores.
 - **Valkey** (optional): rate limits, session cache, bloom filters. Absent → in-process and Postgres fallbacks.
 - **NATS JetStream** (optional): outbound event fan-out.
 
@@ -164,7 +164,7 @@ Raw reports are inputs that can be re-uploaded, so the `raw` bucket may be exclu
 
 ## 14. Cost and footprint
 
-- Smallest useful install: one `all` pod, one Postgres instance, MinIO single node: about 2 vCPU and 4 GiB.
+- Smallest useful install: one `all` pod, one Postgres instance, SeaweedFS standalone: about 2 vCPU and 4 GiB.
 - Workers scale to zero; parsers are the only CPU-heavy part and are bursty.
 - Occurrence partitions and raw reports are the storage drivers; both are bounded by retention.
 - arm64 images allow cheaper nodes.
@@ -175,7 +175,7 @@ Raw reports are inputs that can be re-uploaded, so the `raw` bucket may be exclu
 |---|---|---|---|---|
 | Kubernetes | EKS | GKE | AKS | any conformant 1.29+, OpenShift 4.16+ |
 | Postgres | CNPG or RDS/Aurora | CNPG or Cloud SQL/AlloyDB | CNPG or Flexible Server | CNPG |
-| Object storage | S3 | GCS (S3 interop) | Blob via S3 gateway or MinIO | MinIO, Ceph RGW, SeaweedFS |
+| Object storage | S3 | GCS (S3 interop) | Blob via an S3 gateway (for example SeaweedFS) | SeaweedFS, Ceph RGW, Garage |
 | Workload identity | IRSA / Pod Identity | Workload Identity | Azure Workload Identity | static keys in Secrets |
 | Secrets | Secrets Manager via ESO | Secret Manager via ESO | Key Vault via ESO | Vault via ESO |
 | Ingress | ALB or Gateway API | GKE Gateway | AGIC or Gateway API | NGINX, Envoy Gateway, HAProxy |

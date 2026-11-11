@@ -99,3 +99,40 @@ spec:
 		t.Errorf("expected gate to fail on critical findings, got err: %v", err)
 	}
 }
+
+func TestCLIMigrateValidation(t *testing.T) {
+	// Missing subcommand
+	handled, err := handleCLI([]string{"migrate"})
+	if !handled || err == nil {
+		t.Errorf("expected error when subcommand is missing, got %v", err)
+	}
+
+	// Unknown subcommand
+	handled, err = handleCLI([]string{"migrate", "invalid-subcommand"})
+	if !handled || err == nil {
+		t.Errorf("expected error on unknown subcommand, got %v", err)
+	}
+
+	// migrate up without direct url (clearing any env var for this test)
+	origEnv := os.Getenv("RAMPART_DATABASE_DIRECT_URL")
+	_ = os.Unsetenv("RAMPART_DATABASE_DIRECT_URL")
+	_ = os.Unsetenv("DATABASE_DIRECT_URL")
+	_ = os.Unsetenv("RAMPART_DATABASE_URL")
+	_ = os.Unsetenv("DATABASE_URL")
+	defer func() {
+		if origEnv != "" {
+			_ = os.Setenv("RAMPART_DATABASE_DIRECT_URL", origEnv)
+		}
+	}()
+
+	handled, err = handleCLI([]string{"migrate", "up"})
+	if !handled || err == nil {
+		t.Errorf("expected error on migrate up without direct-url, got %v", err)
+	}
+
+	// migrate wait with unreachable db
+	handled, err = handleCLI([]string{"migrate", "wait", "--db-url", "postgres://nobody:pw@127.0.0.1:54399/none?sslmode=disable", "--timeout", "100ms"})
+	if !handled || err == nil {
+		t.Errorf("expected timeout error on unreachable wait, got %v", err)
+	}
+}

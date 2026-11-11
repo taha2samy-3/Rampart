@@ -20,6 +20,7 @@ import (
 	"rampart/internal/parsers/cyclonedx"
 	"rampart/internal/parsers/spdx"
 	"rampart/internal/parsers/syft"
+	"rampart/internal/store"
 )
 
 const (
@@ -59,6 +60,9 @@ func handleCLI(args []string) (bool, error) {
 
 	case "apply":
 		return true, runApply(args[1:])
+
+	case "migrate":
+		return true, runMigrate(args[1:])
 
 	default:
 		return false, fmt.Errorf("unknown command %q", cmd)
@@ -376,6 +380,7 @@ func parseLocalSBOM(filePath string) (*domain.SBOM, []domain.SBOMComponent, *gra
 func runApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	file := fs.String("f", "", "Path to YAML resource manifest")
+	dbURL := fs.String("db-url", "", "PostgreSQL URL to apply resources directly into")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -390,15 +395,116 @@ func runApply(args []string) error {
 		return fmt.Errorf("failed to read manifest file: %w", err)
 	}
 
-	store := apply.NewMemoryConfigStore()
-	applier := apply.NewApplier(store)
-	resultMsg, err := applier.ApplyDocument(context.Background(), data)
+	var configStore apply.ConfigStore
+	targetDB := *dbURL
+	if targetDB == "" {
+		targetDB = os.Getenv("RAMPART_DATABASE_URL")
+	}
+	if targetDB == "" {
+		targetDB = os.Getenv("DATABASE_URL")
+	}
+
+	if targetDB != "" {
+		pg, err := store.ConnectPostgres(context.Background(), targetDB)
+		if err != nil {
+			return fmt.Errorf("apply: database connection failed: %w", err)
+		}
+		defer pg.Close()
+		configStore = pg
+	} else {
+		configStore = apply.NewMemoryConfigStore()
+	}
+
+	applier := apply.NewApplier(configStore)
+	results, err := applier.ApplyMultiDocument(context.Background(), data)
 	if err != nil {
 		return fmt.Errorf("apply error: %w", err)
 	}
 
-	fmt.Printf("Applied configuration successfully: %s\n", resultMsg)
+	for _, resultMsg := range results {
+		fmt.Printf("Applied configuration successfully: %s\n", resultMsg)
+	}
 	return nil
+}
+
+func runMigrate(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("migrate: subcommand required: 'up' or 'wait'")
+	}
+
+	subcmd := args[0]
+	switch subcmd {
+	case "up":
+		fs := flag.NewFlagSet("migrate up", flag.ContinueOnError)
+		directURL := fs.String("direct-url", "", "PostgreSQL direct connection URL (rampart_owner)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		connURL := *directURL
+		if connURL == "" {
+			connURL = os.Getenv("RAMPART_DATABASE_MIGRATE_URL") // rampart_owner (D4, D30)
+		}
+		if connURL == "" {
+			connURL = os.Getenv("RAMPART_DATABASE_DIRECT_URL")
+		}
+		if connURL == "" {
+			connURL = os.Getenv("DATABASE_DIRECT_URL")
+		}
+		if connURL == "" {
+			connURL = os.Getenv("RAMPART_DATABASE_URL")
+		}
+		if connURL == "" {
+			connURL = os.Getenv("DATABASE_URL")
+		}
+		if connURL == "" {
+			return fmt.Errorf("migrate up: direct PostgreSQL URL is required (via --direct-url or RAMPART_DATABASE_DIRECT_URL)")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		if err := store.MigrateUp(ctx, connURL); err != nil {
+			return fmt.Errorf("migrate up failed: %w", err)
+		}
+		fmt.Println("Database schema migrations, River tables, and monthly partitions applied successfully.")
+		return nil
+
+	case "wait":
+		fs := flag.NewFlagSet("migrate wait", flag.ContinueOnError)
+		dbURL := fs.String("db-url", "", "PostgreSQL connection URL to poll")
+		minVer := fs.Int64("min-version", 1, "Minimum schema version required")
+		timeout := fs.Duration("timeout", 60*time.Second, "Timeout waiting for migrations")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		connURL := *dbURL
+		if connURL == "" {
+			connURL = os.Getenv("RAMPART_DATABASE_URL")
+		}
+		if connURL == "" {
+			connURL = os.Getenv("DATABASE_URL")
+		}
+		if connURL == "" {
+			connURL = os.Getenv("RAMPART_DATABASE_DIRECT_URL")
+		}
+		if connURL == "" {
+			return fmt.Errorf("migrate wait: database URL is required (via --db-url or RAMPART_DATABASE_URL)")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout+5*time.Second)
+		defer cancel()
+
+		if err := store.MigrateWait(ctx, connURL, *minVer, *timeout); err != nil {
+			return fmt.Errorf("migrate wait failed: %w", err)
+		}
+		fmt.Printf("Database schema version >= %d is ready.\n", *minVer)
+		return nil
+
+	default:
+		return fmt.Errorf("migrate: unknown subcommand %q (valid: up, wait)", subcmd)
+	}
 }
 
 func runGate(args []string) error {

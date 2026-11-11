@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,50 +17,84 @@ import (
 	"rampart/internal/store"
 )
 
-func getTestPostgresURLs(t *testing.T) (directURL string, appURL string) {
+var (
+	sharedDirectURL string
+	sharedAppURL    string
+)
+
+func TestMain(m *testing.M) {
 	if custom := os.Getenv("RAMPART_TEST_POSTGRES_URL"); custom != "" {
-		return custom, custom
+		// RAMPART_TEST_POSTGRES_URL is the owner (superuser) URL. The application and
+		// system roles are derived from it: a superuser bypasses RLS, so the isolation
+		// tests must never run as the owner.
+		sharedDirectURL = custom
+		sharedAppURL = withCreds(custom, "rampart_app", "rampart_app_pw")
+		os.Exit(m.Run())
 	}
 
-	// Try localhost:5433 (dedicated test container) then 5432 (default compose port)
+	// Try localhost:5433 then 5432
 	candidates := []int{5433, 5432}
 	for _, port := range candidates {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			direct := fmt.Sprintf("postgres://rampart_owner:rampart_password@127.0.0.1:%d/rampart?sslmode=disable", port)
-			app := fmt.Sprintf("postgres://rampart_app:rampart_app_pw@127.0.0.1:%d/rampart?sslmode=disable", port)
-			return direct, app
+			sharedDirectURL = fmt.Sprintf("postgres://rampart_owner:rampart_password@127.0.0.1:%d/rampart?sslmode=disable", port)
+			sharedAppURL = fmt.Sprintf("postgres://rampart_app:rampart_app_pw@127.0.0.1:%d/rampart?sslmode=disable", port)
+			break
 		}
 	}
 
-	// Auto-provision temporary container via docker if available
-	if _, err := exec.LookPath("docker"); err == nil {
-		containerName := fmt.Sprintf("rampart-pg-test-%d", time.Now().UnixNano()%100000)
-		startCmd := exec.Command("docker", "run", "-d", "--rm", "--name", containerName, "-p", "5433:5432",
-			"-e", "POSTGRES_USER=rampart_owner", "-e", "POSTGRES_PASSWORD=rampart_password", "-e", "POSTGRES_DB=rampart",
-			"postgres:16-alpine")
-		if err := startCmd.Run(); err == nil {
-			t.Cleanup(func() {
-				_ = exec.Command("docker", "rm", "-f", containerName).Run()
-			})
-
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) {
-				time.Sleep(300 * time.Millisecond)
-				checkCmd := exec.Command("docker", "exec", containerName, "pg_isready", "-U", "rampart_owner", "-d", "rampart")
-				if err := checkCmd.Run(); err == nil {
-					direct := "postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable"
-					app := "postgres://rampart_app:rampart_app_pw@127.0.0.1:5433/rampart?sslmode=disable"
-					return direct, app
+	var containerName string
+	if sharedDirectURL == "" {
+		if _, err := exec.LookPath("docker"); err == nil {
+			containerName = fmt.Sprintf("rampart-pg-test-%d", time.Now().UnixNano()%100000)
+			startCmd := exec.Command("docker", "run", "-d", "--rm", "--name", containerName, "-p", "5433:5432",
+				"-e", "POSTGRES_USER=rampart_owner", "-e", "POSTGRES_PASSWORD=rampart_password", "-e", "POSTGRES_DB=rampart",
+				"postgres:16-alpine")
+			if err := startCmd.Run(); err == nil {
+				deadline := time.Now().Add(25 * time.Second)
+				for time.Now().Before(deadline) {
+					time.Sleep(500 * time.Millisecond)
+					checkCmd := exec.Command("docker", "exec", containerName, "pg_isready", "-U", "rampart_owner", "-d", "rampart")
+					if err := checkCmd.Run(); err == nil {
+						qCmd := exec.Command("docker", "exec", containerName, "psql", "-U", "rampart_owner", "-d", "rampart", "-c", "SELECT 1;")
+						if qErr := qCmd.Run(); qErr == nil {
+							sharedDirectURL = "postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable"
+							sharedAppURL = "postgres://rampart_app:rampart_app_pw@127.0.0.1:5433/rampart?sslmode=disable"
+							break
+						}
+					}
 				}
 			}
 		}
 	}
 
-	t.Skip("PostgreSQL test instance not reachable on 5433 or 5432 and docker auto-start failed; skipping integration tests")
-	return "", ""
+	code := m.Run()
+
+	if containerName != "" {
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+	}
+
+	os.Exit(code)
+}
+
+// withCreds returns raw with its user and password replaced.
+func withCreds(raw, user, password string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
+}
+
+func getTestPostgresURLs(t *testing.T) (directURL string, appURL string) {
+	if sharedDirectURL == "" {
+		t.Skip("PostgreSQL test instance not reachable on 5433 or 5432 and docker auto-start failed; skipping integration tests")
+		return "", ""
+	}
+	return sharedDirectURL, sharedAppURL
 }
 
 // setupStores migrates as rampart_owner, provisions the login roles the way a
@@ -92,7 +126,7 @@ func setupStores(t *testing.T, ctx context.Context) (appStore, sysStore *store.P
 		t.Fatalf("ConnectPostgres as rampart_app failed: %v", err)
 	}
 	t.Cleanup(appStore.Close)
-	sysURL := strings.Replace(appURL, "rampart_app:rampart_app_pw", "rampart_system:rampart_system_pw", 1)
+	sysURL := withCreds(appURL, "rampart_system", "rampart_system_pw")
 	sysStore, err = store.ConnectPostgres(ctx, sysURL)
 	if err != nil {
 		t.Fatalf("ConnectPostgres as rampart_system failed: %v", err)

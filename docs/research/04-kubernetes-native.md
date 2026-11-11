@@ -64,7 +64,7 @@ Components (each a `-target`):
 
 **Messaging**: best default is **Postgres as the queue** (River: transactional enqueue with pgx, unique jobs, periodic jobs, retries, batch insert — https://riverqueue.com/docs; or pgmq). Zero extra infra; jobs commit atomically with findings (transactional outbox for free). Pluggable `EventBus` interface with **NATS JetStream** as second implementation for high-throughput/multi-cluster fan-out (single Go binary, at-least-once with `Nats-Msg-Id` dedup, KV + Object Store, Helm chart, KEDA scaler). Kafka is overkill for small installs (Hyades experience); Redis Streams durability depends on config; RabbitMQ brings no advantage over NATS for Go.
 
-**Storage**: PostgreSQL via **CloudNativePG** (Cluster CRD, HA, `-rw/-ro` services, Barman backups, PITR, PgBouncer Pooler). Object storage (S3/MinIO; SeaweedFS/Garage for small) for raw reports and SBOMs. Valkey for cache/rate-limit. Optional ClickHouse/OpenSearch for analytics and full-text. Light **CQRS**: same DB, read models refreshed by outbox consumers, not heavy joins at request time.
+**Storage**: PostgreSQL via **CloudNativePG** (Cluster CRD, HA, `-rw/-ro` services, Barman backups, PITR, PgBouncer Pooler). Object storage (S3/SeaweedFS; SeaweedFS/Garage for small) for raw reports and SBOMs. Valkey for cache/rate-limit. Optional ClickHouse/OpenSearch for analytics and full-text. Light **CQRS**: same DB, read models refreshed by outbox consumers, not heavy joins at request time.
 
 ## 4. Go ecosystem choices
 
@@ -75,7 +75,7 @@ Components (each a `-target`):
 - **Observability**: OTel Go (traces/metrics stable, logs RC with `otelslog`), Prometheus exporter, `slog`, `logr` adapter in operator.
 - **CLI/config**: cobra + koanf.
 - **Codegen**: controller-gen for CRDs/RBAC; `+kubebuilder:printcolumn`.
-- **Packaging**: Helm umbrella chart (CNPG/NATS/MinIO sub-charts toggled off by default) + Kustomize; **ko** (`--platform=all`, distroless `static:nonroot`, auto SPDX SBOM) or buildx + syft; cosign sign + attest. Product should ship its own CycloneDX SBOM and be ingestible by itself.
+- **Packaging**: Helm umbrella chart (CNPG/NATS/SeaweedFS sub-charts toggled off by default) + Kustomize; **ko** (`--platform=all`, distroless `static:nonroot`, auto SPDX SBOM) or buildx + syft; cosign sign + attest. Product should ship its own CycloneDX SBOM and be ingestible by itself.
 
 ## 5. Scaling and multi-tenancy
 

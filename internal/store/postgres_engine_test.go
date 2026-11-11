@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
+	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
@@ -227,4 +228,56 @@ func (f *fixture) newRun(t *testing.T, ctx context.Context, app *store.PostgresS
 		t.Fatal(err)
 	}
 	return run.ID
+}
+
+// River lives in its own schema (doc 12), is usable by rampart_app, and a parse job is
+// unique by its arguments (D2).
+func TestPostgres_RiverQueueInOwnSchema(t *testing.T) {
+	ctx := context.Background()
+	app, _ := setupStores(t, ctx)
+	q, err := jobs.NewRiverQueue(ctx, app.Pool(), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := jobs.ParseJobArgs{IngestRunID: uuid.New(), TenantID: uuid.New()}
+	for i := 0; i < 2; i++ { // second insert must be deduplicated
+		if err := q.EnqueueParse(ctx, args); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+	var n int
+	err = app.Pool().QueryRow(ctx, `SELECT count(*) FROM river.river_job WHERE kind = 'parse' AND args->>'ingest_run_id' = $1`,
+		args.IngestRunID.String()).Scan(&n)
+	if err != nil || n != 1 {
+		t.Fatalf("want exactly 1 parse job in schema river, got %d (%v)", n, err)
+	}
+}
+
+// D20: namespace ownership is a control-plane fact written by rampart_system only, and a
+// namespace has exactly one owner.
+func TestPostgres_NamespaceBinding(t *testing.T) {
+	ctx := context.Background()
+	app, sys := setupStores(t, ctx)
+	a, b := newTenant(t, ctx, sys, "na"), newTenant(t, ctx, sys, "nb")
+	ns := "payments-" + uuid.NewString()[:6]
+
+	if err := app.ClaimNamespace(ctx, a, ns); err == nil {
+		t.Fatal("rampart_app must not be able to bind namespaces")
+	}
+	if err := sys.ClaimNamespace(ctx, a, ns); err != nil {
+		t.Fatal(err)
+	}
+	if err := sys.ClaimNamespace(ctx, a, ns); err != nil { // idempotent
+		t.Fatalf("re-claim by the owner: %v", err)
+	}
+	if err := sys.ClaimNamespace(ctx, b, ns); !errors.Is(err, apply.ErrNamespaceOwned) {
+		t.Fatalf("a second tenant must not take the namespace, got %v", err)
+	}
+	got, err := app.GetTenantByNamespace(ctx, ns)
+	if err != nil || got == nil || got.ID != a {
+		t.Fatalf("the app role reads the binding: %+v %v", got, err)
+	}
+	if none, _ := app.GetTenantByNamespace(ctx, "nobody-"+uuid.NewString()[:6]); none != nil {
+		t.Fatal("an unlisted namespace has no tenant")
+	}
 }

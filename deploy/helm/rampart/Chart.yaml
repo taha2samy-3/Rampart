@@ -1,0 +1,16 @@
+apiVersion: v2
+name: rampart
+description: Rampart Cloud-Native Application Security Posture Management (ASPM) Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - aspm
+  - appsec
+  - security
+  - sbom
+  - kubernetes
+maintainers:
+  - name: rampart-team
+    email: security@rampart.aspm.dev
+

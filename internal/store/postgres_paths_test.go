@@ -123,3 +123,70 @@ func TestPostgresStore_CloseScopeAndRunBookkeeping(t *testing.T) {
 		}
 	})
 }
+
+func TestPostgresStore_ConfigStoreAndSecrets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, sys := setupStores(t, ctx)
+
+	tenantSlug := "cfg-tenant-" + uuid.NewString()[:8]
+	tn := domain.Tenant{
+		ID:          uuid.New(),
+		Slug:        tenantSlug,
+		DisplayName: "Config Store Tenant",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	// 1. Save and retrieve Tenant via sysStore (system privileges for tenants)
+	if err := sys.SaveTenant(ctx, tn); err != nil {
+		t.Fatalf("sys.SaveTenant: %v", err)
+	}
+	gotTenant, err := s.GetTenantBySlug(ctx, tenantSlug)
+	if err != nil || gotTenant == nil {
+		t.Fatalf("GetTenantBySlug failed: %v", err)
+	}
+	if gotTenant.DisplayName != tn.DisplayName {
+		t.Errorf("tenant display name = %q, want %q", gotTenant.DisplayName, tn.DisplayName)
+	}
+
+	// 2. Save and retrieve Application via s (app store under tenant isolation)
+	app := domain.Application{
+		ID:                  uuid.New(),
+		TenantID:            gotTenant.ID,
+		Slug:                "cfg-app",
+		Name:                "Config Application",
+		BusinessCriticality: "high",
+		Lifecycle:           "production",
+		CreatedAt:           time.Now().UTC(),
+	}
+	if err := s.SaveApplication(ctx, app); err != nil {
+		t.Fatalf("s.SaveApplication: %v", err)
+	}
+	gotApp, err := s.GetApplicationBySlug(ctx, gotTenant.ID, "cfg-app")
+	if err != nil || gotApp == nil {
+		t.Fatalf("GetApplicationBySlug failed: %v", err)
+	}
+	if gotApp.Name != app.Name {
+		t.Errorf("app name = %q, want %q", gotApp.Name, app.Name)
+	}
+
+	// 3. Save ScanSource
+	sourceID, err := s.SaveScanSource(ctx, gotTenant.ID, "ci-trivy", "trivy")
+	if err != nil || sourceID == uuid.Nil {
+		t.Fatalf("SaveScanSource failed: %v", err)
+	}
+
+	// 4. Save and retrieve SecretMaterial
+	secretKey := "github-token"
+	secretVal := []byte("ghp_encrypted_secret_data_bytes_12345")
+	if err := s.SaveSecretMaterial(ctx, gotTenant.ID, secretKey, secretVal); err != nil {
+		t.Fatalf("SaveSecretMaterial failed: %v", err)
+	}
+	gotSecret, err := s.GetSecretMaterial(ctx, gotTenant.ID, secretKey)
+	if err != nil {
+		t.Fatalf("GetSecretMaterial failed: %v", err)
+	}
+	if string(gotSecret) != string(secretVal) {
+		t.Errorf("secret mismatch: got %q, want %q", string(gotSecret), string(secretVal))
+	}
+}

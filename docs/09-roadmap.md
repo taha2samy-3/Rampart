@@ -15,7 +15,7 @@ Rewritten after the design review. Assumes a team of **four to five engineers** 
   1. Ingest throughput: 100k SARIF results through staging, merge and occurrence upsert on the reference hardware (D28).
   2. `COPY` into the staging table plus `INSERT … SELECT` into RLS tables as a non-owner role.
   3. River behind PgBouncer: direct connection for the notifier, poll-only fallback.
-  4. Helm install order with bundled CloudNativePG and MinIO.
+  4. Helm install order with bundled CloudNativePG and SeaweedFS.
   5. Streaming SARIF parse with a token walk, memory under 256 MiB for a 500 MiB file.
   6. (Before Phase 3) Mapping engine speed: streaming path selection with CEL at 100k records; `wazero` throughput for a WASI parser.
 - **Exit**: decisions recorded as ADRs; spike numbers replace the goals in D28 or the goals are changed.
@@ -28,7 +28,7 @@ Rewritten after the design review. Assumes a team of **four to five engineers** 
 - River integration; job and event abstractions; per-tenant concurrency cap.
 - `internal/config/apply`; operator with `Tenant`, `Application`, `ScanSource` reconcilers; `rampart apply -f` for file mode; envtest.
 - Secret material sync (operator → encrypted table).
-- Helm chart (monolithic, bundled CNPG and MinIO) and Docker Compose with seed resources.
+- Helm chart (monolithic, bundled CNPG and SeaweedFS) and Docker Compose with seed resources.
 - CI: lint, unit, testcontainers, envtest, cross-tenant leak test harness, ko build, cosign, SBOM, SLSA provenance.
 - Frontend: app shell, tokens and base components from [13](13-frontend.md) §6, login screen against the static OIDC provider.
 - **Exit**: `helm install` works; applying an `Application` shows `Ready=True`; `rampart -target=all` boots from Compose with a usable default tenant; a user can log in and see an empty workbench.

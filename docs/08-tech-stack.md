@@ -8,7 +8,7 @@
 | Internal RPC | none initially (all targets share Postgres + jobs); **connect-go** if cross-target RPC becomes necessary | gRPC + gateway | avoid premature service mesh |
 | Database | **PostgreSQL 16+** via **pgx/v5**; **sqlc** for queries (`:copyfrom` for bulk); **goose** embedded migrations | GORM/ent, Atlas | explicit SQL, no ORM overhead at 5M rows |
 | Jobs / events | **River** (Postgres-backed, transactional) as default `EventBus`; **NATS JetStream** adapter optional | Kafka, Redis Streams, RabbitMQ, pgmq | zero extra infra, outbox for free, scales to NATS |
-| Object storage | S3 API via **aws-sdk-go-v2** (works with MinIO, SeaweedFS, Garage, Ceph, GCS/Azure via gateway) | — | |
+| Object storage | S3 API via **aws-sdk-go-v2** (bundled default **SeaweedFS**; also Garage, Ceph RGW, AWS S3, GCS/Azure via gateway. MinIO community edition is not used: it is in maintenance mode, see D31) | — | |
 | Cache / rate limit | **Valkey** (optional), in-process fallback | Redis | |
 | Kubernetes | **kubebuilder v4** + **controller-runtime v0.23**, **controller-gen** for CRDs/RBAC, CEL validation markers | operator-sdk | |
 | Integration plugins | **wazero** (pure-Go WebAssembly runtime, WASI) for parser plugins; **connect-go** for gRPC connector plugins; OCI artifacts via `oras-go`, verification via `sigstore-go` | Extism, hashicorp/go-plugin | sandbox for untrusted parsers without CGO; out-of-process connectors with their own identity |
@@ -27,7 +27,7 @@
 | Templating (notifications) | Go `text/template` with sprig subset | | |
 | PDF reports | server-side HTML → PDF via headless Chromium Job (rod) or `maroto`; HTML/CSV/JSON first | | |
 | Web UI | **React + TypeScript + Vite**, TanStack Query/Table, generated OpenAPI client; embedded into the binary with `embed` for monolithic mode | htmx/templ | rich findings explorer needs a real SPA |
-| Testing | `testing` + testify, **testcontainers-go** (Postgres, MinIO), **envtest** for operator, golden files for parsers, k6 for load | | |
+| Testing | `testing` + testify, **testcontainers-go** (Postgres, SeaweedFS), **envtest** for operator, golden files for parsers, k6 for load | | |
 | Build / release | **ko** (multi-arch, distroless, SBOM) or buildx; **goreleaser** for CLI; **cosign** sign + attest; Helm chart as OCI | | |
 | Docs | this `docs/` folder; OpenAPI served at `/api/v1/openapi.json`; CRD reference generated with `crd-ref-docs` | | |
 

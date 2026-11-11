@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/config"
+	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/ingest"
@@ -157,7 +158,32 @@ func (r *Runner) Run(ctx context.Context) error {
 		})
 	}
 
-	queue := jobs.NewInMemJobQueue()
+	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
+	if pgStore != nil {
+		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, nil)
+		if err != nil {
+			return fmt.Errorf("initializing river job queue: %w", err)
+		}
+		if err := riverQ.Start(ctx); err != nil {
+			return fmt.Errorf("starting river job queue: %w", err)
+		}
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = riverQ.Stop(stopCtx)
+		}()
+		queue = riverQ
+		r.logger.Info("river job queue started (PostgreSQL backed)")
+	}
+
+	// D4: declarative configuration (tenants, namespaces, sources) is written by rampart_system.
+	configBackend := storeBackend
+	if systemBackend != nil {
+		configBackend = systemBackend
+	}
+	r.autoApplyDefaultResources(ctx, configBackend)
+
 	feeds := enrich.NewFeedStore()
 	registry := integrations.DefaultRegistry()
 
@@ -272,4 +298,33 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func (r *Runner) autoApplyDefaultResources(ctx context.Context, configStore store.Store) {
+	candidates := []string{
+		"/etc/rampart/resources.yaml",
+		"/etc/rampart/resources.json",
+		"deploy/compose/resources/default-resources.yaml",
+		"deploy/compose/resources/default-resources.json",
+	}
+
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			var appStore apply.ConfigStore
+			if cs, ok := configStore.(apply.ConfigStore); ok {
+				appStore = cs
+			} else {
+				appStore = apply.NewMemoryConfigStore()
+			}
+			applier := apply.NewApplier(appStore)
+			results, err := applier.ApplyMultiDocument(ctx, data)
+			if err != nil {
+				r.logger.Warn("failed to auto-apply declarative resources on boot", "path", path, "err", err)
+			} else {
+				r.logger.Info("auto-applied declarative resources on boot", "path", path, "count", len(results))
+			}
+			break
+		}
+	}
 }

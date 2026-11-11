@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rampart.fullname" . }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "rampart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "rampart.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "rampart.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # D1: no Kubernetes API access unless the operator runs in this pod.
+      automountServiceAccountToken: {{ .Values.operator.enabled }}
+      initContainers:
+        - name: wait-for-migrations
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "wait", "--min-version={{ .Values.database.minSchemaVersion }}", "--timeout=300s"]
+          env:
+            {{- include "rampart.dbEnv" (dict "root" . "role" "runtime") | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-target=all"]
+          env:
+            {{- include "rampart.dbEnv" (dict "root" . "role" "runtime") | nindent 12 }}
+            # Migrations run in their own Job (D4), never in the application pod.
+            - name: RAMPART_DATABASE_AUTO_MIGRATE
+              value: "false"
+            - name: RAMPART_OBJECT_STORAGE_ENDPOINT
+              value: {{ if .Values.seaweedfs.enabled }}{{ printf "http://%s-objectstore:8333" (include "rampart.fullname" .) | quote }}{{ else }}{{ required "objectStorage.endpoint is required when seaweedfs.enabled=false" .Values.objectStorage.endpoint | quote }}{{ end }}
+            - name: RAMPART_OBJECT_STORAGE_BUCKET_RAW
+              value: {{ .Values.objectStorage.bucketRaw | quote }}
+            - name: RAMPART_LOG_LEVEL
+              value: {{ .Values.telemetry.logLevel | quote }}
+            - name: RAMPART_LOG_FORMAT
+              value: {{ .Values.telemetry.logFormat | quote }}
+            - name: RAMPART_OPERATOR_MODE
+              value: {{ .Values.operator.mode | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: ops
+              containerPort: 9090
+              protocol: TCP
+          # doc 15 / D6: /healthz is liveness (no dependency checks), /readyz is readiness.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: ops
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: ops
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

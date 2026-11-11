@@ -1,0 +1,94 @@
+{{- /*
+Bundled S3-compatible object store: SeaweedFS (Apache-2.0, one `weed` binary with an S3 gateway).
+Any S3 API works instead (set seaweedfs.enabled=false and objectStorage.endpoint). Credentials are
+generated once into a Secret and kept across upgrades; they never go through values.
+*/}}
+{{- if .Values.seaweedfs.enabled }}
+{{- $name := printf "%s-objectstore" (include "rampart.fullname" .) }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+data:
+  accessKey: {{ if and $existing $existing.data }}{{ index $existing.data "accessKey" }}{{ else }}{{ randAlphaNum 20 | b64enc }}{{ end }}
+  secretKey: {{ if and $existing $existing.data }}{{ index $existing.data "secretKey" }}{{ else }}{{ randAlphaNum 40 | b64enc }}{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: s3
+  selector:
+    app.kubernetes.io/name: {{ include "rampart.name" . }}-objectstore
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "rampart.name" . }}-objectstore
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "rampart.name" . }}-objectstore
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seaweedfs
+          image: {{ .Values.seaweedfs.image }}
+          # master, volume, filer and the S3 gateway in one process (standalone).
+          args: ["server", "-dir=/data", "-s3", "-ip.bind=0.0.0.0"]
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ $name }}, key: accessKey}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ $name }}, key: secretKey}}
+          ports:
+            - name: s3
+              containerPort: 8333
+          readinessProbe:
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 5
+          livenessProbe:
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.persistence.size }}
+{{- end }}

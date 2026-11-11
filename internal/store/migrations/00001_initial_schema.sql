@@ -97,6 +97,15 @@ CREATE TABLE tenant (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- D20: a Tenant lists the namespaces it owns; the binding comes only from that list.
+-- Control-plane table: one owner per namespace, written by rampart_system only.
+CREATE TABLE tenant_namespace (
+    namespace TEXT PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_tenant_namespace_tenant ON tenant_namespace (tenant_id);
+
 CREATE TABLE app_user (
     id UUID PRIMARY KEY,
     issuer TEXT NOT NULL,
@@ -154,6 +163,33 @@ CREATE TABLE secret_material (
 ALTER TABLE secret_material ENABLE ROW LEVEL SECURITY;
 ALTER TABLE secret_material FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON secret_material
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE session (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_session_tenant_user ON session (tenant_id, user_id);
+ALTER TABLE session ENABLE ROW LEVEL SECURITY;
+ALTER TABLE session FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON session
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE local_admin (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, username)
+);
+ALTER TABLE local_admin ENABLE ROW LEVEL SECURITY;
+ALTER TABLE local_admin FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON local_admin
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
 -- ============================================================================
@@ -358,6 +394,31 @@ CREATE UNLOGGED TABLE ingest_staging (
 );
 CREATE INDEX idx_ingest_staging_run_key ON ingest_staging (ingest_run_id, finding_key);
 
+CREATE TABLE action_ledger (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    policy_id UUID NOT NULL,
+    finding_id UUID NOT NULL,
+    action TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, policy_id, finding_id, action)
+);
+ALTER TABLE action_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE action_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON action_ledger
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE tenant_queue_limit (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    queue_name TEXT NOT NULL,
+    max_concurrency INT NOT NULL DEFAULT 5,
+    current_concurrency INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, queue_name)
+);
+ALTER TABLE tenant_queue_limit ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_queue_limit FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON tenant_queue_limit
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
 -- ============================================================================
 -- 6. Findings & Occurrences (D11, D12, D13, D18, D28)
 -- ============================================================================
@@ -398,6 +459,9 @@ CREATE TABLE finding (
     fix_available BOOLEAN NOT NULL DEFAULT FALSE,
     hierarchy_path TEXT,
     environment_kind TEXT,
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    sla_due_date TIMESTAMPTZ,
+    search TSVECTOR,
     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at TIMESTAMPTZ,
@@ -417,6 +481,8 @@ CREATE INDEX idx_finding_tenant_severity ON finding (tenant_id, severity);
 CREATE INDEX idx_finding_tenant_risk_score ON finding (tenant_id, risk_score DESC);
 CREATE INDEX idx_finding_tenant_purl_base ON finding (tenant_id, purl_base) WHERE purl_base IS NOT NULL;
 CREATE INDEX idx_finding_tenant_vuln ON finding (tenant_id, vulnerability_id) WHERE vulnerability_id IS NOT NULL;
+CREATE INDEX idx_finding_tenant_tags ON finding USING GIN (tags);
+CREATE INDEX idx_finding_tenant_search ON finding USING GIN (search);
 
 ALTER TABLE finding ENABLE ROW LEVEL SECURITY;
 ALTER TABLE finding FORCE ROW LEVEL SECURITY;
@@ -483,13 +549,14 @@ CREATE TABLE finding_event (
     PRIMARY KEY (at, id)
 ) PARTITION BY RANGE (at);
 
--- Default initial partition
-CREATE TABLE finding_event_y2026 PARTITION OF finding_event
-    FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
-
--- Safety net: rows outside the pre-created ranges must not fail the pipeline.
--- The scheduler's maintenance job (D4) creates monthly partitions ahead of time.
-CREATE TABLE finding_event_default PARTITION OF finding_event DEFAULT;
+-- Monthly initial partitions (D4)
+CREATE TABLE IF NOT EXISTS finding_event_y2026_m11 PARTITION OF finding_event
+    FOR VALUES FROM ('2026-11-01 00:00:00+00') TO ('2026-12-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS finding_event_y2026_m12 PARTITION OF finding_event
+    FOR VALUES FROM ('2026-12-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS finding_event_y2027_m01 PARTITION OF finding_event
+    FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2027-02-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS finding_event_default PARTITION OF finding_event DEFAULT;
 
 CREATE INDEX idx_finding_event_finding ON finding_event (tenant_id, finding_id, at DESC);
 ALTER TABLE finding_event ENABLE ROW LEVEL SECURITY;
@@ -513,10 +580,14 @@ CREATE TABLE audit_event (
     PRIMARY KEY (at, id)
 ) PARTITION BY RANGE (at);
 
-CREATE TABLE audit_event_y2026 PARTITION OF audit_event
-    FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
-
-CREATE TABLE audit_event_default PARTITION OF audit_event DEFAULT;
+-- Monthly initial partitions (D4)
+CREATE TABLE IF NOT EXISTS audit_event_y2026_m11 PARTITION OF audit_event
+    FOR VALUES FROM ('2026-11-01 00:00:00+00') TO ('2026-12-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS audit_event_y2026_m12 PARTITION OF audit_event
+    FOR VALUES FROM ('2026-12-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS audit_event_y2027_m01 PARTITION OF audit_event
+    FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2027-02-01 00:00:00+00');
+CREATE TABLE IF NOT EXISTS audit_event_default PARTITION OF audit_event DEFAULT;
 
 ALTER TABLE audit_event ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_event FORCE ROW LEVEL SECURITY;
@@ -630,8 +701,8 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rampart_app;
 
 -- D4/D19: tenants are written by the operator (rampart_system); global intelligence
 -- tables are written only by feed sync jobs. rampart_app reads them.
-REVOKE INSERT, UPDATE, DELETE ON tenant, vulnerability, vulnerability_alias, rule FROM rampart_app;
-REVOKE INSERT, UPDATE, DELETE ON tenant, vulnerability, vulnerability_alias, rule FROM rampart_ro;
+REVOKE INSERT, UPDATE, DELETE ON tenant, tenant_namespace, vulnerability, vulnerability_alias, rule FROM rampart_app;
+REVOKE INSERT, UPDATE, DELETE ON tenant, tenant_namespace, vulnerability, vulnerability_alias, rule FROM rampart_ro;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rampart_system;
 
 -- +goose Down
@@ -648,6 +719,10 @@ DROP TABLE IF EXISTS finding;
 DROP TABLE IF EXISTS ingest_staging;
 DROP TABLE IF EXISTS ingest_run_result;
 DROP TABLE IF EXISTS ingest_run_scope;
+DROP TABLE IF EXISTS tenant_queue_limit;
+DROP TABLE IF EXISTS action_ledger;
+DROP TABLE IF EXISTS local_admin;
+DROP TABLE IF EXISTS session;
 DROP TABLE IF EXISTS ingest_run;
 DROP TABLE IF EXISTS upload;
 DROP TABLE IF EXISTS scan_source;
@@ -659,6 +734,7 @@ DROP TABLE IF EXISTS secret_material;
 DROP TABLE IF EXISTS api_token;
 DROP TABLE IF EXISTS tenant_member;
 DROP TABLE IF EXISTS app_user;
+DROP TABLE IF EXISTS tenant_namespace;
 DROP TABLE IF EXISTS tenant;
 DROP TABLE IF EXISTS rule;
 DROP TABLE IF EXISTS vulnerability_alias;
