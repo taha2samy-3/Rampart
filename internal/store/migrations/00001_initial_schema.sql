@@ -1,11 +1,41 @@
 -- +goose Up
 -- Schema Version 1 (Rampart ASPM Foundation)
--- Normative References: docs/12-database-schema.md, docs/16-implementation-decisions.md (D1, D4, D5, D8, D10, D11, D12, D13, D18, D19, D28)
+-- Normative References: docs/12-database-schema.md, docs/16-implementation-decisions.md (D1, D4, D5, D8, D10, D11, D12, D13, D17, D18, D19, D21, D25, D28)
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Helper function for Row-Level Security predicate (D4)
+-- Nullif ensures an empty or unset tenant yields NULL, matching zero rows securely
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION current_tenant_id() RETURNS UUID AS $$
+    SELECT NULLIF(current_setting('app.tenant_id', true), '')::UUID;
+$$ LANGUAGE SQL STABLE;
+-- +goose StatementEnd
 
 -- ============================================================================
--- 1. Global Intelligence Tables (Shared, Read-Only to tenants, No RLS)
+-- 1. Database Roles & Grants (D4)
+-- ============================================================================
+-- Roles are normally provisioned by the platform (CNPG managed roles, Helm, or
+-- deploy/compose/initdb) with credentials from a Secret (D4). This only
+-- guarantees that they exist; it never sets a password or touches login.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_owner') THEN
+        CREATE ROLE rampart_owner NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_app') THEN
+        CREATE ROLE rampart_app NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_system') THEN
+        CREATE ROLE rampart_system NOLOGIN BYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_ro') THEN
+        CREATE ROLE rampart_ro NOLOGIN;
+    END IF;
+END $$;
+-- +goose StatementEnd
+
+-- ============================================================================
+-- 2. Global Intelligence Tables (Shared, Read-Only to tenants, No RLS)
 -- ============================================================================
 
 CREATE TABLE vulnerability (
@@ -29,11 +59,10 @@ CREATE TABLE vulnerability (
     modified TIMESTAMPTZ,
     affected JSONB,
     fixed_versions JSONB,
-    references JSONB,
+    "references" JSONB,
     source_payloads JSONB,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
 CREATE INDEX idx_vulnerability_aliases ON vulnerability USING GIN (aliases);
 
 CREATE TABLE vulnerability_alias (
@@ -55,7 +84,7 @@ CREATE TABLE rule (
 );
 
 -- ============================================================================
--- 2. Tenancy, Identity, Access (D4, D8)
+-- 3. Tenancy, Identity, Access (D4, D8, D17)
 -- ============================================================================
 
 CREATE TABLE tenant (
@@ -67,11 +96,6 @@ CREATE TABLE tenant (
     quotas JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- Helper function for Row-Level Security predicate (D4)
-CREATE OR REPLACE FUNCTION current_tenant_id() RETURNS UUID AS $$
-    SELECT NULLIF(current_setting('app.tenant_id', true), '')::UUID;
-$$ LANGUAGE SQL STABLE;
 
 CREATE TABLE app_user (
     id UUID PRIMARY KEY,
@@ -88,16 +112,52 @@ CREATE TABLE app_user (
 CREATE TABLE tenant_member (
     tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    role TEXT NOT NULL,
+    role TEXT NOT NULL, -- viewer | triager | admin
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tenant_id, user_id)
 );
 ALTER TABLE tenant_member ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_member FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON tenant_member
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
+CREATE TABLE api_token (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT 'default',
+    prefix TEXT NOT NULL,
+    hash BYTEA NOT NULL UNIQUE, -- SHA-256 of token secret (never plaintext, D17)
+    role TEXT NOT NULL DEFAULT 'viewer',
+    scan_source_id UUID, -- Optional restriction per D17
+    scopes TEXT[] NOT NULL DEFAULT '{}',
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ
+);
+CREATE INDEX idx_api_token_tenant ON api_token (tenant_id, prefix);
+CREATE INDEX idx_api_token_hash ON api_token (hash) WHERE revoked_at IS NULL;
+ALTER TABLE api_token ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_token FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON api_token
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE secret_material (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    encrypted_value BYTEA NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, key)
+);
+ALTER TABLE secret_material ENABLE ROW LEVEL SECURITY;
+ALTER TABLE secret_material FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON secret_material
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
 -- ============================================================================
--- 3. Inventory & Assets (D10)
+-- 4. Inventory & Assets (D10)
 -- ============================================================================
 
 CREATE TABLE application (
@@ -118,6 +178,7 @@ CREATE TABLE application (
     UNIQUE (tenant_id, slug)
 );
 ALTER TABLE application ENABLE ROW LEVEL SECURITY;
+ALTER TABLE application FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON application
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
@@ -127,8 +188,8 @@ CREATE TABLE asset (
     application_id UUID REFERENCES application(id) ON DELETE SET NULL, -- Nullable for shared assets (D10)
     service_id UUID,
     environment_id UUID,
-    type TEXT NOT NULL,
-    key TEXT NOT NULL,
+    type TEXT NOT NULL, -- repository | image | workload | url | sbom_project | package | host | cloud_resource
+    key TEXT NOT NULL, -- Stable natural key (D10)
     display_name TEXT,
     attributes JSONB NOT NULL DEFAULT '{}',
     active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -138,6 +199,7 @@ CREATE TABLE asset (
 );
 CREATE INDEX idx_asset_tenant_app ON asset (tenant_id, application_id);
 ALTER TABLE asset ENABLE ROW LEVEL SECURITY;
+ALTER TABLE asset FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON asset
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
@@ -151,11 +213,26 @@ CREATE TABLE asset_version (
     PRIMARY KEY (tenant_id, asset_id, version)
 );
 ALTER TABLE asset_version ENABLE ROW LEVEL SECURITY;
+ALTER TABLE asset_version FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON asset_version
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
+CREATE TABLE asset_edge (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    from_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    to_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    relation TEXT NOT NULL,
+    attributes JSONB NOT NULL DEFAULT '{}',
+    verified BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (tenant_id, from_id, to_id, relation)
+);
+ALTER TABLE asset_edge ENABLE ROW LEVEL SECURITY;
+ALTER TABLE asset_edge FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON asset_edge
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
 -- ============================================================================
--- 4. Sources and Ingestion (D2, D13)
+-- 5. Sources and Ingestion (D2, D9, D10, D13)
 -- ============================================================================
 
 CREATE TABLE scan_source (
@@ -171,14 +248,35 @@ CREATE TABLE scan_source (
     UNIQUE (tenant_id, name)
 );
 ALTER TABLE scan_source ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scan_source FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON scan_source
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE upload (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    scan_source_id UUID REFERENCES scan_source(id) ON DELETE SET NULL,
+    idempotency_key TEXT,
+    object_ref TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    format_hint TEXT,
+    context JSONB NOT NULL DEFAULT '{}',
+    options JSONB NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'created',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, idempotency_key)
+);
+ALTER TABLE upload ENABLE ROW LEVEL SECURITY;
+ALTER TABLE upload FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON upload
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
 CREATE TABLE ingest_run (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
-    upload_id UUID,
-    scan_source_id UUID NOT NULL REFERENCES scan_source(id) ON DELETE CASCADE,
+    upload_id UUID REFERENCES upload(id) ON DELETE SET NULL,
+    scan_source_id UUID REFERENCES scan_source(id) ON DELETE CASCADE,
     application_id UUID NOT NULL REFERENCES application(id) ON DELETE CASCADE,
     asset_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
     track TEXT NOT NULL DEFAULT 'default',
@@ -191,12 +289,48 @@ CREATE TABLE ingest_run (
     error TEXT,
     scan_started TIMESTAMPTZ,
     scan_finished TIMESTAMPTZ,
+    crd_uid TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
 );
 CREATE INDEX idx_ingest_run_tenant_status ON ingest_run (tenant_id, status);
+CREATE INDEX idx_ingest_run_tenant_asset ON ingest_run (tenant_id, asset_id, scanner_family, finished_at DESC);
 ALTER TABLE ingest_run ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_run FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON ingest_run
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE ingest_run_scope (
+    ingest_run_id UUID NOT NULL REFERENCES ingest_run(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    track TEXT NOT NULL,
+    scanner_family TEXT NOT NULL,
+    scan_source_id UUID NOT NULL,
+    last_applied_scan_finished TIMESTAMPTZ,
+    PRIMARY KEY (ingest_run_id, asset_id, track, scanner_family)
+);
+ALTER TABLE ingest_run_scope ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_run_scope FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON ingest_run_scope
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE ingest_run_result (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    ingest_run_id UUID NOT NULL REFERENCES ingest_run(id) ON DELETE CASCADE,
+    finding_key TEXT NOT NULL,
+    is_new BOOLEAN NOT NULL DEFAULT FALSE,
+    is_fixed BOOLEAN NOT NULL DEFAULT FALSE,
+    severity TEXT NOT NULL,
+    category TEXT NOT NULL,
+    location JSONB NOT NULL DEFAULT '{}',
+    raw_payload JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE ingest_run_result ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingest_run_result FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON ingest_run_result
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
 -- Unlogged staging table for fast COPY (D13 - No RLS, deleted per run, never truncated)
@@ -225,7 +359,7 @@ CREATE UNLOGGED TABLE ingest_staging (
 CREATE INDEX idx_ingest_staging_run_key ON ingest_staging (ingest_run_id, finding_key);
 
 -- ============================================================================
--- 5. Findings & Occurrences (D11, D12, D13, D18, D28)
+-- 6. Findings & Occurrences (D11, D12, D13, D18, D28)
 -- ============================================================================
 
 CREATE TABLE finding (
@@ -244,11 +378,14 @@ CREATE TABLE finding (
     cwes INT[] NOT NULL DEFAULT '{}',
     vulnerability_id TEXT,
     location JSONB NOT NULL,
+    purl_base TEXT,
+    file_path TEXT,
     tool_severity TEXT NOT NULL,
     severity TEXT NOT NULL,
     severity_override_reason TEXT,
     cvss_vector TEXT,
     risk_score INT NOT NULL DEFAULT 0,
+    risk_band TEXT NOT NULL DEFAULT 'low',
     state TEXT NOT NULL DEFAULT 'open', -- OpenVEX disposition (D18)
     previous_state TEXT,
     state_reason TEXT,
@@ -256,6 +393,11 @@ CREATE TABLE finding (
     content_hash TEXT NOT NULL,
     weak_fingerprint BOOLEAN NOT NULL DEFAULT FALSE,
     correlation_key TEXT,
+    kev BOOLEAN NOT NULL DEFAULT FALSE,
+    epss_bucket TEXT,
+    fix_available BOOLEAN NOT NULL DEFAULT FALSE,
+    hierarchy_path TEXT,
+    environment_kind TEXT,
     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at TIMESTAMPTZ,
@@ -273,9 +415,25 @@ CREATE INDEX idx_finding_tenant_asset_track ON finding (tenant_id, asset_id, tra
 CREATE INDEX idx_finding_tenant_state ON finding (tenant_id, state);
 CREATE INDEX idx_finding_tenant_severity ON finding (tenant_id, severity);
 CREATE INDEX idx_finding_tenant_risk_score ON finding (tenant_id, risk_score DESC);
+CREATE INDEX idx_finding_tenant_purl_base ON finding (tenant_id, purl_base) WHERE purl_base IS NOT NULL;
+CREATE INDEX idx_finding_tenant_vuln ON finding (tenant_id, vulnerability_id) WHERE vulnerability_id IS NOT NULL;
 
 ALTER TABLE finding ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON finding
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE finding_key_alias (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    old_key TEXT NOT NULL,
+    new_key TEXT NOT NULL,
+    finding_id UUID NOT NULL REFERENCES finding(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, old_key)
+);
+ALTER TABLE finding_key_alias ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding_key_alias FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON finding_key_alias
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
 CREATE TABLE occurrence (
@@ -283,8 +441,10 @@ CREATE TABLE occurrence (
     tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
     finding_id UUID NOT NULL REFERENCES finding(id) ON DELETE CASCADE,
     ingest_run_id UUID NOT NULL REFERENCES ingest_run(id) ON DELETE CASCADE,
-    scan_source_id UUID NOT NULL REFERENCES scan_source(id) ON DELETE CASCADE,
+    scan_source_id UUID REFERENCES scan_source(id) ON DELETE SET NULL,
     occurrence_key TEXT NOT NULL,
+    asset_id UUID NOT NULL,
+    track TEXT NOT NULL DEFAULT 'default',
     scanner_family TEXT NOT NULL,
     scanner_name TEXT NOT NULL,
     scanner_version TEXT,
@@ -297,15 +457,21 @@ CREATE TABLE occurrence (
     seen_count INT NOT NULL DEFAULT 1,
     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (tenant_id, finding_id, scan_source_id, occurrence_key)
+    UNIQUE NULLS NOT DISTINCT (tenant_id, finding_id, scan_source_id, occurrence_key)
 );
 CREATE INDEX idx_occurrence_tenant_finding ON occurrence (tenant_id, finding_id);
+CREATE INDEX idx_occurrence_scope_present ON occurrence (tenant_id, scan_source_id, scanner_family, asset_id, track) WHERE present = TRUE;
 ALTER TABLE occurrence ENABLE ROW LEVEL SECURITY;
+ALTER TABLE occurrence FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON occurrence
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
+-- ============================================================================
+-- 7. Events & Audit (Partitioned by range per D4)
+-- ============================================================================
+
 CREATE TABLE finding_event (
-    id UUID PRIMARY KEY,
+    id UUID NOT NULL,
     tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
     finding_id UUID NOT NULL REFERENCES finding(id) ON DELETE CASCADE,
     at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -313,23 +479,184 @@ CREATE TABLE finding_event (
     type TEXT NOT NULL,
     "from" JSONB,
     "to" JSONB,
-    note TEXT
-);
+    note TEXT,
+    PRIMARY KEY (at, id)
+) PARTITION BY RANGE (at);
+
+-- Default initial partition
+CREATE TABLE finding_event_y2026 PARTITION OF finding_event
+    FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
+
+-- Safety net: rows outside the pre-created ranges must not fail the pipeline.
+-- The scheduler's maintenance job (D4) creates monthly partitions ahead of time.
+CREATE TABLE finding_event_default PARTITION OF finding_event DEFAULT;
+
 CREATE INDEX idx_finding_event_finding ON finding_event (tenant_id, finding_id, at DESC);
 ALTER TABLE finding_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding_event FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON finding_event
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
 
+CREATE TABLE audit_event (
+    id UUID NOT NULL,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor JSONB NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    before JSONB,
+    after JSONB,
+    ip INET,
+    user_agent TEXT,
+    request_id TEXT,
+    PRIMARY KEY (at, id)
+) PARTITION BY RANGE (at);
+
+CREATE TABLE audit_event_y2026 PARTITION OF audit_event
+    FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
+
+CREATE TABLE audit_event_default PARTITION OF audit_event DEFAULT;
+
+ALTER TABLE audit_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_event FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON audit_event
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+-- ============================================================================
+-- 8. Tenant-Local Intelligence Tables (D19)
+-- ============================================================================
+
+CREATE TABLE vulnerability_local (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    aliases TEXT[] NOT NULL DEFAULT '{}',
+    summary TEXT,
+    description TEXT,
+    cwes INT[] NOT NULL DEFAULT '{}',
+    cvss JSONB NOT NULL DEFAULT '[]',
+    severity TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, id)
+);
+ALTER TABLE vulnerability_local ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vulnerability_local FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON vulnerability_local
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE vulnerability_alias_local (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    vulnerability_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, alias)
+);
+ALTER TABLE vulnerability_alias_local ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vulnerability_alias_local FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON vulnerability_alias_local
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE rule_local (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    scanner_family TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    name TEXT,
+    description TEXT,
+    default_severity TEXT,
+    cwes INT[] NOT NULL DEFAULT '{}',
+    category TEXT NOT NULL,
+    tags TEXT[] NOT NULL DEFAULT '{}',
+    PRIMARY KEY (tenant_id, scanner_family, rule_id)
+);
+ALTER TABLE rule_local ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rule_local FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON rule_local
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+-- ============================================================================
+-- 9. Supply Chain & SBOM (docs/12)
+-- ============================================================================
+
+CREATE TABLE sbom (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    asset_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    ingest_run_id UUID REFERENCES ingest_run(id) ON DELETE SET NULL,
+    format TEXT NOT NULL,
+    spec_version TEXT NOT NULL,
+    serial TEXT,
+    object_ref TEXT,
+    root_component TEXT,
+    component_count INT NOT NULL DEFAULT 0,
+    dependencies JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_sbom_tenant_asset ON sbom (tenant_id, asset_id);
+ALTER TABLE sbom ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sbom FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON sbom
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+CREATE TABLE sbom_component (
+    tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    sbom_id UUID NOT NULL REFERENCES sbom(id) ON DELETE CASCADE,
+    ref TEXT NOT NULL,
+    purl TEXT NOT NULL,
+    purl_base TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    licenses TEXT[] NOT NULL DEFAULT '{}',
+    scope TEXT,
+    direct BOOLEAN NOT NULL DEFAULT FALSE,
+    hashes JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY (tenant_id, sbom_id, ref)
+);
+CREATE INDEX idx_sbom_comp_tenant_purl ON sbom_component (tenant_id, purl_base);
+ALTER TABLE sbom_component ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sbom_component FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON sbom_component
+    USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+-- ============================================================================
+-- 10. Role Grants (D4)
+-- ============================================================================
+
+GRANT USAGE ON SCHEMA public TO rampart_app, rampart_ro, rampart_system;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rampart_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rampart_system;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO rampart_ro;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO rampart_owner;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO rampart_owner;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rampart_app;
+
+-- D4/D19: tenants are written by the operator (rampart_system); global intelligence
+-- tables are written only by feed sync jobs. rampart_app reads them.
+REVOKE INSERT, UPDATE, DELETE ON tenant, vulnerability, vulnerability_alias, rule FROM rampart_app;
+REVOKE INSERT, UPDATE, DELETE ON tenant, vulnerability, vulnerability_alias, rule FROM rampart_ro;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rampart_system;
+
 -- +goose Down
+DROP TABLE IF EXISTS sbom_component;
+DROP TABLE IF EXISTS sbom;
+DROP TABLE IF EXISTS rule_local;
+DROP TABLE IF EXISTS vulnerability_alias_local;
+DROP TABLE IF EXISTS vulnerability_local;
+DROP TABLE IF EXISTS audit_event;
 DROP TABLE IF EXISTS finding_event;
 DROP TABLE IF EXISTS occurrence;
+DROP TABLE IF EXISTS finding_key_alias;
 DROP TABLE IF EXISTS finding;
 DROP TABLE IF EXISTS ingest_staging;
+DROP TABLE IF EXISTS ingest_run_result;
+DROP TABLE IF EXISTS ingest_run_scope;
 DROP TABLE IF EXISTS ingest_run;
+DROP TABLE IF EXISTS upload;
 DROP TABLE IF EXISTS scan_source;
+DROP TABLE IF EXISTS asset_edge;
 DROP TABLE IF EXISTS asset_version;
 DROP TABLE IF EXISTS asset;
 DROP TABLE IF EXISTS application;
+DROP TABLE IF EXISTS secret_material;
+DROP TABLE IF EXISTS api_token;
 DROP TABLE IF EXISTS tenant_member;
 DROP TABLE IF EXISTS app_user;
 DROP TABLE IF EXISTS tenant;
@@ -337,4 +664,3 @@ DROP TABLE IF EXISTS rule;
 DROP TABLE IF EXISTS vulnerability_alias;
 DROP TABLE IF EXISTS vulnerability;
 DROP FUNCTION IF EXISTS current_tenant_id();
-

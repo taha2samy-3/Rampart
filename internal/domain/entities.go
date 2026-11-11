@@ -195,6 +195,43 @@ type IngestRun struct {
 	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
 }
 
+// IngestRunScope tracks an asset/track scope touched by a run (D10, D13).
+type IngestRunScope struct {
+	IngestRunID   uuid.UUID `json:"ingest_run_id"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	ScanSourceID  uuid.UUID `json:"scan_source_id"`
+	ScannerFamily string    `json:"scanner_family"`
+	AssetID       uuid.UUID `json:"asset_id"`
+	Track         string    `json:"track"`
+}
+
+// CloseScope uniquely identifies the rescan closure boundary (normative D13).
+type CloseScope struct {
+	TenantID      uuid.UUID `json:"tenant_id"`
+	ScanSourceID  uuid.UUID `json:"scan_source_id"`
+	ScannerFamily string    `json:"scanner_family"`
+	AssetID       uuid.UUID `json:"asset_id"`
+	Track         string    `json:"track"`
+}
+
+func (s CloseScope) Key() string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", s.TenantID, s.ScanSourceID, s.ScannerFamily, s.AssetID, s.Track)
+}
+
+// IngestRunResult stores ephemeral scan run findings for gate evaluation without polluting inventory (D10).
+type IngestRunResult struct {
+	TenantID    uuid.UUID       `json:"tenant_id"`
+	IngestRunID uuid.UUID       `json:"ingest_run_id"`
+	FindingKey  string          `json:"finding_key"`
+	IsNew       bool            `json:"is_new"`   // absent from the baseline track (D26)
+	IsFixed     bool            `json:"is_fixed"` // present in baseline, absent here
+	Severity    Severity        `json:"severity"`
+	Category    FindingCategory `json:"category"`
+	Location    Location        `json:"location"`
+	RawPayload  json.RawMessage `json:"raw_payload,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
 // Finding represents the deduplicated, triaged vulnerability entity (D11, D18, D28).
 type Finding struct {
 	ID                     uuid.UUID       `json:"id"`

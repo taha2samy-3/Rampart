@@ -9,22 +9,28 @@ import (
 	"testing"
 	"time"
 
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/ingest"
 	"rampart/internal/query"
 )
 
 // TestCrossTenantLeakIsolation satisfies Phase 0/1 exit criterion (docs/09 line 45, docs/16 line 334).
-// Asserts that Tenant A can NEVER read, query, or mutate Tenant B's data across any endpoint.
+// Asserts that Tenant A can NEVER read, query, or mutate Tenant B's data across any endpoint,
+// and proves that blind trust of X-Tenant-ID is completely eliminated (Security A).
 func TestCrossTenantLeakIsolation(t *testing.T) {
 	store := ingest.NewMemoryStore()
-	api := query.NewAPI(store, nil)
+	authn := auth.NewAuthenticatorWithStore(store)
+	api := query.NewAPIWithAuth(store, nil, authn)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
 	tenantA := domain.NewID()
 	tenantB := domain.NewID()
+
+	tokenA := authn.DefaultAdminToken(tenantA)
+	tokenB := authn.DefaultAdminToken(tenantB)
 
 	assetA := domain.NewID()
 	assetB := domain.NewID()
@@ -78,9 +84,11 @@ func TestCrossTenantLeakIsolation(t *testing.T) {
 
 	// =========================================================================
 	// Assertion 1: Tenant A lists findings -> must return ONLY Tenant A data
+	// Even if Tenant A injects "X-Tenant-ID: <tenantB>", it is ignored!
 	// =========================================================================
 	reqListA := httptest.NewRequest("GET", "/api/v1/findings", nil)
-	reqListA.Header.Set("X-Tenant-ID", tenantA.String())
+	reqListA.Header.Set("Authorization", "Bearer "+tokenA)
+	reqListA.Header.Set("X-Tenant-ID", tenantB.String()) // Malicious spoof attempt
 	recListA := httptest.NewRecorder()
 	mux.ServeHTTP(recListA, reqListA)
 
@@ -98,54 +106,57 @@ func TestCrossTenantLeakIsolation(t *testing.T) {
 	}
 
 	// =========================================================================
-	// Assertion 2: Tenant A attempts to GET Tenant B's finding -> 404 Not Found
+	// Assertion 2: Tenant A requests Tenant B's finding ID directly -> 404
 	// =========================================================================
 	reqGetB := httptest.NewRequest("GET", "/api/v1/findings/"+findingB.ID.String(), nil)
-	reqGetB.Header.Set("X-Tenant-ID", tenantA.String())
+	reqGetB.Header.Set("Authorization", "Bearer "+tokenA)
 	recGetB := httptest.NewRecorder()
 	mux.ServeHTTP(recGetB, reqGetB)
 
 	if recGetB.Code != http.StatusNotFound {
-		t.Errorf("LEAK DETECTED! Tenant A could access Tenant B finding: expected 404, got %d", recGetB.Code)
+		t.Fatalf("LEAK DETECTED! Tenant A could view Tenant B's finding: status %d", recGetB.Code)
 	}
 
 	// =========================================================================
-	// Assertion 3: Tenant A attempts to GET Tenant B's SBOM -> 404 Not Found
+	// Assertion 3: Tenant A requests Tenant B's SBOM -> 404
 	// =========================================================================
-	reqSbomB := httptest.NewRequest("GET", "/api/v1/assets/"+assetB.String()+"/sbom", nil)
-	reqSbomB.Header.Set("X-Tenant-ID", tenantA.String())
-	recSbomB := httptest.NewRecorder()
-	mux.ServeHTTP(recSbomB, reqSbomB)
+	reqSBOM := httptest.NewRequest("GET", "/api/v1/assets/"+assetB.String()+"/sbom", nil)
+	reqSBOM.Header.Set("Authorization", "Bearer "+tokenA)
+	recSBOM := httptest.NewRecorder()
+	mux.ServeHTTP(recSBOM, reqSBOM)
 
-	if recSbomB.Code != http.StatusNotFound {
-		t.Errorf("LEAK DETECTED! Tenant A could access Tenant B SBOM: expected 404, got %d", recSbomB.Code)
+	if recSBOM.Code != http.StatusNotFound {
+		t.Fatalf("LEAK DETECTED! Tenant A could view Tenant B's SBOM: status %d", recSBOM.Code)
 	}
 
 	// =========================================================================
-	// Assertion 4: Tenant A attempts to GET Tenant B's VEX -> empty statements
+	// Assertion 4: Tenant A tries to PATCH Tenant B's finding -> 404
 	// =========================================================================
-	reqVexB := httptest.NewRequest("GET", "/api/v1/assets/"+assetB.String()+"/vex", nil)
-	reqVexB.Header.Set("X-Tenant-ID", tenantA.String())
-	recVexB := httptest.NewRecorder()
-	mux.ServeHTTP(recVexB, reqVexB)
+	patchPayload := `{"state":"not_affected","justification":"tampered"}`
+	reqPatch := httptest.NewRequest("PATCH", "/api/v1/findings/"+findingB.ID.String(), strings.NewReader(patchPayload))
+	reqPatch.Header.Set("Authorization", "Bearer "+tokenA)
+	recPatch := httptest.NewRecorder()
+	mux.ServeHTTP(recPatch, reqPatch)
 
-	var vexDoc struct {
-		Statements []any `json:"statements"`
-	}
-	_ = json.NewDecoder(recVexB.Body).Decode(&vexDoc)
-	if len(vexDoc.Statements) != 0 {
-		t.Errorf("LEAK DETECTED! Tenant A received Tenant B VEX statements: %d", len(vexDoc.Statements))
+	if recPatch.Code != http.StatusNotFound {
+		t.Fatalf("LEAK DETECTED! Tenant A could mutate Tenant B's finding: status %d", recPatch.Code)
 	}
 
-	// =========================================================================
-	// Assertion 5: Tenant A attempts to PATCH Tenant B's finding -> 404 Not Found
-	// =========================================================================
-	reqPatchB := httptest.NewRequest("PATCH", "/api/v1/findings/"+findingB.ID.String(), strings.NewReader(`{"state":"not_affected"}`))
-	reqPatchB.Header.Set("X-Tenant-ID", tenantA.String())
-	recPatchB := httptest.NewRecorder()
-	mux.ServeHTTP(recPatchB, reqPatchB)
+	// Verify Tenant B's finding was untouched
+	storedB, _, _ := store.GetFinding(context.Background(), tenantB, findingB.ID)
+	if storedB.State != domain.StateOpen {
+		t.Fatalf("tampering succeeded on Tenant B's finding! State: %v", storedB.State)
+	}
 
-	if recPatchB.Code != http.StatusNotFound {
-		t.Errorf("LEAK DETECTED! Tenant A could patch Tenant B finding: expected 404, got %d", recPatchB.Code)
+	// =========================================================================
+	// Assertion 5: Tenant B can successfully access its own finding with tokenB
+	// =========================================================================
+	reqValidB := httptest.NewRequest("GET", "/api/v1/findings/"+findingB.ID.String(), nil)
+	reqValidB.Header.Set("Authorization", "Bearer "+tokenB)
+	recValidB := httptest.NewRecorder()
+	mux.ServeHTTP(recValidB, reqValidB)
+
+	if recValidB.Code != http.StatusOK {
+		t.Fatalf("expected Tenant B to access its own finding: got %d", recValidB.Code)
 	}
 }

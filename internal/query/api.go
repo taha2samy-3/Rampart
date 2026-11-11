@@ -1,8 +1,12 @@
 package query
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,12 +15,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/graph"
-	"rampart/internal/ingest"
 	"rampart/internal/query/grammar"
 	"rampart/internal/risk"
+	"rampart/internal/store"
 )
 
 const (
@@ -26,15 +31,27 @@ const (
 
 // API provides HTTP handlers for the read path /api/v1 (docs/11, docs/16 D14, D16).
 type API struct {
-	store *ingest.MemoryStore
-	feeds *enrich.FeedStore
+	store   store.Store
+	feeds   *enrich.FeedStore
+	authn   *auth.Authenticator
+	hmacKey []byte
 }
 
 // NewAPI creates an instance of API backed by an ingest store and threat intelligence feeds.
-func NewAPI(store *ingest.MemoryStore, feeds *enrich.FeedStore) *API {
+func NewAPI(s store.Store, feeds *enrich.FeedStore) *API {
+	return NewAPIWithAuth(s, feeds, nil)
+}
+
+// NewAPIWithAuth creates an instance of API with an explicit authenticator.
+func NewAPIWithAuth(s store.Store, feeds *enrich.FeedStore, authn *auth.Authenticator) *API {
+	if authn == nil {
+		authn = auth.NewAuthenticatorWithStore(s)
+	}
 	return &API{
-		store: store,
-		feeds: feeds,
+		store:   s,
+		feeds:   feeds,
+		authn:   authn,
+		hmacKey: []byte("rampart-cursor-hmac-secret-v1"),
 	}
 }
 
@@ -68,8 +85,69 @@ type ListFindingsResponse struct {
 	NextCursor string            `json:"next_cursor,omitempty"`
 }
 
+type cursorData struct {
+	Offset int    `json:"offset"`
+	Sort   string `json:"sort"`
+	Filter string `json:"filter"`
+}
+
+func (a *API) encodeCursor(offset int, sortKey, filter string) string {
+	data, _ := json.Marshal(cursorData{Offset: offset, Sort: sortKey, Filter: filter})
+	mac := hmac.New(sha256.New, a.hmacKey)
+	mac.Write(data)
+	sig := hex.EncodeToString(mac.Sum(nil))
+	combined := fmt.Sprintf("%s.%s", base64.RawURLEncoding.EncodeToString(data), sig)
+	return base64.RawURLEncoding.EncodeToString([]byte(combined))
+}
+
+func (a *API) decodeCursor(cursor string, sortKey, filter string) (int, error) {
+	rawCombined, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return 0, err
+	}
+	parts := strings.Split(string(rawCombined), ".")
+	if len(parts) != 2 {
+		return 0, errors.New("invalid cursor format")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return 0, err
+	}
+	expectedMAC := hmac.New(sha256.New, a.hmacKey)
+	expectedMAC.Write(data)
+	if hex.EncodeToString(expectedMAC.Sum(nil)) != parts[1] {
+		return 0, errors.New("invalid cursor signature")
+	}
+	var cd cursorData
+	if err := json.Unmarshal(data, &cd); err != nil {
+		return 0, err
+	}
+	if cd.Sort != sortKey || cd.Filter != filter {
+		return 0, errors.New("cursor invalidated by sort or filter change")
+	}
+	return cd.Offset, nil
+}
+
+func (a *API) resolveTenant(r *http.Request) (uuid.UUID, error) {
+	if tid, err := auth.TenantFromContext(r.Context()); err == nil && tid != domain.NilID {
+		return tid, nil
+	}
+	if a.authn != nil {
+		if u, err := a.authn.AuthenticateRequest(r); err == nil && u != nil && u.TenantID != domain.NilID {
+			return u.TenantID, nil
+		}
+	}
+	return domain.NilID, auth.ErrUnauthorized
+}
+
 func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
 
 	// 1. Fetch raw findings for tenant (isolated by RLS)
 	all, err := a.store.ListFindings(r.Context(), tenantID)
@@ -106,7 +184,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	sortFindings(filtered, sortKey)
 
-	// 5. Pagination
+	// 5. Pagination with HMAC signed cursor (D16)
 	limit := DefaultLimit
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if parsedL, err := strconv.Atoi(lStr); err == nil && parsedL > 0 {
@@ -119,10 +197,8 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 
 	offset := 0
 	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
-		if decoded, err := base64.URLEncoding.DecodeString(cursor); err == nil {
-			if parsedOffset, err := strconv.Atoi(string(decoded)); err == nil {
-				offset = parsedOffset
-			}
+		if parsedOffset, err := a.decodeCursor(cursor, sortKey, qParam); err == nil {
+			offset = parsedOffset
 		}
 	}
 
@@ -151,8 +227,12 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 			Title:    f.Title,
 		}
 
+		env := f.Track
+		if env == "" {
+			env = "production"
+		}
 		riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-			Environment: "production",
+			Environment: env,
 			FirstSeen:   f.FirstSeen,
 		}, a.feeds)
 
@@ -167,7 +247,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 
 	nextCursor := ""
 	if end < total {
-		nextCursor = base64.URLEncoding.EncodeToString([]byte(strconv.Itoa(end)))
+		nextCursor = a.encodeCursor(end, sortKey, qParam)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -180,7 +260,14 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	findingID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -205,8 +292,12 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		Title:    finding.Title,
 	}
 
+	env := finding.Track
+	if env == "" {
+		env = "production"
+	}
 	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-		Environment: "production",
+		Environment: env,
 		FirstSeen:   finding.FirstSeen,
 	}, a.feeds)
 
@@ -225,7 +316,14 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetAssetSBOM(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	assetID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -253,7 +351,14 @@ func (a *API) handleGetAssetSBOM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetAssetSBOMGraph(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	assetID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -299,7 +404,7 @@ func (a *API) handleGetAssetSBOMGraph(w http.ResponseWriter, r *http.Request) {
 		TotalComponents:      len(comps),
 		DirectComponents:     directCount,
 		TransitiveComponents: transitiveCount,
-		Edges:                sbom.Dependencies,
+		Edges:                depGraph.Edges,
 		Mermaid:              depGraph.RenderMermaid(),
 		Tree:                 depGraph.RenderTextTree(),
 	}
@@ -310,7 +415,14 @@ func (a *API) handleGetAssetSBOMGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	assetID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -332,8 +444,8 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 
 	depGraph := graph.NewDependencyGraph(comps, sbom.Dependencies, sbom.RootComponent)
 	path := depGraph.FindShortestPath(target)
-	if path == nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"No path found to target in dependency graph"}`, http.StatusNotFound)
+	if len(path) == 0 {
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"No dependency path to target found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -372,7 +484,14 @@ type PatchFindingRequest struct {
 }
 
 func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	findingID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -392,6 +511,8 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var events []*domain.FindingEvent
+
 	if req.State != "" {
 		newState := domain.FindingState(req.State)
 		if !newState.IsValid() {
@@ -402,11 +523,25 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf(`{"type":"https://rampart.aspm.dev/problems/validation","title":%q}`, err.Error()), http.StatusBadRequest)
 			return
 		}
-		finding.PreviousState = finding.State
+		oldState := finding.State
+		finding.PreviousState = oldState
 		finding.State = newState
 		finding.StateReason = req.Justification
 		finding.Version++
 		finding.UpdatedAt = time.Now().UTC()
+
+		fromStateJSON, _ := json.Marshal(oldState)
+		toStateJSON, _ := json.Marshal(newState)
+		events = append(events, &domain.FindingEvent{
+			ID:        domain.NewID(),
+			FindingID: finding.ID,
+			At:        time.Now().UTC(),
+			Actor:     "user",
+			Type:      "state_changed",
+			From:      fromStateJSON,
+			To:        toStateJSON,
+			Note:      req.Justification,
+		})
 	}
 
 	if req.Severity != "" {
@@ -420,6 +555,9 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = a.store.UpsertFindings(r.Context(), tenantID, []*domain.Finding{finding})
+	if len(events) > 0 {
+		_ = a.store.RecordFindingEvents(r.Context(), tenantID, events)
+	}
 
 	var vulnIDs []string
 	if finding.VulnerabilityID != nil {
@@ -432,8 +570,12 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 		Title:    finding.Title,
 	}
 
+	env := finding.Track
+	if env == "" {
+		env = "production"
+	}
 	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-		Environment: "production",
+		Environment: env,
 		FirstSeen:   finding.FirstSeen,
 	}, a.feeds)
 
@@ -452,7 +594,14 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetAssetVEX(w http.ResponseWriter, r *http.Request) {
-	tenantID := resolveTenantID(r)
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+
 	idStr := r.PathValue("id")
 	assetID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -468,119 +617,75 @@ func (a *API) handleGetAssetVEX(w http.ResponseWriter, r *http.Request) {
 
 	type OpenVEXStatement struct {
 		Vulnerability struct {
-			Name string `json:"name"`
+			ID string `json:"@id"`
 		} `json:"vulnerability"`
-		Products        []string `json:"products"`
-		Status          string   `json:"status"`
-		Justification   string   `json:"justification,omitempty"`
-		ImpactStatement string   `json:"impact_statement,omitempty"`
+		Status        string `json:"status"`
+		Justification string `json:"justification,omitempty"`
+		Impact        string `json:"impact_statement,omitempty"`
 	}
 
 	var statements []OpenVEXStatement
 	for _, f := range findings {
-		if f.AssetID == assetID || f.ApplicationID == assetID {
-			vulnName := f.RuleID
-			if f.VulnerabilityID != nil && *f.VulnerabilityID != "" {
-				vulnName = *f.VulnerabilityID
-			}
-			product := ""
-			if f.Location.Package != nil {
-				product = f.Location.Package.Purl
-			}
-
+		if f.AssetID == assetID && f.VulnerabilityID != nil {
+			status := string(f.State)
 			stmt := OpenVEXStatement{
-				Status:          string(f.State),
-				Justification:   f.StateReason,
-				ImpactStatement: f.Title,
+				Status:        status,
+				Justification: f.StateReason,
 			}
-			stmt.Vulnerability.Name = vulnName
-			if product != "" {
-				stmt.Products = []string{product}
-			}
+			stmt.Vulnerability.ID = *f.VulnerabilityID
 			statements = append(statements, stmt)
 		}
 	}
 
-	res := struct {
+	doc := struct {
 		Context    string             `json:"@context"`
 		ID         string             `json:"@id"`
 		Author     string             `json:"author"`
-		Timestamp  string             `json:"timestamp"`
-		Version    int                `json:"version"`
+		Role       string             `json:"role"`
+		Timestamp  time.Time          `json:"timestamp"`
 		Statements []OpenVEXStatement `json:"statements"`
 	}{
 		Context:    "https://openvex.dev/ns/v0.2.0",
 		ID:         fmt.Sprintf("https://rampart.aspm.dev/vex/%s", assetID),
 		Author:     "Rampart ASPM",
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
-		Version:    1,
+		Role:       "Security Platform",
+		Timestamp:  time.Now().UTC(),
 		Statements: statements,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(res)
+	_ = json.NewEncoder(w).Encode(doc)
 }
 
 func matchesQuery(f *domain.Finding, q grammar.Query) bool {
-	for _, term := range q.Terms {
+	for _, t := range q.Terms {
 		matched := false
-		if term.Field != "" {
-			matched = matchField(f, term.Field, term.Values)
-		} else if term.Text != "" {
-			matched = matchFreeText(f, term.Text)
+		if t.Field != "" {
+			actual := getFieldValue(f, t.Field)
+			for _, v := range t.Values {
+				if v.IsWildcard {
+					if strings.HasPrefix(strings.ToLower(actual), strings.ToLower(v.Prefix)) {
+						matched = true
+						break
+					}
+				} else if strings.EqualFold(actual, v.Raw) {
+					matched = true
+					break
+				}
+			}
+		} else if t.Text != "" {
+			matched = matchFreeText(f, t.Text)
 		}
 
-		if term.Negated {
-			matched = !matched
+		if t.Negated && matched {
+			return false
 		}
-
-		if !matched {
+		if !t.Negated && !matched {
 			return false
 		}
 	}
 	return true
-}
-
-func matchField(f *domain.Finding, field string, values []grammar.Value) bool {
-	fieldVal := getFieldValue(f, field)
-
-	for _, v := range values {
-		if v.IsWildcard {
-			if strings.HasPrefix(strings.ToLower(fieldVal), strings.ToLower(v.Prefix)) {
-				return true
-			}
-		} else if v.IsRange {
-			if num, err := strconv.Atoi(fieldVal); err == nil {
-				if targetNum, err2 := strconv.Atoi(v.RangeVal); err2 == nil {
-					switch v.RangeOp {
-					case ">":
-						if num > targetNum {
-							return true
-						}
-					case ">=":
-						if num >= targetNum {
-							return true
-						}
-					case "<":
-						if num < targetNum {
-							return true
-						}
-					case "<=":
-						if num <= targetNum {
-							return true
-						}
-					}
-				}
-			}
-		} else {
-			if strings.EqualFold(fieldVal, v.Raw) {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 func getFieldValue(f *domain.Finding, field string) string {
@@ -600,8 +705,10 @@ func getFieldValue(f *domain.Finding, field string) string {
 			return *f.VulnerabilityID
 		}
 		return ""
-	case "score":
-		return strconv.Itoa(f.RiskScore)
+	case "app":
+		return f.ApplicationID.String()
+	case "asset":
+		return f.AssetID.String()
 	case "track":
 		return f.Track
 	case "path":
@@ -660,13 +767,4 @@ func sortFindings(findings []*domain.Finding, sortKey string) {
 			return findings[i].Severity.Rank() > findings[j].Severity.Rank()
 		})
 	}
-}
-
-func resolveTenantID(r *http.Request) uuid.UUID {
-	if tHeader := r.Header.Get("X-Tenant-ID"); tHeader != "" {
-		if parsed, err := uuid.Parse(tHeader); err == nil {
-			return parsed
-		}
-	}
-	return uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
 }

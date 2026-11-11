@@ -70,7 +70,9 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `server.http.addr` | `:8080` | API, ingest, UI |
 | `server.ops.addr` | `:9090` | `/metrics`, `/healthz`, `/readyz` (separate port, never exposed through the Gateway) |
 | `server.publicUrl` | — | external base URL for links, redirects, cookies |
-| `database.url` / `database.directUrl` / `database.readUrl` | — | pooled, direct, replica |
+| `database.url` / `database.directUrl` / `database.readUrl` | — | pooled, direct, replica (all as `rampart_app` / `rampart_ro`) |
+| `database.migrateUrl` | — | `rampart_owner`; used only by migrations (D30) |
+| `database.systemUrl` | — | `rampart_system`; tenant bootstrap, feed sync, maintenance (D30) |
 | `database.autoMigrate` | `true` for `all` | |
 | `objectStorage.endpoint`, `.externalEndpoint`, `.region`, `.bucketRaw`, `.bucketExports`, `.accessKeyFile`, `.secretKeyFile`, `.usePathStyle` | — | `externalEndpoint` is the address CI can reach for presigned URLs |
 | `ingest.maxReportBytes` | `536870912` | default per-upload cap |
@@ -78,6 +80,7 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `auth.oidc.issuer`, `.clientId`, `.clientSecretFile`, `.scopes`, `.groupsClaim` | — | static IdP for Phase 1 and for file mode |
 | `auth.session.keyFile` | — | 32-byte key for cookie and envelope encryption (or `kms.keyUri`) |
 | `auth.bootstrapAdmin.passwordFile` | — | break-glass |
+| `auth.bootstrapAdminTokenFile` | — | Phase 1: file the first admin API token is written to (0600). Never logged (D30) |
 | `feeds.nvd.url`, `feeds.osv.url`, `feeds.epss.url`, `feeds.kev.url`, `feeds.cwe.url`, `feeds.<x>.schedule` | public endpoints | overridden by a `ClusterFeedMirror` when one exists |
 | `feeds.egress` | `allow` | `deny` blocks every non-mirror call |
 | `eventBus.type` | `river` | `river` or `nats` |
@@ -474,3 +477,19 @@ Adopted cuts for the MVP and v1.0; the roadmap in [09-roadmap.md](09-roadmap.md)
 | Kubernetes report watching | none | `collector` target |
 | Identity | OIDC, API tokens, CI federation, built-in roles | SAML, SCIM, custom roles |
 | Other | — | SSVC, posture-score formula tuning, scheduled PDF reports |
+
+## D30. Corrections found while implementing Phases 0 and 1
+
+These were found by running the code against PostgreSQL and the HTTP API. Each closes a gap between an earlier section and what can actually work.
+
+- **Roles carry no secrets in SQL (D4).** The migration only creates the four roles as `NOLOGIN` when missing. Passwords and `LOGIN` come from the platform (CNPG managed roles, Helm, `deploy/compose/initdb`). `rampart_app` and `rampart_ro` cannot write `tenant`, `vulnerability`, `vulnerability_alias` or `rule` (D19); tenants are written by `rampart_system`.
+- **Migrations use their own connection.** `database.migrateUrl` (`rampart_owner`) is used only for `AutoMigrate`; `database.directUrl` remains the application's direct connection for `LISTEN/NOTIFY`. A configured database that cannot be reached is a startup error, never a silent fall back to the in-memory store.
+- **The token names its tenant (D8, D4).** Wire format `rpt_<tenant-uuid-hex>_<secret>`. The lookup runs under that tenant's RLS context, so `api_token` keeps the strict policy (an unset tenant sees zero rows). The record must carry the same tenant. The hash is SHA-256; the secret is never stored.
+- **No secret in logs.** With a database, the bootstrap admin token goes to `auth.bootstrapAdminTokenFile` once. It is logged only on the in-memory store.
+- **One transaction per merge batch (D13).** `Store.InTenantTx` runs the batch under `pg_advisory_xact_lock(hashtextextended(scope))`; the finding upsert, occurrence upsert, counter recompute and `finding_event` rows commit or roll back together. The close step is decided before any write; a held close (D22) changes nothing.
+- **Close scope is per scanner (D13).** Records are grouped by `scanner_family` (the tool, not the parser). A report with no findings has no tool to read, so the `scanner` request parameter names it; without it the scope is the parser id and a clean rescan closes nothing. Parsers should later emit run metadata so this parameter is not needed.
+- **D22 thresholds.** The guard holds a close that would close more than 50% of the scope's open findings **and** more than 20.
+- **Upload context decides the asset (D10).** `repository`, `branch`, `commit`, `imageRef`, `imageDigest`, `environment`, `service`, `version`, `scanFinished` come from the request. A file name is never an asset key. `first_seen`/`last_seen` use `scanFinished` when valid and not in the future (D2). Ephemeral is decided by the branch (PR refs and untracked branches), not by the track name, so `staging` is a normal track.
+- **Scan sources are configuration (D3, D10).** An upload names a source by id or name; empty means the tenant's built-in `default` source, created on first use. Any other unknown source is `404 not-found`.
+- **Event partitions.** `finding_event` and `audit_event` get a default partition so a row outside the pre-created ranges cannot fail the pipeline; the scheduler's maintenance job still creates monthly partitions ahead of time.
+- **PgBouncer.** The pgx pool uses `QueryExecModeCacheDescribe`: no server-side prepared statements, as required by transaction pooling.

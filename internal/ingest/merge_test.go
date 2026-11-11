@@ -201,10 +201,10 @@ func TestMassCloseGuard(t *testing.T) {
 		Track:         "main",
 	}
 
-	// Seed 10 findings in initial scan
+	// Seed 30 findings in initial scan (D22: guard needs > 20 closes and > 50%)
 	run1ID := domain.NewID()
 	var records []ingest.StagedRecord
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 30; i++ {
 		records = append(records, ingest.StagedRecord{
 			FindingKey:  domain.NewID().String(),
 			Category:    domain.CategorySCA,
@@ -224,12 +224,36 @@ func TestMassCloseGuard(t *testing.T) {
 		t.Fatalf("close step error: %v", err)
 	}
 
-	// Must be held for confirmation because 10/10 > 50%
+	// Must be held for confirmation because 30/30 > 50% and > 20
 	if !closeRes.HeldForConfirmation {
 		t.Errorf("expected mass close guard to hold run for confirmation")
 	}
 	if closeRes.Closed != 0 {
 		t.Errorf("expected 0 closed findings when held, got %d", closeRes.Closed)
+	}
+	// A held close must change nothing: occurrences stay present, findings stay open.
+	occs, _ := store.GetActiveScopeOccurrences(ctx, scope)
+	if len(occs) != 30 {
+		t.Errorf("held close flipped occurrences: %d present, want 30", len(occs))
+	}
+}
+
+// D22: a small close is never held, even when it is 100% of the scope.
+func TestMassCloseGuardIgnoresSmallScopes(t *testing.T) {
+	ctx := context.Background()
+	store := ingest.NewMemoryStore()
+	engine := ingest.NewEngine(store)
+	tenantID, appID := domain.NewID(), domain.NewID()
+	scope := ingest.CloseScope{TenantID: tenantID, ScanSourceID: domain.NewID(), ScannerFamily: "trivy", AssetID: domain.NewID(), Track: "main"}
+	var records []ingest.StagedRecord
+	for i := 0; i < 10; i++ {
+		records = append(records, ingest.StagedRecord{FindingKey: domain.NewID().String(), Category: domain.CategorySCA,
+			RuleID: "v", Title: "t", Severity: domain.SeverityHigh, ContentHash: "h", SeenAt: time.Now().UTC()})
+	}
+	_, _ = engine.MergeBatch(ctx, scope, domain.NewID(), appID, records)
+	res, err := engine.CloseScopeStepWithGuard(ctx, scope, domain.NewID(), true)
+	if err != nil || res.HeldForConfirmation || res.Closed != 10 {
+		t.Fatalf("10/10 must close (guard needs > 20): %+v %v", res, err)
 	}
 }
 

@@ -31,56 +31,44 @@ func TestOpsServerEndpoints(t *testing.T) {
 	ops := telemetry.NewOpsServer(":0")
 	reqHealth := httptest.NewRequest("GET", "/healthz", nil)
 	recHealth := httptest.NewRecorder()
-	opsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok\n"))
-		}
-	})
-	opsHandler.ServeHTTP(recHealth, reqHealth)
+	ops.Handler().ServeHTTP(recHealth, reqHealth)
 	if recHealth.Code != http.StatusOK {
 		t.Errorf("healthz returned %d, want 200", recHealth.Code)
+	}
+	if !strings.Contains(recHealth.Body.String(), "ok") {
+		t.Errorf("healthz body = %q, want 'ok'", recHealth.Body.String())
 	}
 
 	// 2. Readyz with passing checker
 	opsReady := telemetry.NewOpsServer(":0", func(ctx context.Context) error {
 		return nil
 	})
-	tsReady := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready\n"))
-	}))
-	defer tsReady.Close()
-
-	res, err := http.Get(tsReady.URL + "/readyz")
-	if err != nil {
-		t.Fatalf("failed to query readyz: %v", err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("readyz returned %d, want 200", res.StatusCode)
+	reqReady := httptest.NewRequest("GET", "/readyz", nil)
+	recReady := httptest.NewRecorder()
+	opsReady.Handler().ServeHTTP(recReady, reqReady)
+	if recReady.Code != http.StatusOK {
+		t.Errorf("readyz returned %d, want 200", recReady.Code)
 	}
 
 	// 3. Readyz with failing checker
 	opsFailing := telemetry.NewOpsServer(":0", func(ctx context.Context) error {
 		return errors.New("db disconnected")
 	})
-	tsFailing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("unready\n"))
-	}))
-	defer tsFailing.Close()
-
-	resFail, err := http.Get(tsFailing.URL + "/readyz")
-	if err != nil {
-		t.Fatalf("failed to query failing readyz: %v", err)
-	}
-	defer func() { _ = resFail.Body.Close() }()
-	if resFail.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", resFail.StatusCode)
+	reqFailing := httptest.NewRequest("GET", "/readyz", nil)
+	recFailing := httptest.NewRecorder()
+	opsFailing.Handler().ServeHTTP(recFailing, reqFailing)
+	if recFailing.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", recFailing.Code)
 	}
 
-	_ = ops
-	_ = opsReady
-	_ = opsFailing
+	// 4. Metrics endpoint
+	reqMetrics := httptest.NewRequest("GET", "/metrics", nil)
+	recMetrics := httptest.NewRecorder()
+	ops.Handler().ServeHTTP(recMetrics, reqMetrics)
+	if recMetrics.Code != http.StatusOK {
+		t.Errorf("metrics returned %d, want 200", recMetrics.Code)
+	}
+	if !strings.Contains(recMetrics.Body.String(), "rampart_uptime_seconds") {
+		t.Errorf("metrics body = %q, want rampart_uptime_seconds", recMetrics.Body.String())
+	}
 }

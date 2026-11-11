@@ -14,15 +14,17 @@ type ReadinessChecker func(ctx context.Context) error
 // OpsServer runs the internal operations endpoints on its own dedicated port (D6).
 // It serves /healthz, /readyz, and /metrics.
 type OpsServer struct {
-	server   *http.Server
-	ready    atomic.Bool
-	checkers []ReadinessChecker
+	server    *http.Server
+	ready     atomic.Bool
+	checkers  []ReadinessChecker
+	startTime time.Time
 }
 
 // NewOpsServer creates an OpsServer bound to the specified address (default :9090).
 func NewOpsServer(addr string, checkers ...ReadinessChecker) *OpsServer {
 	ops := &OpsServer{
-		checkers: checkers,
+		checkers:  checkers,
+		startTime: time.Now(),
 	}
 	ops.ready.Store(true)
 
@@ -38,6 +40,11 @@ func NewOpsServer(addr string, checkers ...ReadinessChecker) *OpsServer {
 	}
 
 	return ops
+}
+
+// Handler returns the underlying HTTP handler (useful for testing).
+func (s *OpsServer) Handler() http.Handler {
+	return s.server.Handler
 }
 
 // Start runs the HTTP listener synchronously until closed.
@@ -87,6 +94,6 @@ func (s *OpsServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
 func (s *OpsServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
-	// Base metrics payload (OpenTelemetry/Prometheus baseline)
-	_, _ = w.Write([]byte("# HELP rampart_uptime_seconds Process uptime\n# TYPE rampart_uptime_seconds gauge\nrampart_uptime_seconds 1\n"))
+	uptime := time.Since(s.startTime).Seconds()
+	_, _ = fmt.Fprintf(w, "# HELP rampart_uptime_seconds Process uptime\n# TYPE rampart_uptime_seconds gauge\nrampart_uptime_seconds %.2f\n", uptime)
 }

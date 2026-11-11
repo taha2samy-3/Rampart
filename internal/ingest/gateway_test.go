@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"rampart/internal/auth"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
 
@@ -19,10 +20,15 @@ func TestGatewayUploadFlow(t *testing.T) {
 	queue := jobs.NewInMemJobQueue()
 	gw := ingest.NewGateway(queue)
 
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	// 1. Create Upload
+	// 0. Verify Unauthenticated request returns 401 Unauthorized (Security A)
 	createReq := ingest.CreateUploadRequest{
 		ScanSourceID: "01931f6a-0000-7000-8000-000000000001",
 		FormatHint:   "sarif",
@@ -30,7 +36,16 @@ func TestGatewayUploadFlow(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(createReq)
 
+	reqUnauth := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(bodyBytes))
+	recUnauth := httptest.NewRecorder()
+	mux.ServeHTTP(recUnauth, reqUnauth)
+	if recUnauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated request, got %d", recUnauth.Code)
+	}
+
+	// 1. Create Upload with valid Bearer token
 	req := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(bodyBytes))
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Idempotency-Key", "test-key-123")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -47,8 +62,9 @@ func TestGatewayUploadFlow(t *testing.T) {
 		t.Fatal("expected non-empty uploadId")
 	}
 
-	// 2. Test Idempotency with same key -> returns 200 OK with identical UploadID (D2)
+	// 2. Test Idempotency with exact same key and payload -> 200 OK with identical UploadID (D9)
 	reqIdem := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(bodyBytes))
+	reqIdem.Header.Set("Authorization", "Bearer "+token)
 	reqIdem.Header.Set("Idempotency-Key", "test-key-123")
 	recIdem := httptest.NewRecorder()
 	mux.ServeHTTP(recIdem, reqIdem)
@@ -63,6 +79,23 @@ func TestGatewayUploadFlow(t *testing.T) {
 		t.Errorf("expected idempotent upload ID %s, got %s", createRes.UploadID, resIdem.UploadID)
 	}
 
+	// 2b. Test Idempotency Conflict (D9): same key with DIFFERENT payload -> 409 Conflict
+	conflictReq := ingest.CreateUploadRequest{
+		ScanSourceID: "01931f6a-0000-7000-8000-000000000001",
+		FormatHint:   "cyclonedx", // altered payload
+		SizeBytes:    2048,
+	}
+	conflictBytes, _ := json.Marshal(conflictReq)
+	reqConflict := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(conflictBytes))
+	reqConflict.Header.Set("Authorization", "Bearer "+token)
+	reqConflict.Header.Set("Idempotency-Key", "test-key-123")
+	recConflict := httptest.NewRecorder()
+	mux.ServeHTTP(recConflict, reqConflict)
+
+	if recConflict.Code != http.StatusConflict {
+		t.Errorf("expected 409 Conflict for reused idempotency key with different payload, got %d", recConflict.Code)
+	}
+
 	// 3. Complete Upload
 	completeReq := ingest.CompleteUploadRequest{
 		SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -70,6 +103,7 @@ func TestGatewayUploadFlow(t *testing.T) {
 	completeBytes, _ := json.Marshal(completeReq)
 
 	reqComplete := httptest.NewRequest("POST", "/ingest/v1/uploads/"+createRes.UploadID+"/complete", bytes.NewReader(completeBytes))
+	reqComplete.Header.Set("Authorization", "Bearer "+token)
 	recComplete := httptest.NewRecorder()
 	mux.ServeHTTP(recComplete, reqComplete)
 
@@ -95,6 +129,7 @@ func TestGatewayUploadFlow(t *testing.T) {
 
 	// 4. Query Ingest Run status
 	reqRun := httptest.NewRequest("GET", "/ingest/v1/runs/"+completeRes.IngestRunID, nil)
+	reqRun.Header.Set("Authorization", "Bearer "+token)
 	recRun := httptest.NewRecorder()
 	mux.ServeHTTP(recRun, reqRun)
 
@@ -105,6 +140,11 @@ func TestGatewayUploadFlow(t *testing.T) {
 
 func TestGatewayDirectReportUpload(t *testing.T) {
 	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
@@ -127,7 +167,7 @@ func TestGatewayDirectReportUpload(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/ingest/v1/reports", &b)
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.Header.Set("X-Tenant-ID", "01931f6a-0000-7000-8000-000000000000")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -147,14 +187,47 @@ func TestGatewayDirectReportUpload(t *testing.T) {
 	}
 
 	// Verify findings in store
-	findings, _ := gw.Store().ListFindings(req.Context(), uuid.MustParse("01931f6a-0000-7000-8000-000000000000"))
+	findings, _ := gw.Store().ListFindings(req.Context(), tenantID)
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding stored, got %d", len(findings))
+	}
+
+	// 2. Rescan: upload identical file again. Verifies D10 asset resolution & D13 dedup (0 created, 1 untouched)
+	var b2 bytes.Buffer
+	w2 := multipart.NewWriter(&b2)
+	_ = w2.WriteField("format", "sarif")
+	_ = w2.WriteField("track", "main")
+	part2, _ := w2.CreateFormFile("file", "semgrep.sarif")
+	_, _ = part2.Write(sarifData)
+	_ = w2.Close()
+
+	req2 := httptest.NewRequest("POST", "/ingest/v1/reports", &b2)
+	req2.Header.Set("Content-Type", w2.FormDataContentType())
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on rescan upload, got %d", rec2.Code)
+	}
+
+	var res2 ingest.DirectReportResponse
+	_ = json.NewDecoder(rec2.Body).Decode(&res2)
+	if res2.Created != 0 {
+		t.Errorf("expected 0 new findings on rescan, got %d (deduplication broken!)", res2.Created)
+	}
+	if res2.Untouched != 1 {
+		t.Errorf("expected 1 untouched finding on rescan, got %d", res2.Untouched)
 	}
 }
 
 func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
@@ -165,7 +238,7 @@ func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/ingest/v1/sbom", bytes.NewReader(xmlData))
 	req.Header.Set("Content-Type", "application/vnd.cyclonedx+xml")
-	req.Header.Set("X-Tenant-ID", "01931f6a-0000-7000-8000-000000000000")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -187,6 +260,11 @@ func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 
 func TestGatewaySBOMUploadSPDXTagValue(t *testing.T) {
 	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
@@ -197,7 +275,7 @@ func TestGatewaySBOMUploadSPDXTagValue(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/ingest/v1/sbom?format=spdx", bytes.NewReader(spdxData))
 	req.Header.Set("Content-Type", "text/plain")
-	req.Header.Set("X-Tenant-ID", "01931f6a-0000-7000-8000-000000000000")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

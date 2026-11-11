@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/ingest"
@@ -19,12 +20,23 @@ import (
 func TestQueryAPIFindings(t *testing.T) {
 	store := ingest.NewMemoryStore()
 	feeds := enrich.NewFeedStore()
-	api := query.NewAPI(store, feeds)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+
+	authn := auth.NewAuthenticatorWithStore(store)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(store, feeds, authn)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	// 0. Verify unauthenticated request returns 401 Unauthorized (Security A)
+	reqUnauth := httptest.NewRequest("GET", "/api/v1/findings", nil)
+	recUnauth := httptest.NewRecorder()
+	mux.ServeHTTP(recUnauth, reqUnauth)
+	if recUnauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated request, got %d", recUnauth.Code)
+	}
+
 	cveStr := "CVE-2021-44228"
 
 	// Seed 3 findings
@@ -78,6 +90,7 @@ func TestQueryAPIFindings(t *testing.T) {
 
 	// 1. Test List all
 	reqAll := httptest.NewRequest("GET", "/api/v1/findings", nil)
+	reqAll.Header.Set("Authorization", "Bearer "+token)
 	recAll := httptest.NewRecorder()
 	mux.ServeHTTP(recAll, reqAll)
 
@@ -93,6 +106,7 @@ func TestQueryAPIFindings(t *testing.T) {
 
 	// 2. Test Filter: ?q=severity:critical,high
 	reqFilter := httptest.NewRequest("GET", "/api/v1/findings?q=severity:critical,high", nil)
+	reqFilter.Header.Set("Authorization", "Bearer "+token)
 	recFilter := httptest.NewRecorder()
 	mux.ServeHTTP(recFilter, reqFilter)
 
@@ -104,6 +118,7 @@ func TestQueryAPIFindings(t *testing.T) {
 
 	// 3. Test Filter Negation: ?q=-state:fixed
 	reqNeg := httptest.NewRequest("GET", "/api/v1/findings?q=-state:fixed", nil)
+	reqNeg.Header.Set("Authorization", "Bearer "+token)
 	recNeg := httptest.NewRecorder()
 	mux.ServeHTTP(recNeg, reqNeg)
 
@@ -115,6 +130,7 @@ func TestQueryAPIFindings(t *testing.T) {
 
 	// 4. Test Wildcard: ?q=cve:CVE-2021-*
 	reqWC := httptest.NewRequest("GET", "/api/v1/findings?q=cve:CVE-2021-*", nil)
+	reqWC.Header.Set("Authorization", "Bearer "+token)
 	recWC := httptest.NewRecorder()
 	mux.ServeHTTP(recWC, reqWC)
 
@@ -126,6 +142,7 @@ func TestQueryAPIFindings(t *testing.T) {
 
 	// 5. Test Get Finding Detail
 	reqDetail := httptest.NewRequest("GET", "/api/v1/findings/"+f1ID.String(), nil)
+	reqDetail.Header.Set("Authorization", "Bearer "+token)
 	recDetail := httptest.NewRecorder()
 	mux.ServeHTTP(recDetail, reqDetail)
 
@@ -145,12 +162,15 @@ func TestQueryAPIFindings(t *testing.T) {
 
 func TestQueryAPISBOM(t *testing.T) {
 	store := ingest.NewMemoryStore()
-	api := query.NewAPI(store, nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+
+	authn := auth.NewAuthenticatorWithStore(store)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(store, nil, authn)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
 	assetID := domain.NewID()
 
 	sbom := &domain.SBOM{
@@ -190,6 +210,7 @@ func TestQueryAPISBOM(t *testing.T) {
 	_ = store.SaveSBOM(context.Background(), sbom, comps)
 
 	req := httptest.NewRequest("GET", "/api/v1/assets/"+assetID.String()+"/sbom", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -208,6 +229,7 @@ func TestQueryAPISBOM(t *testing.T) {
 
 	// Test GET /sbom/graph
 	reqGraph := httptest.NewRequest("GET", "/api/v1/assets/"+assetID.String()+"/sbom/graph", nil)
+	reqGraph.Header.Set("Authorization", "Bearer "+token)
 	recGraph := httptest.NewRecorder()
 	mux.ServeHTTP(recGraph, reqGraph)
 
@@ -236,6 +258,7 @@ func TestQueryAPISBOM(t *testing.T) {
 
 	// Test GET /sbom/path
 	reqPath := httptest.NewRequest("GET", "/api/v1/assets/"+assetID.String()+"/sbom/path?target=pkg:npm/debug@2.6.9", nil)
+	reqPath.Header.Set("Authorization", "Bearer "+token)
 	recPath := httptest.NewRecorder()
 	mux.ServeHTTP(recPath, reqPath)
 
@@ -256,24 +279,29 @@ func TestQueryAPISBOM(t *testing.T) {
 
 func TestQueryAPIPatchAndVEX(t *testing.T) {
 	store := ingest.NewMemoryStore()
-	api := query.NewAPI(store, nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+
+	authn := auth.NewAuthenticatorWithStore(store)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(store, nil, authn)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
 	assetID := domain.NewID()
 	findingID := domain.NewID()
 
+	vulnID := "CVE-2021-44228"
 	f := &domain.Finding{
-		ID:         findingID,
-		TenantID:   tenantID,
-		AssetID:    assetID,
-		FindingKey: "patch-test-key",
-		RuleID:     "CVE-2021-44228",
-		Title:      "Log4Shell",
-		Severity:   domain.SeverityCritical,
-		State:      domain.StateOpen,
+		ID:              findingID,
+		TenantID:        tenantID,
+		AssetID:         assetID,
+		FindingKey:      "patch-test-key",
+		RuleID:          "CVE-2021-44228",
+		VulnerabilityID: &vulnID,
+		Title:           "Log4Shell",
+		Severity:        domain.SeverityCritical,
+		State:           domain.StateOpen,
 		Location: domain.Location{
 			Package: &domain.PackageLocation{
 				Purl: "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1",
@@ -288,6 +316,7 @@ func TestQueryAPIPatchAndVEX(t *testing.T) {
 	// 1. PATCH state to not_affected with justification
 	patchBody := `{"state":"not_affected","justification":"vulnerable_code_not_present","severity":"medium"}`
 	reqPatch := httptest.NewRequest("PATCH", "/api/v1/findings/"+findingID.String(), strings.NewReader(patchBody))
+	reqPatch.Header.Set("Authorization", "Bearer "+token)
 	recPatch := httptest.NewRecorder()
 	mux.ServeHTTP(recPatch, reqPatch)
 
@@ -306,6 +335,7 @@ func TestQueryAPIPatchAndVEX(t *testing.T) {
 
 	// 2. Export VEX for the asset
 	reqVEX := httptest.NewRequest("GET", "/api/v1/assets/"+assetID.String()+"/vex", nil)
+	reqVEX.Header.Set("Authorization", "Bearer "+token)
 	recVEX := httptest.NewRecorder()
 	mux.ServeHTTP(recVEX, reqVEX)
 

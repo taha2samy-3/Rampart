@@ -139,8 +139,8 @@ func runUpload(args []string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	if *token != "" {
-		req.Header.Set("Authorization", "Bearer "+*token)
+	if tok := resolveToken(*token); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -219,8 +219,8 @@ func runSBOMUpload(args []string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	if *token != "" {
-		req.Header.Set("Authorization", "Bearer "+*token)
+	if tok := resolveToken(*token); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -422,8 +422,8 @@ func runGate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *token != "" {
-		req.Header.Set("Authorization", "Bearer "+*token)
+	if tok := resolveToken(*token); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -523,4 +523,22 @@ func parseFlexibleFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 		return nil, err
 	}
 	return positional, nil
+}
+
+func resolveToken(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("RAMPART_TOKEN"); env != "" {
+		return env
+	}
+	homeDir, _ := os.UserHomeDir()
+	cfgPath := filepath.Join(homeDir, ".rampart", "credentials.json")
+	if data, err := os.ReadFile(cfgPath); err == nil {
+		var creds map[string]string
+		if json.Unmarshal(data, &creds) == nil {
+			return creds["token"]
+		}
+	}
+	return ""
 }

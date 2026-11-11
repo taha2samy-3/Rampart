@@ -9,8 +9,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/rampart ./cmd/ram
 
 FROM alpine:3.20
 
+RUN addgroup -S rampart && adduser -S rampart -G rampart
+
 WORKDIR /app
 COPY --from=builder /bin/rampart /app/rampart
+
+RUN mkdir -p /var/lib/rampart && chown rampart:rampart /var/lib/rampart
+
+USER rampart:rampart
 
 EXPOSE 8080 9090
 

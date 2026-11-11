@@ -8,42 +8,34 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/store"
 )
 
 // ErrRunStale indicates that a run's scanFinished timestamp is older than the last applied scan for this scope (D13 line 204).
 var ErrRunStale = errors.New("ingest: run is stale (scanFinished is older than last applied scan for this scope)")
 
 // CloseScope uniquely identifies the rescan closure boundary (normative D13).
-type CloseScope struct {
-	TenantID      uuid.UUID
-	ScanSourceID  uuid.UUID
-	ScannerFamily string
-	AssetID       uuid.UUID
-	Track         string
-}
-
-// Key formats the scope for advisory locking and logging.
-func (s CloseScope) Key() string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", s.TenantID, s.ScanSourceID, s.ScannerFamily, s.AssetID, s.Track)
-}
+type CloseScope = domain.CloseScope
 
 // StagedRecord represents a normalized record ready for batch merge (D13).
 type StagedRecord struct {
-	FindingKey   string
-	Category     domain.FindingCategory
-	RuleID       string
-	Title        string
-	Description  string
-	ToolSeverity string
-	Severity     domain.Severity
-	Location     domain.Location
-	CWEs         []int
-	VulnID       string
-	CVSSVector   string
-	ContentHash  string
-	SeenAt       time.Time
-	RawPayload   []byte
+	ScannerFamily string // the scanner (semgrep, trivy...), which defines the close scope (D11, D13)
+	FindingKey    string
+	Category      domain.FindingCategory
+	RuleID        string
+	Title         string
+	Description   string
+	ToolSeverity  string
+	Severity      domain.Severity
+	Location      domain.Location
+	CWEs          []int
+	VulnID        string
+	CVSSVector    string
+	ContentHash   string
+	SeenAt        time.Time
+	RawPayload    []byte
 }
 
 // MergeOutcome records the result breakdown of a batch merge.
@@ -71,16 +63,7 @@ type CloseScopeResult struct {
 }
 
 // Store abstracts the persistence layer for the merge engine.
-type Store interface {
-	GetFindingsByKeys(ctx context.Context, tenantID uuid.UUID, keys []string) (map[string]*domain.Finding, error)
-	UpsertFindings(ctx context.Context, tenantID uuid.UUID, findings []*domain.Finding) error
-	UpsertOccurrences(ctx context.Context, occurrences []*domain.Occurrence) error
-	GetActiveScopeOccurrences(ctx context.Context, scope CloseScope) ([]*domain.Occurrence, error)
-	UpdateOccurrencesPresence(ctx context.Context, occurrenceIDs []uuid.UUID, present bool) error
-	GetActiveScopeFindings(ctx context.Context, tenantID uuid.UUID, assetID uuid.UUID, track string) ([]*domain.Finding, error)
-	CountPresentOccurrences(ctx context.Context, tenantID uuid.UUID, findingID uuid.UUID) (int, error)
-	CheckScopeOrdering(scope CloseScope, scanFinished time.Time) (bool, error)
-}
+type Store = store.Store
 
 // Engine implements the normative D13 deduplication and reimport merge algorithm.
 type Engine struct {
@@ -106,6 +89,8 @@ func (e *Engine) MergeBatch(
 }
 
 // MergeBatchWithOptions processes a batch with explicit policy options (minimumSeverity, ephemeral runs, fieldMerge).
+// The whole batch runs in one transaction under the scope's advisory lock (D13): it
+// commits or rolls back as a unit, and two runs on the same scope are serialised.
 func (e *Engine) MergeBatchWithOptions(
 	ctx context.Context,
 	scope CloseScope,
@@ -118,10 +103,38 @@ func (e *Engine) MergeBatchWithOptions(
 	if len(records) == 0 {
 		return outcome, nil
 	}
+	err := e.store.InTenantTx(ctx, scope.TenantID, func(st Store) error {
+		if err := st.LockScope(ctx, scope); err != nil {
+			return fmt.Errorf("ingest: locking scope failed: %w", err)
+		}
+		var err error
+		outcome, err = e.mergeBatch(ctx, st, scope, runID, applicationID, records, opts)
+		return err
+	})
+	return outcome, err
+}
+
+func (e *Engine) mergeBatch(
+	ctx context.Context,
+	st Store,
+	scope CloseScope,
+	runID uuid.UUID,
+	applicationID uuid.UUID,
+	records []StagedRecord,
+	opts MergeOptions,
+) (MergeOutcome, error) {
+	var outcome MergeOutcome
+	var events []*domain.FindingEvent
+	addEvent := func(f *domain.Finding, typ string, at time.Time) {
+		events = append(events, &domain.FindingEvent{
+			ID: domain.NewID(), FindingID: f.ID, At: at, Actor: "system:parser", Type: typ,
+			Note: "ingest_run " + runID.String(),
+		})
+	}
 
 	// 0. Verify ordering per D13 line 204: late-arriving older scan is marked stale
 	if !opts.ScanFinished.IsZero() {
-		isStale, err := e.store.CheckScopeOrdering(scope, opts.ScanFinished)
+		isStale, err := st.CheckScopeOrdering(scope, opts.ScanFinished)
 		if err != nil {
 			return outcome, err
 		}
@@ -145,7 +158,7 @@ func (e *Engine) MergeBatchWithOptions(
 	}
 
 	// 2. Fetch existing findings for update
-	existingFindings, err := e.store.GetFindingsByKeys(ctx, scope.TenantID, keys)
+	existingFindings, err := st.GetFindingsByKeys(ctx, scope.TenantID, keys)
 	if err != nil {
 		return outcome, fmt.Errorf("ingest: failed to query existing findings: %w", err)
 	}
@@ -180,6 +193,7 @@ func (e *Engine) MergeBatchWithOptions(
 				Title:             rec.Title,
 				Description:       rec.Description,
 				CWEs:              rec.CWEs,
+				VulnerabilityID:   vulnPtr(rec.VulnID),
 				Location:          rec.Location,
 				Severity:          rec.Severity,
 				ToolSeverity:      rec.ToolSeverity,
@@ -195,10 +209,16 @@ func (e *Engine) MergeBatchWithOptions(
 				UpdatedAt:         rec.SeenAt,
 			}
 			outcome.Created++
+			addEvent(targetFinding, "created", rec.SeenAt)
 		} else {
 			targetFinding = existing
-			targetFinding.LastSeen = rec.SeenAt
+			if rec.SeenAt.After(targetFinding.LastSeen) {
+				targetFinding.LastSeen = rec.SeenAt
+			}
 			targetFinding.Detection = domain.DetectionPresent
+			if targetFinding.VulnerabilityID == nil {
+				targetFinding.VulnerabilityID = vulnPtr(rec.VulnID)
+			}
 
 			// Check for reactivation: previously fixed finding reported again by scanner (D13, D18)
 			if existing.State == domain.StateFixed {
@@ -213,6 +233,7 @@ func (e *Engine) MergeBatchWithOptions(
 					targetFinding.ReopenedCount++
 					targetFinding.Version++
 					outcome.Reactivated++
+					addEvent(targetFinding, "reactivated", rec.SeenAt)
 				}
 			} else if existing.State == domain.StateNotAffected && existing.ContentHash != rec.ContentHash {
 				// Code changed at location: flag not_affected finding for re-review (D18 line 358)
@@ -220,6 +241,7 @@ func (e *Engine) MergeBatchWithOptions(
 				targetFinding.ContentHash = rec.ContentHash
 				targetFinding.Version++
 				outcome.Updated++
+				addEvent(targetFinding, "recheck_needed", rec.SeenAt)
 			} else if existing.ContentHash != rec.ContentHash {
 				// Updated: scanner changed title, description, or location
 				if opts.FieldMerge != "keep" {
@@ -232,6 +254,7 @@ func (e *Engine) MergeBatchWithOptions(
 				targetFinding.ContentHash = rec.ContentHash
 				targetFinding.Version++
 				outcome.Updated++
+				addEvent(targetFinding, "updated", rec.SeenAt)
 			} else {
 				// Untouched: rescan sees identical issue
 				outcome.Untouched++
@@ -274,15 +297,39 @@ func (e *Engine) MergeBatchWithOptions(
 	}
 
 	// Persist findings and occurrences
-	if err := e.store.UpsertFindings(ctx, scope.TenantID, findingsToUpsert); err != nil {
+	if err := st.UpsertFindings(ctx, scope.TenantID, findingsToUpsert); err != nil {
 		return outcome, fmt.Errorf("ingest: upserting findings failed: %w", err)
 	}
-	if err := e.store.UpsertOccurrences(ctx, occurrencesToUpsert); err != nil {
+	if err := st.UpsertOccurrences(ctx, occurrencesToUpsert); err != nil {
 		return outcome, fmt.Errorf("ingest: upserting occurrences failed: %w", err)
+	}
+	// D12: counters are recomputed from rows, never incremented.
+	ids := make([]uuid.UUID, 0, len(findingsToUpsert))
+	for _, f := range findingsToUpsert {
+		ids = append(ids, f.ID)
+	}
+	if err := st.RecomputeOccurrenceCounts(ctx, scope.TenantID, ids); err != nil {
+		return outcome, fmt.Errorf("ingest: recomputing occurrence counts failed: %w", err)
+	}
+	if err := st.RecordFindingEvents(ctx, scope.TenantID, events); err != nil {
+		return outcome, fmt.Errorf("ingest: recording finding events failed: %w", err)
 	}
 
 	return outcome, nil
 }
+
+func vulnPtr(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
+}
+
+// D22 defaults for ingestionPolicy.maxClosePercent and the minimum size of a held close.
+const (
+	massClosePercent     = 50
+	massCloseMinFindings = 20
+)
 
 // CloseScopeStep executes the normative D13 close step once per scope after all batches commit.
 // Only executes when run has zero record errors!
@@ -299,77 +346,117 @@ func (e *Engine) CloseScopeStepWithGuard(
 	enableMassCloseGuard bool,
 ) (CloseScopeResult, error) {
 	var res CloseScopeResult
+	err := e.store.InTenantTx(ctx, scope.TenantID, func(st Store) error {
+		if err := st.LockScope(ctx, scope); err != nil {
+			return fmt.Errorf("ingest: locking scope failed: %w", err)
+		}
+		var err error
+		res, err = e.closeScope(ctx, st, scope, currentRunID, enableMassCloseGuard)
+		if err == nil && res.HeldForConfirmation {
+			return errCloseHeld // roll back: a held close must not flip occurrences either
+		}
+		return err
+	})
+	if errors.Is(err, errCloseHeld) {
+		return res, nil
+	}
+	return res, err
+}
 
-	// 1. Mark occurrences of this scope not seen in current run as present = false (D13)
-	existingOccs, err := e.store.GetActiveScopeOccurrences(ctx, scope)
+var errCloseHeld = errors.New("ingest: close held for confirmation")
+
+func (e *Engine) closeScope(
+	ctx context.Context,
+	st Store,
+	scope CloseScope,
+	currentRunID uuid.UUID,
+	enableMassCloseGuard bool,
+) (CloseScopeResult, error) {
+	var res CloseScopeResult
+
+	// Occurrences of this scope not seen in the current run (D13 step 1).
+	existingOccs, err := st.GetActiveScopeOccurrences(ctx, scope)
 	if err != nil {
 		return res, fmt.Errorf("ingest: querying scope occurrences failed: %w", err)
 	}
-
 	var absentIDs []uuid.UUID
+	absentByFinding := make(map[uuid.UUID]int)
 	for _, occ := range existingOccs {
 		if occ.IngestRunID != currentRunID && occ.Present {
 			absentIDs = append(absentIDs, occ.ID)
+			absentByFinding[occ.FindingID]++
 		}
 	}
 
-	if len(absentIDs) > 0 {
-		if err := e.store.UpdateOccurrencesPresence(ctx, absentIDs, false); err != nil {
-			return res, fmt.Errorf("ingest: updating occurrences presence failed: %w", err)
-		}
-	}
-
-	// 2. Active findings with NO present occurrence left -> state = 'fixed' (D13, D18)
-	activeFindings, err := e.store.GetActiveScopeFindings(ctx, scope.TenantID, scope.AssetID, scope.Track)
+	// D13 step 2, decided BEFORE any write so a held close changes nothing: an active
+	// finding closes when no present occurrence is left once the absent ones are removed.
+	// A finding reported by two sources stays open until both stop reporting it.
+	activeFindings, err := st.GetActiveScopeFindings(ctx, scope.TenantID, scope.AssetID, scope.Track)
 	if err != nil {
 		return res, fmt.Errorf("ingest: querying active findings failed: %w", err)
 	}
-
-	closedCount := 0
-	var fixedFindings []*domain.Finding
-	now := time.Now().UTC()
-
+	activeIDs := make([]uuid.UUID, 0, len(activeFindings))
 	for _, f := range activeFindings {
-		// Only active triage states are auto-closed (D18: not_affected/risk_accepted stay as-is!)
+		activeIDs = append(activeIDs, f.ID)
+	}
+	presentCounts, err := st.CountPresentOccurrencesBatch(ctx, scope.TenantID, activeIDs)
+	if err != nil {
+		return res, fmt.Errorf("ingest: counting occurrences failed: %w", err)
+	}
+
+	now := time.Now().UTC()
+	var fixedFindings []*domain.Finding
+	var events []*domain.FindingEvent
+	for _, f := range activeFindings {
+		// Only active dispositions are auto-closed (D18: not_affected/risk_accepted stay as-is).
 		if f.State != domain.StateOpen && f.State != domain.StateUnderInvestigation && f.State != domain.StateAffected {
 			continue
 		}
-
-		presentCount, err := e.store.CountPresentOccurrences(ctx, scope.TenantID, f.ID)
-		if err != nil {
-			return res, fmt.Errorf("ingest: counting occurrences failed: %w", err)
+		if presentCounts[f.ID]-absentByFinding[f.ID] > 0 {
+			continue
 		}
+		resFixed := domain.ResolutionFixed
+		f.PreviousState = f.State // D18: restored on reactivation
+		f.State = domain.StateFixed
+		f.Detection = domain.DetectionAbsent
+		f.Resolution = &resFixed
+		f.ResolvedAt = &now
+		f.Version++
+		fixedFindings = append(fixedFindings, f)
+		events = append(events, &domain.FindingEvent{
+			ID: domain.NewID(), FindingID: f.ID, At: now, Actor: "system:parser", Type: "closed_by_rescan",
+			Note: "ingest_run " + currentRunID.String(),
+		})
+	}
+	closedCount := len(fixedFindings)
 
-		if presentCount == 0 {
-			resFixed := domain.ResolutionFixed
-			f.State = domain.StateFixed
-			f.Detection = domain.DetectionAbsent
-			f.Resolution = &resFixed
-			f.ResolvedAt = &now
-			f.Version++
-			fixedFindings = append(fixedFindings, f)
-			closedCount++
-		}
+	// Mass-close guard (D22): hold the close when it would close more than
+	// maxClosePercent (default 50%) of the scope's open findings AND more than 20.
+	if enableMassCloseGuard && closedCount > massCloseMinFindings && closedCount*100 > len(activeFindings)*massClosePercent {
+		return CloseScopeResult{HeldForConfirmation: true}, nil
 	}
 
-	// Mass-close guard (D13 line 104, D22): held for confirmation if closing > 50% of scope
-	if enableMassCloseGuard && len(activeFindings) >= 10 && closedCount > len(activeFindings)/2 {
-		return CloseScopeResult{
-			Closed:              0,
-			HeldForConfirmation: true,
-		}, nil
+	if err := st.UpdateOccurrencesPresence(ctx, scope.TenantID, absentIDs, false); err != nil {
+		return res, fmt.Errorf("ingest: updating occurrences presence failed: %w", err)
 	}
-
 	if len(fixedFindings) > 0 {
-		if err := e.store.UpsertFindings(ctx, scope.TenantID, fixedFindings); err != nil {
+		if err := st.UpsertFindings(ctx, scope.TenantID, fixedFindings); err != nil {
 			return res, fmt.Errorf("ingest: closing findings failed: %w", err)
 		}
+		if err := st.RecordFindingEvents(ctx, scope.TenantID, events); err != nil {
+			return res, fmt.Errorf("ingest: recording finding events failed: %w", err)
+		}
+	}
+	// D12: recompute counters of every finding whose occurrences changed.
+	changed := make([]uuid.UUID, 0, len(absentByFinding))
+	for id := range absentByFinding {
+		changed = append(changed, id)
+	}
+	if err := st.RecomputeOccurrenceCounts(ctx, scope.TenantID, changed); err != nil {
+		return res, fmt.Errorf("ingest: recomputing occurrence counts failed: %w", err)
 	}
 
-	return CloseScopeResult{
-		Closed:              closedCount,
-		HeldForConfirmation: false,
-	}, nil
+	return CloseScopeResult{Closed: closedCount}, nil
 }
 
 // MemoryStore provides a thread-safe, in-memory store for unit tests and local execution.
@@ -380,16 +467,34 @@ type MemoryStore struct {
 	sboms                 map[string]*domain.SBOM
 	sbomComponents        map[string][]domain.SBOMComponent
 	scopeLastScanFinished map[string]time.Time
+	findingEvents         map[string][]*domain.FindingEvent
+	assets                map[string]*domain.Asset
+	applications          map[string]*domain.Application
+	ingestRuns            map[string]*domain.IngestRun
+	ingestRunScopes       map[string]*domain.IngestRunScope
+	ingestRunResults      map[string][]*domain.IngestRunResult
+	tokens                map[string]*auth.TokenRecord
+	tenants               map[uuid.UUID]*domain.Tenant
+	scanSources           map[string]uuid.UUID
 }
 
 // NewMemoryStore initializes a new MemoryStore.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
+		scanSources:           make(map[string]uuid.UUID),
 		findings:              make(map[string]*domain.Finding),
 		occurrences:           make(map[string]*domain.Occurrence),
 		sboms:                 make(map[string]*domain.SBOM),
 		sbomComponents:        make(map[string][]domain.SBOMComponent),
 		scopeLastScanFinished: make(map[string]time.Time),
+		findingEvents:         make(map[string][]*domain.FindingEvent),
+		assets:                make(map[string]*domain.Asset),
+		applications:          make(map[string]*domain.Application),
+		ingestRuns:            make(map[string]*domain.IngestRun),
+		ingestRunScopes:       make(map[string]*domain.IngestRunScope),
+		ingestRunResults:      make(map[string][]*domain.IngestRunResult),
+		tokens:                make(map[string]*auth.TokenRecord),
+		tenants:               make(map[uuid.UUID]*domain.Tenant),
 	}
 }
 
@@ -474,7 +579,7 @@ func (m *MemoryStore) GetActiveScopeOccurrences(ctx context.Context, scope Close
 	return result, nil
 }
 
-func (m *MemoryStore) UpdateOccurrencesPresence(ctx context.Context, occurrenceIDs []uuid.UUID, present bool) error {
+func (m *MemoryStore) UpdateOccurrencesPresence(ctx context.Context, tenantID uuid.UUID, occurrenceIDs []uuid.UUID, present bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -484,7 +589,7 @@ func (m *MemoryStore) UpdateOccurrencesPresence(ctx context.Context, occurrenceI
 	}
 
 	for _, occ := range m.occurrences {
-		if idMap[occ.ID] {
+		if occ.TenantID == tenantID && idMap[occ.ID] {
 			occ.Present = present
 		}
 	}
@@ -586,4 +691,257 @@ func (m *MemoryStore) GetFinding(ctx context.Context, tenantID, findingID uuid.U
 	}
 
 	return target, occs, nil
+}
+
+// RecordFindingEvents stores audit trail events in memory.
+func (m *MemoryStore) RecordFindingEvents(ctx context.Context, tenantID uuid.UUID, events []*domain.FindingEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, ev := range events {
+		key := tenantID.String() + ":" + ev.FindingID.String()
+		cp := *ev
+		if cp.ID == domain.NilID {
+			cp.ID = domain.NewID()
+		}
+		if cp.At.IsZero() {
+			cp.At = time.Now().UTC()
+		}
+		m.findingEvents[key] = append(m.findingEvents[key], &cp)
+	}
+	return nil
+}
+
+// GetFindingEvents retrieves chronological events for a finding.
+func (m *MemoryStore) GetFindingEvents(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.FindingEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	key := tenantID.String() + ":" + findingID.String()
+	events := m.findingEvents[key]
+	var res []*domain.FindingEvent
+	for _, ev := range events {
+		cp := *ev
+		res = append(res, &cp)
+	}
+	return res, nil
+}
+
+// LookupAsset queries an asset by type and key.
+func (m *MemoryStore) LookupAsset(ctx context.Context, tenantID uuid.UUID, assetType domain.AssetType, key string) (*domain.Asset, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	composite := fmt.Sprintf("%s:%s:%s", tenantID, assetType, key)
+	if a, exists := m.assets[composite]; exists {
+		cp := *a
+		return &cp, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+// CreateAsset persists a new asset.
+func (m *MemoryStore) CreateAsset(ctx context.Context, asset *domain.Asset) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s:%s", asset.TenantID, asset.Type, asset.Key)
+	cp := *asset
+	m.assets[composite] = &cp
+	return nil
+}
+
+// LookupApplication queries an application by slug.
+func (m *MemoryStore) LookupApplication(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	composite := fmt.Sprintf("%s:%s", tenantID, slug)
+	if app, exists := m.applications[composite]; exists {
+		cp := *app
+		return &cp, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+// CreateApplication inserts or updates an application.
+func (m *MemoryStore) CreateApplication(ctx context.Context, app *domain.Application) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s", app.TenantID, app.Slug)
+	cp := *app
+	m.applications[composite] = &cp
+	return nil
+}
+
+// CreateIngestRun records an ingestion run.
+func (m *MemoryStore) CreateIngestRun(ctx context.Context, run *domain.IngestRun) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s", run.TenantID, run.ID)
+	cp := *run
+	m.ingestRuns[composite] = &cp
+	return nil
+}
+
+// GetIngestRun fetches an ingest run by id.
+func (m *MemoryStore) GetIngestRun(ctx context.Context, tenantID, runID uuid.UUID) (*domain.IngestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	composite := fmt.Sprintf("%s:%s", tenantID, runID)
+	if run, exists := m.ingestRuns[composite]; exists {
+		cp := *run
+		return &cp, nil
+	}
+	return nil, errors.New("store: ingest run not found")
+}
+
+// UpdateIngestRun updates an ingest run status and statistics.
+func (m *MemoryStore) UpdateIngestRun(ctx context.Context, run *domain.IngestRun) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s", run.TenantID, run.ID)
+	cp := *run
+	m.ingestRuns[composite] = &cp
+	return nil
+}
+
+// RecordRunScope links an asset/track scope to an ingest run.
+func (m *MemoryStore) RecordRunScope(ctx context.Context, scope *domain.IngestRunScope) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s:%s:%s", scope.TenantID, scope.IngestRunID, scope.AssetID, scope.Track)
+	cp := *scope
+	m.ingestRunScopes[composite] = &cp
+	return nil
+}
+
+// RecordRunResult records ephemeral scan run findings.
+func (m *MemoryStore) RecordRunResult(ctx context.Context, result *domain.IngestRunResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	composite := fmt.Sprintf("%s:%s", result.TenantID, result.IngestRunID)
+	cp := *result
+	m.ingestRunResults[composite] = append(m.ingestRunResults[composite], &cp)
+	return nil
+}
+
+// LookupTokenByHash retrieves an API token record by its SHA-256 hash.
+func (m *MemoryStore) LookupTokenByHash(ctx context.Context, tenantID uuid.UUID, tokenHash string) (*auth.TokenRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if rec, exists := m.tokens[tokenHash]; exists && rec.TenantID == tenantID {
+		cp := *rec
+		return &cp, nil
+	}
+	return nil, auth.ErrUnauthorized
+}
+
+// SaveToken persists or updates an API token record.
+func (m *MemoryStore) SaveToken(ctx context.Context, record *auth.TokenRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cp := *record
+	m.tokens[record.TokenHash] = &cp
+	return nil
+}
+
+// CreateTenant inserts a new tenant into memory.
+func (m *MemoryStore) CreateTenant(ctx context.Context, tenant *domain.Tenant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cp := *tenant
+	m.tenants[tenant.ID] = &cp
+	return nil
+}
+
+// GetTenant fetches a tenant by UUID.
+func (m *MemoryStore) GetTenant(ctx context.Context, tenantID uuid.UUID) (*domain.Tenant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if t, exists := m.tenants[tenantID]; exists {
+		cp := *t
+		return &cp, nil
+	}
+	return nil, errors.New("store: tenant not found")
+}
+
+// InTenantTx runs fn directly: the in-memory store has no transactions, only locks per call.
+func (m *MemoryStore) InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error {
+	return fn(m)
+}
+
+// LockScope is a no-op in memory.
+func (m *MemoryStore) LockScope(ctx context.Context, scope CloseScope) error { return nil }
+
+// RecomputeOccurrenceCounts sets occurrence_count from present occurrences (D12).
+func (m *MemoryStore) RecomputeOccurrenceCounts(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := make(map[uuid.UUID]bool, len(findingIDs))
+	for _, id := range findingIDs {
+		want[id] = true
+	}
+	counts := make(map[uuid.UUID]int)
+	for _, o := range m.occurrences {
+		if o.TenantID == tenantID && o.Present && want[o.FindingID] {
+			counts[o.FindingID]++
+		}
+	}
+	for _, f := range m.findings {
+		if f.TenantID == tenantID && want[f.ID] {
+			f.OccurrenceCount = counts[f.ID]
+		}
+	}
+	return nil
+}
+
+// EnsureScanSource mirrors PostgresStore: empty ref means the built-in default source.
+// A UUID ref is accepted as given (the memory store has no source configuration).
+func (m *MemoryStore) EnsureScanSource(ctx context.Context, tenantID uuid.UUID, ref string) (uuid.UUID, error) {
+	if ref == "" {
+		ref = "default"
+	}
+	if id, err := uuid.Parse(ref); err == nil {
+		return id, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantID.String() + ":" + ref
+	if id, ok := m.scanSources[key]; ok {
+		return id, nil
+	}
+	if ref != "default" {
+		return uuid.Nil, store.ErrNotFound
+	}
+	id := domain.NewID()
+	m.scanSources[key] = id
+	return id, nil
+}
+
+// CountPresentOccurrencesBatch counts present occurrences per finding.
+func (m *MemoryStore) CountPresentOccurrencesBatch(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	want := make(map[uuid.UUID]bool, len(findingIDs))
+	for _, id := range findingIDs {
+		want[id] = true
+	}
+	out := make(map[uuid.UUID]int)
+	for _, o := range m.occurrences {
+		if o.TenantID == tenantID && o.Present && want[o.FindingID] {
+			out[o.FindingID]++
+		}
+	}
+	return out, nil
 }
