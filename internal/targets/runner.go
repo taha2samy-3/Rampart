@@ -134,6 +134,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
+	if err := r.bootstrapLocalAdmin(ctx, storeBackend); err != nil {
+		return err
+	}
+
 	authn := auth.NewAuthenticatorWithStore(storeBackend)
 	if err := r.bootstrapAdminToken(ctx, authn, storeBackend, defaultTenantID, pgStore != nil); err != nil {
 		return err
@@ -354,8 +358,9 @@ func (r *Runner) autoApplyDefaultResources(ctx context.Context, configStore stor
 	}
 }
 
-// buildAuthHandlers wires the browser auth endpoints. With no auth.oidc.issuer the endpoints still
-// exist (ui-config reports no sign-in method) so the UI can say so instead of failing.
+// buildAuthHandlers wires the browser auth endpoints. Sessions exist when there is a way to sign in:
+// an OIDC provider and/or the local administrator. With neither, the endpoints still exist (ui-config
+// reports no sign-in method) so the UI can say so instead of failing.
 func (r *Runner) buildAuthHandlers(st store.Store, authn *auth.Authenticator) (*auth.Handlers, error) {
 	tenants, ok := st.(auth.TenantLookup)
 	if !ok {
@@ -363,23 +368,20 @@ func (r *Runner) buildAuthHandlers(st store.Store, authn *auth.Authenticator) (*
 	}
 	deps := auth.HandlerDeps{
 		Identity: st, Tenants: tenants, Authn: authn, Logger: r.logger,
-		Product: "Rampart", Version: version.Version,
+		Product: "Rampart", Version: version.Version, Local: st, Audit: st,
 	}
 	oc := r.cfg.Auth.OIDC
-	if oc.Issuer == "" {
-		r.logger.Warn("auth.oidc.issuer is not set: browser sign-in is disabled (API tokens still work)")
+	ba := r.cfg.Auth.BootstrapAdmin
+	hasOIDC := oc.Issuer != ""
+	hasLocal := ba.PasswordFile != ""
+	if !hasOIDC && !hasLocal {
+		r.logger.Warn("no sign-in method is configured (auth.oidc.issuer, auth.bootstrapAdmin.passwordFile): browser sign-in is disabled, API tokens still work")
 		return auth.NewHandlers(deps), nil
 	}
 
 	key, err := readSecretFile(r.cfg.Auth.Session.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("auth.session.keyFile: %w", err)
-	}
-	var secret []byte
-	if oc.ClientSecretFile != "" {
-		if secret, err = readSecretFile(oc.ClientSecretFile); err != nil {
-			return nil, fmt.Errorf("auth.oidc.clientSecretFile: %w", err)
-		}
 	}
 	secure := strings.HasPrefix(r.cfg.Server.PublicURL, "https://")
 	sessions, err := auth.NewSessionManager(st, auth.SessionConfig{
@@ -389,20 +391,120 @@ func (r *Runner) buildAuthHandlers(st store.Store, authn *auth.Authenticator) (*
 		return nil, fmt.Errorf("auth.session.keyFile: %w", err)
 	}
 	authn.SetSessions(sessions)
-
-	policy := auth.RolePolicy{DefaultRole: auth.Role(oc.DefaultRole)}
-	for _, b := range oc.Bindings {
-		policy.Bindings = append(policy.Bindings, auth.Binding{Kind: b.Kind, Name: b.Name, Role: auth.Role(b.Role)})
-	}
 	deps.Sessions = sessions
-	deps.Policy = policy
-	deps.OIDC = auth.NewOIDCClient(auth.OIDCConfig{
-		Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: string(secret),
-		RedirectURL: strings.TrimRight(r.cfg.Server.PublicURL, "/") + "/auth/oidc/default/callback",
-		Scopes:      oc.Scopes, GroupsClaim: oc.GroupsClaim, RequireEmailVerified: oc.RequireEmailVerified,
-	})
-	r.logger.Info("browser sign-in enabled", "issuer", oc.Issuer, "redirect", strings.TrimRight(r.cfg.Server.PublicURL, "/")+"/auth/oidc/default/callback")
+
+	// D3: local sign-in is refused once an identity provider is configured, unless keepEnabled says so.
+	deps.LocalLoginEnabled = hasLocal && (!hasOIDC || ba.KeepEnabled)
+	switch {
+	case hasLocal && deps.LocalLoginEnabled && hasOIDC:
+		r.logger.Warn("the local administrator stays enabled next to single sign-on (auth.bootstrapAdmin.keepEnabled)")
+	case hasLocal && !hasOIDC:
+		r.logger.Info("local administrator sign-in enabled (no identity provider is configured)")
+	case hasLocal:
+		r.logger.Info("local administrator sign-in is off because an identity provider is configured; set auth.bootstrapAdmin.keepEnabled to keep it")
+	}
+
+	if hasOIDC {
+		var secret []byte
+		if oc.ClientSecretFile != "" {
+			if secret, err = readSecretFile(oc.ClientSecretFile); err != nil {
+				return nil, fmt.Errorf("auth.oidc.clientSecretFile: %w", err)
+			}
+		}
+		policy := auth.RolePolicy{DefaultRole: auth.Role(oc.DefaultRole)}
+		for _, b := range oc.Bindings {
+			policy.Bindings = append(policy.Bindings, auth.Binding{Kind: b.Kind, Name: b.Name, Role: auth.Role(b.Role)})
+		}
+		deps.Policy = policy
+		deps.OIDC = auth.NewOIDCClient(auth.OIDCConfig{
+			Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: string(secret),
+			RedirectURL: strings.TrimRight(r.cfg.Server.PublicURL, "/") + "/auth/oidc/default/callback",
+			Scopes:      oc.Scopes, GroupsClaim: oc.GroupsClaim, RequireEmailVerified: oc.RequireEmailVerified,
+		})
+		r.logger.Info("browser sign-in enabled", "issuer", oc.Issuer, "redirect", strings.TrimRight(r.cfg.Server.PublicURL, "/")+"/auth/oidc/default/callback")
+	}
 	return auth.NewHandlers(deps), nil
+}
+
+// BootstrapLocalAdmin creates the first local administrator, once (D3, doc 14 section 1). The password
+// comes from auth.bootstrapAdmin.passwordFile; if that file does not exist a random password is generated
+// into it with mode 0600. The password is never logged. An existing account is left alone, so a password
+// changed later with `rampart admin set-password` survives restarts.
+func (r *Runner) bootstrapLocalAdmin(ctx context.Context, st store.Store) error {
+	ba := r.cfg.Auth.BootstrapAdmin
+	if ba.PasswordFile == "" {
+		return nil
+	}
+	tenants, ok := st.(auth.TenantLookup)
+	if !ok {
+		return fmt.Errorf("the store cannot look up tenants by slug")
+	}
+	tenant, err := tenants.GetTenantBySlug(ctx, ba.Tenant)
+	if err != nil || tenant == nil {
+		return fmt.Errorf("auth.bootstrapAdmin.tenant %q does not exist: %v", ba.Tenant, err)
+	}
+	if existing, err := st.GetLocalAdmin(ctx, tenant.ID, ba.Username); err != nil {
+		return err
+	} else if existing != nil {
+		return nil
+	}
+
+	password, generated, err := ReadOrGeneratePassword(ba.PasswordFile)
+	if err != nil {
+		return fmt.Errorf("auth.bootstrapAdmin.passwordFile: %w", err)
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	userID, err := st.UpsertUser(ctx, auth.User{Issuer: auth.LocalIssuer, Subject: ba.Username, Name: "Local administrator"})
+	if err != nil {
+		return err
+	}
+	if err := st.UpsertMember(ctx, tenant.ID, userID, auth.RoleAdmin); err != nil {
+		return err
+	}
+	created, err := st.CreateLocalAdmin(ctx, auth.LocalAdmin{
+		ID: domain.NewID(), TenantID: tenant.ID, UserID: userID, Username: ba.Username, PasswordHash: hash,
+	})
+	if err != nil {
+		return err
+	}
+	if created {
+		r.logger.Info("local administrator created", "username", ba.Username, "tenant", ba.Tenant,
+			"passwordFile", ba.PasswordFile, "passwordGenerated", generated)
+	}
+	return nil
+}
+
+// ReadOrGeneratePassword reads the password from path, or generates one (24 characters) and writes it
+// there with mode 0600, exclusively, so a concurrent start cannot overwrite it.
+func ReadOrGeneratePassword(path string) (password string, generated bool, err error) {
+	if b, rerr := os.ReadFile(path); rerr == nil {
+		pw := strings.TrimRight(string(b), "\r\n")
+		if len(pw) < auth.MinPasswordLength {
+			return "", false, auth.ErrWeakPassword
+		}
+		return pw, false, nil
+	} else if !os.IsNotExist(rerr) {
+		return "", false, rerr
+	}
+	pw, err := auth.GeneratePassword(24)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) { // another replica wrote it first
+			return ReadOrGeneratePassword(path)
+		}
+		return "", false, fmt.Errorf("cannot write the generated password (is the directory writable?): %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(pw + "\n"); err != nil {
+		return "", false, err
+	}
+	return pw, true, nil
 }
 
 // readSecretFile reads a secret from a file, dropping trailing newlines only.
