@@ -91,6 +91,25 @@ seaweedfs:
   persistence:
     size: 50Gi
 
+server:
+  # External base URL: builds the OIDC redirect URI and decides Secure cookies (https).
+  publicUrl: ""
+
+auth:
+  oidc:
+    # Leave issuer empty to run without browser sign-in (API tokens still work).
+    issuer: ""
+    clientId: ""
+    # A Secret you create holding the client secret. It never goes through values.
+    clientSecretName: ""
+    clientSecretKey: clientSecret
+    # Role on first login when no binding matches: viewer, triager, admin, or "" for no access.
+    defaultRole: viewer
+    # Roles are granted by bindings, never read straight from the IdP (doc 14 section 3).
+    bindings: []
+    #  - {kind: group, name: rampart-admins, role: admin}
+    #  - {kind: user, name: alice@example.com, role: triager}
+
 operator:
   enabled: true
   mode: auto

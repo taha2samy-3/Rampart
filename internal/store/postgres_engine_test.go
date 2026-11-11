@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,5 +280,90 @@ func TestPostgres_NamespaceBinding(t *testing.T) {
 	}
 	if none, _ := app.GetTenantByNamespace(ctx, "nobody-"+uuid.NewString()[:6]); none != nil {
 		t.Fatal("an unlisted namespace has no tenant")
+	}
+}
+
+// Sessions and memberships under row-level security (D8, doc 14).
+func TestPostgres_IdentityAndSessions(t *testing.T) {
+	ctx := context.Background()
+	app, sys := setupStores(t, ctx)
+	a, b := newTenant(t, ctx, sys, "ida"), newTenant(t, ctx, sys, "idb")
+	uid, err := app.UpsertUser(ctx, auth.User{Issuer: "https://idp", Subject: "sub-" + uuid.NewString()[:6], Email: "p@example.com", Name: "P"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := app.UpsertUser(ctx, auth.User{Issuer: "https://idp", Subject: "x", Email: "q@example.com"})
+	if again == uid {
+		t.Fatal("different subjects are different people")
+	}
+	if err := app.UpsertMember(ctx, a, uid, auth.RoleTriager); err != nil {
+		t.Fatal(err)
+	}
+	if role, ok, _ := app.GetMemberRole(ctx, a, uid); !ok || role != auth.RoleTriager {
+		t.Fatalf("member role: %q %v", role, ok)
+	}
+	if _, ok, _ := app.GetMemberRole(ctx, b, uid); ok {
+		t.Fatal("no membership in tenant B")
+	}
+
+	sm, _ := auth.NewSessionManager(app, auth.SessionConfig{Key: []byte(strings.Repeat("k", 32))})
+	value, rec, err := sm.Create(ctx, a, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: sm.CookieName(), Value: value})
+	p, err := sm.Principal(req)
+	if err != nil || p.Role != auth.RoleTriager || p.Email != "p@example.com" {
+		t.Fatalf("principal: %+v %v", p, err)
+	}
+
+	// the secret is never stored: only its hash
+	var stored string
+	if err := sys.Pool().QueryRow(ctx, `SELECT token_hash FROM session WHERE id = $1`, rec.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(value, stored) || stored != auth.HashToken(value[strings.Index(value, ".")+1:]) {
+		t.Fatalf("session secret must be stored as its SHA-256 only")
+	}
+	// no tenant context sees no sessions (RLS)
+	var n int
+	_ = app.Pool().QueryRow(ctx, `SELECT count(*) FROM session`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("a session with no tenant context saw %d rows", n)
+	}
+	// a session of tenant A cannot be looked up as tenant B
+	if _, err := app.LookupSession(ctx, b, rec.TokenHash); err == nil {
+		t.Fatal("tenant B must not see tenant A's session")
+	}
+
+	// the person sees their own tenants across RLS, and only theirs
+	_ = app.UpsertMember(ctx, b, uid, auth.RoleViewer)
+	list, err := app.ListUserTenants(ctx, uid)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("tenants: %v %v", list, err)
+	}
+	other, _ := app.ListUserTenants(ctx, again)
+	if len(other) != 0 {
+		t.Fatalf("another person must not see these memberships: %v", other)
+	}
+
+	// removing the membership revokes the session at once (no role, no session)
+	if _, err := sys.Pool().Exec(ctx, `DELETE FROM tenant_member WHERE tenant_id = $1 AND user_id = $2`, a, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.Principal(req); err == nil {
+		t.Fatal("a session must die when the membership is removed")
+	}
+	// a disabled user is revoked too
+	_ = app.UpsertMember(ctx, a, uid, auth.RoleViewer)
+	if _, err := sm.Principal(req); err != nil {
+		t.Fatalf("membership restored: %v", err)
+	}
+	if _, err := sys.Pool().Exec(ctx, `UPDATE app_user SET status = 'disabled' WHERE id = $1`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.Principal(req); err == nil {
+		t.Fatal("a disabled user's session must not authenticate")
 	}
 }

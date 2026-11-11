@@ -1,7 +1,10 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"rampart/internal/config"
 )
@@ -85,5 +88,74 @@ func TestLoadWithEnv(t *testing.T) {
 	}
 	if cfg.Ingest.BatchRows != 2500 {
 		t.Errorf("expected batch rows 2500, got %d", cfg.Ingest.BatchRows)
+	}
+}
+
+// D6: the file uses the documented keys (server.http.addr, database.directUrl, auth.oidc.*).
+func TestConfigFileFollowsD6Shape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := `
+server:
+  http: {addr: ":18080"}
+  ops: {addr: ":19090"}
+  publicUrl: https://rampart.example.com
+database:
+  directUrl: postgres://direct
+  migrateUrl: postgres://owner
+auth:
+  session: {keyFile: /run/secrets/session, idleTimeout: 2h}
+  oidc:
+    issuer: https://idp.example.com
+    clientId: rampart
+    clientSecretFile: /run/secrets/oidc
+    defaultRole: triager
+    bindings:
+      - {kind: group, name: sec-admins, role: admin}
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RAMPART_CONFIG_FILE", path)
+	cfg, err := config.Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.HTTPAddr != ":18080" || cfg.Server.OpsAddr != ":19090" || cfg.Server.PublicURL != "https://rampart.example.com" {
+		t.Errorf("server: %+v", cfg.Server)
+	}
+	if cfg.Database.DirectURL != "postgres://direct" || cfg.Database.MigrateURL != "postgres://owner" {
+		t.Errorf("database: %+v", cfg.Database)
+	}
+	o := cfg.Auth.OIDC
+	if o.Issuer != "https://idp.example.com" || o.DefaultRole != "triager" || len(o.Bindings) != 1 || o.Bindings[0].Role != "admin" {
+		t.Errorf("oidc: %+v", o)
+	}
+	if cfg.Auth.Session.IdleTimeout != 2*time.Hour || cfg.Auth.Session.AbsoluteTimeout != 24*time.Hour {
+		t.Errorf("session: %+v (absolute must keep its 24h default)", cfg.Auth.Session)
+	}
+	// env beats file
+	t.Setenv("RAMPART_AUTH_OIDC_DEFAULT_ROLE", "viewer")
+	t.Setenv("RAMPART_AUTH_OIDC_BINDINGS", "user:alice@example.com=admin,group:devs=triager")
+	cfg, _ = config.Load(nil)
+	if cfg.Auth.OIDC.DefaultRole != "viewer" || len(cfg.Auth.OIDC.Bindings) != 2 || cfg.Auth.OIDC.Bindings[0].Name != "alice@example.com" {
+		t.Errorf("env must override the file: %+v", cfg.Auth.OIDC)
+	}
+}
+
+func TestOIDCNeedsSessionKeyAndPublicURL(t *testing.T) {
+	t.Setenv("RAMPART_CONFIG_FILE", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("RAMPART_AUTH_OIDC_ISSUER", "https://idp.example.com")
+	t.Setenv("RAMPART_AUTH_OIDC_CLIENT_ID", "rampart")
+	if _, err := config.Load(nil); err == nil {
+		t.Fatal("an issuer without a session key and a public URL must be refused")
+	}
+	t.Setenv("RAMPART_AUTH_SESSION_KEY_FILE", "/k")
+	t.Setenv("RAMPART_SERVER_PUBLIC_URL", "https://rampart.example.com")
+	if _, err := config.Load(nil); err != nil {
+		t.Fatalf("complete OIDC settings must load: %v", err)
+	}
+	t.Setenv("RAMPART_AUTH_OIDC_DEFAULT_ROLE", "owner")
+	if _, err := config.Load(nil); err == nil {
+		t.Fatal("an unknown default role must be refused")
 	}
 }

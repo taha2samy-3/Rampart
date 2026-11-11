@@ -476,6 +476,10 @@ type MemoryStore struct {
 	tokens                map[string]*auth.TokenRecord
 	tenants               map[uuid.UUID]*domain.Tenant
 	scanSources           map[string]uuid.UUID
+	users                 map[uuid.UUID]auth.User
+	userIDs               map[string]uuid.UUID
+	members               map[string]memMember
+	sessions              map[string]auth.SessionRecord
 }
 
 // NewMemoryStore initializes a new MemoryStore.
@@ -495,6 +499,10 @@ func NewMemoryStore() *MemoryStore {
 		ingestRunResults:      make(map[string][]*domain.IngestRunResult),
 		tokens:                make(map[string]*auth.TokenRecord),
 		tenants:               make(map[uuid.UUID]*domain.Tenant),
+		users:                 make(map[uuid.UUID]auth.User),
+		userIDs:               make(map[string]uuid.UUID),
+		members:               make(map[string]memMember),
+		sessions:              make(map[string]auth.SessionRecord),
 	}
 }
 
@@ -944,4 +952,111 @@ func (m *MemoryStore) CountPresentOccurrencesBatch(ctx context.Context, tenantID
 		}
 	}
 	return out, nil
+}
+
+// --- identity (auth.IdentityStore) for the in-memory store -------------------------------------
+
+type memMember struct {
+	role auth.Role
+}
+
+// UpsertUser creates or updates a person by (issuer, subject).
+func (m *MemoryStore) UpsertUser(ctx context.Context, u auth.User) (uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := u.Issuer + "\x1f" + u.Subject
+	if id, ok := m.userIDs[key]; ok {
+		cp := u
+		cp.ID = id
+		m.users[id] = cp
+		return id, nil
+	}
+	u.ID = domain.NewID()
+	m.userIDs[key] = u.ID
+	m.users[u.ID] = u
+	return u.ID, nil
+}
+
+func (m *MemoryStore) UpsertMember(ctx context.Context, tenantID, userID uuid.UUID, role auth.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.members[tenantID.String()+":"+userID.String()] = memMember{role: role}
+	return nil
+}
+
+func (m *MemoryStore) GetMemberRole(ctx context.Context, tenantID, userID uuid.UUID) (auth.Role, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mm, ok := m.members[tenantID.String()+":"+userID.String()]
+	return mm.role, ok, nil
+}
+
+func (m *MemoryStore) ListUserTenants(ctx context.Context, userID uuid.UUID) ([]auth.TenantRef, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []auth.TenantRef{}
+	for _, t := range m.tenants {
+		if _, ok := m.members[t.ID.String()+":"+userID.String()]; ok {
+			out = append(out, auth.TenantRef{ID: t.ID, Slug: t.Slug, Name: t.DisplayName})
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStore) CreateSession(ctx context.Context, r auth.SessionRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[r.TenantID.String()+":"+r.TokenHash] = r
+	return nil
+}
+
+func (m *MemoryStore) LookupSession(ctx context.Context, tenantID uuid.UUID, tokenHash string) (*auth.SessionPrincipal, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.sessions[tenantID.String()+":"+tokenHash]
+	if !ok {
+		return nil, auth.ErrUnauthorized
+	}
+	mm, member := m.members[tenantID.String()+":"+r.UserID.String()]
+	u := m.users[r.UserID]
+	if !member {
+		return nil, auth.ErrUnauthorized
+	}
+	return &auth.SessionPrincipal{Session: r, Email: u.Email, Name: u.Name, Role: mm.role}, nil
+}
+
+func (m *MemoryStore) TouchSession(ctx context.Context, tenantID, sessionID uuid.UUID, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, r := range m.sessions {
+		if r.ID == sessionID && r.TenantID == tenantID {
+			r.LastSeenAt = at
+			m.sessions[k] = r
+		}
+	}
+	return nil
+}
+
+func (m *MemoryStore) DeleteSession(ctx context.Context, tenantID, sessionID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, r := range m.sessions {
+		if r.ID == sessionID && r.TenantID == tenantID {
+			delete(m.sessions, k)
+		}
+	}
+	return nil
+}
+
+// GetTenantBySlug lets the in-memory store back the auth handlers' tenant lookup.
+func (m *MemoryStore) GetTenantBySlug(ctx context.Context, slug string) (*domain.Tenant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, t := range m.tenants {
+		if t.Slug == slug {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }

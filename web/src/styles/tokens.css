@@ -1,0 +1,83 @@
+/*
+ * Design tokens (docs/13-frontend.md section 6). Light is the default.
+ * Dark applies under prefers-color-scheme unless the user chose light, or
+ * whenever the user chose dark (data-theme on <html>).
+ * Deviation: the doc lists one value per risk colour; on the dark surface the
+ * critical, high, medium and low shapes and the severity segment are lifted so
+ * they keep 3:1 against the surface.
+ */
+:root {
+  color-scheme: light;
+  --surface: #ffffff;
+  --chrome: #f3f5f8;
+  --ink: #1b2233;
+  --ink-2: #5b6679;
+  --rule: #d5dae3;
+  --accent: #4353d6;
+  --accent-contrast: #ffffff;
+  --resolved: #19a38c;
+
+  --band-critical: #b4232a;
+  --band-high: #d9622b;
+  --band-medium: #c99a1a;
+  --band-low: #6b7c93;
+  --band-info: #a9b4c4;
+
+  --seg-severity: #55607a;
+  --seg-threat: #b4232a;
+  --seg-context: #d9622b;
+  --seg-reduction: #19a38c;
+
+  --mark-back: #4353d6;
+  --mark-front: #19c3a6;
+
+  --dur-pane: 120ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --surface: #141922;
+    --chrome: #1c2330;
+    --ink: #e7ebf2;
+    --ink-2: #9aa6b8;
+    --rule: #2c3545;
+    --accent: #8c98ff;
+    --accent-contrast: #141922;
+    --resolved: #2dd4bf;
+    --band-critical: #e5484d;
+    --band-high: #e8743b;
+    --band-medium: #d9a91f;
+    --band-low: #8496ad;
+    --band-info: #a9b4c4;
+    --seg-severity: #7b88a3;
+    --seg-threat: #e5484d;
+    --seg-context: #e8743b;
+    --seg-reduction: #2dd4bf;
+    --mark-back: #8c98ff;
+    --mark-front: #2dd4bf;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #141922;
+  --chrome: #1c2330;
+  --ink: #e7ebf2;
+  --ink-2: #9aa6b8;
+  --rule: #2c3545;
+  --accent: #8c98ff;
+  --accent-contrast: #141922;
+  --resolved: #2dd4bf;
+  --band-critical: #e5484d;
+  --band-high: #e8743b;
+  --band-medium: #d9a91f;
+  --band-low: #8496ad;
+  --band-info: #a9b4c4;
+  --seg-severity: #7b88a3;
+  --seg-threat: #e5484d;
+  --seg-context: #e8743b;
+  --seg-reduction: #2dd4bf;
+  --mark-back: #8c98ff;
+  --mark-front: #2dd4bf;
+}

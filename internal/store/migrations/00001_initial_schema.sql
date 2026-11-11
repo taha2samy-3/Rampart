@@ -129,6 +129,10 @@ ALTER TABLE tenant_member ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_member FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON tenant_member
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+-- A person may read their own memberships across tenants (tenant switcher, D8). Read only:
+-- writes still require the tenant context.
+CREATE POLICY member_reads_own ON tenant_member FOR SELECT
+    USING (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
 
 CREATE TABLE api_token (
     id UUID PRIMARY KEY,
@@ -170,9 +174,11 @@ CREATE TABLE session (
     tenant_id UUID NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
     user_id UUID NOT NULL,
     token_hash TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,      -- absolute lifetime (doc 14: 24 h)
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- idle timeout (doc 14: 8 h)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX idx_session_token_hash ON session (tenant_id, token_hash);
 CREATE INDEX idx_session_tenant_user ON session (tenant_id, user_id);
 ALTER TABLE session ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session FORCE ROW LEVEL SECURITY;

@@ -1,0 +1,11 @@
+.git
+.github
+bin
+**/node_modules
+web/dist/*
+!web/dist/.keep
+web/.scratch
+**/*.test
+coverage.out
+deploy/compose/.env
+docs

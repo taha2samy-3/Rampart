@@ -25,6 +25,7 @@ import (
 	"rampart/internal/parsers/spdx"
 	"rampart/internal/parsers/syft"
 	"rampart/internal/store"
+	"rampart/internal/telemetry"
 )
 
 var (
@@ -797,4 +798,10 @@ func (g *Gateway) finishRun(ctx context.Context, run *domain.IngestRun, status d
 	run.Error = reason
 	run.FinishedAt = &now
 	_ = g.store.UpdateIngestRun(ctx, run)
+	telemetry.RecordIngestRun(ctx, string(status))
+	telemetry.RecordIngestOutcome(ctx, "created", run.Stats.Created)
+	telemetry.RecordIngestOutcome(ctx, "updated", run.Stats.Updated)
+	telemetry.RecordIngestOutcome(ctx, "untouched", run.Stats.Untouched)
+	telemetry.RecordIngestOutcome(ctx, "reactivated", run.Stats.Reactivated)
+	telemetry.RecordIngestOutcome(ctx, "closed", run.Stats.Closed)
 }

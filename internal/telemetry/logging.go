@@ -36,7 +36,7 @@ func SetupLogger(levelStr string, format string, out io.Writer) *slog.Logger {
 		handler = slog.NewJSONHandler(out, opts)
 	}
 
-	logger := slog.New(handler)
+	logger := slog.New(CorrelatingHandler{handler})
 	slog.SetDefault(logger)
 	return logger
 }

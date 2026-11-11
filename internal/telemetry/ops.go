@@ -18,6 +18,7 @@ type OpsServer struct {
 	ready     atomic.Bool
 	checkers  []ReadinessChecker
 	startTime time.Time
+	metrics   atomic.Pointer[http.Handler]
 }
 
 // NewOpsServer creates an OpsServer bound to the specified address (default :9090).
@@ -91,7 +92,14 @@ func (s *OpsServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ready\n"))
 }
 
+// SetMetricsHandler replaces the placeholder /metrics body with the real exporter (Setup).
+func (s *OpsServer) SetMetricsHandler(h http.Handler) { s.metrics.Store(&h) }
+
 func (s *OpsServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if h := s.metrics.Load(); h != nil {
+		(*h).ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
 	uptime := time.Since(s.startTime).Seconds()

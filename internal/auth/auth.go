@@ -64,6 +64,12 @@ type ContextUser struct {
 	TenantID uuid.UUID
 	Role     Role
 	Scopes   []string
+
+	// Set for browser sessions only (zero for API tokens).
+	UserID    uuid.UUID
+	Email     string
+	Name      string
+	SessionID uuid.UUID
 }
 
 // FromContext extracts the authenticated user from the context.
@@ -188,8 +194,12 @@ func (m *MemoryTokenStore) SaveToken(_ context.Context, record *TokenRecord) err
 
 // Authenticator validates bearer tokens and enforces tenant RBAC.
 type Authenticator struct {
-	store TokenStore
+	store    TokenStore
+	sessions *SessionManager // optional: browser sessions (doc 14)
 }
+
+// SetSessions enables authentication by session cookie when a request carries no API token.
+func (a *Authenticator) SetSessions(m *SessionManager) { a.sessions = m }
 
 // NewAuthenticator creates a new authenticator instance with default in-memory store.
 func NewAuthenticator() *Authenticator {
@@ -221,7 +231,7 @@ func (a *Authenticator) RegisterToken(rawToken string, record *TokenRecord) {
 func (a *Authenticator) AuthenticateRequest(r *http.Request) (*ContextUser, error) {
 	token := extractToken(r)
 	if token == "" {
-		return nil, ErrUnauthorized
+		return a.authenticateSession(r)
 	}
 
 	tenantID, err := TenantFromToken(token)
@@ -242,6 +252,29 @@ func (a *Authenticator) AuthenticateRequest(r *http.Request) (*ContextUser, erro
 		TenantID: record.TenantID,
 		Role:     record.Role,
 		Scopes:   record.Scopes,
+	}, nil
+}
+
+// authenticateSession authenticates a browser by its session cookie. State-changing methods
+// additionally need the CSRF token bound to the session (doc 14, doc 13 section 3).
+func (a *Authenticator) authenticateSession(r *http.Request) (*ContextUser, error) {
+	if a.sessions == nil {
+		return nil, ErrUnauthorized
+	}
+	p, err := a.sessions.Principal(r)
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	default:
+		if !a.sessions.CheckCSRF(r, p.Session.ID) {
+			return nil, ErrCSRF
+		}
+	}
+	return &ContextUser{
+		Subject: p.Email, TenantID: p.Session.TenantID, Role: p.Role, Scopes: []string{"tenant"},
+		UserID: p.Session.UserID, Email: p.Email, Name: p.Name, SessionID: p.Session.ID,
 	}, nil
 }
 

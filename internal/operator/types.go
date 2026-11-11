@@ -76,8 +76,8 @@ type TenantSpec struct {
 }
 
 type TenantStatus struct {
-	CommonStatus
-	TenantID string `json:"tenantId,omitempty"`
+	CommonStatus `json:",inline"`
+	TenantID     string `json:"tenantId,omitempty"`
 }
 
 // ApplicationCR represents the Application Custom Resource.
@@ -99,7 +99,7 @@ type ApplicationSpec struct {
 }
 
 type ApplicationStatus struct {
-	CommonStatus
+	CommonStatus  `json:",inline"`
 	ApplicationID string `json:"applicationId,omitempty"`
 }
 
@@ -124,6 +124,6 @@ type ScanSourceSpec struct {
 }
 
 type ScanSourceStatus struct {
-	CommonStatus
+	CommonStatus `json:",inline"`
 	ScanSourceID string `json:"scanSourceId,omitempty"`
 }

@@ -1,0 +1,27 @@
+# Development identity provider for the Compose quick start.
+#
+# The mockCallback connector signs in a fixed demo user without asking for credentials. That is
+# fine for a laptop and wrong for anything else: never expose this Dex. Replace it with your real
+# identity provider by setting RAMPART_AUTH_OIDC_* (see docs/14-sso-and-identity.md).
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: rampart
+    name: Rampart
+    secretEnv: RAMPART_OIDC_CLIENT_SECRET
+    redirectURIs:
+      - http://localhost:8080/auth/oidc/default/callback
+
+connectors:
+  - type: mockCallback
+    id: demo
+    name: Demo user

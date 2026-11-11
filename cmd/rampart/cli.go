@@ -21,10 +21,13 @@ import (
 	"rampart/internal/parsers/spdx"
 	"rampart/internal/parsers/syft"
 	"rampart/internal/store"
+	"rampart/internal/version"
 )
 
+// Version is the build version (set with -ldflags -X rampart/internal/version.Version).
+var Version = version.Version
+
 const (
-	Version         = "0.1.0-phase1"
 	ExitSuccess     = 0
 	ExitGateFailed  = 1
 	ExitUsageError  = 2

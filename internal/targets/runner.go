@@ -3,9 +3,13 @@ package targets
 import (
 	"context"
 	"fmt"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"log/slog"
 	"net/http"
 	"os"
+	"rampart/internal/operator"
+	"rampart/internal/secrets"
 	"strings"
 	"time"
 
@@ -22,6 +26,7 @@ import (
 	"rampart/internal/store"
 	"rampart/internal/telemetry"
 	"rampart/internal/ui"
+	"rampart/internal/version"
 )
 
 // Runner manages the lifecycle of the selected target components (ADR 0004).
@@ -92,6 +97,16 @@ func (r *Runner) Run(ctx context.Context) error {
 		storeBackend = ingest.NewMemoryStore()
 	}
 
+	// OpenTelemetry (D6): real /metrics always, traces and OTLP export when telemetry.otlpEndpoint is set.
+	tel, err := telemetry.Setup(ctx, telemetry.Config{Version: version.Version, Target: r.cfg.Target, OTLPEndpoint: r.cfg.Telemetry.OTLPEndpoint})
+	if err != nil {
+		return fmt.Errorf("setting up telemetry: %w", err)
+	}
+	defer func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tel.Shutdown(shutCtx)
+	}()
 	// 2. Initialize Ops server in background (:9090) with DB readiness probe
 	if pgStore != nil {
 		r.ops = telemetry.NewOpsServer(r.cfg.Server.OpsAddr, func(c context.Context) error {
@@ -99,7 +114,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		})
 	}
 
+	r.ops.SetMetricsHandler(tel.MetricsHandler())
+
 	errOpsChan := make(chan error, 1)
+	errOperatorChan := make(chan error, 1)
 	go func() {
 		if err := r.ops.Start(); err != nil && err != http.ErrServerClosed {
 			errOpsChan <- fmt.Errorf("ops server error: %w", err)
@@ -121,6 +139,11 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
+	// 3b. The operator (D1, D3): only in-cluster or with an explicit kubeconfig.
+	if err := r.startOperator(ctx, storeBackend, sysStore, errOperatorChan); err != nil {
+		return err
+	}
+
 	// 4. Parse selected targets
 	targetList := strings.Split(r.cfg.Target, ",")
 	isAll := false
@@ -134,23 +157,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	// 5. Initialize HTTP multiplexer for server.http.addr (:8080)
 	mux := http.NewServeMux()
 
-	if isAll || contains(targetList, "web-ui") {
-		r.logger.Info("mounting web-ui workbench on / and /workbench")
-		mux.Handle("/workbench", ui.Handler())
-		mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-			if req.URL.Path != "/" {
-				http.NotFound(w, req)
-				return
-			}
-			if strings.Contains(req.Header.Get("Accept"), "application/json") {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = fmt.Fprintf(w, `{"product":"rampart","target":"%s","status":"running"}`, r.cfg.Target)
-				return
-			}
-			ui.Handler().ServeHTTP(w, req)
-		})
-	} else {
+	isWebUI := isAll || contains(targetList, "web-ui")
+	if !isWebUI {
 		mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -202,9 +210,24 @@ func (r *Runner) Run(ctx context.Context) error {
 		queryAPI.RegisterRoutes(mux)
 	}
 
+	// Sign-in, sessions, ui-config and /me (doc 13 section 3, doc 14 section 2).
+	if isAll || contains(targetList, "query-api") {
+		h, err := r.buildAuthHandlers(storeBackend, authn)
+		if err != nil {
+			return err
+		}
+		h.RegisterRoutes(mux)
+	}
+
+	// The SPA owns every path the backend does not (deep links fall back to index.html).
+	if isWebUI {
+		r.logger.Info("serving the web UI on /")
+		mux.Handle("/", ui.Handler(ui.Options{HSTS: strings.HasPrefix(r.cfg.Server.PublicURL, "https://")}))
+	}
+
 	httpServer := &http.Server{
 		Addr:              r.cfg.Server.HTTPAddr,
-		Handler:           mux,
+		Handler:           telemetry.RequestIDMiddleware(telemetry.HTTPMiddleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -222,6 +245,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		r.logger.Info("shutdown signal received, initiating graceful teardown")
+	case err := <-errOperatorChan:
+		return err
 	case err := <-errOpsChan:
 		return err
 	case err := <-errHTTPChan:
@@ -327,4 +352,125 @@ func (r *Runner) autoApplyDefaultResources(ctx context.Context, configStore stor
 			break
 		}
 	}
+}
+
+// buildAuthHandlers wires the browser auth endpoints. With no auth.oidc.issuer the endpoints still
+// exist (ui-config reports no sign-in method) so the UI can say so instead of failing.
+func (r *Runner) buildAuthHandlers(st store.Store, authn *auth.Authenticator) (*auth.Handlers, error) {
+	tenants, ok := st.(auth.TenantLookup)
+	if !ok {
+		return nil, fmt.Errorf("the store cannot look up tenants by slug")
+	}
+	deps := auth.HandlerDeps{
+		Identity: st, Tenants: tenants, Authn: authn, Logger: r.logger,
+		Product: "Rampart", Version: version.Version,
+	}
+	oc := r.cfg.Auth.OIDC
+	if oc.Issuer == "" {
+		r.logger.Warn("auth.oidc.issuer is not set: browser sign-in is disabled (API tokens still work)")
+		return auth.NewHandlers(deps), nil
+	}
+
+	key, err := readSecretFile(r.cfg.Auth.Session.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("auth.session.keyFile: %w", err)
+	}
+	var secret []byte
+	if oc.ClientSecretFile != "" {
+		if secret, err = readSecretFile(oc.ClientSecretFile); err != nil {
+			return nil, fmt.Errorf("auth.oidc.clientSecretFile: %w", err)
+		}
+	}
+	secure := strings.HasPrefix(r.cfg.Server.PublicURL, "https://")
+	sessions, err := auth.NewSessionManager(st, auth.SessionConfig{
+		Key: key, Secure: secure, Idle: r.cfg.Auth.Session.IdleTimeout, Absolute: r.cfg.Auth.Session.AbsoluteTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth.session.keyFile: %w", err)
+	}
+	authn.SetSessions(sessions)
+
+	policy := auth.RolePolicy{DefaultRole: auth.Role(oc.DefaultRole)}
+	for _, b := range oc.Bindings {
+		policy.Bindings = append(policy.Bindings, auth.Binding{Kind: b.Kind, Name: b.Name, Role: auth.Role(b.Role)})
+	}
+	deps.Sessions = sessions
+	deps.Policy = policy
+	deps.OIDC = auth.NewOIDCClient(auth.OIDCConfig{
+		Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: string(secret),
+		RedirectURL: strings.TrimRight(r.cfg.Server.PublicURL, "/") + "/auth/oidc/default/callback",
+		Scopes:      oc.Scopes, GroupsClaim: oc.GroupsClaim, RequireEmailVerified: oc.RequireEmailVerified,
+	})
+	r.logger.Info("browser sign-in enabled", "issuer", oc.Issuer, "redirect", strings.TrimRight(r.cfg.Server.PublicURL, "/")+"/auth/oidc/default/callback")
+	return auth.NewHandlers(deps), nil
+}
+
+// readSecretFile reads a secret from a file, dropping trailing newlines only.
+func readSecretFile(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimRight(string(b), "\r\n")), nil
+}
+
+// operatorRESTConfig finds the cluster the operator reconciles. It returns (nil, "") when there is none.
+// It deliberately ignores ~/.kube/config and $KUBECONFIG.
+func (r *Runner) operatorRESTConfig() (*rest.Config, string, error) {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		c, err := rest.InClusterConfig()
+		return c, "in-cluster", err
+	}
+	if path := r.cfg.Operator.Kubeconfig; path != "" {
+		c, err := clientcmd.BuildConfigFromFlags("", path)
+		return c, "kubeconfig " + path, err
+	}
+	return nil, "", nil
+}
+
+func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.PostgresStore, errCh chan<- error) error {
+	mode := r.cfg.Operator.Mode
+	if mode == "off" {
+		return nil
+	}
+	rc, source, err := r.operatorRESTConfig()
+	if err != nil {
+		return fmt.Errorf("operator: loading cluster configuration from %s: %w", source, err)
+	}
+	if rc == nil {
+		if mode == "on" {
+			return fmt.Errorf("operator.mode=on but there is no in-cluster configuration and no --kubeconfig")
+		}
+		r.logger.Info("operator not started: not in a cluster and no --kubeconfig (operator.mode=auto)")
+		return nil
+	}
+	if sys == nil {
+		return fmt.Errorf("the operator writes configuration as rampart_system: set database.systemUrl")
+	}
+	configStore, ok := store.Store(sys).(apply.ConfigStore)
+	if !ok {
+		return fmt.Errorf("the system store cannot hold configuration")
+	}
+
+	var secretStore operator.SecretMaterialStore
+	if key, kerr := readSecretFile(r.cfg.Auth.Session.KeyFile); kerr == nil {
+		cipher, cerr := secrets.NewCipher(key)
+		if cerr != nil {
+			return fmt.Errorf("auth.session.keyFile: %w", cerr)
+		}
+		secretStore = &operator.EncryptingSecretStore{Inner: sys, Cipher: cipher}
+	} else {
+		r.logger.Warn("auth.session.keyFile is not set or unreadable: Secrets referenced by ScanSources will not be synced", "err", kerr)
+	}
+
+	ns := firstNonEmpty(r.cfg.Operator.Namespace, os.Getenv("POD_NAMESPACE"))
+	r.logger.Info("operator starting", "cluster", source, "leaderElectionNamespace", ns)
+	go func() {
+		errCh <- operator.Run(ctx, operator.ManagerConfig{
+			REST: rc, Store: configStore, SecretStore: secretStore, Logger: r.logger,
+			LeaderElectionNamespace: ns, SecretReaderClusterRole: r.cfg.Operator.SecretReaderClusterRole,
+			ServiceAccountName: r.cfg.Operator.ServiceAccount, ServiceAccountNamespace: ns,
+		})
+	}()
+	return nil
 }

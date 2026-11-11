@@ -14,6 +14,9 @@ type CloseScope = domain.CloseScope
 
 // Store defines the comprehensive persistence contract for Rampart Phase 0 and Phase 1.
 type Store interface {
+	// People, memberships and browser sessions (D8, doc 14)
+	auth.IdentityStore
+
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error
 	LockScope(ctx context.Context, scope CloseScope) error

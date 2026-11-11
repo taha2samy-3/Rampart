@@ -1,0 +1,6 @@
+node_modules/
+dist/*
+!dist/.keep
+coverage/
+.scratch/
+*.tsbuildinfo

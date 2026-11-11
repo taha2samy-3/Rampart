@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,61 +16,130 @@ type Config struct {
 	Target        string              `json:"target" yaml:"target"`
 	Server        ServerConfig        `json:"server" yaml:"server"`
 	Database      DatabaseConfig      `json:"database" yaml:"database"`
-	ObjectStorage ObjectStorageConfig `json:"object_storage" yaml:"object_storage"`
+	ObjectStorage ObjectStorageConfig `json:"object_storage" yaml:"objectStorage"`
 	Ingest        IngestConfig        `json:"ingest" yaml:"ingest"`
 	Telemetry     TelemetryConfig     `json:"telemetry" yaml:"telemetry"`
 	Operator      OperatorConfig      `json:"operator" yaml:"operator"`
 	Auth          AuthConfig          `json:"auth" yaml:"auth"`
 }
 
-// AuthConfig holds authentication settings (D6, D3).
+// AuthConfig holds authentication settings (D6, D3, D8).
 type AuthConfig struct {
+	OIDC    OIDCSettings    `json:"oidc" yaml:"oidc"`
+	Session SessionSettings `json:"session" yaml:"session"`
+
 	// BootstrapAdminTokenFile is where the first admin API token is written (0600) when it
 	// does not exist yet. It replaces logging the token: a secret in logs is a leak (D3).
-	BootstrapAdminTokenFile string `json:"bootstrap_admin_token_file" yaml:"bootstrap_admin_token_file"`
+	BootstrapAdminTokenFile string `json:"bootstrap_admin_token_file" yaml:"bootstrapAdminTokenFile"`
+}
+
+// OIDCSettings is the static identity provider of Phase 1 (D6 auth.oidc.*, D8).
+type OIDCSettings struct {
+	Issuer           string   `json:"issuer" yaml:"issuer"`
+	ClientID         string   `json:"client_id" yaml:"clientId"`
+	ClientSecretFile string   `json:"client_secret_file" yaml:"clientSecretFile"`
+	Scopes           []string `json:"scopes" yaml:"scopes"`
+	GroupsClaim      string   `json:"groups_claim" yaml:"groupsClaim"`
+	// RequireEmailVerified refuses logins whose email the IdP does not vouch for (doc 14 section 3).
+	RequireEmailVerified bool `json:"require_email_verified" yaml:"requireEmailVerified"`
+	// DefaultRole is given on first login when no binding matches: viewer, triager, admin, or empty for no access.
+	DefaultRole string `json:"default_role" yaml:"defaultRole"`
+	// Bindings grant roles to a person (kind user: email or subject) or a group at tenant scope.
+	// They are the Phase 1 form of an AccessBinding; roles are never read straight from the IdP.
+	Bindings []BindingSetting `json:"bindings" yaml:"bindings"`
+}
+
+// BindingSetting is one role binding (see OIDCSettings.Bindings).
+type BindingSetting struct {
+	Kind string `json:"kind" yaml:"kind"` // user | group
+	Name string `json:"name" yaml:"name"`
+	Role string `json:"role" yaml:"role"`
+}
+
+// SessionSettings configures browser sessions (doc 14 section 2).
+type SessionSettings struct {
+	// KeyFile holds a 32-byte key that signs CSRF tokens and seals the login state (D6 auth.session.keyFile).
+	KeyFile         string        `json:"key_file" yaml:"keyFile"`
+	IdleTimeout     time.Duration `json:"idle_timeout" yaml:"idleTimeout"`
+	AbsoluteTimeout time.Duration `json:"absolute_timeout" yaml:"absoluteTimeout"`
+}
+
+// UnmarshalYAML reads the D6 shape: server.http.addr, server.ops.addr, server.publicUrl.
+func (s *ServerConfig) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		HTTP struct {
+			Addr string `yaml:"addr"`
+		} `yaml:"http"`
+		Ops struct {
+			Addr string `yaml:"addr"`
+		} `yaml:"ops"`
+		PublicURL string `yaml:"publicUrl"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	if raw.HTTP.Addr != "" {
+		s.HTTPAddr = raw.HTTP.Addr
+	}
+	if raw.Ops.Addr != "" {
+		s.OpsAddr = raw.Ops.Addr
+	}
+	if raw.PublicURL != "" {
+		s.PublicURL = raw.PublicURL
+	}
+	return nil
 }
 
 type ServerConfig struct {
-	HTTPAddr  string `json:"http_addr" yaml:"http_addr"`
-	OpsAddr   string `json:"ops_addr" yaml:"ops_addr"`
-	PublicURL string `json:"public_url" yaml:"public_url"`
+	HTTPAddr  string `json:"http_addr" yaml:"httpAddr"`
+	OpsAddr   string `json:"ops_addr" yaml:"opsAddr"`
+	PublicURL string `json:"public_url" yaml:"publicUrl"`
 }
 
 type DatabaseConfig struct {
 	URL       string `json:"url" yaml:"url"`
-	DirectURL string `json:"direct_url" yaml:"direct_url"`
+	DirectURL string `json:"direct_url" yaml:"directUrl"`
 	// MigrateURL connects as rampart_owner and is used only by migrations (D4).
-	MigrateURL string `json:"migrate_url" yaml:"migrate_url"`
+	MigrateURL string `json:"migrate_url" yaml:"migrateUrl"`
 	// SystemURL connects as rampart_system (BYPASSRLS): tenant bootstrap, feeds, maintenance (D4).
-	SystemURL   string `json:"system_url" yaml:"system_url"`
-	ReadURL     string `json:"read_url" yaml:"read_url"`
-	AutoMigrate bool   `json:"auto_migrate" yaml:"auto_migrate"`
+	SystemURL   string `json:"system_url" yaml:"systemUrl"`
+	ReadURL     string `json:"read_url" yaml:"readUrl"`
+	AutoMigrate bool   `json:"auto_migrate" yaml:"autoMigrate"`
 }
 
 type ObjectStorageConfig struct {
 	Endpoint         string `json:"endpoint" yaml:"endpoint"`
-	ExternalEndpoint string `json:"external_endpoint" yaml:"external_endpoint"`
+	ExternalEndpoint string `json:"external_endpoint" yaml:"externalEndpoint"`
 	Region           string `json:"region" yaml:"region"`
-	BucketRaw        string `json:"bucket_raw" yaml:"bucket_raw"`
-	BucketExports    string `json:"bucket_exports" yaml:"bucket_exports"`
-	AccessKeyFile    string `json:"access_key_file" yaml:"access_key_file"`
-	SecretKeyFile    string `json:"secret_key_file" yaml:"secret_key_file"`
-	UsePathStyle     bool   `json:"use_path_style" yaml:"use_path_style"`
+	BucketRaw        string `json:"bucket_raw" yaml:"bucketRaw"`
+	BucketExports    string `json:"bucket_exports" yaml:"bucketExports"`
+	AccessKeyFile    string `json:"access_key_file" yaml:"accessKeyFile"`
+	SecretKeyFile    string `json:"secret_key_file" yaml:"secretKeyFile"`
+	UsePathStyle     bool   `json:"use_path_style" yaml:"usePathStyle"`
 }
 
 type IngestConfig struct {
-	MaxReportBytes int64 `json:"max_report_bytes" yaml:"max_report_bytes"`
-	BatchRows      int   `json:"batch_rows" yaml:"batch_rows"`
+	MaxReportBytes int64 `json:"max_report_bytes" yaml:"maxReportBytes"`
+	BatchRows      int   `json:"batch_rows" yaml:"batchRows"`
 }
 
 type TelemetryConfig struct {
-	OTLPEndpoint string `json:"otlp_endpoint" yaml:"otlp_endpoint"`
-	LogLevel     string `json:"log_level" yaml:"log_level"`
-	LogFormat    string `json:"log_format" yaml:"log_format"`
+	OTLPEndpoint string `json:"otlp_endpoint" yaml:"otlpEndpoint"`
+	LogLevel     string `json:"log_level" yaml:"logLevel"`
+	LogFormat    string `json:"log_format" yaml:"logFormat"`
 }
 
 type OperatorConfig struct {
 	Mode string `json:"mode" yaml:"mode"` // auto | on | off (D6)
+	// Kubeconfig is an explicit kubeconfig file. In "auto" mode the operator starts only in-cluster
+	// or with this set; it never reads ~/.kube/config or $KUBECONFIG, so a developer laptop never
+	// starts reconciling a real cluster by accident (D3).
+	Kubeconfig string `json:"kubeconfig" yaml:"kubeconfig"`
+	// ServiceAccount, Namespace and SecretReaderClusterRole describe the operator's own identity for
+	// the per-tenant secret-reader binding (D1). Namespace also holds the leader-election Lease.
+	ServiceAccount          string `json:"service_account" yaml:"serviceAccount"`
+	Namespace               string `json:"namespace" yaml:"namespace"`
+	SecretReaderClusterRole string `json:"secret_reader_cluster_role" yaml:"secretReaderClusterRole"`
 }
 
 // DefaultConfig provides standard normative defaults.
@@ -102,6 +172,10 @@ func DefaultConfig() *Config {
 		Operator: OperatorConfig{
 			Mode: "auto",
 		},
+		Auth: AuthConfig{
+			OIDC:    OIDCSettings{RequireEmailVerified: true, DefaultRole: "viewer", GroupsClaim: "groups"},
+			Session: SessionSettings{IdleTimeout: 8 * time.Hour, AbsoluteTimeout: 24 * time.Hour},
+		},
 	}
 }
 
@@ -128,6 +202,7 @@ func Load(args []string) (*Config, error) {
 	logLevelFlag := fs.String("log-level", cfg.Telemetry.LogLevel, "Log level: debug, info, warn, error")
 	logFormatFlag := fs.String("log-format", cfg.Telemetry.LogFormat, "Log format: json or text")
 	operatorModeFlag := fs.String("operator", cfg.Operator.Mode, "Operator mode: auto, on, off")
+	kubeconfigFlag := fs.String("kubeconfig", cfg.Operator.Kubeconfig, "Explicit kubeconfig for the operator (never read implicitly)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -162,6 +237,9 @@ func Load(args []string) (*Config, error) {
 	}
 	if *logFormatFlag != "" {
 		cfg.Telemetry.LogFormat = *logFormatFlag
+	}
+	if *kubeconfigFlag != "" {
+		cfg.Operator.Kubeconfig = *kubeconfigFlag
 	}
 	if *operatorModeFlag != "" {
 		cfg.Operator.Mode = *operatorModeFlag
@@ -206,6 +284,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.OpsAddr == "" {
 		return fmt.Errorf("config: server.ops.addr cannot be empty")
+	}
+	if err := c.Auth.validate(c.Server.PublicURL); err != nil {
+		return err
 	}
 	if c.Ingest.BatchRows <= 0 {
 		return fmt.Errorf("config: ingest.batch_rows must be greater than zero")
@@ -257,6 +338,43 @@ func applyEnv(cfg *Config) {
 	if v := get("DATABASE_SYSTEM_URL"); v != "" {
 		cfg.Database.SystemURL = v
 	}
+	if v := get("AUTH_OIDC_ISSUER"); v != "" {
+		cfg.Auth.OIDC.Issuer = v
+	}
+	if v := get("AUTH_OIDC_CLIENT_ID"); v != "" {
+		cfg.Auth.OIDC.ClientID = v
+	}
+	if v := get("AUTH_OIDC_CLIENT_SECRET_FILE"); v != "" {
+		cfg.Auth.OIDC.ClientSecretFile = v
+	}
+	if v := get("AUTH_OIDC_SCOPES"); v != "" {
+		cfg.Auth.OIDC.Scopes = splitList(v)
+	}
+	if v := get("AUTH_OIDC_GROUPS_CLAIM"); v != "" {
+		cfg.Auth.OIDC.GroupsClaim = v
+	}
+	if v := get("AUTH_OIDC_DEFAULT_ROLE"); v != "" {
+		cfg.Auth.OIDC.DefaultRole = v
+	}
+	if v := get("AUTH_OIDC_REQUIRE_EMAIL_VERIFIED"); v != "" {
+		cfg.Auth.OIDC.RequireEmailVerified = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := get("AUTH_OIDC_BINDINGS"); v != "" { // user:alice@example.com=admin,group:sec=triager
+		cfg.Auth.OIDC.Bindings = parseBindings(v)
+	}
+	if v := get("AUTH_SESSION_KEY_FILE"); v != "" {
+		cfg.Auth.Session.KeyFile = v
+	}
+	if v := get("AUTH_SESSION_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Auth.Session.IdleTimeout = d
+		}
+	}
+	if v := get("AUTH_SESSION_ABSOLUTE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Auth.Session.AbsoluteTimeout = d
+		}
+	}
 	if v := get("AUTH_BOOTSTRAP_ADMIN_TOKEN_FILE"); v != "" {
 		cfg.Auth.BootstrapAdminTokenFile = v
 	}
@@ -286,6 +404,9 @@ func applyEnv(cfg *Config) {
 	if v := get("LOG_LEVEL"); v != "" {
 		cfg.Telemetry.LogLevel = v
 	}
+	if v := get("TELEMETRY_OTLP_ENDPOINT"); v != "" {
+		cfg.Telemetry.OTLPEndpoint = v
+	}
 	if v := get("TELEMETRY_LOG_LEVEL"); v != "" {
 		cfg.Telemetry.LogLevel = v
 	}
@@ -295,7 +416,67 @@ func applyEnv(cfg *Config) {
 	if v := get("TELEMETRY_LOG_FORMAT"); v != "" {
 		cfg.Telemetry.LogFormat = v
 	}
+	if v := get("OPERATOR_KUBECONFIG"); v != "" {
+		cfg.Operator.Kubeconfig = v
+	}
+	if v := get("OPERATOR_SERVICE_ACCOUNT"); v != "" {
+		cfg.Operator.ServiceAccount = v
+	}
+	if v := get("OPERATOR_NAMESPACE"); v != "" {
+		cfg.Operator.Namespace = v
+	}
+	if v := get("OPERATOR_SECRET_READER_CLUSTER_ROLE"); v != "" {
+		cfg.Operator.SecretReaderClusterRole = v
+	}
 	if v := get("OPERATOR_MODE"); v != "" {
 		cfg.Operator.Mode = v
 	}
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// parseBindings reads "kind:name=role,kind:name=role".
+func parseBindings(v string) []BindingSetting {
+	var out []BindingSetting
+	for _, item := range splitList(v) {
+		left, role, ok := strings.Cut(item, "=")
+		kind, name, ok2 := strings.Cut(left, ":")
+		if ok && ok2 {
+			out = append(out, BindingSetting{Kind: kind, Name: name, Role: role})
+		}
+	}
+	return out
+}
+
+func (a AuthConfig) validate(publicURL string) error {
+	switch a.OIDC.DefaultRole {
+	case "", "viewer", "triager", "admin":
+	default:
+		return fmt.Errorf("config: auth.oidc.defaultRole must be viewer, triager, admin or empty, got %q", a.OIDC.DefaultRole)
+	}
+	for _, b := range a.OIDC.Bindings {
+		if (b.Kind != "user" && b.Kind != "group") || b.Name == "" || (b.Role != "viewer" && b.Role != "triager" && b.Role != "admin") {
+			return fmt.Errorf("config: invalid auth.oidc binding %+v", b)
+		}
+	}
+	if a.OIDC.Issuer == "" {
+		return nil
+	}
+	switch {
+	case a.OIDC.ClientID == "":
+		return fmt.Errorf("config: auth.oidc.clientId is required when auth.oidc.issuer is set")
+	case a.Session.KeyFile == "":
+		return fmt.Errorf("config: auth.session.keyFile is required when auth.oidc.issuer is set")
+	case publicURL == "":
+		return fmt.Errorf("config: server.publicUrl is required when auth.oidc.issuer is set (it builds the redirect URI)")
+	}
+	return nil
 }

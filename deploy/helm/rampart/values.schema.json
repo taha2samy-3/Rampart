@@ -2,26 +2,143 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "replicaCount": {"type": "integer", "minimum": 1},
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
     "image": {
       "type": "object",
-      "required": ["repository"],
-      "properties": {"repository": {"type": "string", "minLength": 1}, "tag": {"type": "string"}}
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
     },
     "operator": {
       "type": "object",
-      "properties": {"enabled": {"type": "boolean"}, "mode": {"enum": ["auto", "on", "off"]}}
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
+        }
+      }
     },
     "telemetry": {
       "type": "object",
-      "properties": {"logLevel": {"enum": ["debug", "info", "warn", "error"]}, "logFormat": {"enum": ["json", "text"]}}
+      "properties": {
+        "logLevel": {
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "logFormat": {
+          "enum": [
+            "json",
+            "text"
+          ]
+        }
+      }
     },
     "database": {
       "type": "object",
       "properties": {
-        "existingSecret": {"type": "string"},
-        "minSchemaVersion": {"type": "integer", "minimum": 1},
-        "cnpg": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "instances": {"type": "integer", "minimum": 1}}}
+        "existingSecret": {
+          "type": "string"
+        },
+        "minSchemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cnpg": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "instances": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "oidc": {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "defaultRole": {
+              "enum": [
+                "",
+                "viewer",
+                "triager",
+                "admin"
+              ]
+            },
+            "bindings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "name",
+                  "role"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "user",
+                      "group"
+                    ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "role": {
+                    "enum": [
+                      "viewer",
+                      "triager",
+                      "admin"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "publicUrl": {
+          "type": "string"
+        }
       }
     }
   }
