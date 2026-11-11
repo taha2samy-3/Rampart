@@ -4,28 +4,28 @@ The Rampart UI: a static React single-page app. It holds no secrets; sign-in is 
 
 ## Prerequisites
 
-Node 20 and pnpm 11. Then `pnpm install`.
+Bun 1.4 or newer (the lockfile is `bun.lock`). Then `bun install`.
 
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `pnpm dev` | Vite dev server on http://127.0.0.1:5173, proxies `/api` and `/auth` |
-| `pnpm mock` | Mock backend on port 8099 (`dev/mock-server.mjs`) |
-| `pnpm build` | Typecheck, then build to `dist/` (hashed files under `/assets/`) |
-| `pnpm preview` | Serve `dist/` on port 4173 with the production CSP header |
-| `pnpm test` | Vitest, Testing Library and axe |
-| `pnpm typecheck` | `tsc --noEmit`, strict |
-| `pnpm lint` | ESLint |
+| `bun run dev` | Vite dev server on http://127.0.0.1:5173, proxies `/api` and `/auth` |
+| `bun run mock` | Mock backend on port 8099 (`dev/mock-server.mjs`) |
+| `bun run build` | Typecheck, then build to `dist/` (hashed files under `/assets/`) |
+| `bun run preview` | Serve `dist/` on port 4173 with the production CSP header |
+| `bun run test` | Vitest, Testing Library and axe |
+| `bun run typecheck` | `tsc --noEmit`, strict |
+| `bun run lint` | ESLint |
 
 ## Run it against the mock server
 
 ```
-pnpm mock          # terminal 1
-pnpm dev           # terminal 2, open http://127.0.0.1:5173
+bun run mock          # terminal 1
+bun run dev           # terminal 2, open http://127.0.0.1:5173
 ```
 
-Switch scenario while it runs: `curl 'http://127.0.0.1:5173/__mock/scenario?set=<name>'`, or start with `MOCK_SCENARIO=<name> pnpm mock`.
+Switch scenario while it runs: `curl 'http://127.0.0.1:5173/__mock/scenario?set=<name>'`, or start with `MOCK_SCENARIO=<name> bun run mock`.
 
 | Scenario | Behaviour |
 |---|---|
@@ -39,12 +39,12 @@ Switch scenario while it runs: `curl 'http://127.0.0.1:5173/__mock/scenario?set=
 ## Run it against a real backend
 
 ```
-RAMPART_BACKEND=http://127.0.0.1:8080 pnpm dev
+RAMPART_BACKEND=http://127.0.0.1:8080 bun run dev
 ```
 
 ## How the build is served
 
-`pnpm build` writes `web/dist`. `dist/.keep` is committed so `//go:embed all:dist` compiles before the first build; the build recreates it. The Go server serves `dist` at `/` with `index.html` as `no-cache` and `/assets/*` as immutable, falls back to `index.html` for client routes, and sets `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. The bundle has no inline script, no inline style attribute in markup and no external origin; fonts are self-hosted.
+`bun run build` writes `web/dist`. `dist/.keep` is committed so `//go:embed all:dist` compiles before the first build; the build recreates it. The Go server serves `dist` at `/` with `index.html` as `no-cache` and `/assets/*` as immutable, falls back to `index.html` for client routes, and sets `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. The bundle has no inline script, no inline style attribute in markup and no external origin; fonts are self-hosted.
 
 ## Layout
 
@@ -55,5 +55,4 @@ The API types are written by hand from the Go structs. `/api/v1/openapi.json` do
 ## Troubleshooting
 
 - Blank page, console shows a CSP violation: something injected inline style or script. Radix modal mode does this; use the wrappers in `src/components`.
-- `pnpm` refuses to run with "Ignored build scripts": `pnpm install` once; `pnpm-workspace.yaml` already allows esbuild.
 - Login loops back to `/login`: the session cookie is not reaching the browser; check the dev proxy target and that the backend sets the cookie for the same origin.

@@ -142,19 +142,19 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@v4
+          bun-version: 1.4.4
+      - uses: actions/cache@v4
         with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
-      - run: pnpm build
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun --bun run typecheck
+      - run: bun --bun run lint
+      - run: bun --bun run test
+      - run: bun --bun run build
       - name: Initial JS stays within 250 kB gzipped (doc 13 section 8)
         run: |
           size=$(for f in dist/assets/index-*.js; do gzip -c "$f" | wc -c; done | awk '{s+=$1} END{print s}')

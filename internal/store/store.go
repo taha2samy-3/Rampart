@@ -16,6 +16,8 @@ type CloseScope = domain.CloseScope
 type Store interface {
 	// People, memberships and browser sessions (D8, doc 14)
 	auth.IdentityStore
+	auth.LocalAdminStore // break-glass local administrator (D3)
+	auth.AuditStore
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error

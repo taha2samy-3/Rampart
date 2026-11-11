@@ -21,6 +21,15 @@ var (
 		metric.WithDescription("Findings processed by ingest runs, by outcome: created, updated, untouched, reactivated, closed."))
 )
 
+// logins counts sign-in attempts (rampart_auth_logins_total), by method and result.
+var logins, _ = meter.Int64Counter("rampart.auth.logins",
+	metric.WithDescription("Sign-in attempts, by method (local, oidc) and result (success, failure, locked, rate_limited)."))
+
+// RecordLogin records a sign-in attempt.
+func RecordLogin(ctx context.Context, method, result string) {
+	logins.Add(ctx, 1, metric.WithAttributes(attribute.String("method", method), attribute.String("result", result)))
+}
+
 // RecordIngestRun records a finished run.
 func RecordIngestRun(ctx context.Context, status string) {
 	ingestRuns.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))

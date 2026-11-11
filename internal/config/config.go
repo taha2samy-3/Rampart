@@ -27,10 +27,23 @@ type Config struct {
 type AuthConfig struct {
 	OIDC    OIDCSettings    `json:"oidc" yaml:"oidc"`
 	Session SessionSettings `json:"session" yaml:"session"`
+	// BootstrapAdmin is the break-glass local administrator (D3, doc 14 section 1).
+	BootstrapAdmin BootstrapAdminSettings `json:"bootstrap_admin" yaml:"bootstrapAdmin"`
 
 	// BootstrapAdminTokenFile is where the first admin API token is written (0600) when it
 	// does not exist yet. It replaces logging the token: a secret in logs is a leak (D3).
 	BootstrapAdminTokenFile string `json:"bootstrap_admin_token_file" yaml:"bootstrapAdminTokenFile"`
+}
+
+// BootstrapAdminSettings configures the first local administrator, like Argo CD's initial admin.
+// It is created once, at first boot, from the password in PasswordFile; if the file does not exist a
+// random password is generated into it (0600). Sign-in with it is refused once an identity provider is
+// configured unless KeepEnabled is set. Every use is audited and logged as a warning.
+type BootstrapAdminSettings struct {
+	Username     string `json:"username" yaml:"username"`
+	PasswordFile string `json:"password_file" yaml:"passwordFile"`
+	Tenant       string `json:"tenant" yaml:"tenant"`
+	KeepEnabled  bool   `json:"keep_enabled" yaml:"keepEnabled"`
 }
 
 // OIDCSettings is the static identity provider of Phase 1 (D6 auth.oidc.*, D8).
@@ -173,8 +186,9 @@ func DefaultConfig() *Config {
 			Mode: "auto",
 		},
 		Auth: AuthConfig{
-			OIDC:    OIDCSettings{RequireEmailVerified: true, DefaultRole: "viewer", GroupsClaim: "groups"},
-			Session: SessionSettings{IdleTimeout: 8 * time.Hour, AbsoluteTimeout: 24 * time.Hour},
+			OIDC:           OIDCSettings{RequireEmailVerified: true, DefaultRole: "viewer", GroupsClaim: "groups"},
+			Session:        SessionSettings{IdleTimeout: 8 * time.Hour, AbsoluteTimeout: 24 * time.Hour},
+			BootstrapAdmin: BootstrapAdminSettings{Username: "admin", Tenant: "default"},
 		},
 	}
 }
@@ -375,6 +389,18 @@ func applyEnv(cfg *Config) {
 			cfg.Auth.Session.AbsoluteTimeout = d
 		}
 	}
+	if v := get("AUTH_BOOTSTRAP_ADMIN_USERNAME"); v != "" {
+		cfg.Auth.BootstrapAdmin.Username = v
+	}
+	if v := get("AUTH_BOOTSTRAP_ADMIN_PASSWORD_FILE"); v != "" {
+		cfg.Auth.BootstrapAdmin.PasswordFile = v
+	}
+	if v := get("AUTH_BOOTSTRAP_ADMIN_TENANT"); v != "" {
+		cfg.Auth.BootstrapAdmin.Tenant = v
+	}
+	if v := get("AUTH_BOOTSTRAP_ADMIN_KEEP_ENABLED"); v != "" {
+		cfg.Auth.BootstrapAdmin.KeepEnabled = strings.ToLower(v) == "true" || v == "1"
+	}
 	if v := get("AUTH_BOOTSTRAP_ADMIN_TOKEN_FILE"); v != "" {
 		cfg.Auth.BootstrapAdminTokenFile = v
 	}
@@ -465,6 +491,14 @@ func (a AuthConfig) validate(publicURL string) error {
 	for _, b := range a.OIDC.Bindings {
 		if (b.Kind != "user" && b.Kind != "group") || b.Name == "" || (b.Role != "viewer" && b.Role != "triager" && b.Role != "admin") {
 			return fmt.Errorf("config: invalid auth.oidc binding %+v", b)
+		}
+	}
+	if ba := a.BootstrapAdmin; ba.PasswordFile != "" {
+		switch {
+		case ba.Username == "" || len(ba.Username) > 100:
+			return fmt.Errorf("config: auth.bootstrapAdmin.username must be 1 to 100 characters")
+		case a.Session.KeyFile == "":
+			return fmt.Errorf("config: auth.session.keyFile is required when auth.bootstrapAdmin.passwordFile is set (it signs sessions)")
 		}
 	}
 	if a.OIDC.Issuer == "" {

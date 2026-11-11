@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 // The dev server proxies /api and /auth to the mock server (default) or to a
-// real backend: RAMPART_BACKEND=http://localhost:8080 pnpm dev
+// real backend: RAMPART_BACKEND=http://localhost:8080 bun run dev
 const backend = process.env.RAMPART_BACKEND ?? 'http://127.0.0.1:8099';
 
 // emptyOutDir wipes dist; dist/.keep must survive so Go's //go:embed all:dist compiles before the first build.

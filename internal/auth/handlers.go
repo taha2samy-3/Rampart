@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/domain"
@@ -30,6 +34,13 @@ type HandlerDeps struct {
 	Authn    *Authenticator
 	Policy   RolePolicy
 
+	// Local sign-in (break-glass, D3). LocalLoginEnabled is decided by the caller: a bootstrap admin
+	// exists and either no identity provider is configured or keepEnabled is set.
+	LocalLoginEnabled bool
+	Local             LocalAdminStore
+	Audit             AuditStore
+	LocalLimiter      *RateLimiter // default: 10 attempts per client address per minute
+
 	Product string
 	Version string
 	Logger  *slog.Logger
@@ -46,6 +57,9 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
+	if d.LocalLimiter == nil {
+		d.LocalLimiter = NewRateLimiter(10, time.Minute)
+	}
 	return &Handlers{d}
 }
 
@@ -54,6 +68,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/ui-config", h.uiConfig)
 	mux.HandleFunc("GET /auth/login", h.login)
 	mux.HandleFunc("GET /auth/oidc/{idp}/callback", h.callback)
+	mux.HandleFunc("POST /auth/local/login", h.localLogin)
 	mux.HandleFunc("GET /auth/session", h.session)
 	mux.HandleFunc("POST /auth/logout", h.logout)
 	mux.HandleFunc("POST /auth/tenant", h.switchTenant)
@@ -85,6 +100,9 @@ func (h *Handlers) uiConfig(w http.ResponseWriter, r *http.Request) {
 	methods := []map[string]string{}
 	if h.OIDC != nil && h.Sessions != nil {
 		methods = append(methods, map[string]string{"id": "default", "name": "Single sign-on", "type": "oidc"})
+	}
+	if h.LocalLoginEnabled && h.Sessions != nil && h.Local != nil {
+		methods = append(methods, map[string]string{"id": "local", "name": "Username and password", "type": "password"})
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("Content-Type", "application/json")
@@ -146,6 +164,7 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 
 // loginError sends the browser back to the SPA login screen with a short code it can explain.
 func loginError(w http.ResponseWriter, r *http.Request, code string) {
+	telemetry.RecordLogin(r.Context(), "oidc", "failure")
 	http.Redirect(w, r, "/login?error="+url.QueryEscape(code), http.StatusFound)
 }
 
@@ -207,6 +226,7 @@ func (h *Handlers) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Sessions.SetCookie(w, value, rec.ExpiresAt)
+	telemetry.RecordLogin(r.Context(), "oidc", "success")
 	http.Redirect(w, r, SafeReturnTo(st.ReturnTo), http.StatusFound)
 }
 
@@ -338,4 +358,133 @@ func (h *Handlers) mePermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"role": u.Role, "scopes": u.Scopes})
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (h *Handlers) audit(r *http.Request, tenantID uuid.UUID, actor, action string, detail map[string]any) {
+	if h.Audit == nil {
+		return
+	}
+	ua := r.UserAgent()
+	if len(ua) > 200 {
+		ua = ua[:200]
+	}
+	err := h.Audit.RecordAudit(r.Context(), AuditEvent{
+		TenantID: tenantID, Actor: actor, Action: action, ResourceType: "session", ResourceID: "local",
+		Detail: detail, IP: clientIP(r), UserAgent: ua, RequestID: telemetry.RequestID(r.Context()),
+	})
+	if err != nil {
+		h.Logger.Error("audit write failed", "action", action, "err", err)
+	}
+}
+
+// localLogin is the break-glass sign-in (D3, doc 14 section 1). It is deliberately narrow: JSON only
+// (a cross-site form cannot send it), a request-size cap, a per-address rate limit, a per-account
+// lockout stored in the database, identical answers for an unknown user and a wrong password, equal
+// work in both cases, and an audit record for every attempt.
+func (h *Handlers) localLogin(w http.ResponseWriter, r *http.Request) {
+	if !h.LocalLoginEnabled || h.Sessions == nil || h.Local == nil {
+		problem(w, r, http.StatusForbidden, "forbidden", "Local sign-in is turned off",
+			"Sign in with single sign-on, or ask an administrator to enable the local administrator.")
+		return
+	}
+	if mt := strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]); mt != "application/json" {
+		problem(w, r, http.StatusUnsupportedMediaType, "validation", "Send the sign-in as JSON", "")
+		return
+	}
+	if ok, wait := h.LocalLimiter.Allow(clientIP(r)); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		telemetry.RecordLogin(r.Context(), "local", "rate_limited")
+		problem(w, r, http.StatusTooManyRequests, "rate-limited", "Too many sign-in attempts", "Wait a minute and try again.")
+		return
+	}
+	var body struct {
+		Tenant   string `json:"tenant"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil ||
+		body.Username == "" || body.Password == "" || len(body.Username) > 100 || len(body.Password) > 1024 {
+		problem(w, r, http.StatusBadRequest, "validation", "A username and a password are required", "")
+		return
+	}
+	if body.Tenant == "" {
+		body.Tenant = "default"
+	}
+	invalid := func() {
+		telemetry.RecordLogin(r.Context(), "local", "failure")
+		problem(w, r, http.StatusUnauthorized, "unauthorized", "Wrong username or password", "Check them and try again.")
+	}
+
+	tenant, err := h.Tenants.GetTenantBySlug(r.Context(), body.Tenant)
+	var admin *LocalAdmin
+	if err == nil && tenant != nil {
+		admin, err = h.Local.GetLocalAdmin(r.Context(), tenant.ID, body.Username)
+	}
+	if err != nil || tenant == nil || admin == nil {
+		VerifyPassword(body.Password, dummyHash) // same work as a real check
+		if tenant != nil {
+			h.audit(r, tenant.ID, "anonymous", "local_login_failed", map[string]any{"reason": "unknown_user", "username": truncate(body.Username, 64)})
+		}
+		invalid()
+		return
+	}
+	actor := "local:" + admin.Username
+	now := h.Sessions.now()
+	if admin.LockedUntil != nil && now.Before(*admin.LockedUntil) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(admin.LockedUntil.Sub(now).Seconds())+1))
+		h.audit(r, tenant.ID, actor, "local_login_locked", map[string]any{"until": admin.LockedUntil.UTC().Format(time.RFC3339)})
+		telemetry.RecordLogin(r.Context(), "local", "locked")
+		problem(w, r, http.StatusTooManyRequests, "rate-limited", "This account is locked after too many wrong passwords",
+			"Try again in "+strconv.Itoa(int(admin.LockedUntil.Sub(now).Minutes())+1)+" minutes, or reset the password with the CLI.")
+		return
+	}
+
+	ok := VerifyPassword(body.Password, admin.PasswordHash)
+	lockedUntil, rerr := h.Local.RecordLocalLogin(r.Context(), tenant.ID, admin.ID, ok, now, maxFailedAttempts, lockDuration)
+	if rerr != nil {
+		h.Logger.Error("recording local login", "err", rerr)
+		problem(w, r, http.StatusInternalServerError, "internal", "Cannot sign in right now", "")
+		return
+	}
+	if !ok {
+		h.audit(r, tenant.ID, actor, "local_login_failed", map[string]any{"reason": "wrong_password"})
+		if lockedUntil != nil {
+			h.audit(r, tenant.ID, actor, "local_login_locked", map[string]any{"until": lockedUntil.UTC().Format(time.RFC3339), "reason": "too_many_failures"})
+			h.Logger.Warn("local administrator locked after repeated wrong passwords", "username", admin.Username, "tenant", body.Tenant)
+		}
+		invalid()
+		return
+	}
+	// The person must still belong to the tenant: removing the membership disables the account too.
+	if _, member, merr := h.Identity.GetMemberRole(r.Context(), tenant.ID, admin.UserID); merr != nil || !member {
+		h.audit(r, tenant.ID, actor, "local_login_failed", map[string]any{"reason": "not_a_member"})
+		invalid()
+		return
+	}
+	value, rec, err := h.Sessions.Create(r.Context(), tenant.ID, admin.UserID)
+	if err != nil {
+		problem(w, r, http.StatusInternalServerError, "internal", "Cannot sign in right now", "")
+		return
+	}
+	h.Sessions.SetCookie(w, value, rec.ExpiresAt)
+	h.audit(r, tenant.ID, actor, "local_login_success", nil)
+	telemetry.RecordLogin(r.Context(), "local", "success")
+	// Break-glass use must be noticed (doc 14 section 1: alerting on use).
+	h.Logger.Warn("break-glass sign-in: the local administrator signed in", "username", admin.Username, "tenant", body.Tenant, "ip", clientIP(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

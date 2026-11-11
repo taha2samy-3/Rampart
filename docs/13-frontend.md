@@ -26,7 +26,7 @@ No global client-state library. URL holds view state, TanStack Query holds serve
 
 ## 2. How it is packaged and served
 
-- `web/` is its own workspace. `pnpm build` emits `web/dist`.
+- `web/` is its own workspace, managed with Bun (`bun install`, `bun --bun run build`). The build emits `web/dist`.
 - **Monolithic mode**: `web/dist` is embedded in the Go binary with `embed`. `query-api` serves it at `/` with `Cache-Control: immutable` for hashed assets and `no-cache` for `index.html`.
 - **Distributed mode**: the same files ship in a tiny static image (`rampart-web`, nginx-unprivileged or Caddy, read-only root filesystem). The Ingress or Gateway routes `/` to it and `/api`, `/auth` to `query-api`. Same origin, so no CORS.
 - Runtime configuration comes from `GET /api/v1/ui-config` (public, cacheable): product name, enabled features, login methods, locale defaults, support links. The bundle is identical in every environment.
@@ -253,6 +253,6 @@ Deviations from this document, with reasons:
 - **Select** is a styled native `<select>`. Radix Select injects an inline `<style>` that the CSP blocks. Menus and dialogs are non-modal for the same reason; the dialog marks the app root inert and draws its own overlay.
 - **The wordmark** is live Red Hat Display 800 text, not outlined paths. The mark itself is the real geometry.
 - **API client** is typed by hand from the Go structs until `/api/v1/openapi.json` exists. Only `api/` changes when `openapi-fetch` replaces it.
-- **Versions**: Node 20 pins Vitest 3, jsdom 26 and Vite 7; TypeScript is 5.9 because typescript-eslint does not support 7 yet.
+- **Versions**: Vitest 3, jsdom 26 and Vite 7 (chosen when the toolchain targeted Node 20; they can move up now that Bun is the runner); TypeScript is 5.9 because typescript-eslint does not support 7 yet. Tooling is Bun, run with `bun --bun` so scripts use the Bun runtime.
 
 What the UI asks of the API (not yet provided): application and asset names (or slugs) in the findings list, since `Finding` carries only ids; a `group` on each risk factor so the score bar does not classify by factor name; `count=true`.

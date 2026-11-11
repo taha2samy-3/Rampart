@@ -480,6 +480,8 @@ type MemoryStore struct {
 	userIDs               map[string]uuid.UUID
 	members               map[string]memMember
 	sessions              map[string]auth.SessionRecord
+	localAdmins           map[string]*auth.LocalAdmin
+	audits                []auth.AuditEvent
 }
 
 // NewMemoryStore initializes a new MemoryStore.
@@ -503,6 +505,7 @@ func NewMemoryStore() *MemoryStore {
 		userIDs:               make(map[string]uuid.UUID),
 		members:               make(map[string]memMember),
 		sessions:              make(map[string]auth.SessionRecord),
+		localAdmins:           make(map[string]*auth.LocalAdmin),
 	}
 }
 
@@ -1059,4 +1062,74 @@ func (m *MemoryStore) GetTenantBySlug(ctx context.Context, slug string) (*domain
 		}
 	}
 	return nil, nil
+}
+
+// --- local administrator and audit log for the in-memory store ---------------------------------
+
+func (m *MemoryStore) GetLocalAdmin(ctx context.Context, tenantID uuid.UUID, username string) (*auth.LocalAdmin, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if a, ok := m.localAdmins[tenantID.String()+":"+username]; ok {
+		cp := *a
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) CreateLocalAdmin(ctx context.Context, a auth.LocalAdmin) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := a.TenantID.String() + ":" + a.Username
+	if _, ok := m.localAdmins[key]; ok {
+		return false, nil
+	}
+	cp := a
+	m.localAdmins[key] = &cp
+	return true, nil
+}
+
+func (m *MemoryStore) RecordLocalLogin(ctx context.Context, tenantID, id uuid.UUID, success bool, now time.Time, maxFailures int, lock time.Duration) (*time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.localAdmins {
+		if a.TenantID != tenantID || a.ID != id {
+			continue
+		}
+		if success {
+			a.FailedAttempts, a.LockedUntil = 0, nil
+			return nil, nil
+		}
+		a.FailedAttempts++
+		if a.FailedAttempts >= maxFailures {
+			until := now.Add(lock)
+			a.FailedAttempts, a.LockedUntil = 0, &until
+			return &until, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) SetLocalAdminPassword(ctx context.Context, tenantID uuid.UUID, username, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.localAdmins[tenantID.String()+":"+username]
+	if !ok {
+		return store.ErrNotFound
+	}
+	a.PasswordHash, a.FailedAttempts, a.LockedUntil = passwordHash, 0, nil
+	return nil
+}
+
+func (m *MemoryStore) RecordAudit(ctx context.Context, e auth.AuditEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.audits = append(m.audits, e)
+	return nil
+}
+
+// AuditEvents returns the recorded audit events; for tests.
+func (m *MemoryStore) AuditEvents() []auth.AuditEvent {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]auth.AuditEvent(nil), m.audits...)
 }

@@ -39,3 +39,23 @@ tasks:
     cmds:
       - mkdir -p bin
       - go build -v -o bin/rampart ./cmd/rampart
+
+  web:install:
+    desc: Install the web UI dependencies (Bun)
+    dir: web
+    cmds:
+      - bun install --frozen-lockfile
+
+  web:build:
+    desc: Build the web UI into web/dist (it is embedded in the Go binary)
+    dir: web
+    cmds:
+      - bun --bun run build
+
+  web:test:
+    desc: Typecheck, lint and test the web UI
+    dir: web
+    cmds:
+      - bun --bun run typecheck
+      - bun --bun run lint
+      - bun --bun run test
