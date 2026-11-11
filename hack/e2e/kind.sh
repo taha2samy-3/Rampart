@@ -79,6 +79,19 @@ assert_eq "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)" "2
 csp="$(curl -sI http://127.0.0.1:18080/ | tr -d '\r' | grep -i '^content-security-policy' || true)"
 assert_contains "$csp" "default-src 'self'" "CSP"
 
+log "The first administrator: the password is in a Secret, sign-in works, and it is audited (D3)"
+admin_pw="$(kubectl -n "$NS" get secret "$REL-admin" -o jsonpath='{.data.password}' | base64 -d)"
+[ "${#admin_pw}" -ge 20 ] || fail "the generated administrator password is too short (${#admin_pw})"
+assert_eq "$(kubectl -n "$NS" get secret "$REL-admin" -o jsonpath='{.data.username}' | base64 -d)" "admin" "administrator username"
+assert_contains "$(curl -fsS http://127.0.0.1:18080/api/v1/ui-config)" '"type":"password"' "ui-config offers password sign-in (no identity provider is configured)"
+jar="$(mktemp)"
+assert_eq "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"username":"admin","password":"definitely-not-it-123"}' http://127.0.0.1:18080/auth/local/login)" "401" "a wrong password"
+assert_eq "$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$admin_pw\"}" http://127.0.0.1:18080/auth/local/login)" "204" "the generated password signs in"
+assert_eq "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/x-www-form-urlencoded' -d "username=admin&password=$admin_pw" http://127.0.0.1:18080/auth/local/login)" "415" "a form post (cross-site forms cannot send JSON)"
+assert_contains "$(curl -fsS -b "$jar" http://127.0.0.1:18080/auth/session)" '"name":"Local administrator"' "the session belongs to the local administrator"
+assert_contains "$(curl -fsS -b "$jar" http://127.0.0.1:18080/api/v1/me/permissions)" '"role":"admin"' "the local administrator is an admin"
+rm -f "$jar"
+
 log "The operator started in-cluster and has no errors"
 logs="$(kubectl -n "$NS" logs "deploy/$REL" -c rampart --tail=500)"
 assert_contains "$logs" "operator starting" "operator log"
@@ -136,6 +149,9 @@ assert_eq "$(kubectl auth can-i create clusterroles "$as")" "no" "operator must 
 
 log "Database: roles, bindings and encrypted secret material"
 pg() { kubectl -n "$NS" exec "$REL-postgres-1" -c postgres -- psql -U postgres -d rampart -Atc "$1"; }
+assert_eq "$(pg "select count(*) from local_admin where username='admin' and password_hash like '\$argon2id\$%'")" "1" "the local administrator is stored as an argon2id hash"
+assert_eq "$(pg "select string_agg(action, ',' order by at) from audit_event where action like 'local_login%'")" "local_login_failed,local_login_success" "the sign-ins were audited"
+case "$(kubectl -n "$NS" logs "deploy/$REL" -c rampart --tail=1000)" in *"$admin_pw"*) fail "the administrator password is in the application log" ;; esac
 assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles where rolname='rampart_app'")" "truefalse" "rampart_app: login, RLS enforced"
 assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles where rolname='rampart_system'")" "truetrue" "rampart_system: login, bypass RLS"
 assert_eq "$(pg "select tenant_id is not null from tenant_namespace where namespace='$TEAM_NS'")" "t" "namespace ownership recorded (D20)"
