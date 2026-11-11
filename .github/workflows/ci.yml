@@ -39,8 +39,26 @@ jobs:
           version: v1.64.8
           args: --timeout=5m ./...
 
-  test:
-    name: Unit, Integration, RLS & Leak Tests
+  # The Go suites run as separate jobs, in parallel, each with only the services it needs. Split by
+  # dependency, not by size: a failure says at once whether code, the database or Kubernetes broke.
+  test-unit:
+    name: Tests - unit (no services)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Race detector, shuffled order
+        run: |
+          pkgs=$(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
+          go test -race -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic $pkgs
+      - uses: actions/upload-artifact@v4
+        with: {name: coverage-unit, path: coverage-unit.out}
+
+  test-store:
+    name: Tests - PostgreSQL (RLS, merge, sessions, River)
     needs: lint
     runs-on: ubuntu-latest
     services:
@@ -55,23 +73,41 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U rampart_owner -d rampart"
           --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      # The owner URL. The tests derive the rampart_app and rampart_system URLs from it:
+      # a superuser bypasses row-level security, so isolation is never tested as the owner.
+      RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
-      - name: Test with race detector
-        env:
-          # The owner URL. The tests derive the rampart_app and rampart_system URLs from it:
-          # a superuser bypasses row-level security, so isolation is never tested as the owner.
-          RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
-        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
-      - name: A skipped Postgres suite is a failure in CI
+      - name: Race detector
+        run: go test -race -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ 2>&1 | tee /tmp/store.txt
+      - name: A skipped suite is a failure in CI
+        run: "! grep -q -- '--- SKIP' /tmp/store.txt"
+      - uses: actions/upload-artifact@v4
+        with: {name: coverage-store, path: coverage-store.out}
+
+  test-operator:
+    name: Tests - operator (real kube-apiserver and etcd)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Install kube-apiserver and etcd (envtest)
         run: |
-          go test -count=1 -v ./internal/store/ 2>&1 | tee /tmp/store.txt
-          ! grep -q -- "--- SKIP" /tmp/store.txt
-        env:
-          RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+          echo "KUBEBUILDER_ASSETS=$(setup-envtest use -p path)" >> "$GITHUB_ENV"
+      - name: Race detector
+        run: go test -race -count=1 -v -coverprofile=coverage-operator.out -covermode=atomic ./internal/operator/ 2>&1 | tee /tmp/operator.txt
+      - name: A skipped suite is a failure in CI
+        run: "! grep -q -- '--- SKIP' /tmp/operator.txt"
+      - uses: actions/upload-artifact@v4
+        with: {name: coverage-operator, path: coverage-operator.out}
 
   helm:
     name: Helm & CRDs
@@ -95,15 +131,91 @@ jobs:
         run: |
           helm template t deploy/helm/rampart --is-upgrade | grep -q 'helm.sh/hook": pre-upgrade'
 
+  web:
+    name: Web UI
+    needs: lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      - name: Initial JS stays within 250 kB gzipped (doc 13 section 8)
+        run: |
+          size=$(for f in dist/assets/index-*.js; do gzip -c "$f" | wc -c; done | awk '{s+=$1} END{print s}')
+          echo "initial JS: ${size} bytes gzipped"
+          test "$size" -le 250000
+      - name: index.html has no inline script or inline style (CSP)
+        run: |
+          ! grep -Eq '<script(\s[^>]*)?>[^<]' dist/index.html
+          ! grep -Eq ' style="| on[a-z]+="' dist/index.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+
+  e2e:
+    # Installs the Helm chart and exercises the operator on a throwaway kind cluster that exists only
+    # inside this job. hack/e2e/kind.sh refuses to run against anything that is not a local kind cluster.
+    name: Helm and operator on kind
+    needs: [test-unit, test-store, test-operator, helm, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      KO_DOCKER_REPO: kind.local
+      KIND_CLUSTER_NAME: rampart-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: azure/setup-helm@v4
+      - uses: ko-build/setup-ko@v0.8
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: rampart-e2e
+      - name: Build the image straight into the kind node (the embedded UI is included)
+        run: ko build --bare --tags e2e ./cmd/rampart
+      - name: Install the chart and test the operator
+        env:
+          IMAGE_REPO: kind.local
+          IMAGE_TAG: e2e
+        run: hack/e2e/kind.sh
+      - name: ShellCheck the e2e script
+        if: always()
+        run: shellcheck -S warning hack/e2e/kind.sh
+
   build:
     name: Build, SBOM
-    needs: test
+    needs: [test-unit, test-store, test-operator, web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
       - run: |
           mkdir -p bin
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/rampart ./cmd/rampart
@@ -125,7 +237,7 @@ jobs:
     # attestation (docs/15). SLSA provenance is produced by the next job.
     name: Publish & Sign
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, helm]
+    needs: [build, helm, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -139,6 +251,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
       - uses: ko-build/setup-ko@v0.8
       - uses: sigstore/cosign-installer@v3.7.0
       - uses: anchore/sbom-action/download-syft@v0.17.9

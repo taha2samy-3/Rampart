@@ -28,7 +28,7 @@ export const NAV_GROUPS: NavItem[][] = [
     { id: 'ingestion', path: '/ingestion', icon: IconIngestion, phase: 1, what: 'Ingest runs arrive in Phase 1; sources and the Dependency-Track page in Phase 3.' },
   ],
   [
-    { id: 'policies', path: '/policies', icon: IconPolicies, phase: 3, what: 'Risk, SLA and automation policies.' },
+    { id: 'policies', path: '/policies', icon: IconPolicies, phase: 2, what: 'Risk and SLA policies; automation rules and exceptions follow in Phase 5.' },
     { id: 'integrations', path: '/integrations', icon: IconIntegrations, phase: 3, what: 'The catalogue, connectors, webhooks and API tokens.' },
     { id: 'administration', path: '/administration', icon: IconAdmin, phase: 2, what: 'Users, teams, access bindings and the audit log; identity providers follow in Phase 4.' },
   ],

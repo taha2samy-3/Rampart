@@ -110,6 +110,11 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 			"Set auth.oidc.* and auth.session.keyFile, then restart.")
 		return
 	}
+	// The UI adds idp=<id> when several sign-in methods exist (doc 14 section 4). Phase 1 has one.
+	if idp := r.URL.Query().Get("idp"); idp != "" && idp != "default" {
+		problem(w, r, http.StatusNotFound, "not-found", "Unknown sign-in method", "")
+		return
+	}
 	tenant := r.URL.Query().Get("tenant")
 	if tenant == "" {
 		tenant = "default"

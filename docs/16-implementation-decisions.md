@@ -500,3 +500,31 @@ These were found by running the code against PostgreSQL and the HTTP API. Each c
 - Checked against SeaweedFS 4.53 with the exact calls the gateway needs: bucket creation; a SigV4 presigned `PUT` with `Content-Length` signed in (a body of a different size is rejected with 403, D9); a tampered presigned URL is rejected; object round trip with matching SHA-256; bucket lifecycle rules (retention, doc 15).
 - Credentials come from the environment (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`), supplied by a Secret in Helm and by `.env` in Compose. No identity file is mounted.
 - Helm: `seaweedfs.enabled` (default true) deploys a standalone StatefulSet running as a non-root user; its keys are generated once and kept across upgrades. Compose: the `objectstore` service.
+
+## D32. Browser sign-in, the operator, telemetry and the UI server (Phase 0 and 1)
+
+**Sign-in (doc 14 section 2, D8).**
+- `query-api` is the OIDC relying party: Authorization Code with PKCE S256, `state` and `nonce`, ID token checked for signature (cached JWKS), `iss`, `aud`, `exp` and `nonce`. Discovery is lazy and retried, so the platform can start before its IdP.
+- The login state (state, nonce, verifier, tenant, `return_to`) sits in a short-lived, single-use cookie sealed with AES-256-GCM under a key derived from `auth.session.keyFile`. `return_to` accepts same-origin paths only.
+- A session is an opaque 256-bit secret; only its SHA-256 is stored. The cookie is `<tenant-uuid-hex>.<secret>` so the lookup runs under that tenant's row-level security. Over https it is `__Host-rampart_session` (Secure, Path=/); over http, `rampart_session`. HttpOnly and SameSite=Lax always. Idle 8 h, absolute 24 h, both configurable.
+- Revocation is immediate: the lookup joins `app_user` (status) and `tenant_member`, so removing a membership or disabling a person ends the session on the next request. Refresh-token re-validation (D27) is not built yet.
+- CSRF: `X-CSRF-Token` equals HMAC(key, session id) and is required on every state-changing request authenticated by a cookie. API tokens are not cookie-based and are exempt.
+- Roles never come straight from the IdP. `auth.oidc.bindings` (kind `user` by email or subject, kind `group`) is the Phase 1 form of an `AccessBinding`; the strongest match wins, then the role the person already holds, then `auth.oidc.defaultRole`. An empty result means no access (`no_access`). `email_verified` is required unless disabled.
+- A person may read their own memberships across tenants through the `member_reads_own` policy on `tenant_member` (SELECT only, keyed on `app.user_id`); writes still need the tenant context. That is how the tenant switcher lists tenants without a bypass role.
+- Failure goes back to the SPA as `/login?error=<code>` with codes `invalid_state`, `idp_error`, `email_unverified`, `tenant_not_found`, `no_access`, `internal`.
+- Endpoints: `GET /api/v1/ui-config` (public), `GET /auth/login`, `GET /auth/oidc/{idp}/callback`, `GET /auth/session`, `POST /auth/logout`, `POST /auth/tenant`, `GET /api/v1/me`, `/me/tenants`, `/me/permissions`. Every problem response carries `request_id`.
+- Local sign-in: only the single break-glass admin of D3 is in scope of these documents (doc 14 section 1). Regular local users with passwords are not supported: password policy and MFA belong to the IdP.
+
+**Operator (D1, D3, D20, D21).**
+- The reconcilers run on controller-runtime against the real API server (tested with envtest and in CI on kind). A status write happens only when the status changed. A resource waiting for a Tenant or a Secret is retried, and a Tenant appearing or changing its namespaces requeues the resources in them.
+- It starts only in a cluster or with an explicit `--kubeconfig`. It never reads `~/.kube/config` or `$KUBECONFIG`, so running the binary on a laptop cannot start reconciling whatever cluster the developer happens to be pointed at.
+- It creates the namespaces a Tenant lists and one `RoleBinding` per tenant namespace to a ClusterRole that can only read Secrets, so it reads Secrets there and nowhere else. It can only bind that one ClusterRole. Secrets are read with an uncached client, so it needs no list or watch on Secrets cluster-wide.
+- Referenced Secrets are encrypted (D1) before they reach PostgreSQL. Deleting a CR keeps its rows (D21); finalizers for `ScanSource` revocation and `Tenant` purge are not built.
+
+**Telemetry (D6).** `/metrics` is real (Prometheus text) on the ops port: Go runtime and process metrics, HTTP request metrics labelled by the matched route pattern (never the raw path), and `rampart_ingest_runs_total` and `rampart_ingest_findings_total`. With `telemetry.otlpEndpoint` set, traces and metrics are also exported over OTLP/HTTP. Every request has an `X-Request-ID`; logs written with a context carry `trace_id`, `span_id` and `request_id`.
+
+**UI server (doc 13 section 2).** `web/dist` is embedded in the binary and served at `/` with `Content-Security-Policy: default-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'`, `X-Content-Type-Options`, `Referrer-Policy: same-origin`, and HSTS when the public URL is https. Hashed assets are immutable, `index.html` is `no-cache`, client routes fall back to `index.html`, and paths under `/api`, `/auth`, `/ingest`, `/hooks`, `/scim` and `/compat` are 404 rather than the shell.
+
+**Configuration file (D6).** The YAML keys are the documented ones (`server.http.addr`, `database.directUrl`, `auth.oidc.*`); the environment form is `RAMPART_` plus the key path joined with `_`.
+
+**CI.** The Go suites run as separate parallel jobs by dependency (no services, PostgreSQL, a real API server), then Helm, the web build, and a kind job that installs the chart, applies a Tenant, an Application and a ScanSource, checks `Ready=True`, the RBAC limits, encrypted secret material, upgrade and rollback. `hack/e2e/kind.sh` refuses to run on anything but a local kind cluster.

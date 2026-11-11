@@ -230,3 +230,29 @@ Budgets are checked in CI with Lighthouse CI and a bundle-size check.
 - **Phase 2**: triage dialogs, risk waterfall, risk acceptance, application pages, dashboard, compliance views, admin (users, bindings, audit).
 - **Phase 3**: integration catalogue and mapping editor, schema-generated connector forms, connectors, Dependency-Track source page and mapping editor, groups and tickets, saved views, exports, SSE.
 - **Phase 4**: asset graph, identity providers UI, scheduled reports, Arabic locale completion, MCP settings.
+
+## 10. Status
+
+Built and verified (Phase 0, in `web/`): the shell, the login screen, and the findings workbench structure.
+
+| Area | State |
+|---|---|
+| Stack | React 19, strict TypeScript, Vite, TanStack Router (typed search params `q`, `sel`, `sort`, `density`), TanStack Query, TanStack Table and Virtual, Radix for menus, dialog, tabs and tooltip, Tailwind v4 on our tokens, react-i18next, Vitest, Testing Library, axe |
+| Bootstrap | ui-config, then session (401 shows the login screen), then permissions. The CSRF token lives in memory only. The only thing stored in the browser is the theme |
+| Login | One IdP shows "Continue with <name>"; several show a chooser. The six backend error codes (`invalid_state`, `idp_error`, `email_unverified`, `tenant_not_found`, `no_access`, `internal`) map to plain copy. `return_to` is validated as a same-origin path |
+| Workbench | Three docked panes (nav 170 px collapsing to 48, facets 156, inspector 330 and resizable), 44 px top bar, rows 46 or 32 px, the query bar writes `q` and shows term chips, the table fetches `/api/v1/findings` with infinite scroll, empty and no-match states |
+| Design | Tokens, band shapes and the segmented score bar as in section 6. No cards, shadows, pills or uppercase labels. Light and dark from the same tokens. Fonts are self-hosted |
+| Quality | 51 tests, axe clean on every screen, ESLint and `tsc` clean. Initial JS 211 kB gzipped against the 250 kB budget, checked in CI. CSP-clean: no inline script, no `style=` attribute, no violation in Chromium |
+| Verified against the real backend | Open `/`, sign in through Dex, land on the empty workbench with the upload command, session cookie HttpOnly and invisible to JavaScript, `localStorage` empty, reload keeps the session, sign out returns to login |
+
+Not built yet (later phases, per section 9): row selection with `x` and the bulk bar, filter-bar autocomplete, Ctrl+K as a real command palette, the Detected by, Due and Signals facets (they need facet counts from the API), the hierarchy scope picker, notifications, Storybook, Playwright end-to-end tests in CI, Lighthouse CI, the generated OpenAPI client, `count=true`, and `GET /findings/{id}` for the inspector (it reads the loaded list; a deep link to an unloaded finding says so).
+
+Deviations from this document, with reasons:
+
+- **Dark risk colours** are lifted from the light values so each keeps 3:1 against the dark surface. The light values are as specified; light medium (`#C99A1A`) is 2.6:1 on white and info is lower, so the shape and the printed score carry the meaning there.
+- **Select** is a styled native `<select>`. Radix Select injects an inline `<style>` that the CSP blocks. Menus and dialogs are non-modal for the same reason; the dialog marks the app root inert and draws its own overlay.
+- **The wordmark** is live Red Hat Display 800 text, not outlined paths. The mark itself is the real geometry.
+- **API client** is typed by hand from the Go structs until `/api/v1/openapi.json` exists. Only `api/` changes when `openapi-fetch` replaces it.
+- **Versions**: Node 20 pins Vitest 3, jsdom 26 and Vite 7; TypeScript is 5.9 because typescript-eslint does not support 7 yet.
+
+What the UI asks of the API (not yet provided): application and asset names (or slugs) in the findings list, since `Finding` carries only ids; a `group` on each risk factor so the score bar does not classify by factor name; `count=true`.
