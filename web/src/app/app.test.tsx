@@ -57,6 +57,76 @@ describe('bootstrap sequence', () => {
   });
 });
 
+describe('local administrator sign-in (break-glass)', () => {
+  const PASSWORD = { id: 'local', name: 'Username and password', type: 'password' };
+  const SSO = { id: 'default', name: 'Default SSO', type: 'oidc' };
+
+  it('alone it is the primary action and posts JSON to /auth/local/login, then loads the app', async () => {
+    const calls = mockFetch({ loggedIn: false, methods: [PASSWORD] });
+    const { container } = renderApp('/login?return_to=%2Ffindings');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Username'), 'admin');
+    await user.type(screen.getByLabelText('Password'), 'correct-horse-9');
+    expect(await axe(container)).toHaveNoViolations();
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith('/findings'));
+    const post = calls.find((c) => c.url === '/auth/local/login')!;
+    expect(post.method).toBe('POST');
+    expect(post.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(post.body!)).toEqual({ username: 'admin', password: 'correct-horse-9' });
+    expect(screen.queryByRole('button', { name: /Continue with/ })).toBeNull();
+  });
+
+  it('next to single sign-on, SSO stays the one primary action and the form is secondary', async () => {
+    mockFetch({ loggedIn: false, methods: [SSO, PASSWORD] });
+    const { container } = renderApp('/login');
+    const sso = await screen.findByRole('button', { name: 'Continue with Default SSO' });
+    const local = screen.getByRole('button', { name: 'Sign in' });
+    expect(sso.className).toContain('bg-accent');
+    expect(local.className).not.toContain('bg-accent');
+    expect(screen.getByText('Or sign in as the local administrator')).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('a wrong password shows plain copy, clears the field, and never echoes the password', async () => {
+    mockFetch({ loggedIn: false, methods: [PASSWORD], local: 401 });
+    const { container } = renderApp('/login');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Username'), 'admin');
+    await user.type(screen.getByLabelText('Password'), 'wrong-password-1');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('Wrong username or password.')).toBeInTheDocument();
+    expect(screen.getByText('Check them and try again.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+    expect(container.textContent).not.toContain('wrong-password-1');
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('a locked account says so, with the wait and the way out', async () => {
+    mockFetch({ loggedIn: false, methods: [PASSWORD], local: 429 });
+    renderApp('/login');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Username'), 'admin');
+    await user.type(screen.getByLabelText('Password'), 'whatever-password');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('Too many attempts.')).toBeInTheDocument();
+    expect(screen.getByText(/rampart admin set-password/)).toBeInTheDocument();
+    expect(screen.getByText('req_local')).toBeInTheDocument();
+  });
+
+  it('on /t/<tenant>/login the tenant goes with the credentials', async () => {
+    const calls = mockFetch({ loggedIn: false, methods: [PASSWORD] });
+    renderApp('/t/acme/login');
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('Username'), 'admin');
+    await user.type(screen.getByLabelText('Password'), 'correct-horse-9');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/auth/local/login')).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url === '/auth/local/login')!.body!).tenant).toBe('acme');
+  });
+});
+
 describe('findings route', () => {
   it('empty workbench: shell, three panes and the upload command', async () => {
     mockFetch({ loggedIn: true, findings: [] });

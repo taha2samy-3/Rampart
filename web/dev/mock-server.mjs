@@ -168,6 +168,29 @@ const server = http.createServer((req, res) => {
     res.writeHead(302, { Location: returnTo });
     return res.end();
   }
+  if (p === '/auth/local/login' && req.method === 'POST') {
+    if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) return problem(res, 415, 'Send the sign-in as JSON', '');
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      try {
+        const { username, password } = JSON.parse(body);
+        if (username === 'locked') {
+          res.setHeader('Retry-After', '900');
+          return problem(res, 429, 'This account is locked after too many wrong passwords', 'Try again in 15 minutes, or reset the password with the CLI.');
+        }
+        if (username === 'admin' && password === 'correct-horse-9') {
+          scenario = dataMode;
+          res.writeHead(204);
+          return res.end();
+        }
+        return problem(res, 401, 'Wrong username or password', 'Check them and try again.');
+      } catch {
+        return problem(res, 400, 'A username and a password are required', '');
+      }
+    });
+    return;
+  }
   if (p === '/auth/logout' && req.method === 'POST') {
     if (req.headers['x-csrf-token'] !== 'mock-csrf-token') return problem(res, 403, 'Forbidden', 'Missing or wrong CSRF token.');
     scenario = 'loggedout';

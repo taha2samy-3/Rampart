@@ -30,9 +30,13 @@ export function finding(i: number, band: 'critical' | 'high' | 'medium' | 'low' 
 
 export interface Scenario {
   loggedIn?: boolean;
+  /** Sign-in methods ui-config reports (default: one OIDC provider). */
+  methods?: { id: string; name: string; type: string }[];
+  /** What POST /auth/local/login answers: 204 on success, or a problem status. */
+  local?: 204 | 401 | 403 | 429;
   findings?: ReturnType<typeof finding>[] | 'error';
 }
-export type Calls = { method: string; url: string; headers: Record<string, string> }[];
+export type Calls = { method: string; url: string; headers: Record<string, string>; body?: string }[];
 
 export function mockFetch(sc: Scenario): Calls {
   const calls: Calls = [];
@@ -41,8 +45,12 @@ export function mockFetch(sc: Scenario): Calls {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const path = url.split('?')[0]!;
-    calls.push({ method: init?.method ?? 'GET', url, headers: (init?.headers ?? {}) as Record<string, string> });
-    if (path === '/api/v1/ui-config') return json(CONFIG);
+    calls.push({ method: init?.method ?? 'GET', url, headers: (init?.headers ?? {}) as Record<string, string>, body: typeof init?.body === 'string' ? init.body : undefined });
+    if (path === '/api/v1/ui-config') return json({ ...CONFIG, login: { methods: sc.methods ?? CONFIG.login.methods } });
+    if (path === '/auth/local/login') {
+      const st = sc.local ?? 204;
+      return st === 204 ? json(null, 204) : json({ type: 'u', title: 'x', status: st, detail: st === 429 ? 'Try again in 15 minutes.' : undefined, request_id: 'req_local' }, st);
+    }
     if (path === '/auth/session') return sc.loggedIn ? json(SESSION) : json({ type: 'u', title: 'Authentication required', status: 401 }, 401);
     if (path === '/auth/tenant' || path === '/auth/logout') return json(null, 204);
     if (path === '/api/v1/me/permissions') return json({ role: 'triager', scopes: ['tenant'] });
