@@ -37,7 +37,7 @@ services:
       timeout: 5s
       retries: 12
 
-  # Static OIDC provider for local sign-in (see dex/config.yaml). Not for production.
+  # Development identity provider with two demo users (see dex/config.yaml.tpl; ./init.sh renders it). Not for production.
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
     container_name: rampart-dex
@@ -72,7 +72,11 @@ services:
       RAMPART_AUTH_OIDC_CLIENT_SECRET_FILE: "/run/secrets/oidc_client_secret"
       RAMPART_AUTH_SESSION_KEY_FILE: "/run/secrets/session_key"
       RAMPART_AUTH_OIDC_DEFAULT_ROLE: "viewer"
-      RAMPART_AUTH_OIDC_BINDINGS: "user:kilgore@kilgore.trout=admin"
+      RAMPART_AUTH_OIDC_BINDINGS: "user:ada@example.com=admin"
+      # The first administrator, created inside Rampart at first start (D3). With single sign-on
+      # configured it would normally switch itself off; keepEnabled leaves it on for this quick start.
+      RAMPART_AUTH_BOOTSTRAP_ADMIN_PASSWORD_FILE: "/run/secrets/admin_password"
+      RAMPART_AUTH_BOOTSTRAP_ADMIN_KEEP_ENABLED: "true"
       RAMPART_OBJECT_STORAGE_ENDPOINT: "http://objectstore:8333"
       RAMPART_OBJECT_STORAGE_BUCKET_RAW: "rampart-raw-reports"
       RAMPART_SERVER_HTTP_ADDR: ":8080"
@@ -81,6 +85,7 @@ services:
     secrets:
       - oidc_client_secret
       - session_key
+      - admin_password
     # The issuer URL must be the same for the browser and for the server. Sharing the Dex network
     # namespace makes http://localhost:5556/dex reach Dex from inside this container too, so no
     # /etc/hosts entry is needed. (Ports are published on the dex service above.)
@@ -101,6 +106,8 @@ secrets:
     environment: RAMPART_OIDC_CLIENT_SECRET
   session_key:
     environment: RAMPART_SESSION_KEY   # exactly 32 characters
+  admin_password:
+    environment: RAMPART_ADMIN_PASSWORD
 
 volumes:
   pgdata:
