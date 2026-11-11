@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.5" serialNumber="urn:uuid:3e671587-390d-40f6-90ac-3e30d3a69e23" version="1">
+  <components>
+    <component type="library" bom-ref="pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1">
+      <group>org.apache.logging.log4j</group>
+      <name>log4j-core</name>
+      <version>2.14.1</version>
+      <purl>pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1</purl>
+      <licenses>
+        <license>
+          <id>Apache-2.0</id>
+        </license>
+      </licenses>
+      <hashes>
+        <hash alg="SHA-256">2b1a996dc88607147efbbf6c41c7b8d4bbbe9be9992f44c4fa6164293f9c6d4a</hash>
+      </hashes>
+    </component>
+  </components>
+  <vulnerabilities>
+    <vulnerability bom-ref="CVE-2021-44228">
+      <id>CVE-2021-44228</id>
+      <description>Log4Shell remote code execution in Log4j</description>
+      <detail>JNDI injection flaw allows unauthenticated remote code execution.</detail>
+      <ratings>
+        <rating>
+          <severity>critical</severity>
+          <score>10.0</score>
+          <method>CVSSv31</method>
+        </rating>
+      </ratings>
+      <cwes>
+        <cwe>502</cwe>
+      </cwes>
+      <affects>
+        <target>
+          <ref>pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1</ref>
+        </target>
+      </affects>
+    </vulnerability>
+  </vulnerabilities>
+</bom>
+

@@ -1,0 +1,16 @@
+SPDXVersion: SPDX-2.3
+DataLicense: CC0-1.0
+SPDXID: SPDXRef-DOCUMENT
+DocumentName: test-tag-value-sbom
+DocumentNamespace: http://spdx.org/spdxdocs/test-tag-value-sbom-1.0
+
+##### Package: openssl
+PackageName: openssl
+SPDXID: SPDXRef-Package-openssl
+PackageVersion: 1.1.1k
+PackageLicenseConcluded: OpenSSL
+PackageLicenseDeclared: OpenSSL
+PackageChecksum: SHA256: b2a3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3
+ExternalRef: PACKAGE-MANAGER purl pkg:generic/openssl@1.1.1k
+ExternalRef: SECURITY cpe23Type cpe:2.3:a:openssl:openssl:1.1.1k:*:*:*:*:*:*:*
+

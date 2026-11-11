@@ -1,0 +1,21 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://openvex.dev/docs/public/vex-2023-001",
+  "author": "Security Team",
+  "timestamp": "2023-01-15T12:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2021-44228"
+      },
+      "products": [
+        "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The vulnerable JNDILookup class is excluded from our distribution."
+    }
+  ]
+}
+

@@ -1,0 +1,39 @@
+[
+  {
+    "apiVersion": "rampart.aspm.dev/v1alpha1",
+    "kind": "Tenant",
+    "metadata": {
+      "name": "default"
+    },
+    "spec": {
+      "displayName": "Default Organization"
+    }
+  },
+  {
+    "apiVersion": "rampart.aspm.dev/v1alpha1",
+    "kind": "Application",
+    "metadata": {
+      "name": "payments-api",
+      "namespace": "default"
+    },
+    "spec": {
+      "displayName": "Payments Processing Service",
+      "businessCriticality": "critical",
+      "internetFacing": true,
+      "owners": ["payments-team@company.internal"]
+    }
+  },
+  {
+    "apiVersion": "rampart.aspm.dev/v1alpha1",
+    "kind": "ScanSource",
+    "metadata": {
+      "name": "ci-semgrep",
+      "namespace": "default"
+    },
+    "spec": {
+      "scannerFamily": "semgrep",
+      "type": "reportUpload"
+    }
+  }
+]
+

@@ -1,0 +1,35 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "bom-ref": "pkg:npm/axios@0.21.1",
+      "type": "library",
+      "name": "axios",
+      "version": "0.21.1",
+      "purl": "pkg:npm/axios@0.21.1"
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2020-28168",
+      "description": "Server-Side Request Forgery in axios",
+      "detail": "Axios up to 0.21.0 allows SSRF via the proxy parameter.",
+      "ratings": [
+        {
+          "severity": "high",
+          "score": 7.5,
+          "method": "CVSSv31"
+        }
+      ],
+      "cwes": [918],
+      "affects": [
+        {
+          "ref": "pkg:npm/axios@0.21.1"
+        }
+      ]
+    }
+  ]
+}
+

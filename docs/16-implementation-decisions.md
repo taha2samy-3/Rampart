@@ -1,0 +1,476 @@
+# 16 — Implementation decisions (normative)
+
+This document closes the gaps found by the design review ([17-design-review.md](17-design-review.md)). It is **normative**: where an older sentence elsewhere disagrees, this document wins. Each section says which review item it closes.
+
+## D1. Who talks to the Kubernetes API (closes B1, M8)
+
+| Target | Kubernetes API access |
+|---|---|
+| `operator` | Reads and writes Rampart CRs and their status. Reads Secrets referenced by CRs. Creates tenant namespaces, per-tenant Roles, `Job`/`CronJob` for `ScheduledScan`. Watches reports in managed clusters |
+| `ingest-gateway` | Only `tokenreviews.authentication.k8s.io: create`, and only when ServiceAccount authentication is enabled |
+| every other target | None. `automountServiceAccountToken: false` |
+
+Consequences:
+
+- **The gateway never creates `ReportIngest` objects.** An API upload produces only `upload` and `ingest_run` rows. `ReportIngest` is a user-facing, GitOps resource for "ingest this object that is already in storage". This also removes the risk of thousands of CRs per day in etcd.
+- Visibility of API uploads in `kubectl` comes from `ScanSource.status` counters and `rampart ingests list`.
+- **Secrets**: the operator is the only reader of Kubernetes Secrets. It copies referenced secret material into the `secret_material` table, envelope-encrypted (AES-256-GCM, one data key per tenant, wrapped by a KMS key or a mounted master key), with a content hash and the Secret `resourceVersion`. `notify`, `sync` and `query-api` decrypt from that table. A Secret change triggers reconcile and a new row version; consumers pick it up through the config change notification. This replaces the earlier statements "never copied into Postgres" (02 §5, 07 §3) and "operator-issued short-lived handle".
+- Operator RBAC (explicit): cluster-wide `get/list/watch` on Rampart CRDs and `namespaces`; `create/patch` on `namespaces` (tenant reconcile); `update/patch` on Rampart `*/status` and finalizers; `get/list/watch` on `secrets` through a per-tenant Role it creates in each tenant namespace; `create/delete` on `roles`/`rolebindings` limited by an aggregated ClusterRole it is allowed to grant; `create/delete` on `jobs`/`cronjobs` in tenant namespaces only when the `ScheduledScan` module is enabled; `create` on `events`; `leases` in its own namespace.
+
+## D2. Ingest run ownership and job identity (closes B2, M5, M14, M15)
+
+- `POST /ingest/v1/uploads` inserts `upload` (status `created`) with the full context and options.
+- `POST /ingest/v1/uploads/{id}/complete` in one transaction: sets `upload.status = completed`, inserts `ingest_run` (status `queued`), inserts River job `ParseJob{ingest_run_id}` with `UniqueOpts{ByArgs}`. It returns `ingestRunId`.
+- For a user-created `ReportIngest` CR the operator performs the same three inserts, with `ingest_run.crd_uid` set (unique). It never enqueues for a CR whose uid already has an `ingest_run`.
+- The parser owns every later change to `ingest_run` (status, stats, error, timestamps).
+- One status enum everywhere: `queued | parsing | merging | enriching | scoring | completed | completed_with_errors | failed | stale`. `completed` means merged, enriched **and scored**, so the CI gate never evaluates a risk band that is still being computed. `ReportIngest.status.phase` is the same value capitalised (`Queued`, `Parsing`, …). The CI gate waits for `completed`, `completed_with_errors`, `failed` or `stale`.
+- One stats shape: `{parsed, created, updated, untouched, reactivated, closed, skipped_min_severity, record_errors}`.
+- Batch size is **5 000 staged rows per transaction** (one number; supersedes "1000" in 02 §3).
+- A failed run keeps the findings its committed batches created; it never closes anything.
+- `Idempotency-Key`: unique per tenant for 7 days. Same key with an identical request body returns the original response; with a different body returns `409` with problem type `idempotency-key-reused`.
+- `first_seen` and `last_seen` use `context.scanFinished` when supplied and not in the future, otherwise the ingest time.
+
+## D3. Running without Kubernetes (closes B3)
+
+- The reconcile logic is a library, `internal/config/apply`, that turns a Rampart resource (the CRD YAML shape) into config rows. The operator calls it from reconcilers. The CLI calls it from `rampart apply -f <file|dir>`.
+- `-target=all` starts the operator only when in-cluster config or `--kubeconfig` is present (`--operator=auto|on|off`).
+- Docker Compose mounts `/etc/rampart/resources/*.yaml`; the `all` target applies them at boot and re-applies on file change. The quick-start ships a default tenant, one `ScanSource` and default policies.
+- Status in file mode is stored in Postgres and shown by `rampart get <kind>`.
+- **Break-glass admin**: on first boot, if `auth.bootstrapAdmin.passwordFile` is set, a `local_admin` row is created (argon2id). Local login is refused once any identity provider is `Ready`, unless `auth.bootstrapAdmin.keepEnabled=true`. Every use is audited.
+
+## D4. Database roles, RLS, migrations (closes B4, M7)
+
+| Role | Used by | Rights |
+|---|---|---|
+| `rampart_owner` | `rampart migrate` only | owns all objects; DDL |
+| `rampart_app` | gateway, parser, enrich, policy, notify, sync, query-api | DML on tenant tables through RLS; read on global tables; no ownership |
+| `rampart_system` | operator, scheduler, feed sync, cross-tenant maintenance | `BYPASSRLS`; DML on config and global tables; used only by code paths that either write global data or fan out one job per tenant |
+| `rampart_ro` | query-api against replicas | `SELECT` through RLS |
+
+- RLS policy text on every tenant table: `using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid) with check (same)`. An unset tenant yields zero rows instead of an error.
+- Every tenant-scoped transaction starts with `select set_config('app.tenant_id', $1, true)`. A store-level test fails the build if a query runs on `rampart_app` without it.
+- Tables without RLS: global intelligence tables, `tenant`, `river.*`, `ingest_staging`. River job arguments carry `tenant_id`; the worker sets the tenant before touching data.
+- Cross-tenant work (for example "KEV added, re-score") is done as: `rampart_system` selects affected `(tenant_id, finding_id)` pairs from an index-only query and enqueues per-tenant jobs. It never mutates tenant rows itself.
+- Credentials come from the CNPG-generated application Secret (or external DSNs): `database.url` (pooled, PgBouncer transaction mode) and `database.directUrl` (direct to the primary).
+- **`LISTEN/NOTIFY` needs the direct URL.** River's notifier and the config-change listener use `database.directUrl`; request handlers use the pooled URL. With no direct URL, River runs in poll-only mode and config is re-read every 15 s.
+- Migrations: `rampart migrate up` runs goose migrations and River's own migrations. In Helm it is a plain Job on install (not a hook, so it can wait for the bundled CNPG cluster) and a `pre-upgrade` hook on upgrade. Every target has an init container `rampart migrate wait` that blocks until the schema version is at least the one the binary expects. `-target=all` auto-migrates by default (`database.autoMigrate`).
+- Partitions (`finding_event`, `audit_event`, `trend_daily`) are created three months ahead by the scheduler's `maintenance` job; the first set is created by the migration.
+
+## D5. Identifiers (closes B5)
+
+UUIDv7 values are generated in Go (`github.com/google/uuid`, `NewV7`). No database default. PostgreSQL 16 remains the minimum.
+
+## D6. Configuration reference (closes B6, M3)
+
+Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/config.yaml`. Flags override env, env overrides file.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `target` | `all` | comma list of targets |
+| `server.http.addr` | `:8080` | API, ingest, UI |
+| `server.ops.addr` | `:9090` | `/metrics`, `/healthz`, `/readyz` (separate port, never exposed through the Gateway) |
+| `server.publicUrl` | — | external base URL for links, redirects, cookies |
+| `database.url` / `database.directUrl` / `database.readUrl` | — | pooled, direct, replica |
+| `database.autoMigrate` | `true` for `all` | |
+| `objectStorage.endpoint`, `.externalEndpoint`, `.region`, `.bucketRaw`, `.bucketExports`, `.accessKeyFile`, `.secretKeyFile`, `.usePathStyle` | — | `externalEndpoint` is the address CI can reach for presigned URLs |
+| `ingest.maxReportBytes` | `536870912` | default per-upload cap |
+| `ingest.batchRows` | `5000` | |
+| `auth.oidc.issuer`, `.clientId`, `.clientSecretFile`, `.scopes`, `.groupsClaim` | — | static IdP for Phase 1 and for file mode |
+| `auth.session.keyFile` | — | 32-byte key for cookie and envelope encryption (or `kms.keyUri`) |
+| `auth.bootstrapAdmin.passwordFile` | — | break-glass |
+| `feeds.nvd.url`, `feeds.osv.url`, `feeds.epss.url`, `feeds.kev.url`, `feeds.cwe.url`, `feeds.<x>.schedule` | public endpoints | overridden by a `ClusterFeedMirror` when one exists |
+| `feeds.egress` | `allow` | `deny` blocks every non-mirror call |
+| `eventBus.type` | `river` | `river` or `nats` |
+| `cache.valkeyUrl` | — | optional |
+| `telemetry.otlpEndpoint`, `log.level`, `log.format` | —, `info`, `json` | |
+| `operator.mode` | `auto` | `auto`, `on`, `off` |
+
+Helm values skeleton: `mode`, `image`, `config` (the tree above), `bundled.postgres.enabled`, `bundled.minio.enabled`, `bundled.valkey.enabled`, `bundled.nats.enabled`, `ingress|gateway`, `targets.<name>.{replicas,resources,autoscaling}`, `keda.enabled`, `networkPolicy.enabled`, `serviceMonitor.enabled`.
+
+Feed sync ownership: the **scheduler enqueues** feed jobs; the **enrich** target executes them.
+
+## D7. Decisions gating the Phase 0 scaffold (closes B7)
+
+These are baked into module paths, CRD groups, labels and token prefixes, so they must be confirmed before scaffolding. Proposed values, used throughout these documents:
+
+| Decision | Proposed |
+|---|---|
+| Product name | Rampart |
+| API group | `rampart.aspm.dev` |
+| Go module | `github.com/<org>/rampart` |
+| License | Apache-2.0 |
+| Minimum Kubernetes | 1.30 |
+| Minimum PostgreSQL | 16 |
+
+## D8. Identity model for tenants (closes part of B14)
+
+- A person is one global `app_user` identified by `(issuer, subject)`. Membership in tenants is `tenant_member(tenant_id, user_id, status)`.
+- A session has one active tenant. `POST /auth/tenant` switches it and rotates the session id. The UI tenant switcher lists `GET /api/v1/me/tenants`.
+- Canonical login endpoint is `GET /auth/login?tenant=<slug>&return_to=<path>`. `/login` and `/t/<tenant>/login` are SPA routes that redirect to it.
+- **Phase 1 scope**: one OIDC provider from static config (`auth.oidc.*`), built-in roles `viewer`, `triager`, `admin` bound at tenant scope in the `role_binding` table, API tokens with scopes. `IdentityProvider` and `AccessBinding` CRDs, scoped bindings and the remaining roles arrive in Phase 2.
+- **CLI login**: Phase 1 is `rampart login --token`. From Phase 2, Rampart itself is the device-authorization server: `POST /auth/device/code`, the user approves in the browser with their SSO session, the CLI polls `POST /auth/device/token` and receives a user-bound API token stored in the OS keychain. This works with any IdP.
+
+## D9. Presigned uploads (closes B15)
+
+- `objectStorage.externalEndpoint` is the host placed in presigned URLs. With bundled MinIO the chart exposes it through its own route (`/s3` path or a dedicated hostname).
+- The client declares `sizeBytes` at `POST /uploads`. The gateway rejects sizes above the tenant limit and signs `Content-Length` into the presigned PUT, so a different size fails at the storage layer.
+- The parser verifies size and SHA-256 while streaming and fails the run on mismatch before any merge.
+- Object key: `tenants/<tenant_id>/uploads/<yyyy>/<mm>/<dd>/<upload_id>`. Presigned URLs expire after 15 minutes.
+
+## D10. Assets, versions and tracks (closes B11 image problem, B12)
+
+**An asset is the long-lived thing; a version is one build of it.**
+
+| Asset type | `key` | Version (`asset_version.version`) |
+|---|---|---|
+| `repository` | normalized clone URL | commit SHA |
+| `image` | `registry/repository` (no tag, no digest) | `sha256:` digest (tags kept as attributes) |
+| `workload` | `cluster/namespace/kind/name` | pod template hash |
+| `url` | `scheme://host:port` + path prefix | — |
+| `sbom_project` | `dtrack://<connector>/<project name>` | DT project version |
+| `package`, `host`, `cloud_resource`, `pipeline` | as in 03 §1 | — |
+
+`asset_version(tenant_id, asset_id, version, attributes, first_seen, last_seen)`.
+
+**Track.** Findings on an asset are kept per *track*, a named line of versions: for repositories the branch (`main`, `release/1.x`), for images and workloads the environment (`prod`, `staging`) or, if none is given, `default`. The track comes from `ScanSource.mapping.trackFrom` (default: `context.environment`, else `context.branch` when it is a tracked ref, else `default`).
+
+**Tracked and ephemeral runs.** A `ScanSource` lists `trackedRefs` (default: the repository default branch and `release/*`). A run whose branch is not tracked (pull requests, feature branches) is **ephemeral**: it is parsed, fingerprinted and compared with the baseline track (`mapping.baselineTrack`, default `main`) to produce the CI gate result (new, existing, fixed), and its results are stored for 30 days in `ingest_run_result`. It does not create, update or close findings in the inventory. This removes branch churn entirely.
+
+**Resolution order for a run** (first match wins, per finding when a report spans several targets):
+
+1. Primary asset type from the finding category and context:
+
+| Category | Context has | Asset type |
+|---|---|---|
+| sast, secret, iac, license | `repository` | `repository` |
+| sca | `imageDigest` or report target is an image | `image` |
+| sca | otherwise `repository` | `repository` |
+| container | image reference in report or context | `image` |
+| dast | target URL | `url` |
+| cspm | resource id | `cloud_resource` |
+| compliance (Kubernetes) | resource key | `workload` |
+
+2. Asset lookup by `(tenant, type, key)`; created if missing.
+3. Application: (a) the asset's existing `application_id`; (b) `Application.selectors` matching the asset key; (c) `ScanSource.mapping.applicationFrom` (a CEL expression that must return an application slug); (d) `ScanSource.defaultApplication`; (e) the tenant's built-in **Unassigned** application. `finding.application_id` is therefore never null.
+4. `service` and `environment` come from selectors, then from `context.service` / `context.environment`.
+
+A report with several targets (for example Trivy scanning three images) yields one `ingest_run` and several rows in `ingest_run_scope`, one per `(asset, track)`.
+
+**Shared assets.** `asset.application_id` is nullable. `package` assets and shared base images belong to no application; they are linked by `asset_edge`. A finding always attaches to the consuming primary asset (the image or repository that was scanned), never to the shared package asset.
+
+**Canonical upload context** (one schema for 03, 04, 05, 11): `repository`, `branch`, `commit`, `imageRef`, `imageDigest`, `environment`, `service`, `version`, `buildId`, `pipelineUrl`, `scanStarted`, `scanFinished`, `tags[]`.
+
+## D11. Fingerprint specification (closes B11)
+
+- Computed in `internal/normalize`, inside the parser target, after normalization. Parsers only map; `normalize` derives `snippet_hash`, `secret_hash`, `image_repository`, `manifest_path`, `resource_address`, `normalized_url` from `RawFinding.Location` and `Evidence`.
+- Serialization: `finding_key = SHA-256( "v1" US family US scope_key US f1 US f2 … )` where `US` is byte `0x1F`. Each field is UTF-8, NFC-normalized, trimmed; identifiers, hosts and paths are case-folded only where the table says so. A missing field is the empty string.
+- `scope_key = tenant_id US asset_id US track` for `scope: asset` (default); `tenant_id US application_id` for `scope: application`; `tenant_id` for `scope: tenant`. The version (digest, commit) is never part of the key.
+- Default fields (compiled-in `DedupPolicy`, overridable by CRD):
+
+| Class | Fields, in order | Fallback when the discriminating field is empty |
+|---|---|---|
+| SAST | `rule_id`, `file_path`, first non-empty of (`logical_location`, `snippet_hash`, tool `primaryLocationLineHash`) | `start_line` (marks the finding `weak_fingerprint`) |
+| SCA | `canonical_vuln_id`, `purl_base`, `manifest_path` (repository assets only) | `component_name` when no purl |
+| Secret | `rule_id`, `file_path`, `secret_hash` | `start_line` |
+| IaC | `rule_id`, `file_path`, `resource_address` | `start_line` |
+| Config / compliance | `control_id` or `rule_id`, `resource_key` | — |
+| DAST | `rule_id`, `normalized_url`, `method`, `param` | — |
+| License | `purl_base`, `license_id` | — |
+
+- If every field after `family` is empty, `finding_key` is the hash of the canonical JSON of the raw record and the finding is flagged `weak_fingerprint`. Weak fingerprints are counted in run stats and shown in the UI.
+- `canonical_vuln_id` at parse time uses only the identifiers in the record and the alias table as it exists: prefer a CVE, else the smallest GHSA, else the first identifier. When enrichment later links an identifier to a CVE, a `RekeyJob` computes the new key; if a finding with the new key exists the two are merged (older `first_seen` wins, events kept), otherwise the key is updated. `finding_key_alias(old_key → finding_id)` keeps old keys resolvable for one retention period so triage memory and VEX still match.
+- `scanner_family` for SARIF input comes from a table keyed by lower-cased `tool.driver.name`: `semgrep`, `codeql`, `trivy`, `grype`, `gitleaks`, `checkov`, `bandit`, `nuclei`, `snyk`, `zap`, `kics`, `dependency-check`, `osv-scanner`, `scorecard`, `hadolint`. Unknown drivers get `sarif:<driver-name>`. There is no bare `sarif` family.
+- Field names are fixed as: `rule_id`, `file_path`, `logical_location`, `snippet_hash`, `canonical_vuln_id`, `purl_base`, `manifest_path`, `image_repository`, `secret_hash`, `resource_address`, `resource_key`, `control_id`, `normalized_url`, `method`, `param`, `license_id`. (`purl_no_version`, `uri`, `function` in older examples are aliases to be removed.)
+- Go types to define in Phase 0: `Location` (struct with optional `Code`, `Package`, `Web`, `Resource`, `Image` parts), `ParseContext` (upload context + source options + limits), `Hint` (filename, content type, declared format), `VEXStatement`, `CVSSVector`.
+
+## D12. Occurrences (closes M4 and inconsistency 23, 24)
+
+An **occurrence is the current evidence of one finding from one source at one concrete location**, not a per-run log.
+
+- Unique key: `(tenant_id, finding_id, scan_source_id, occurrence_key)` where `occurrence_key = SHA-256(tool_record_id)` when the tool gives a stable id, else the hash of the full location including line and version.
+- Columns: `first_seen`, `last_seen`, `last_ingest_run_id`, `seen_count`, `present` (bool), `asset_version`, `tool_severity`, `cvss_vectors`, `location`, `normalized`, `raw`.
+- Each run upserts: seen → `present = true`, `last_seen`, `seen_count + 1`, `raw` replaced. Not seen in a run of the same scope → `present = false`.
+- Occurrences with `present = false` are deleted after `RetentionPolicy.occurrencesDays`. The table is not time-partitioned.
+- `finding.occurrence_count` = number of occurrences with `present = true`. Counters are always recomputed from rows, never incremented, so a retried batch cannot double-count.
+- History ("which run saw this") lives in `finding_event` and `ingest_run` stats, which are partitioned by time.
+- `finding_source` is removed; `occurrence.present` replaces it.
+
+## D13. Merge and reimport-close (closes B9, B10)
+
+**Scope of a run.** `close_scope = (tenant_id, scan_source_id, scanner_family, asset_id, track)`. One `ingest_run_scope` row per scope touched by the run.
+
+**Locking.** Before merging a scope, the parser takes `pg_advisory_xact_lock(hashtextextended(close_scope_text, 0))` in each batch transaction, and a session-level advisory lock for the whole run. Two runs on the same scope are therefore serialised; runs on different scopes proceed in parallel.
+
+**Ordering.** Each scope stores `last_applied_scan_finished`. A run whose `scanFinished` is older is marked `stale`: stored, visible, not merged, nothing closed.
+
+**Staging.** `ingest_staging` is an unlogged table without RLS, written only by `COPY` from the parser, keyed by `(ingest_run_id, seq)`. Rows are deleted when the run ends (never truncated). `COPY` is used only for this table, because PostgreSQL does not support `COPY FROM` on tables with row-level security; tenant tables are written with `INSERT … SELECT`.
+
+**Per batch** (one transaction, ≤ 5 000 staged rows):
+
+```sql
+with batch as (                       -- one representative row per finding_key
+  select distinct on (finding_key) *
+  from ingest_staging
+  where ingest_run_id = $run and seq between $lo and $hi
+  order by finding_key, severity_rank desc, seq
+),
+existing as (
+  select f.id, f.finding_key, f.state, f.content_hash, f.severity_override_reason
+  from finding f join batch b on b.finding_key = f.finding_key
+  where f.tenant_id = $tenant
+  for update of f
+),
+ins as (
+  insert into finding (id, tenant_id, finding_key, …, state, first_seen, last_seen, content_hash, version)
+  select b.new_id, $tenant, b.finding_key, …, b.initial_state, b.seen_at, b.seen_at, b.content_hash, 1
+  from batch b
+  where not exists (select 1 from existing e where e.finding_key = b.finding_key)
+  on conflict (tenant_id, finding_key) do nothing
+  returning id, finding_key
+),
+upd as (
+  update finding f set
+    last_seen     = greatest(f.last_seen, b.seen_at),
+    location      = b.location,
+    tool_severity = b.tool_severity,
+    title         = case when $merge = 'keep' then f.title       else b.title end,
+    description   = case when $merge = 'keep' then f.description else b.description end,
+    severity      = case when $merge = 'keep' or e.severity_override_reason is not null then f.severity else b.severity end,
+    cvss_vector   = coalesce(b.cvss_vector, f.cvss_vector),
+    content_hash  = b.content_hash,
+    state         = case when e.state = 'fixed' and not $do_not_reactivate then 'open' else f.state end,
+    resolution    = case when e.state = 'fixed' and not $do_not_reactivate then null   else f.resolution end,
+    resolved_at   = case when e.state = 'fixed' and not $do_not_reactivate then null   else f.resolved_at end,
+    reopened_count= f.reopened_count + (e.state = 'fixed' and not $do_not_reactivate)::int,
+    version       = f.version + 1,
+    updated_at    = now()
+  from batch b join existing e on e.finding_key = b.finding_key
+  where f.id = e.id
+  returning f.id, f.finding_key, e.state as old_state, f.state as new_state,
+            (e.content_hash is distinct from b.content_hash) as changed
+)
+select 'created' as outcome, id, finding_key from ins
+union all
+select case when old_state = 'fixed' and new_state = 'open' then 'reactivated'
+            when changed then 'updated' else 'untouched' end, id, finding_key from upd;
+```
+
+Notes:
+- `existing` captures the pre-update state, so reactivation is detected on PostgreSQL 16 without `RETURNING old`.
+- `content_hash` is SHA-256 over the fields a rescan may legitimately change: title, description, tool severity, CVSS vectors, fixed version, location without line and column. It defines "updated".
+- Two staged rows with the same `finding_key` in one batch are collapsed by `distinct on`; all of them still become occurrences.
+- `fieldMerge` has two values: `scanner` (default; the scanner's text and severity replace stored ones unless an analyst overrode severity) and `keep` (stored text and severity win; only `last_seen`, location and occurrences change). The value `merge` is dropped.
+- After the statement, in the same transaction: upsert occurrences (`INSERT … SELECT … ON CONFLICT … DO UPDATE`), insert `finding_event` rows for `created`, `reactivated`, `updated`, set `search` and promoted columns, restart SLA for reactivated rows when the policy says so, and enqueue enrich and policy jobs keyed by run.
+- A lost insert race (`on conflict do nothing` returns no row) cannot happen inside one scope because of the lock; across scopes keys differ by construction.
+
+**Close step** (once per scope, after the last batch, only if the run has status `completed`, i.e. zero record errors):
+
+```sql
+-- 1. occurrences of this scope not seen in this run
+update occurrence o set present = false
+where o.tenant_id = $tenant and o.scan_source_id = $source and o.scanner_family = $family
+  and o.asset_id = $asset and o.track = $track
+  and o.present and o.last_ingest_run_id <> $run;
+
+-- 2. findings with no present occurrence left, in an active state
+update finding f set state = 'fixed', resolution = 'fixed', resolved_at = now(), version = version + 1
+where f.tenant_id = $tenant and f.asset_id = $asset and f.track = $track
+  and f.state in ('open','under_investigation','affected')
+  and not exists (select 1 from occurrence o where o.finding_id = f.id and o.present)
+returning f.id;       -- → finding_event 'closed_by_rescan', stats.closed
+```
+
+Rules:
+- A finding reported by two sources stays open until **both** stop reporting it.
+- Findings in `not_affected`, `risk_accepted`, `out_of_scope`, `duplicate` keep their state; only their occurrences flip to `present = false`, which the UI shows as "no longer detected".
+- `minimumSeverity`: a staged record below the threshold does not create a finding, but if the finding already exists its occurrence is refreshed, so it is not closed by absence.
+- `closeOldFindings = false`: step 2 is skipped; step 1 still runs.
+- `closeScope: application` widens step 1 and 2 from one asset to all assets of the application for that source and family.
+- A run with `record_errors > 0` ends as `completed_with_errors` and skips the close step.
+
+## D14. Phase 1 read path and risk (closes M1, M2)
+
+- The explorer reads the `finding` table directly; it **is** the denormalized read model (`finding_view` does not exist). `application_summary`, `hierarchy_rollup`, `trend_daily`, `control_status` are the aggregate read models, added in Phase 2.
+- In Phase 1 the parser sets `severity` and a provisional `risk_score` from the built-in base table (critical 600 … info 10) plus KEV and EPSS points when the vulnerability row already has them. The `policy` target takes over scoring in Phase 2 with the same formula.
+- `vulnerability` rows: the merge inserts a stub (`id`, `aliases` from the record) when a finding references an unknown identifier. Phase 1 alias and metadata sources are OSV (bulk dumps), KEV and EPSS; NVD is added in Phase 2. `vulnerability.id` never changes; if a stub `GHSA-…` later maps to a CVE, a new CVE row is created, `vulnerability_alias` points both to the CVE row, and findings are re-pointed by the `RekeyJob`.
+
+## D15. Parsing libraries and streaming (closes M6)
+
+- SARIF, Trivy, Grype, Semgrep and generic JSON use a hand-written `encoding/json` token walk over the results array; the libraries (`go-sarif`) supply struct types for single elements only.
+- CycloneDX and SPDX documents are decoded whole with `cyclonedx-go` / `tools-golang`, under a size cap (`ingest.maxSbomBytes`, default 256 MiB) and a parser memory limit. SBOMs are bounded by component count, so this is acceptable.
+- Every parser has a decompression and nesting-depth limit and a fuzz test.
+
+## D16. Query grammar, cursors, sorting (closes B13)
+
+```
+query   = term { SP term } ;
+term    = [ "-" ] ( field ":" values | text ) ;
+values  = value { "," value } ;                  (* OR within a field *)
+value   = bare | quoted | range | wildcard ;
+range   = ( ">" | ">=" | "<" | "<=" ) ( number | duration | date ) ;
+wildcard= bare "*" ;                              (* prefix match only *)
+quoted  = '"' { any char, \" escaped } '"' ;
+text    = bare | quoted ;                         (* full-text search *)
+duration= number ( "h" | "d" | "w" ) ;
+```
+
+Terms are ANDed. `-` negates a term. No parentheses and no cross-field OR in v1.
+
+Phase 1 fields and their columns: `state`, `severity`, `risk` (band), `score` (range), `category`, `scanner`, `rule`, `cve` (vulnerability id or alias, prefix wildcard), `cwe`, `app` (slug), `asset` (key prefix), `assettype`, `env`, `track`, `path` (file path prefix), `purl` (purl_base prefix), `tag`, `owner`, `kev` (bool), `fix` (bool), `sla` (`breached`, `due:<duration>`), `age` (range on `first_seen`), `seen` (range on `last_seen`), `source`, `run`.
+
+- The parser lives in Go (`internal/query/grammar`). The SPA has its own TypeScript implementation; both run the same shared test vectors (`grammar_cases.json`), which keeps their behaviour identical.
+- SQL is built by a small internal builder with positional arguments (no string interpolation of values). `sqlc` is used for static queries only.
+- Sort keys in Phase 1: `-score` (default), `score`, `-seen`, `-age`, `age`, `severity`. Each has a covering index that starts with `tenant_id`.
+- Cursor: base64url of `{sort key values, id}` plus an HMAC; opaque to clients; invalid after a sort or filter change.
+
+## D17. Small decisions (closes M9–M13, nits)
+
+- A namespaced CR in a namespace that has no `Tenant` gets `Ready=False`, reason `TenantNotFound`.
+- Hierarchy path labels are slugs: lower-case, `[a-z0-9_]`, other characters replaced by `_`, to satisfy `ltree`.
+- `scheduler` belongs to the `write` composite. `mcp` is always its own Deployment.
+- River retry policy: 25 attempts with exponential backoff for transient errors (network, 5xx, lock timeout); permanent errors (unparseable report, hash mismatch, unknown format) fail immediately with a typed code on `ingest_run.error`.
+- Problem type catalogue (prefix `https://rampart.aspm.dev/problems/`): `validation`, `unauthorized`, `forbidden`, `not-found`, `conflict-version`, `idempotency-key-reused`, `rate-limited`, `quota-exceeded`, `payload-too-large`, `unsupported-format`, `upstream-unavailable`, `internal`.
+- Fixtures live in `internal/parsers/<name>/testdata/<tool-version>/`. `hack/fixtures` holds only large load-test inputs.
+- Test requirements: a cross-tenant leak test runs every list and get endpoint as tenant A against tenant B data; a seed generator (`hack/seed`) builds the 5M-finding benchmark database; the ingestion benchmark is "100 000 SARIF results, 2 vCPU / 2 GiB parser, CNPG single instance 4 vCPU / 16 GiB, SSD, target under 60 s, measured from `complete` to run `completed`". This target is unproven and is the subject of a Phase 0 spike.
+- Report generation moves to `POST /api/v1/report-jobs` so it no longer collides with `POST /ingest/v1/reports`.
+- Event names are `rampart.<entity>.<verb>` everywhere, for example `rampart.finding.sla_breaching`.
+- Enum spelling: CRD fields use camelCase (`apiPull`, `azureBoards`); database and API values use snake_case (`api_pull`, `azure_boards`); the mapping is mechanical.
+- Category enum: `sast`, `sca`, `secret`, `iac`, `container`, `dast`, `cspm`, `compliance`, `license`, `supply_chain`.
+- SAML is implemented in-process with `crewjam/saml`. Dex or Keycloak are only for LDAP and non-OIDC social logins.
+- The SLA matrix axis is **risk band × application business criticality**.
+- `ClusterFeedMirror` is the only feed-mirror kind. GHSA data comes through OSV.
+- API tokens have an optional `scan_source_id` column that restricts an ingest token to one source.
+- Arabic ships in Phase 4; English only before that. RTL-safe CSS (logical properties) is required from Phase 1 so the later locale is not a rewrite.
+
+## D18. Detection and disposition are separate (closes architecture finding 5)
+
+A finding carries two independent facts:
+
+| Field | Values | Set by |
+|---|---|---|
+| `detection` | `present`, `absent` | derived: `present` when any occurrence has `present = true` |
+| `state` (disposition) | `open`, `under_investigation`, `affected`, `not_affected`, `risk_accepted`, `out_of_scope`, `duplicate`, `fixed` | people, policies, upstream triage, and the close step |
+
+Rules that follow:
+- The close step moves only active dispositions to `fixed`. For `risk_accepted`, `not_affected`, `out_of_scope` and `duplicate`, `detection` becomes `absent` and the UI shows "no longer detected".
+- **Risk-acceptance expiry on an absent finding resolves it** (`fixed`, `resolution = fixed`) instead of reopening it. Expiry on a present finding returns it to the disposition it had before acceptance (stored in `previous_state`), not always to `open`.
+- Reactivation (`fixed` → active because the scanner reports it again) also restores `previous_state`.
+- A `not_affected` decision on a code finding stores the `content_hash` it was made against. If the code at that location changes (`content_hash` differs), the finding is flagged for re-review and listed under "decisions to re-check"; it is not silently trusted forever.
+- `verified` is removed. "Confirmed" is the `affected` state.
+- An upstream state of "resolved" (for example Dependency-Track `RESOLVED`) while the component is still listed maps to `not_affected` with a note, never to `fixed`, so it cannot oscillate with reactivation.
+
+## D19. Global tables are written only by feed sync (closes finding 7)
+
+- `vulnerability`, `vulnerability_alias`, `weakness`, `taxonomy`, `taxon`, `taxon_mapping` and `rule` are written only by `rampart_system` feed jobs from official sources.
+- Rule metadata found in tenant reports goes to a tenant-scoped `rule_local(tenant_id, scanner_family, rule_id, …)`. The UI prefers the global rule when one exists and shows the local one otherwise.
+- An identifier unknown to the feeds creates a row in tenant-scoped `vulnerability_local`. Aliases asserted by a tenant's report or by Dependency-Track are stored in `vulnerability_alias_local` and affect only that tenant.
+- This replaces "the merge inserts a stub" in D14: the stub is tenant-local.
+- A tenant can therefore never change another tenant's severity, taxonomy mapping, alias graph or SLA.
+
+## D20. Tenant boundary in the control plane (closes findings 9, 23)
+
+- A `Tenant` (cluster-scoped, platform-admin only) lists the namespaces it owns: `spec.namespaces: [payments, checkout]`. The binding comes only from that list. The namespace label is informational and never trusted.
+- Config identity is `(tenant, kind, namespace, name)`. Teams inside one tenant can therefore have their own namespaces with ordinary Kubernetes RBAC between them, and still share hierarchy, dedup and roll-ups. A namespace may set a default hierarchy node.
+- `ReportIngest.spec.object` must point inside the tenant's own prefix (`tenants/<tenant_id>/…`) in the configured raw bucket. The reconciler rejects anything else with `Ready=False`, reason `ObjectOutsideTenant`.
+- Watching the **local** cluster or any cluster with operator credentials is only possible through the cluster-scoped `ClusterScanSource`, which a platform admin creates and which names the target tenant per namespace selector. A namespaced `ScanSource` of type `kubernetes` must supply its own kubeconfig Secret.
+- Creating an `AccessBinding` in a tenant namespace is equivalent to tenant administration. This is documented, and the Helm chart ships a narrower ClusterRole for team members that excludes `accessbindings`, `identityproviders` and `connectors`.
+- The CRD kind `Application` keeps its name; it is addressed as `applications.rampart.aspm.dev` with short name `rapp` to avoid confusion with Argo CD's `Application`.
+
+## D21. Config rows, deletion, status volume (closes finding 14)
+
+- Config rows are keyed by `(tenant_id, kind, namespace, name)`; the CR uid is an attribute. Re-applying CRs from Git after a restore re-attaches to the same rows and ids.
+- A UI-created object and a CR with the same `(kind, name)` in a tenant conflict: the CR gets `Ready=False`, reason `NameTakenByUI`, until one is renamed or the UI object is "adopted" (an explicit action).
+- Deleting a CR:
+
+| Kind | On delete |
+|---|---|
+| `Application`, `HierarchyNode` | The row is kept and marked `managed_by = none` (orphaned, editable in the UI). Findings are untouched. `spec.deletionPolicy: Archive` instead archives the application and closes its findings with `resolution = deleted_asset` |
+| `ScanSource`, `Connector`, `IdentityProvider` | Disabled, tokens and webhooks revoked (finalizer), history kept |
+| Policies, `Exception` | Removed; findings they affected are re-evaluated |
+| `Tenant` | Refused while data exists unless `spec.deletionPolicy: Purge` |
+
+- Status is throttled to one write per object per 5 minutes (immediately only on condition changes). Rolling counters (`ingests24h`, `logins24h`, `evaluations24h`) are **not** written to status; they are Prometheus metrics. Status keeps conditions, ids, `lastIngest`, and open-finding counts by band.
+- The operator needs egress to connector, Dependency-Track and IdP endpoints for validation probes; the NetworkPolicy table in 15 §5 gains that row. KEDA needs a read-only database role (`rampart_keda`, `SELECT` on a queue-depth view) and a network path to PostgreSQL.
+- Watching reports in managed clusters moves out of the operator into a separate `collector` target (it has an S3 path, content-hash dedup and a per-subject debounce, and it produces ordinary ingest runs). It is deferred to after v1.0.
+
+## D22. Ingest credentials and CI federation (closes finding 11)
+
+- The tenant is part of the request: ingest endpoints are `/ingest/v1/t/{tenant}/…`, and the federated token audience is `rampart:<public-host>:<tenant>`. A token is only matched against that tenant's trust rules.
+- Trust rules match immutable identifiers (`repository_id`, `repository_owner_id`, GitLab `project_id`, `namespace_id`), with names allowed only as an additional display check.
+- The CI token is exchanged once (`POST /ingest/v1/t/{tenant}/token`) for a 15-minute Rampart ingest token bound to the source and the derived context. Replays of the original token after exchange are rejected by `jti`.
+- **Clients may tighten, never loosen.** `minimumSeverity` can only be raised above the source's value for *creating* findings and never affects closing (D13). `closeOldFindings` and `doNotReactivate` are source settings; a request can only turn closing off.
+- Closing happens only for tracked refs (D10).
+- **Mass-close guard**: if a run would close more than `ingestionPolicy.maxClosePercent` (default 50%) of a scope's open findings and more than 20 findings, the close step is held, the run ends as `completed_with_errors` with reason `close_held`, and a maintainer confirms or discards it.
+- ServiceAccount tokens are verified against the issuing cluster's OIDC discovery and JWKS (registered per `ClusterScanSource`), so the gateway needs no Kubernetes API access at all. This supersedes the TokenReview line in D1.
+
+## D23. Dependency-Track: scope for v1 and corrections (closes findings 12, 13)
+
+- **v1 ships flows B and C with triage mode `import` only.** SBOM forwarding (A) and write-back (D) follow after v1.0.
+- The webhook secret is never written to status. `status.webhookURL` shows the URL without the secret; the secret lives in a Secret created by the operator (`<source>-webhook`). When the DT publisher supports custom headers the secret is sent as a header instead of in the path.
+- Debounce is trailing-edge with a dirty flag: an event during a running sync schedules exactly one more sync afterwards.
+- A project sync triggered by `BOM_PROCESSED` waits until DT reports analysis settled for that project (processing token finished and the project's metrics `lastOccurrence` is newer than the BOM import); otherwise it retries with backoff. A run that sees components changed but **zero** vulnerabilities where the previous run had some is subject to the mass-close guard (D22).
+- An SBOM upload that is forwarded records a `linked_run` on the SBOM ingest run; the CI gate waits for both the SBOM run and the linked Dependency-Track sync run.
+- An imported upstream decision that needs approval is stored as a pending upstream decision on the finding (one per finding, replaced not duplicated) and is not pushed back in any mode until it is approved or rejected.
+- When write-back ships, change detection uses a per `(finding, matrix)` sync record with the last pushed and last pulled hash, compares human-actor events only, and round-trips `risk_accepted` through a marker in `analysisDetails`. One Rampart finding may map to several DT analyses; the push fans out to all of them and a disagreement on pull is shown as a conflict for a human to settle.
+- The DefectDojo-compatible shim is mounted at `/compat/defectdojo/api/v2` (not `/api/v2`), does not auto-create applications unless the source opts in, scopes engagement aliases to the token, and stays in the post-v1.0 list.
+
+## D24. Cross-tool correlation is non-destructive and deferred (closes finding 6)
+
+- v1 keeps one finding per `(scanner_family, fingerprint)`. Findings are never merged into each other across tools.
+- A `correlation_key` (for SCA: `canonical_vuln_id`, `purl_base`, asset, track) is stored and indexed. Findings that share it form a **correlation group** used for display ("also reported by Grype"), for one ticket per group, and for counting unique issues. Triage on one member can be applied to the group as an explicit bulk action.
+- Statements elsewhere about "one Finding with two Occurrences from different tools" and `source_count` describe the later, optional merge and do not apply to v1.
+
+## D25. Events and automation (closes finding 18)
+
+- The pipeline emits **one event per run and per scope**, carrying the run id and the outcome sets (created, reactivated, updated, closed) as id ranges, not one job per finding. Consumers process sets.
+- Aggregate read models are recomputed per application from source rows after a run; they are never incremented.
+- Outbound per-finding webhooks and notifications are produced by the `notify` target from those sets, with digesting above a threshold (more than 20 findings in one run produce one summary message).
+- Policy actions carry a causation id; a chain stops at depth 3 and at any repeated `(policy, finding)` pair.
+- A side effect (ticket, notification) is reserved in `action_ledger(tenant, policy, finding, action)` in the same transaction that decides it, so a retried or repeated event cannot create a second ticket.
+- CEL errors: a missing field evaluates the condition to `false` and is counted in the policy's status. For `failGate` policies an evaluation error fails the gate (fail closed) and says so in the reasons.
+- Per-tenant fairness is implemented by us, not assumed from River: each tenant has a concurrency cap per queue, enforced by a semaphore table checked at job start (jobs over the cap snooze).
+
+## D26. CI gate semantics (closes finding 24)
+
+- The pipeline declares what it will upload: `rampart gate --expect semgrep,trivy,sbom` (or `POST …/builds` then `…/builds/{id}/seal`). The gate waits for those runs, plus linked Dependency-Track runs, to reach a final status.
+- "New" means present in this run and absent from the baseline track (D10). "Fixed" is the reverse.
+- The gate endpoint lives on `query-api` (`POST /api/v1/gate`), because it is a read over scored findings; `rampart gate` calls it.
+- On timeout the gate returns `pass: false`, reason `timeout`, unless the source sets `gate.onTimeout: pass`.
+
+## D27. Identity corrections (closes finding 20)
+
+- `login.emailDomains` on a tenant `IdentityProvider` takes effect only after a platform admin approves the domain claim (`status.domains[].approved`).
+- `AccessBinding` subjects are qualified by identity provider: `{kind: User, idp: okta, subject: 00u1…}` or `{kind: Group, idp: okta, name: payments-devs}`. Email-only subjects are accepted only when the tenant has exactly one IdP with verified email.
+- A `ClusterIdentityProvider` lists the tenants allowed to use it; just-in-time provisioning into other tenants is refused.
+- Platform roles are bound with the cluster-scoped `ClusterAccessBinding`.
+- Refresh-token re-validation takes a per-session advisory lock so only one replica refreshes. SAML sessions are not re-validated; they rely on the absolute lifetime and SCIM.
+- Revocation: sessions and tokens are checked against Postgres at most 30 seconds stale (cache TTL), and a revocation publishes a notification that evicts the cache entry on every replica at once. "Immediately" in 14 means "within 30 seconds, normally under one".
+- An inbound ticket transition mapped to `risk_accepted` or `not_affected` creates a **request** that follows the approval workflow; it never sets the state directly.
+- `query-api` is the API for the UI and automation and therefore serves both queries and commands. The rule in 02 and ADR 0004 is restated as: `query-api` never parses reports and `ingest-gateway` never serves UI data. Reads that follow a write in the same session go to the primary; other reads may use a replica.
+
+## D28. Performance claims restated (closes findings 16, 17, 19)
+
+- One query SLO: **p95 under 500 ms at the API for a supported filter and sort combination on 5 million findings**; p99 under 1 s.
+- Supported combinations are a published matrix; each row has an index. Filters outside the matrix work but carry no latency promise.
+- `kev`, `epss_bucket`, `fix_available`, `hierarchy_path`, `environment_kind` and `owner_team_id` are denormalized onto `finding` and indexed with `tenant_id` first (using `btree_gin` for array columns). A partial index set covers active states.
+- Facet counts are exact up to 10 000 matches and shown as "10k+" above that; counts for the unfiltered view come from roll-ups.
+- Time-dependent risk factors are not stored in the score. "Open longer than 90 days" is evaluated at query time as a filter and badge, so nothing needs a nightly mass re-score. EPSS changes re-score a finding only when the vulnerability crosses a band boundary defined in the policy.
+- Ingestion target: "100 000 new SARIF results merged, enriched, scored and queryable in under 60 s" on the reference hardware in D17, and "rescan of 100 000 unchanged results in under 20 s". Both are goals to be validated by a Phase 0 spike, not established facts.
+- With D12, a rescan with no changes writes one `UPDATE` per occurrence (`last_seen`, run id) and no new rows, so storage grows with change, not with scan frequency. `raw` evidence larger than 8 KiB is stored in object storage and referenced.
+- The `search` vector is maintained asynchronously by the policy target, not in the merge transaction.
+
+## D29. Scope of the first release (closes finding 25)
+
+Adopted cuts for the MVP and v1.0; the roadmap in [09-roadmap.md](09-roadmap.md) reflects them.
+
+| Area | MVP / v1.0 | Later |
+|---|---|---|
+| Tenancy | Schema, RLS and API are multi-tenant from day one; the product runs with one tenant by default | Tenant self-service, quotas, MSSP |
+| CRDs | `Tenant`, `Application`, `ScanSource`, `Connector`, `SLAPolicy`, `RiskPolicy`, `IdentityProvider`, `AccessBinding`, `ReportIngest` | `Policy` (CEL automation), `Exception`, `DedupPolicy`, `RetentionPolicy`, `HierarchyNode`, `ScheduledScan`, `ClusterScanSource`. `ClusterFeedMirror` and `IntegrationPackage` (mappings, declarative connectors, WebAssembly parsers) are inside v1.0; see [19](19-integration-sdk.md) |
+| Deployment | monolithic and simple-scalable | distributed with KEDA, NATS, Valkey, MCP |
+| Dedup | per-tool fingerprints, correlation groups for display | merge across tools, re-key tooling UI |
+| Automation | built-in rules: auto-close by rescan, SLA, one gate rule, ticket on critical | generic CEL action engine with simulate |
+| Dependency-Track | pull, webhook trigger, triage import, FPF file | SBOM forwarding, write-back, policy violations, shim |
+| Kubernetes report watching | none | `collector` target |
+| Identity | OIDC, API tokens, CI federation, built-in roles | SAML, SCIM, custom roles |
+| Other | — | SSVC, posture-score formula tuning, scheduled PDF reports |

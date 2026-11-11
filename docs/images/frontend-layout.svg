@@ -1,0 +1,227 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 740" width="1200" height="740" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" role="img">
+<defs><marker id="a-line" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748B"/></marker><marker id="a-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0E9F9A"/></marker><marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4353D6"/></marker><marker id="a-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#D97706"/></marker><marker id="a-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#DC2626"/></marker></defs>
+<rect x="0.75" y="0.75" width="1198.5" height="738.5" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+<text x="40" y="42" font-size="22" font-weight="700" fill="#0F172A" text-anchor="start">Frontend layout: findings workbench</text>
+<text x="40" y="64" font-size="13" font-weight="400" fill="#475569" text-anchor="start">Three docked panes divided by rules. No cards, no shadows. The score bar in each row shows what the risk is made of.</text>
+<g font-family="'Red Hat Text', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif">
+<rect x="30" y="84" width="1140" height="630" rx="6" fill="#FFFFFF" stroke="#D5DAE3" stroke-width="1.2"/>
+<g transform="translate(46 94) scale(0.375)"><polygon points="18.00,7.75 46.00,7.75 54.63,22.70 47.00,22.70 47.00,36.70 39.40,36.70 39.40,22.70 24.60,22.70 24.60,36.70 17.00,36.70 17.00,22.70 9.37,22.70" fill="#19C3A6" stroke="#19C3A6" stroke-width="1.4" stroke-linejoin="round"/><polygon points="18.00,56.25 4.00,32.00 7.29,26.30 13.40,26.30 13.40,40.30 28.20,40.30 28.20,26.30 35.80,26.30 35.80,40.30 50.60,40.30 50.60,26.30 56.71,26.30 60.00,32.00 46.00,56.25" fill="#4353D6" stroke="#4353D6" stroke-width="1.4" stroke-linejoin="round"/></g>
+<text x="78" y="112" font-size="17" font-weight="800" fill="#1B2233" text-anchor="start" font-family="'Red Hat Display', 'Red Hat Text', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif">rampart</text>
+<text x="170" y="111" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">acme</text>
+<text x="206" y="111" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">/</text>
+<text x="218" y="111" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">Fintech</text>
+<rect x="420" y="95" width="380" height="26" rx="2" fill="#FFFFFF" stroke="#D5DAE3" stroke-width="1"/>
+<text x="432" y="112" font-size="12.5" font-weight="400" fill="#5B6679" text-anchor="start">Search findings, assets, CVEs</text>
+<rect x="760" y="99" width="32" height="18" rx="2" fill="#F3F5F8" stroke="#D5DAE3" stroke-width="1"/>
+<text x="776" y="112" font-size="11.5" font-weight="600" fill="#5B6679" text-anchor="middle">/</text>
+<rect x="1128" y="96" width="24" height="24" rx="2" fill="#1B2233" stroke="#1B2233" stroke-width="0"/>
+<text x="1140" y="112" font-size="10.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">SA</text>
+<line x1="30" y1="128" x2="1170" y2="128" stroke="#D5DAE3" stroke-width="1"/>
+<path d="M30 128H200V714H36a6 6 0 0 1-6-6Z" fill="#F3F5F8"/>
+<line x1="200" y1="128" x2="200" y2="714" stroke="#D5DAE3" stroke-width="1"/>
+<text x="50" y="158" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Overview</text>
+<rect x="30" y="170" width="3" height="26" rx="0" fill="#4353D6" stroke="#4353D6" stroke-width="0"/>
+<text x="50" y="188" font-size="13" font-weight="700" fill="#1B2233" text-anchor="start">Findings</text>
+<text x="50" y="218" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Applications</text>
+<text x="50" y="248" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Inventory</text>
+<text x="50" y="278" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Vulnerabilities</text>
+<text x="50" y="324" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Workflow</text>
+<text x="50" y="354" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Compliance</text>
+<text x="50" y="400" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Ingestion</text>
+<text x="50" y="430" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Policies</text>
+<text x="50" y="460" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Integrations</text>
+<text x="50" y="490" font-size="13" font-weight="400" fill="#5B6679" text-anchor="start">Administration</text>
+<text x="216" y="154" font-size="12.5" font-weight="500" fill="#1B2233" text-anchor="start" font-family="'Red Hat Mono', ui-monospace, Menlo, monospace">state:open  risk:critical,high  app:payments-api</text>
+<text x="746" y="154" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end">73 findings</text>
+<text x="828" y="154" font-size="12.5" font-weight="600" fill="#4353D6" text-anchor="end">Save view</text>
+<line x1="200" y1="170" x2="840" y2="170" stroke="#D5DAE3" stroke-width="1"/>
+<line x1="356" y1="170" x2="356" y2="714" stroke="#D5DAE3" stroke-width="1"/>
+<text x="216" y="196" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">Risk</text>
+<rect x="216" y="209" width="9" height="9" rx="1" fill="#4353D6" stroke="#4353D6" stroke-width="1"/>
+<text x="232" y="218" font-size="12" font-weight="600" fill="#1B2233" text-anchor="start">Critical</text>
+<text x="344" y="218" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">12</text>
+<rect x="216" y="230" width="9" height="9" rx="1" fill="#4353D6" stroke="#4353D6" stroke-width="1"/>
+<text x="232" y="239" font-size="12" font-weight="600" fill="#1B2233" text-anchor="start">High</text>
+<text x="344" y="239" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">61</text>
+<rect x="216" y="251" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="260" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Medium</text>
+<text x="344" y="260" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">240</text>
+<rect x="216" y="272" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="281" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Low</text>
+<text x="344" y="281" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">118</text>
+<text x="216" y="318" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">Detected by</text>
+<rect x="216" y="331" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="340" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Trivy</text>
+<text x="344" y="340" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">140</text>
+<rect x="216" y="352" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="361" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Semgrep</text>
+<text x="344" y="361" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">96</text>
+<rect x="216" y="373" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="382" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Grype</text>
+<text x="344" y="382" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">88</text>
+<rect x="216" y="394" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="403" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Gitleaks</text>
+<text x="344" y="403" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">9</text>
+<text x="216" y="440" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">Deadline</text>
+<rect x="216" y="453" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="462" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Overdue</text>
+<text x="344" y="462" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">7</text>
+<rect x="216" y="474" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="483" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Due this week</text>
+<text x="344" y="483" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">19</text>
+<text x="216" y="520" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">Signals</text>
+<rect x="216" y="533" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="542" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Known exploited</text>
+<text x="344" y="542" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">4</text>
+<rect x="216" y="554" width="9" height="9" rx="1" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="232" y="563" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Fix available</text>
+<text x="344" y="563" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">203</text>
+<text x="394" y="189" font-size="12" font-weight="600" fill="#5B6679" text-anchor="start">Score</text>
+<text x="496" y="189" font-size="12" font-weight="600" fill="#5B6679" text-anchor="start">Finding</text>
+<text x="702" y="189" font-size="12" font-weight="600" fill="#5B6679" text-anchor="start">Asset</text>
+<text x="828" y="189" font-size="12" font-weight="600" fill="#5B6679" text-anchor="end">Due</text>
+<line x1="356" y1="198" x2="840" y2="198" stroke="#D5DAE3" stroke-width="1"/>
+<rect x="357" y="199" width="483" height="45" rx="0" fill="#F3F5F8" stroke="#F3F5F8" stroke-width="0"/>
+<rect x="357" y="199" width="3" height="45" rx="0" fill="#4353D6" stroke="#4353D6" stroke-width="0"/>
+<line x1="368" y1="244" x2="840" y2="244" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,216.5 381.5,222 376,227.5 370.5,222" fill="#B4232A"/>
+<text x="394" y="227" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">950</text>
+<rect x="430" y="216" width="23.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="454.0" y="216" width="26.0" height="11" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<rect x="481.0" y="216" width="9.799999999999999" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<rect x="492.8" y="216" width="4.8" height="11" rx="0" fill="#FFFFFF" stroke="#19A38C" stroke-width="1.2"/>
+<text x="496" y="219" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">CVE-2024-3094 in xz-utils</text>
+<text x="496" y="235" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">liblzma 5.6.0, fixed in 5.6.1</text>
+<text x="702" y="227" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">api, prod</text>
+<text x="828" y="227" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">2 d left</text>
+<line x1="368" y1="290" x2="840" y2="290" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,262.5 381.5,268 376,273.5 370.5,268" fill="#B4232A"/>
+<text x="394" y="273" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">905</text>
+<rect x="430" y="262" width="35.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="466.0" y="262" width="14.0" height="11" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<rect x="481.0" y="262" width="2.3" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="265" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">AWS access key committed</text>
+<text x="496" y="281" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">config/deploy.env, line 14</text>
+<text x="702" y="273" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">payments-api</text>
+<text x="828" y="273" font-size="12" font-weight="700" fill="#B4232A" text-anchor="end">3 d over</text>
+<line x1="368" y1="336" x2="840" y2="336" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,308.5 381.5,314 376,319.5 370.5,314" fill="#B4232A"/>
+<text x="394" y="319" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">860</text>
+<rect x="430" y="308" width="35.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="466.0" y="308" width="14.6" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="311" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">SQL injection in OrderRepo</text>
+<text x="496" y="327" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">src/orders/repo.go</text>
+<text x="702" y="319" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">payments-api</text>
+<text x="828" y="319" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">5 d left</text>
+<line x1="368" y1="382" x2="840" y2="382" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,355 381.5,364.5 370.5,364.5" fill="#D9622B"/>
+<text x="394" y="365" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">790</text>
+<rect x="430" y="354" width="23.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="454.0" y="354" width="11.6" height="11" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<rect x="466.6" y="354" width="9.799999999999999" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="357" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">CVE-2023-44487 in x/net</text>
+<text x="496" y="373" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">HTTP/2 rapid reset</text>
+<text x="702" y="365" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">gateway, prod</text>
+<text x="828" y="365" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">9 d left</text>
+<line x1="368" y1="428" x2="840" y2="428" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,401 381.5,410.5 370.5,410.5" fill="#D9622B"/>
+<text x="394" y="411" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">720</text>
+<rect x="430" y="400" width="23.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="454.0" y="400" width="18.2" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="403" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">S3 bucket is not encrypted</text>
+<text x="496" y="419" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">infra/prod/storage.tf</text>
+<text x="702" y="411" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">infra</text>
+<text x="828" y="411" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">12 d left</text>
+<line x1="368" y1="474" x2="840" y2="474" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,447 381.5,456.5 370.5,456.5" fill="#D9622B"/>
+<text x="394" y="457" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">690</text>
+<rect x="430" y="446" width="23.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="454.0" y="446" width="16.4" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="449" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">Container runs as root</text>
+<text x="496" y="465" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">deploy/worker.yaml</text>
+<text x="702" y="457" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">worker, prod</text>
+<text x="828" y="457" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">14 d left</text>
+<line x1="368" y1="520" x2="840" y2="520" stroke="#E6E9EF" stroke-width="1"/>
+<polygon points="376,493 381.5,502.5 370.5,502.5" fill="#D9622B"/>
+<text x="394" y="503" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">640</text>
+<rect x="430" y="492" width="23.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="454.0" y="492" width="13.399999999999999" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="495" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">Email change has no CSRF check</text>
+<text x="496" y="511" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">POST /account/email</text>
+<text x="702" y="503" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">web</text>
+<text x="828" y="503" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">21 d left</text>
+<line x1="368" y1="566" x2="840" y2="566" stroke="#E6E9EF" stroke-width="1"/>
+<rect x="371.5" y="539.5" width="9" height="9" rx="0" fill="#C99A1A" stroke="#C99A1A" stroke-width="0"/>
+<text x="394" y="549" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">410</text>
+<rect x="430" y="538" width="11.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="442.0" y="538" width="2.5999999999999996" height="11" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<rect x="445.6" y="538" width="8.0" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="541" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">lodash 4.17.20 is outdated</text>
+<text x="496" y="557" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">package-lock.json</text>
+<text x="702" y="549" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">web</text>
+<text x="828" y="549" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">60 d left</text>
+<line x1="368" y1="612" x2="840" y2="612" stroke="#E6E9EF" stroke-width="1"/>
+<rect x="371.5" y="585.5" width="9" height="9" rx="0" fill="#C99A1A" stroke="#C99A1A" stroke-width="0"/>
+<text x="394" y="595" font-size="14" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">380</text>
+<rect x="430" y="584" width="11.0" height="11" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="442.0" y="584" width="9.799999999999999" height="11" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="496" y="587" font-size="13" font-weight="600" fill="#1B2233" text-anchor="start">Stack traces shown to users</text>
+<text x="496" y="603" font-size="11.5" font-weight="400" fill="#5B6679" text-anchor="start">GET /api/orders</text>
+<text x="702" y="595" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">api, staging</text>
+<text x="828" y="595" font-size="12" font-weight="400" fill="#5B6679" text-anchor="end">75 d left</text>
+<line x1="356" y1="670" x2="840" y2="670" stroke="#D5DAE3" stroke-width="1"/>
+<text x="372" y="697" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">3 selected</text>
+<text x="462" y="697" font-size="12.5" font-weight="600" fill="#4353D6" text-anchor="start">Change state</text>
+<text x="572.0" y="697" font-size="12.5" font-weight="600" fill="#4353D6" text-anchor="start">Assign</text>
+<text x="640.0" y="697" font-size="12.5" font-weight="600" fill="#4353D6" text-anchor="start">Create ticket</text>
+<text x="757.0" y="697" font-size="12.5" font-weight="600" fill="#4353D6" text-anchor="start">Accept risk</text>
+<line x1="840" y1="128" x2="840" y2="714" stroke="#D5DAE3" stroke-width="1"/>
+<text x="860" y="158" font-size="16" font-weight="700" fill="#1B2233" text-anchor="start">CVE-2024-3094 in xz-utils</text>
+<text x="860" y="178" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Open, critical, due in 2 days. Owner: platform team.</text>
+<text x="860" y="226" font-size="30" font-weight="700" fill="#1B2233" style="font-variant-numeric:tabular-nums">950</text>
+<rect x="930" y="206" width="78.5" height="20" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<rect x="1010.0" y="206" width="88.5" height="20" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<rect x="1100.0" y="206" width="34.5" height="20" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<rect x="1138.0" y="206" width="16" height="20" rx="0" fill="#FFFFFF" stroke="#19A38C" stroke-width="1.5"/>
+<rect x="860" y="249" width="9" height="9" rx="0" fill="#55607A" stroke="#55607A" stroke-width="0"/>
+<text x="878" y="258" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">Scanner severity: high</text>
+<text x="1150" y="258" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">400</text>
+<rect x="860" y="272" width="9" height="9" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<text x="878" y="281" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">On the CISA exploited list</text>
+<text x="1150" y="281" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">300</text>
+<rect x="860" y="295" width="9" height="9" rx="0" fill="#B4232A" stroke="#B4232A" stroke-width="0"/>
+<text x="878" y="304" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">Likely to be exploited (EPSS 0.94)</text>
+<text x="1150" y="304" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">150</text>
+<rect x="860" y="318" width="9" height="9" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="878" y="327" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">Reachable from the internet</text>
+<text x="1150" y="327" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">100</text>
+<rect x="860" y="341" width="9" height="9" rx="0" fill="#D9622B" stroke="#D9622B" stroke-width="0"/>
+<text x="878" y="350" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">Handles card data</text>
+<text x="1150" y="350" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">80</text>
+<rect x="860" y="364" width="9" height="9" rx="0" fill="#FFFFFF" stroke="#19A38C" stroke-width="1.2"/>
+<text x="878" y="373" font-size="12.5" font-weight="400" fill="#1B2233" text-anchor="start">Behind a web application firewall</text>
+<text x="1150" y="373" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="end" style="font-variant-numeric:tabular-nums">−80</text>
+<line x1="860" y1="392" x2="1150" y2="392" stroke="#D5DAE3" stroke-width="1"/>
+<text x="860" y="420" font-size="12.5" font-weight="700" fill="#1B2233" text-anchor="start">Overview</text>
+<line x1="860" y1="427" x2="916" y2="427" stroke="#4353D6" stroke-width="2"/>
+<text x="931.2" y="420" font-size="12.5" font-weight="400" fill="#5B6679" text-anchor="start">Evidence</text>
+<text x="1002.4000000000001" y="420" font-size="12.5" font-weight="400" fill="#5B6679" text-anchor="start">Occurrences</text>
+<text x="1094.3000000000002" y="420" font-size="12.5" font-weight="400" fill="#5B6679" text-anchor="start">Activity</text>
+<text x="860" y="458" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Package</text>
+<text x="944" y="458" font-size="11.5" font-weight="400" fill="#1B2233" text-anchor="start" font-family="'Red Hat Mono', ui-monospace, Menlo, monospace">pkg:deb/debian/xz-utils@5.6.0</text>
+<text x="860" y="482" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Fixed in</text>
+<text x="944" y="482" font-size="11.5" font-weight="400" fill="#1B2233" text-anchor="start" font-family="'Red Hat Mono', ui-monospace, Menlo, monospace">5.6.1+really5.4.5</text>
+<text x="860" y="506" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Detected by</text>
+<text x="944" y="506" font-size="12" font-weight="400" fill="#1B2233" text-anchor="start">Trivy and Dependency-Track</text>
+<text x="860" y="530" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">Asset</text>
+<text x="944" y="530" font-size="11.5" font-weight="400" fill="#1B2233" text-anchor="start" font-family="'Red Hat Mono', ui-monospace, Menlo, monospace">ghcr.io/example/api</text>
+<text x="860" y="554" font-size="12" font-weight="400" fill="#5B6679" text-anchor="start">First seen</text>
+<text x="944" y="554" font-size="12" font-weight="400" fill="#1B2233" text-anchor="start">3 days ago</text>
+<rect x="860" y="664" width="110" height="32" rx="2" fill="#4353D6" stroke="#4353D6" stroke-width="0"/>
+<text x="915" y="685" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">Change state</text>
+<rect x="980" y="664" width="84" height="32" rx="2" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="1022" y="685" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="middle">Accept risk</text>
+<rect x="1074" y="664" width="76" height="32" rx="2" fill="#FFFFFF" stroke="#9AA4B5" stroke-width="1"/>
+<text x="1112" y="685" font-size="12.5" font-weight="600" fill="#1B2233" text-anchor="middle">New ticket</text>
+</g>
+</svg>

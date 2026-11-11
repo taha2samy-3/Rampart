@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" role="img">
+<defs><marker id="a-line" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748B"/></marker><marker id="a-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0E9F9A"/></marker><marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4353D6"/></marker><marker id="a-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#D97706"/></marker><marker id="a-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#DC2626"/></marker></defs>
+<rect x="0.75" y="0.75" width="1198.5" height="558.5" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+<text x="40" y="42" font-size="22" font-weight="700" fill="#0F172A" text-anchor="start">Deployment modes</text>
+<text x="40" y="64" font-size="13" font-weight="400" fill="#475569" text-anchor="start">The same image runs every mode. Helm value: mode = monolithic | simple-scalable | distributed.</text>
+<rect x="30" y="96" width="360" height="330" rx="12" fill="#E6FAF8" fill-opacity="0.35" stroke="#0E9F9A" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="44" y="118" font-size="13" font-weight="700" fill="#0B5E5B" text-anchor="start">monolithic   ·   -target=all</text>
+<rect x="60" y="150" width="300" height="200" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="210.0" y="220.0" font-size="16" font-weight="700" fill="#0B5E5B" text-anchor="middle">1 Deployment</text>
+<text x="210.0" y="238.0" font-size="13" font-weight="400" fill="#475569" text-anchor="middle">gateway · parser · enrich</text>
+<text x="210.0" y="256.0" font-size="13" font-weight="400" fill="#475569" text-anchor="middle">policy · notify · sync</text>
+<text x="210.0" y="274.0" font-size="13" font-weight="400" fill="#475569" text-anchor="middle">query-api · web-ui</text>
+<text x="210.0" y="292.0" font-size="13" font-weight="400" fill="#475569" text-anchor="middle">operator · scheduler</text>
+<text x="210" y="392" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">evaluation · small teams · single node</text>
+<rect x="420" y="96" width="360" height="330" rx="12" fill="#EEF0FF" fill-opacity="0.35" stroke="#4353D6" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="434" y="118" font-size="13" font-weight="700" fill="#2A3690" text-anchor="start">simple-scalable</text>
+<rect x="440" y="150" width="320" height="84" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="600.0" y="180.0" font-size="14" font-weight="700" fill="#0B5E5B" text-anchor="middle">write</text>
+<text x="600.0" y="197.0" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">gateway · parser · enrich</text>
+<text x="600.0" y="214.0" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">policy · notify · sync</text>
+<rect x="440" y="246" width="320" height="60" rx="10" fill="#EEF0FF" stroke="#4353D6" stroke-width="1.5"/>
+<text x="600.0" y="272.5" font-size="14" font-weight="700" fill="#2A3690" text-anchor="middle">read</text>
+<text x="600.0" y="289.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">query-api · web-ui</text>
+<rect x="440" y="318" width="320" height="50" rx="10" fill="#FEF3C7" stroke="#D97706" stroke-width="1.5"/>
+<text x="600.0" y="348.0" font-size="14" font-weight="700" fill="#8A4B04" text-anchor="middle">operator + scheduler</text>
+<text x="600" y="400" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">mid-size · independent read and write scaling</text>
+<rect x="810" y="96" width="360" height="330" rx="12" fill="#FEF3C7" fill-opacity="0.35" stroke="#D97706" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="824" y="118" font-size="13" font-weight="700" fill="#8A4B04" text-anchor="start">distributed</text>
+<rect x="830" y="150" width="100" height="42" rx="10" fill="#EEF0FF" stroke="#4353D6" stroke-width="1.5"/>
+<text x="880.0" y="175.0" font-size="12" font-weight="700" fill="#2A3690" text-anchor="middle">gateway</text>
+<rect x="940" y="150" width="100" height="42" rx="10" fill="#EEF0FF" stroke="#4353D6" stroke-width="1.5"/>
+<text x="990.0" y="175.0" font-size="12" font-weight="700" fill="#2A3690" text-anchor="middle">query-api</text>
+<rect x="1050" y="150" width="100" height="42" rx="10" fill="#EEF0FF" stroke="#4353D6" stroke-width="1.5"/>
+<text x="1100.0" y="175.0" font-size="12" font-weight="700" fill="#2A3690" text-anchor="middle">web-ui</text>
+<rect x="830" y="202" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="880.0" y="227.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">parser</text>
+<rect x="940" y="202" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="990.0" y="227.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">enrich</text>
+<rect x="1050" y="202" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="1100.0" y="227.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">policy</text>
+<rect x="830" y="254" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="880.0" y="279.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">notify</text>
+<rect x="940" y="254" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="990.0" y="279.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">sync</text>
+<rect x="1050" y="254" width="100" height="42" rx="10" fill="#E6FAF8" stroke="#0E9F9A" stroke-width="1.5"/>
+<text x="1100.0" y="279.0" font-size="12" font-weight="700" fill="#0B5E5B" text-anchor="middle">scheduler</text>
+<rect x="830" y="306" width="100" height="42" rx="10" fill="#FEF3C7" stroke="#D97706" stroke-width="1.5"/>
+<text x="880.0" y="331.0" font-size="12" font-weight="700" fill="#8A4B04" text-anchor="middle">operator</text>
+<text x="1050" y="334" font-size="12" font-weight="600" fill="#8A4B04" text-anchor="middle">KEDA per worker queue</text>
+<text x="990" y="400" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">large · multi-tenant · read replicas</text>
+<rect x="30" y="452" width="1140" height="74" rx="10" fill="#F1F5F9" stroke="#64748B" stroke-width="1.5"/>
+<text x="600.0" y="485.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Shared state: PostgreSQL + object storage</text>
+<text x="600.0" y="502.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">Targets are stateless, so switching modes needs no data migration.</text>
+</svg>

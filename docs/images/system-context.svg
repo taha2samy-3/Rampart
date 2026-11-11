@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 690" width="1200" height="690" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" role="img">
+<defs><marker id="a-line" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748B"/></marker><marker id="a-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0E9F9A"/></marker><marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4353D6"/></marker><marker id="a-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#D97706"/></marker><marker id="a-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#DC2626"/></marker></defs>
+<rect x="0.75" y="0.75" width="1198.5" height="688.5" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+<text x="40" y="42" font-size="22" font-weight="700" fill="#0F172A" text-anchor="start">System context</text>
+<text x="40" y="64" font-size="13" font-weight="400" fill="#475569" text-anchor="start">What Rampart connects to. It consumes scanner output; it does not scan.</text>
+<rect x="420" y="270" width="360" height="180" rx="10" fill="#2A3690" stroke="#1E2A5E" stroke-width="1.5"/>
+<text x="600.0" y="343.0" font-size="24" font-weight="700" fill="#FFFFFF" text-anchor="middle">Rampart</text>
+<text x="600.0" y="361.0" font-size="13" font-weight="400" fill="#DBE1FF" text-anchor="middle">ingest · deduplicate · correlate</text>
+<text x="600.0" y="379.0" font-size="13" font-weight="400" fill="#DBE1FF" text-anchor="middle">score risk · enforce SLA</text>
+<text x="600.0" y="397.0" font-size="13" font-weight="400" fill="#DBE1FF" text-anchor="middle">route remediation · report posture</text>
+<rect x="40" y="100" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="185.0" y="131.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">CI pipelines and scanners</text>
+<text x="185.0" y="148.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">SARIF · CycloneDX · native JSON</text>
+<polyline points="330,135 420,300" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="40" y="200" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="185.0" y="231.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Dependency-Track</text>
+<text x="185.0" y="248.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">SBOM analysis · SCA findings · triage</text>
+<polyline points="330,235 420,330" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)" marker-start="url(#a-line)"/>
+<rect x="40" y="300" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="185.0" y="331.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Kubernetes clusters</text>
+<text x="185.0" y="348.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">PolicyReport · Trivy Operator reports</text>
+<polyline points="330,335 420,360" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="40" y="400" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="185.0" y="431.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Vulnerability feeds</text>
+<text x="185.0" y="448.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">NVD · OSV · EPSS · KEV · CWE</text>
+<polyline points="330,435 420,390" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="40" y="500" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="185.0" y="531.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Identity provider</text>
+<text x="185.0" y="548.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">OIDC · SAML · SCIM</text>
+<polyline points="330,535 420,420" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="870" y="100" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="1015.0" y="131.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Jira · GitHub · GitLab</text>
+<text x="1015.0" y="148.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">tickets with two-way status sync</text>
+<polyline points="780,300 870,135" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)" marker-start="url(#a-line)"/>
+<rect x="870" y="200" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="1015.0" y="231.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Slack · Teams · email · webhooks</text>
+<text x="1015.0" y="248.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">notifications · CloudEvents</text>
+<polyline points="780,330 870,235" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="870" y="300" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="1015.0" y="331.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Analysts and developers</text>
+<text x="1015.0" y="348.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">web UI (static SPA)</text>
+<polyline points="780,360 870,335" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)" marker-start="url(#a-line)"/>
+<rect x="870" y="400" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="1015.0" y="431.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">CLI · CI gate · MCP clients</text>
+<text x="1015.0" y="448.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">REST API, OpenAPI 3.1</text>
+<polyline points="780,390 870,435" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)" marker-start="url(#a-line)"/>
+<rect x="870" y="500" width="290" height="70" rx="10" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+<text x="1015.0" y="531.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">SIEM and data lake</text>
+<text x="1015.0" y="548.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">OCSF export · audit stream</text>
+<polyline points="780,420 870,535" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+<rect x="360" y="590" width="480" height="70" rx="10" fill="#F1F5F9" stroke="#64748B" stroke-width="1.5"/>
+<text x="600.0" y="621.5" font-size="14" font-weight="700" fill="#1E293B" text-anchor="middle">Runs on Kubernetes</text>
+<text x="600.0" y="638.5" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">PostgreSQL (CloudNativePG) · object storage (S3 API) · CRDs + operator</text>
+<polyline points="600,450 600,590" fill="none" stroke="#64748B" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a-line)"/>
+</svg>

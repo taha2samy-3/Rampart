@@ -1,0 +1,41 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Run all quality checks (fmt, vet, lint, test)
+    cmds:
+      - task: check
+
+  check:
+    desc: Run formatting, vet, lint, and tests
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+
+  fmt:
+    desc: Check formatting
+    cmds:
+      - sh -c '[ -z "$(gofmt -l .)" ]'
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  test:
+    desc: Run unit tests with race detection
+    cmds:
+      - go test -v -race ./...
+
+  build:
+    desc: Build the single rampart binary
+    cmds:
+      - mkdir -p bin
+      - go build -v -o bin/rampart ./cmd/rampart
