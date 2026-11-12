@@ -1009,14 +1009,16 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 
 // applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
 const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
-	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at`
+	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, coalesce(hierarchy_path, '')`
 
 func scanApplication(row pgx.Row, app *domain.Application) error {
 	var owners, selectors []byte
+	var hPath string
 	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
-		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt); err != nil {
+		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt, &hPath); err != nil {
 		return err
 	}
+	app.HierarchyPath = hPath
 	if len(owners) > 0 {
 		_ = json.Unmarshal(owners, &app.Owners)
 	}
@@ -1041,11 +1043,12 @@ func (s *PostgresStore) CreateApplication(ctx context.Context, app *domain.Appli
 		}
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
-			                         data_classification, compensating_controls, lifecycle, version, created_at, managed_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, 'none')
+			                         data_classification, compensating_controls, lifecycle, version, created_at, managed_by,
+			                         hierarchy_path)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, 'none', $12)
 			ON CONFLICT (tenant_id, slug) DO NOTHING`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
-			nonNil(app.DataClassification), nonNil(app.CompensatingControls), app.Lifecycle, createdAt)
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), app.Lifecycle, createdAt, nonEmpty(app.HierarchyPath))
 		if err == nil && tag.RowsAffected() == 0 {
 			return ErrApplicationExists
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,6 +42,8 @@ type HandlerDeps struct {
 	Audit             AuditStore
 	LocalLimiter      *RateLimiter // default: 10 attempts per client address per minute
 
+	DeviceAuth *DeviceAuthManager
+
 	Product string
 	Version string
 	Logger  *slog.Logger
@@ -60,6 +63,9 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	if d.LocalLimiter == nil {
 		d.LocalLimiter = NewRateLimiter(10, time.Minute)
 	}
+	if d.DeviceAuth == nil && d.Authn != nil {
+		d.DeviceAuth = NewDeviceAuthManager(d.Authn.store)
+	}
 	return &Handlers{d}
 }
 
@@ -75,6 +81,12 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/me", h.me)
 	mux.HandleFunc("GET /api/v1/me/tenants", h.meTenants)
 	mux.HandleFunc("GET /api/v1/me/permissions", h.mePermissions)
+
+	// RFC 8628 OAuth 2.0 Device Authorization Grant (Phase 2, D8, D54)
+	mux.HandleFunc("POST /auth/device/code", h.deviceCode)
+	mux.HandleFunc("GET /auth/device", h.devicePage)
+	mux.HandleFunc("POST /auth/device/verify", h.deviceVerify)
+	mux.HandleFunc("POST /auth/device/token", h.deviceToken)
 }
 
 const problemBase = "https://rampart.aspm.dev/problems/"
@@ -487,4 +499,216 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+func (h *Handlers) deviceCode(w http.ResponseWriter, r *http.Request) {
+	if h.DeviceAuth == nil {
+		problem(w, r, http.StatusNotImplemented, "unsupported", "Device authorization is not configured", "")
+		return
+	}
+	clientID := r.FormValue("client_id")
+	scope := r.FormValue("scope")
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			ClientID string `json:"client_id"`
+			Scope    string `json:"scope"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.ClientID != "" {
+			clientID = body.ClientID
+		}
+		if body.Scope != "" {
+			scope = body.Scope
+		}
+	}
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	host := r.Host
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		host = fwd
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, host)
+	res, err := h.DeviceAuth.CreateDeviceCode(clientID, scope, baseURL)
+	if err != nil {
+		problem(w, r, http.StatusInternalServerError, "internal", "Failed to create device code", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *Handlers) currentUser(r *http.Request) *ContextUser {
+	if u, ok := FromContext(r.Context()); ok && u != nil {
+		return u
+	}
+	if h.Authn != nil {
+		if u, err := h.Authn.AuthenticateRequest(r); err == nil && u != nil {
+			return u
+		}
+	}
+	if h.Sessions != nil {
+		if p, err := h.Sessions.Principal(r); err == nil && p != nil {
+			return &ContextUser{
+				UserID:   p.Session.UserID,
+				Email:    p.Email,
+				Name:     p.Name,
+				TenantID: p.Session.TenantID,
+				Role:     p.Role,
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handlers) devicePage(w http.ResponseWriter, r *http.Request) {
+	user := h.currentUser(r)
+	if user == nil {
+		loginURL := "/auth/login?return_to=" + url.QueryEscape(r.URL.RequestURI())
+		http.Redirect(w, r, loginURL, http.StatusFound)
+		return
+	}
+
+	userCode := r.URL.Query().Get("user_code")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Authorize Rampart CLI</title>
+<style>
+body { font-family: sans-serif; max-width: 480px; margin: 40px auto; padding: 20px; line-height: 1.5; }
+input[type="text"] { width: 100%%; padding: 10px; font-size: 18px; margin: 10px 0; text-transform: uppercase; font-family: monospace; letter-spacing: 2px; box-sizing: border-box; }
+button { background: #0066cc; color: #fff; border: 0; padding: 12px 24px; font-size: 16px; border-radius: 4px; cursor: pointer; width: 100%%; }
+</style>
+</head>
+<body>
+<h2>Authorize Rampart CLI</h2>
+<p>Signed in as <strong>%s</strong></p>
+<form method="POST" action="/auth/device/verify">
+<label for="user_code">Enter user code:</label>
+<input type="text" id="user_code" name="user_code" value="%s" required autofocus placeholder="XXXX-XXXX" />
+<button type="submit">Authorize</button>
+</form>
+</body>
+</html>`, user.Email, userCode)
+}
+
+func (h *Handlers) deviceVerify(w http.ResponseWriter, r *http.Request) {
+	if h.DeviceAuth == nil {
+		problem(w, r, http.StatusNotImplemented, "unsupported", "Device authorization is not configured", "")
+		return
+	}
+	user := h.currentUser(r)
+	if user == nil {
+		problem(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required", "")
+		return
+	}
+
+	userCode := r.FormValue("user_code")
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			UserCode string `json:"user_code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.UserCode != "" {
+			userCode = body.UserCode
+		}
+	}
+
+	if err := h.DeviceAuth.VerifyUserCode(r.Context(), userCode, user); err != nil {
+		if errors.Is(err, ErrInvalidGrant) {
+			problem(w, r, http.StatusBadRequest, "invalid_grant", "Invalid or unknown user code", "")
+			return
+		}
+		if errors.Is(err, ErrExpiredToken) {
+			problem(w, r, http.StatusBadRequest, "expired_token", "User code has expired", "")
+			return
+		}
+		problem(w, r, http.StatusInternalServerError, "internal", "Verification failed", err.Error())
+		return
+	}
+
+	if strings.Contains(r.Header.Get("Accept"), "text/html") || r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Authorization Successful</title>
+<style>body { font-family: sans-serif; max-width: 480px; margin: 40px auto; padding: 20px; text-align: center; line-height: 1.5; }</style>
+</head>
+<body>
+<h2 style="color: #2e7d32;">Authorization Successful</h2>
+<p>You have approved Rampart CLI. You may now close this browser window and return to your terminal.</p>
+</body>
+</html>`)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "approved",
+		"message": "Device authorization successful. You can close this window.",
+	})
+}
+
+func (h *Handlers) deviceToken(w http.ResponseWriter, r *http.Request) {
+	if h.DeviceAuth == nil {
+		problem(w, r, http.StatusNotImplemented, "unsupported", "Device authorization is not configured", "")
+		return
+	}
+	grantType := r.FormValue("grant_type")
+	deviceCode := r.FormValue("device_code")
+	clientID := r.FormValue("client_id")
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			GrantType  string `json:"grant_type"`
+			DeviceCode string `json:"device_code"`
+			ClientID   string `json:"client_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.GrantType != "" {
+			grantType = body.GrantType
+		}
+		if body.DeviceCode != "" {
+			deviceCode = body.DeviceCode
+		}
+		if body.ClientID != "" {
+			clientID = body.ClientID
+		}
+	}
+
+	if grantType != "" && grantType != "urn:ietf:params:oauth:grant-type:device_code" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":             "unsupported_grant_type",
+			"error_description": "grant_type must be urn:ietf:params:oauth:grant-type:device_code",
+		})
+		return
+	}
+
+	res, err := h.DeviceAuth.PollToken(deviceCode, clientID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		var errCode, errDesc string
+		switch {
+		case errors.Is(err, ErrAuthorizationPending):
+			errCode = "authorization_pending"
+			errDesc = "The authorization request is still pending."
+		case errors.Is(err, ErrExpiredToken):
+			errCode = "expired_token"
+			errDesc = "The device code has expired."
+		case errors.Is(err, ErrAccessDenied):
+			errCode = "access_denied"
+			errDesc = "The authorization request was denied."
+		default:
+			errCode = "invalid_grant"
+			errDesc = "Invalid device code."
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":             errCode,
+			"error_description": errDesc,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
 }

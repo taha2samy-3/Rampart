@@ -616,6 +616,12 @@ type MemoryStore struct {
 	audits                []auth.AuditEvent
 	uploads               map[string]*domain.Upload
 	actionLedger          map[string]bool
+	bindings              map[uuid.UUID]memBinding
+}
+
+type memBinding struct {
+	TenantID uuid.UUID
+	Binding  domain.AccessBinding
 }
 
 // NewMemoryStore initializes a new MemoryStore.
@@ -644,7 +650,100 @@ func NewMemoryStore() *MemoryStore {
 		localAdmins:           make(map[string]*auth.LocalAdmin),
 		uploads:               make(map[string]*domain.Upload),
 		actionLedger:          make(map[string]bool),
+		bindings:              make(map[uuid.UUID]memBinding),
 	}
+}
+
+// UpsertAccessBinding gives subject the role on the application, hierarchy, or tenant.
+func (m *MemoryStore) UpsertAccessBinding(ctx context.Context, tenantID uuid.UUID, b *domain.AccessBinding) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if b.ID == uuid.Nil {
+		b.ID = domain.NewID()
+	}
+	if b.ManagedBy == "" {
+		b.ManagedBy = "api"
+	}
+	if b.SubjectKind == "" {
+		b.SubjectKind = "user"
+	}
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = time.Now().UTC()
+	}
+
+	for id, mb := range m.bindings {
+		if mb.TenantID == tenantID && strings.EqualFold(mb.Binding.Subject, b.Subject) {
+			match := false
+			if b.TenantScope && mb.Binding.TenantScope {
+				match = true
+			} else if b.HierarchyPath != "" && mb.Binding.HierarchyPath == b.HierarchyPath {
+				match = true
+			} else if b.ApplicationID != uuid.Nil && mb.Binding.ApplicationID == b.ApplicationID {
+				match = true
+			}
+			if match {
+				b.ID = id
+				m.bindings[id] = memBinding{TenantID: tenantID, Binding: *b}
+				return nil
+			}
+		}
+	}
+	m.bindings[b.ID] = memBinding{TenantID: tenantID, Binding: *b}
+	return nil
+}
+
+func (m *MemoryStore) ListAccessBindings(ctx context.Context, tenantID uuid.UUID, appID *uuid.UUID) ([]domain.AccessBinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []domain.AccessBinding{}
+	for _, mb := range m.bindings {
+		if mb.TenantID == tenantID {
+			if appID == nil || mb.Binding.ApplicationID == *appID {
+				out = append(out, mb.Binding)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStore) GetAccessBinding(ctx context.Context, tenantID, id uuid.UUID) (*domain.AccessBinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mb, ok := m.bindings[id]
+	if !ok || mb.TenantID != tenantID {
+		return nil, store.ErrNotFound
+	}
+	cp := mb.Binding
+	return &cp, nil
+}
+
+func (m *MemoryStore) DeleteAccessBinding(ctx context.Context, tenantID, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mb, ok := m.bindings[id]
+	if !ok || mb.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	delete(m.bindings, id)
+	return nil
+}
+
+func (m *MemoryStore) BindingsFor(ctx context.Context, tenantID uuid.UUID, subjects []string) ([]domain.AccessBinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []domain.AccessBinding{}
+	for _, mb := range m.bindings {
+		if mb.TenantID == tenantID {
+			for _, s := range subjects {
+				if strings.EqualFold(mb.Binding.Subject, s) {
+					out = append(out, mb.Binding)
+					break
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // CheckScopeOrdering checks whether the incoming scanFinished time is older than the last applied scan for this scope (D13 line 204).

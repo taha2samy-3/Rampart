@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,25 +93,132 @@ func runLogin(args []string) error {
 		return err
 	}
 
-	if *token == "" {
-		return fmt.Errorf("login: --token is required in Phase 1 (D8, D11)")
+	if *token != "" {
+		return saveCredentials(*server, *token)
 	}
 
-	// In a real CLI, store in ~/.rampart/config.json
-	homeDir, _ := os.UserHomeDir()
+	// RFC 8628 Device Authorization Flow (Phase 2, D8, D54)
+	return runDeviceLogin(*server)
+}
+
+func saveCredentials(server, token string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("login: failed to locate home directory: %w", err)
+	}
 	cfgDir := filepath.Join(homeDir, ".rampart")
 	_ = os.MkdirAll(cfgDir, 0700)
 	cfgPath := filepath.Join(cfgDir, "credentials.json")
 
 	creds := map[string]string{
-		"server": *server,
-		"token":  *token,
+		"server": server,
+		"token":  token,
 	}
 	data, _ := json.MarshalIndent(creds, "", "  ")
-	_ = os.WriteFile(cfgPath, data, 0600)
+	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
+		return fmt.Errorf("login: failed to write credentials: %w", err)
+	}
 
-	fmt.Printf("Successfully logged into Rampart server at %s\n", *server)
+	fmt.Printf("Successfully logged into Rampart server at %s\n", server)
 	return nil
+}
+
+func runDeviceLogin(server string) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	codeURL := strings.TrimRight(server, "/") + "/auth/device/code"
+
+	reqBody, _ := json.Marshal(map[string]string{
+		"client_id": "rampart-cli",
+		"scope":     "ingest read triage admin",
+	})
+	resp, err := client.Post(codeURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("device login: failed to request code: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("device login failed (%d): %s", resp.StatusCode, string(b))
+	}
+
+	var codeResp struct {
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURI         string `json:"verification_uri"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
+		ExpiresIn               int    `json:"expires_in"`
+		Interval                int    `json:"interval"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&codeResp); err != nil {
+		return fmt.Errorf("device login: failed to decode code response: %w", err)
+	}
+
+	interval := codeResp.Interval
+	if interval <= 0 {
+		interval = 2
+	}
+	expiresIn := codeResp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 900
+	}
+
+	fmt.Printf("\nTo log in to Rampart, visit:\n  %s\n", codeResp.VerificationURIComplete)
+	fmt.Printf("Or visit %s and enter code: %s\n\n", codeResp.VerificationURI, codeResp.UserCode)
+	fmt.Println("Waiting for authorization...")
+
+	tokenURL := strings.TrimRight(server, "/") + "/auth/device/token"
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Duration(interval) * time.Second)
+
+		form := url.Values{
+			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+			"device_code": {codeResp.DeviceCode},
+			"client_id":   {"rampart-cli"},
+		}
+		tresp, err := client.PostForm(tokenURL, form)
+		if err != nil {
+			continue
+		}
+
+		bodyBytes, _ := io.ReadAll(tresp.Body)
+		_ = tresp.Body.Close()
+
+		if tresp.StatusCode == http.StatusOK {
+			var tokenResp struct {
+				AccessToken string `json:"access_token"`
+				TokenType   string `json:"token_type"`
+			}
+			if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
+				return fmt.Errorf("device login: failed to parse token: %w", err)
+			}
+			return saveCredentials(server, tokenResp.AccessToken)
+		}
+
+		var errResp struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		_ = json.Unmarshal(bodyBytes, &errResp)
+
+		switch errResp.Error {
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 2
+			continue
+		case "access_denied":
+			return errors.New("device login: authorization denied by user")
+		case "expired_token":
+			return errors.New("device login: authorization expired")
+		default:
+			return fmt.Errorf("device login error: %s (%s)", errResp.Error, errResp.ErrorDescription)
+		}
+	}
+
+	return errors.New("device login: timed out waiting for authorization")
 }
 
 func runUpload(args []string) error {

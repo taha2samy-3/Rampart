@@ -24,11 +24,11 @@ type AccessBindings interface {
 	BindingsFor(ctx context.Context, tenantID uuid.UUID, subjects []string) ([]domain.AccessBinding, error)
 }
 
-const bindingCols = `b.id, b.subject, b.role, b.application_id, coalesce(a.name, ''), b.managed_by, b.created_by, b.created_at`
+const bindingCols = `b.id, b.subject, b.role, coalesce(b.application_id, '00000000-0000-0000-0000-000000000000'::uuid), coalesce(a.name, ''), b.managed_by, b.created_by, b.created_at, coalesce(b.hierarchy_path, ''), b.tenant_scope, b.subject_kind, b.idp`
 
 func scanBinding(row pgx.Row) (domain.AccessBinding, error) {
 	var b domain.AccessBinding
-	err := row.Scan(&b.ID, &b.Subject, &b.Role, &b.ApplicationID, &b.ApplicationName, &b.ManagedBy, &b.CreatedBy, &b.CreatedAt)
+	err := row.Scan(&b.ID, &b.Subject, &b.Role, &b.ApplicationID, &b.ApplicationName, &b.ManagedBy, &b.CreatedBy, &b.CreatedAt, &b.HierarchyPath, &b.TenantScope, &b.SubjectKind, &b.IdP)
 	return b, err
 }
 
@@ -42,11 +42,30 @@ func (s *PostgresStore) UpsertAccessBinding(ctx context.Context, tenantID uuid.U
 	if b.ManagedBy == "" {
 		b.ManagedBy = "api"
 	}
+	if b.SubjectKind == "" {
+		b.SubjectKind = "user"
+	}
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `INSERT INTO access_binding (id, tenant_id, subject, role, application_id, managed_by, created_by, created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-			ON CONFLICT (tenant_id, lower(subject), application_id) DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by
-			RETURNING id`, b.ID, tenantID, b.Subject, string(b.Role), b.ApplicationID, b.ManagedBy, b.CreatedBy, b.CreatedAt).Scan(&b.ID)
+		var err error
+		if b.TenantScope {
+			err = tx.QueryRow(ctx, `INSERT INTO access_binding (id, tenant_id, subject, role, application_id, managed_by, created_by, created_at, tenant_scope, subject_kind, idp)
+				VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,TRUE,$8,$9)
+				ON CONFLICT (tenant_id, lower(subject)) WHERE tenant_scope = TRUE
+				DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by
+				RETURNING id`, b.ID, tenantID, b.Subject, string(b.Role), b.ManagedBy, b.CreatedBy, b.CreatedAt, b.SubjectKind, b.IdP).Scan(&b.ID)
+		} else if b.HierarchyPath != "" {
+			err = tx.QueryRow(ctx, `INSERT INTO access_binding (id, tenant_id, subject, role, application_id, managed_by, created_by, created_at, hierarchy_path, subject_kind, idp)
+				VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10)
+				ON CONFLICT (tenant_id, lower(subject), hierarchy_path) WHERE hierarchy_path IS NOT NULL
+				DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by
+				RETURNING id`, b.ID, tenantID, b.Subject, string(b.Role), b.ManagedBy, b.CreatedBy, b.CreatedAt, b.HierarchyPath, b.SubjectKind, b.IdP).Scan(&b.ID)
+		} else {
+			err = tx.QueryRow(ctx, `INSERT INTO access_binding (id, tenant_id, subject, role, application_id, managed_by, created_by, created_at, subject_kind, idp)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+				ON CONFLICT (tenant_id, lower(subject), application_id) WHERE application_id IS NOT NULL
+				DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by
+				RETURNING id`, b.ID, tenantID, b.Subject, string(b.Role), b.ApplicationID, b.ManagedBy, b.CreatedBy, b.CreatedAt, b.SubjectKind, b.IdP).Scan(&b.ID)
+		}
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.Code == "23503" { // foreign key: the application is not there
 			return ErrNotFound

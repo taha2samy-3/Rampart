@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/risk"
 )
@@ -99,6 +100,10 @@ func NewApplier(store ConfigStore) *Applier {
 }
 
 // ApplyDocument parses and reconciles a single JSON/YAML resource definition.
+type accessBindingStore interface {
+	UpsertAccessBinding(ctx context.Context, tenantID uuid.UUID, b *domain.AccessBinding) error
+}
+
 func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error) {
 	var generic map[string]any
 	if err := yaml.Unmarshal(raw, &generic); err != nil {
@@ -256,6 +261,158 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			return "", err
 		}
 		return fmt.Sprintf("scansource.rampart.aspm.dev/%s configured (id=%s)", header.Metadata.Name, id), nil
+
+	case "accessbinding":
+		var spec struct {
+			Role     string `json:"role"`
+			Subjects []struct {
+				Kind    string `json:"kind"`
+				IDP     string `json:"idp"`
+				Name    string `json:"name"`
+				Subject string `json:"subject"`
+			} `json:"subjects"`
+			Scope struct {
+				Tenant       bool     `json:"tenant"`
+				Hierarchy    []string `json:"hierarchy"`
+				Applications []string `json:"applications"`
+			} `json:"scope"`
+		}
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: accessbinding %q: %w", header.Metadata.Name, err)
+		}
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		bs, ok := a.store.(accessBindingStore)
+		if !ok {
+			return "", fmt.Errorf("apply: store does not support access bindings")
+		}
+		role, rok := auth.ParseRole(spec.Role)
+		if !rok {
+			return "", fmt.Errorf("apply: unknown role %q", spec.Role)
+		}
+
+		for _, sub := range spec.Subjects {
+			subject := sub.Subject
+			if subject == "" {
+				subject = sub.Name
+			}
+			if subject == "" {
+				continue
+			}
+
+			if spec.Scope.Tenant {
+				b := &domain.AccessBinding{
+					Subject:     subject,
+					SubjectKind: strings.ToLower(sub.Kind),
+					IdP:         sub.IDP,
+					Role:        string(role),
+					TenantScope: true,
+					ManagedBy:   "k8s",
+				}
+				if err := bs.UpsertAccessBinding(ctx, tenant.ID, b); err != nil {
+					return "", err
+				}
+			}
+			for _, h := range spec.Scope.Hierarchy {
+				b := &domain.AccessBinding{
+					Subject:       subject,
+					SubjectKind:   strings.ToLower(sub.Kind),
+					IdP:           sub.IDP,
+					Role:          string(role),
+					HierarchyPath: h,
+					ManagedBy:     "k8s",
+				}
+				if err := bs.UpsertAccessBinding(ctx, tenant.ID, b); err != nil {
+					return "", err
+				}
+			}
+			for _, appSlug := range spec.Scope.Applications {
+				app, err := a.store.GetApplicationBySlug(ctx, tenant.ID, appSlug)
+				if err != nil || app == nil {
+					return "", fmt.Errorf("apply: application %q not found", appSlug)
+				}
+				b := &domain.AccessBinding{
+					Subject:       subject,
+					SubjectKind:   strings.ToLower(sub.Kind),
+					IdP:           sub.IDP,
+					Role:          string(role),
+					ApplicationID: app.ID,
+					ManagedBy:     "k8s",
+				}
+				if err := bs.UpsertAccessBinding(ctx, tenant.ID, b); err != nil {
+					return "", err
+				}
+			}
+		}
+		return fmt.Sprintf("accessbinding.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "clusteraccessbinding":
+		var spec struct {
+			Role     string `json:"role"`
+			Subjects []struct {
+				Kind    string `json:"kind"`
+				IDP     string `json:"idp"`
+				Name    string `json:"name"`
+				Subject string `json:"subject"`
+			} `json:"subjects"`
+			Scope struct {
+				AllTenants bool     `json:"allTenants"`
+				Tenants    []string `json:"tenants"`
+			} `json:"scope"`
+		}
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: clusteraccessbinding %q: %w", header.Metadata.Name, err)
+		}
+		role, rok := auth.ParseRole(spec.Role)
+		if !rok {
+			return "", fmt.Errorf("apply: unknown role %q", spec.Role)
+		}
+		bs, ok := a.store.(accessBindingStore)
+		if !ok {
+			return "", fmt.Errorf("apply: store does not support access bindings")
+		}
+		var tenantIDs []uuid.UUID
+		if spec.Scope.AllTenants {
+			if lister, ok := a.store.(interface {
+				ListTenantIDs(ctx context.Context) ([]uuid.UUID, error)
+			}); ok {
+				tenantIDs, _ = lister.ListTenantIDs(ctx)
+			}
+		} else {
+			for _, tSlug := range spec.Scope.Tenants {
+				t, err := a.store.GetTenantBySlug(ctx, tSlug)
+				if err == nil && t != nil {
+					tenantIDs = append(tenantIDs, t.ID)
+				}
+			}
+		}
+		for _, tID := range tenantIDs {
+			for _, sub := range spec.Subjects {
+				subject := sub.Subject
+				if subject == "" {
+					subject = sub.Name
+				}
+				if subject == "" {
+					continue
+				}
+				b := &domain.AccessBinding{
+					Subject:     subject,
+					SubjectKind: strings.ToLower(sub.Kind),
+					IdP:         sub.IDP,
+					Role:        string(role),
+					TenantScope: true,
+					ManagedBy:   "k8s",
+				}
+				_ = bs.UpsertAccessBinding(ctx, tID, b)
+			}
+		}
+		return fmt.Sprintf("clusteraccessbinding.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "identityprovider", "clusteridentityprovider":
+		return fmt.Sprintf("%s.rampart.aspm.dev/%s configured", lk, header.Metadata.Name), nil
 
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedKind, header.Kind)

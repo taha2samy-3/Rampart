@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
@@ -14,10 +15,12 @@ import (
 var errForbiddenApp = errors.New("your role does not allow this on that application")
 
 // roleScope is what a caller may do where: the tenant role is the floor, and an access binding raises it for
-// one application (docs/16 D48).
+// one application, hierarchy subtree, or the tenant (docs/04, docs/07 section 2, docs/16 D8, D48).
 type roleScope struct {
-	tenant auth.Role
-	apps   map[uuid.UUID]auth.Role
+	tenant      auth.Role
+	apps        map[uuid.UUID]auth.Role
+	hierarchies map[string]auth.Role
+	appPath     func(uuid.UUID) string
 }
 
 func higher(a, b auth.Role) auth.Role {
@@ -28,7 +31,20 @@ func higher(a, b auth.Role) auth.Role {
 }
 
 // on is the caller's role on an application.
-func (s roleScope) on(app uuid.UUID) auth.Role { return higher(s.tenant, s.apps[app]) }
+func (s roleScope) on(app uuid.UUID) auth.Role {
+	best := higher(s.tenant, s.apps[app])
+	if len(s.hierarchies) > 0 && s.appPath != nil {
+		hPath := s.appPath(app)
+		if hPath != "" {
+			for prefix, r := range s.hierarchies {
+				if hPath == prefix || strings.HasPrefix(hPath, prefix+".") {
+					best = higher(best, r)
+				}
+			}
+		}
+	}
+	return best
+}
 
 // anywhere is the highest role the caller holds anywhere. An endpoint uses it as its door; the decision on a
 // particular application is checked where the application is known.
@@ -37,14 +53,43 @@ func (s roleScope) anywhere() auth.Role {
 	for _, r := range s.apps {
 		best = higher(best, r)
 	}
+	for _, r := range s.hierarchies {
+		best = higher(best, r)
+	}
 	return best
 }
 
 func (s roleScope) allows(app uuid.UUID, min auth.Role) bool { return s.on(app).Rank() >= min.Rank() }
 
+// allowsHierarchy checks if caller has min role on hierarchy path prefix.
+func (s roleScope) allowsHierarchy(hPath string, min auth.Role) bool {
+	if s.tenant.Rank() >= min.Rank() {
+		return true
+	}
+	for prefix, r := range s.hierarchies {
+		if r.Rank() >= min.Rank() && (hPath == prefix || strings.HasPrefix(hPath, prefix+".")) {
+			return true
+		}
+	}
+	return false
+}
+
 // scopeOf loads the bindings of the caller. A store without bindings (the in-memory one) gives the tenant role only.
 func (a *API) scopeOf(ctx context.Context, tenantID uuid.UUID, user *auth.ContextUser) roleScope {
-	sc := roleScope{tenant: user.Role, apps: map[uuid.UUID]auth.Role{}}
+	sc := roleScope{
+		tenant:      user.Role,
+		apps:        map[uuid.UUID]auth.Role{},
+		hierarchies: map[string]auth.Role{},
+	}
+	if a.store != nil {
+		sc.appPath = func(appID uuid.UUID) string {
+			app, err := a.store.GetApplication(ctx, tenantID, appID)
+			if err != nil || app == nil {
+				return ""
+			}
+			return app.HierarchyPath
+		}
+	}
 	bs, ok := a.store.(store.AccessBindings)
 	if !ok {
 		return sc
@@ -55,7 +100,13 @@ func (a *API) scopeOf(ctx context.Context, tenantID uuid.UUID, user *auth.Contex
 	}
 	for _, b := range list {
 		if r, ok := auth.ParseRole(b.Role); ok {
-			sc.apps[b.ApplicationID] = higher(sc.apps[b.ApplicationID], r)
+			if b.TenantScope {
+				sc.tenant = higher(sc.tenant, r)
+			} else if b.HierarchyPath != "" {
+				sc.hierarchies[b.HierarchyPath] = higher(sc.hierarchies[b.HierarchyPath], r)
+			} else if b.ApplicationID != uuid.Nil {
+				sc.apps[b.ApplicationID] = higher(sc.apps[b.ApplicationID], r)
+			}
 		}
 	}
 	return sc

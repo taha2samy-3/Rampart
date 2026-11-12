@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,48 @@ func TestCLILogin(t *testing.T) {
 	handled, err := handleCLI([]string{"login", "--token", "test-token-xyz"})
 	if err != nil || !handled {
 		t.Errorf("expected login command handled without error, got %v", err)
+	}
+}
+
+func TestCLIDeviceLogin(t *testing.T) {
+	tokenStore := auth.NewMemoryTokenStore()
+	authn := auth.NewAuthenticatorWithStore(tokenStore)
+	deviceAuth := auth.NewDeviceAuthManager(tokenStore)
+
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	user := &auth.ContextUser{
+		Subject:  "dev@example.com",
+		Email:    "dev@example.com",
+		TenantID: tenantID,
+		Role:     auth.RoleMaintainer,
+	}
+
+	h := auth.NewHandlers(auth.HandlerDeps{
+		Authn:      authn,
+		DeviceAuth: deviceAuth,
+	})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	tsAuto := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/device/code":
+			res, _ := deviceAuth.CreateDeviceCode("rampart-cli", "", "http://localhost")
+			// Simulate user approval in browser
+			_ = deviceAuth.VerifyUserCode(r.Context(), res.UserCode, user)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(res)
+		case "/auth/device/token":
+			mux.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer tsAuto.Close()
+
+	handled, err := handleCLI([]string{"login", "--server", tsAuto.URL})
+	if err != nil || !handled {
+		t.Fatalf("expected device login to succeed, got %v", err)
 	}
 }
 

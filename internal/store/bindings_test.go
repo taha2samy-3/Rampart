@@ -206,3 +206,195 @@ func TestAccessBindings_RoleOnOneApplication(t *testing.T) {
 		t.Fatalf("audit: %s", au)
 	}
 }
+
+func TestAccessBindings_HierarchyAndTenantScopes(t *testing.T) {
+	h := newUploadHarness(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// 1. Create applications under different hierarchy subtrees
+	checkout := &domain.Application{
+		ID:                  uuid.New(),
+		TenantID:            h.tenant,
+		Slug:                "checkout",
+		Name:                "Checkout",
+		HierarchyPath:       "fintech.payments.checkout",
+		BusinessCriticality: "high",
+		Lifecycle:           "production",
+		CreatedAt:           now,
+	}
+	if err := h.store.CreateApplication(ctx, checkout); err != nil {
+		t.Fatal(err)
+	}
+	chkAsset := &domain.Asset{
+		ID:            uuid.New(),
+		TenantID:      h.tenant,
+		ApplicationID: &checkout.ID,
+		Type:          domain.AssetRepository,
+		Key:           "github.com/acme/checkout",
+		DisplayName:   "checkout",
+		Active:        true,
+		FirstSeen:     now,
+		LastSeen:      now,
+	}
+	if err := h.store.CreateAsset(ctx, chkAsset); err != nil {
+		t.Fatal(err)
+	}
+
+	wallet := &domain.Application{
+		ID:                  uuid.New(),
+		TenantID:            h.tenant,
+		Slug:                "wallet",
+		Name:                "Wallet",
+		HierarchyPath:       "fintech.payments.wallet",
+		BusinessCriticality: "high",
+		Lifecycle:           "production",
+		CreatedAt:           now,
+	}
+	if err := h.store.CreateApplication(ctx, wallet); err != nil {
+		t.Fatal(err)
+	}
+	walAsset := &domain.Asset{
+		ID:            uuid.New(),
+		TenantID:      h.tenant,
+		ApplicationID: &wallet.ID,
+		Type:          domain.AssetRepository,
+		Key:           "github.com/acme/wallet",
+		DisplayName:   "wallet",
+		Active:        true,
+		FirstSeen:     now,
+		LastSeen:      now,
+	}
+	if err := h.store.CreateAsset(ctx, walAsset); err != nil {
+		t.Fatal(err)
+	}
+
+	logistics := &domain.Application{
+		ID:                  uuid.New(),
+		TenantID:            h.tenant,
+		Slug:                "logistics",
+		Name:                "Logistics",
+		HierarchyPath:       "ops.logistics",
+		BusinessCriticality: "medium",
+		Lifecycle:           "production",
+		CreatedAt:           now,
+	}
+	if err := h.store.CreateApplication(ctx, logistics); err != nil {
+		t.Fatal(err)
+	}
+	logAsset := &domain.Asset{
+		ID:            uuid.New(),
+		TenantID:      h.tenant,
+		ApplicationID: &logistics.ID,
+		Type:          domain.AssetRepository,
+		Key:           "github.com/acme/logistics",
+		DisplayName:   "logistics",
+		Active:        true,
+		FirstSeen:     now,
+		LastSeen:      now,
+	}
+	if err := h.store.CreateAsset(ctx, logAsset); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(key string, app *domain.Application, asset *domain.Asset) *domain.Finding {
+		return &domain.Finding{
+			ID:                uuid.New(),
+			TenantID:          h.tenant,
+			FindingKey:        key,
+			DedupScope:        app.Slug + ":main",
+			AssetID:           asset.ID,
+			ApplicationID:     app.ID,
+			Track:             "main",
+			RuleScannerFamily: "semgrep",
+			RuleID:            "rule.test",
+			Title:             key,
+			Category:          domain.CategorySAST,
+			Severity:          domain.SeverityHigh,
+			ToolSeverity:      "high",
+			State:             domain.StateOpen,
+			FirstSeen:         now,
+			LastSeen:          now,
+			OccurrenceCount:   1,
+			Version:           1,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+	}
+	fChk := mk("h-find-1", checkout, chkAsset)
+	fWal := mk("h-find-2", wallet, walAsset)
+	fLog := mk("h-find-3", logistics, logAsset)
+	if err := h.store.UpsertFindings(ctx, h.tenant, []*domain.Finding{fChk, fWal, fLog}); err != nil {
+		t.Fatal(err)
+	}
+
+	authn := auth.NewAuthenticatorWithStore(h.store)
+	api := query.NewAPIWithAuth(h.store, enrich.NewFeedStore(), authn)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+	srv := httptest.NewServer(api.Audited(mux))
+	defer srv.Close()
+
+	boss := h.tokenFor(auth.RoleAdmin, "boss@acme.example")
+	claire := h.tokenFor(auth.RoleViewer, "claire@acme.example")
+	dave := h.tokenFor(auth.RoleViewer, "dave@acme.example")
+
+	do := func(token, method, path, body string) (int, []byte) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, b
+	}
+	triage := func(token string, f *domain.Finding, state string) int {
+		code, _ := do(token, "PATCH", "/api/v1/findings/"+f.ID.String(), `{"state":"`+state+`"}`)
+		return code
+	}
+
+	// 2. Grant hierarchy scope on "fintech.payments" to claire
+	code, body := do(boss, "POST", "/api/v1/access-bindings", `{"subject":"claire@acme.example","role":"triager","hierarchyPath":"fintech.payments"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("bind hierarchy: %d %s", code, body)
+	}
+
+	// Claire can triage checkout and wallet (under fintech.payments)
+	if c := triage(claire, fChk, "under_investigation"); c != http.StatusOK {
+		t.Fatalf("claire on checkout: expected 200, got %d", c)
+	}
+	if c := triage(claire, fWal, "under_investigation"); c != http.StatusOK {
+		t.Fatalf("claire on wallet: expected 200, got %d", c)
+	}
+
+	// Claire cannot triage logistics (under ops.logistics)
+	if c := triage(claire, fLog, "under_investigation"); c != http.StatusForbidden {
+		t.Fatalf("claire on logistics: expected 403, got %d", c)
+	}
+
+	// Verify me/access exposes hierarchy bindings
+	_, meClaire := do(claire, "GET", "/api/v1/me/access", "")
+	if !strings.Contains(string(meClaire), "fintech.payments") || !strings.Contains(string(meClaire), `"triager"`) {
+		t.Fatalf("me/access for claire missing hierarchy info: %s", meClaire)
+	}
+
+	// 3. Grant tenant scope to dave
+	code, body = do(boss, "POST", "/api/v1/access-bindings", `{"subject":"dave@acme.example","role":"triager","tenantScope":true}`)
+	if code != http.StatusCreated {
+		t.Fatalf("bind tenant scope: %d %s", code, body)
+	}
+
+	// Dave has tenant-wide triager role: can triage checkout, wallet, and logistics
+	if c := triage(dave, fChk, "out_of_scope"); c != http.StatusOK {
+		t.Fatalf("dave on checkout: expected 200, got %d", c)
+	}
+	if c := triage(dave, fWal, "out_of_scope"); c != http.StatusOK {
+		t.Fatalf("dave on wallet: expected 200, got %d", c)
+	}
+	if c := triage(dave, fLog, "under_investigation"); c != http.StatusOK {
+		t.Fatalf("dave on logistics: expected 200, got %d", c)
+	}
+}
