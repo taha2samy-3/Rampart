@@ -19,18 +19,22 @@ $$ LANGUAGE SQL STABLE;
 -- +goose StatementBegin
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_owner') THEN
-        CREATE ROLE rampart_owner NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_app') THEN
-        CREATE ROLE rampart_app NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_system') THEN
-        CREATE ROLE rampart_system NOLOGIN BYPASSRLS;
-    END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_ro') THEN
-        CREATE ROLE rampart_ro NOLOGIN;
-    END IF;
+    BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_owner') THEN
+            CREATE ROLE rampart_owner NOLOGIN;
+        END IF;
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_app') THEN
+            CREATE ROLE rampart_app NOLOGIN;
+        END IF;
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_system') THEN
+            CREATE ROLE rampart_system NOLOGIN BYPASSRLS;
+        END IF;
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rampart_ro') THEN
+            CREATE ROLE rampart_ro NOLOGIN;
+        END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+        NULL;
+    END;
 END $$;
 -- +goose StatementEnd
 

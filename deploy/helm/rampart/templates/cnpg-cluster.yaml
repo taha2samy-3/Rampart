@@ -27,6 +27,8 @@ spec:
         bypassrls: true
         passwordSecret:
           name: {{ include "rampart.fullname" . }}-db-system
+      - name: rampart_ro
+        ensure: present
   storage:
     size: {{ .Values.database.cnpg.storage.size }}
   monitoring:
