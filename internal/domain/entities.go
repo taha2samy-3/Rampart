@@ -34,6 +34,7 @@ type Application struct {
 	ID                  uuid.UUID  `json:"id"`
 	TenantID            uuid.UUID  `json:"tenant_id"`
 	HierarchyNodeID     *uuid.UUID `json:"hierarchy_node_id,omitempty"`
+	HierarchyPath       string     `json:"hierarchy_path,omitempty"`
 	Slug                string     `json:"slug"`
 	Name                string     `json:"name"`
 	Description         string     `json:"description,omitempty"`

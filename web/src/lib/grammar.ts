@@ -28,7 +28,7 @@ export interface ParsedQuery {
 export const KNOWN_FIELDS = [
   'state', 'severity', 'risk', 'score', 'category', 'scanner', 'rule', 'cve', 'cwe', 'app', 'asset',
   'assettype', 'env', 'track', 'path', 'purl', 'tag', 'owner', 'kev', 'fix', 'sla', 'age', 'seen',
-  'source', 'run',
+  'source', 'run', 'hierarchy',
 ] as const;
 
 function splitOutsideQuotes(input: string, sep: (ch: string) => boolean): { parts: string[]; open: boolean } {

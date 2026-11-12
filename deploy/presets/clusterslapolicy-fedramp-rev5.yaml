@@ -1,0 +1,18 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSLAPolicy
+metadata:
+  name: fedramp-rev5
+spec:
+  # FedRAMP Rev 5: critical 30d, high 30d, medium 90d, low 180d
+  matrix:
+    critical: {critical: 30, high: 30, medium: 30, low: 30}
+    high:     {critical: 30, high: 30, medium: 30, low: 30}
+    medium:   {critical: 90, high: 90, medium: 90, low: 90}
+    low:      {critical: 180, high: 180, medium: 180, low: 180}
+  caps:
+    kevDueDate: true
+    maxDays: 180
+  startFrom: firstSeen
+  restartOnReactivation: true
+  pauseDuringRiskAcceptance: true
+

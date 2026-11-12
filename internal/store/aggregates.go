@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"rampart/internal/domain"
+	"rampart/internal/risk"
 )
 
 // Aggregator answers the questions of the Overview and Applications screens. PostgreSQL computes them from the
@@ -42,6 +43,7 @@ func scanSummary(row pgx.Row) (domain.AppSummary, error) {
 	}
 	s.Open["critical"], s.Open["high"], s.Open["medium"], s.Open["low"] = c, h, m, l
 	s.Exposure = c + h
+	s.PostureScore = risk.CalculatePostureScore(s.Open, 1, nil, 0)
 	return s, nil
 }
 
@@ -219,6 +221,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 			o.Gaps = append(o.Gaps, a)
 		}
 	}
+	o.PostureScore = risk.CalculatePostureScore(o.Open, len(apps), o.SLA.Adherence, len(o.Gaps))
 	return o, nil
 }
 

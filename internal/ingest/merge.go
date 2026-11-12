@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -1244,6 +1245,31 @@ func (m *MemoryStore) GetDispositionedScopeFindings(ctx context.Context, tenantI
 // GetRiskPolicySpec: the in-memory store has no policy objects.
 func (m *MemoryStore) GetRiskPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
 	return nil, false, nil
+}
+
+// EnsureHierarchyPath: memory store stub.
+func (m *MemoryStore) EnsureHierarchyPath(ctx context.Context, tenantID uuid.UUID, segments []string) (*domain.HierarchyNode, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path := strings.Join(segments, ".")
+	node := &domain.HierarchyNode{
+		ID: domain.NewID(), TenantID: tenantID, Name: segments[len(segments)-1],
+		Slug: segments[len(segments)-1], Path: path,
+	}
+	return node, nil
+}
+
+// ListHierarchyNodes: memory store stub.
+func (m *MemoryStore) ListHierarchyNodes(ctx context.Context, tenantID uuid.UUID) ([]*domain.HierarchyNode, error) {
+	return nil, nil
+}
+
+// HierarchyRollups: memory store stub.
+func (m *MemoryStore) HierarchyRollups(ctx context.Context, tenantID uuid.UUID) ([]domain.HierarchyRollup, error) {
+	return nil, nil
 }
 
 // GetSLAPolicySpec: the in-memory store has no policy objects.

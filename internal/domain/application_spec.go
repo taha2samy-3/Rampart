@@ -18,6 +18,7 @@ type ApplicationSpec struct {
 	DataClassification   []string  `json:"dataClassification,omitempty"`
 	CompensatingControls []string  `json:"compensatingControls,omitempty"`
 	Lifecycle            string    `json:"lifecycle,omitempty"`
+	Hierarchy            []string  `json:"hierarchy,omitempty"`
 	Selectors            Selectors `json:"selectors,omitempty"`
 }
 
@@ -115,9 +116,34 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 	if name == "" {
 		name = slug
 	}
+	var hierarchyPath string
+	if len(s.Hierarchy) > 0 {
+		var parts []string
+		for _, h := range s.Hierarchy {
+			sh := slugifySpec(h)
+			if sh != "" {
+				parts = append(parts, sh)
+			}
+		}
+		hierarchyPath = strings.Join(parts, ".")
+	}
 	return Application{
 		ID: id, TenantID: tenantID, Slug: slug, Name: name, BusinessCriticality: crit, InternetFacing: s.InternetFacing,
 		Owners: s.Owners, DataClassification: classes, CompensatingControls: controls, Lifecycle: lifecycle,
-		Selectors: Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
+		HierarchyPath: hierarchyPath,
+		Selectors:     Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
 	}, nil
+}
+
+func slugifySpec(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var out []rune
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			out = append(out, r)
+		} else if r == '-' || r == ' ' || r == '.' {
+			out = append(out, '_')
+		}
+	}
+	return strings.Trim(string(out), "_")
 }

@@ -1,0 +1,18 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSLAPolicy
+metadata:
+  name: pci-dss
+spec:
+  # PCI DSS 4.0.1: critical and high vulnerabilities remediated within 30 days
+  matrix:
+    critical: {critical: 30, high: 30, medium: 30, low: 30}
+    high:     {critical: 30, high: 30, medium: 30, low: 30}
+    medium:   {critical: 90, high: 90, medium: 90, low: 90}
+    low:      {critical: 90, high: 90, medium: 90, low: 90}
+  caps:
+    kevDueDate: true
+    maxDays: 30
+  startFrom: firstSeen
+  restartOnReactivation: true
+  pauseDuringRiskAcceptance: true
+

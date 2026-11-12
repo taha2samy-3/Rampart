@@ -1,0 +1,57 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterRiskPolicy
+metadata:
+  name: default
+spec:
+  base:
+    critical: 600
+    high: 400
+    medium: 200
+    low: 80
+    info: 10
+  bands:
+    critical: 800
+    high: 600
+    medium: 300
+  factors:
+    - name: KEV
+      when: "vuln.kev"
+      points: 300
+      group: "threat"
+      reason: "Vulnerability listed in CISA Known Exploited Vulnerabilities catalog"
+    - name: EPSS_HIGH
+      when: "vuln.epss >= 0.5"
+      points: 150
+      group: "threat"
+      reason: "EPSS exploitation probability is >= 50%"
+    - name: EPSS_MODERATE
+      when: "vuln.epss >= 0.1 && vuln.epss < 0.5"
+      points: 60
+      group: "threat"
+      reason: "EPSS exploitation probability is >= 10%"
+    - name: INTERNET_FACING
+      when: "app.internet_facing"
+      points: 100
+      group: "context"
+      reason: "Asset or application is internet-facing"
+    - name: SENSITIVE_DATA
+      when: 'app.data_classification.exists(d, d in ["pci", "pii", "phi"])'
+      points: 80
+      group: "context"
+      reason: "Application handles sensitive data (PCI, PII, or PHI)"
+    - name: APP_CRITICAL
+      when: 'app.criticality == "critical"'
+      points: 100
+      group: "context"
+      reason: "Application business criticality is rated Critical"
+    - name: PRODUCTION_ENV
+      when: 'finding.track in ["production", "prod"]'
+      points: 60
+      group: "context"
+      reason: "Finding detected in production environment"
+    - name: COMPENSATING_CONTROL
+      when: 'finding.category == "dast" && app.compensating_controls.exists(c, c in ["waf", "api_gateway"])'
+      points: -80
+      group: "reduction"
+      reason: "Application is protected by an inspecting reverse proxy or WAF"
+

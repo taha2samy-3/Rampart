@@ -154,6 +154,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/settings", a.handlePatchSettings)
 	mux.HandleFunc("GET /api/v1/applications", a.handleListApplications)
 	mux.HandleFunc("GET /api/v1/applications/{id}/summary", a.handleApplicationSummary)
+	mux.HandleFunc("GET /api/v1/hierarchy", a.handleListHierarchy)
 	mux.HandleFunc("GET /api/v1/dashboards/overview", a.handleOverview)
 	mux.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
 	mux.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)

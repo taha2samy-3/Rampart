@@ -106,6 +106,11 @@ type Store interface {
 	LookupApplication(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
 	CreateApplication(ctx context.Context, app *domain.Application) error
 
+	// Hierarchy (docs/01 B1, docs/03, docs/06)
+	EnsureHierarchyPath(ctx context.Context, tenantID uuid.UUID, segments []string) (*domain.HierarchyNode, error)
+	ListHierarchyNodes(ctx context.Context, tenantID uuid.UUID) ([]*domain.HierarchyNode, error)
+	HierarchyRollups(ctx context.Context, tenantID uuid.UUID) ([]domain.HierarchyRollup, error)
+
 	// Presigned uploads (D2, D9)
 	CreateUpload(ctx context.Context, u *domain.Upload) error
 	GetUpload(ctx context.Context, tenantID, id uuid.UUID) (*domain.Upload, error)

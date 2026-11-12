@@ -92,6 +92,21 @@ func TestBuildFindingQuery(t *testing.T) {
 	}
 }
 
+func TestBuildFindingQueryWithHierarchy(t *testing.T) {
+	tenantID := uuid.New()
+	q, _ := grammar.Parse("hierarchy:fintech")
+	sqlStr, args, err := BuildFindingQuery(tenantID, "id", &q, "-score", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlStr, "hierarchy_path = $") || !strings.Contains(sqlStr, "hierarchy_path LIKE $") {
+		t.Fatalf("expected hierarchy filter in sql, got: %s", sqlStr)
+	}
+	if len(args) != 3 { // tenant_id + 2 args for hierarchy
+		t.Fatalf("expected 3 args, got %d", len(args))
+	}
+}
+
 func TestBuildFindingQueryWithCursor(t *testing.T) {
 	tenantID := uuid.New()
 	targetID := uuid.New().String()

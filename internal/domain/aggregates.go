@@ -22,9 +22,36 @@ type AppSummary struct {
 	// RiskScore is the highest score of an active finding (docs/06: application risk is the max).
 	RiskScore int `json:"risk_score"`
 	// Exposure counts the active critical and high findings.
-	Exposure    int        `json:"exposure_count"`
-	SLABreached int        `json:"sla_breached"`
-	LastScan    *time.Time `json:"last_scan,omitempty"`
+	Exposure     int        `json:"exposure_count"`
+	SLABreached  int        `json:"sla_breached"`
+	PostureScore int        `json:"posture_score"`
+	LastScan     *time.Time `json:"last_scan,omitempty"`
+}
+
+// HierarchyNode is a business unit, portfolio or team node in an N-level organizational tree (docs/01 B1, docs/03).
+type HierarchyNode struct {
+	ID        uuid.UUID      `json:"id"`
+	TenantID  uuid.UUID      `json:"tenant_id"`
+	ParentID  *uuid.UUID     `json:"parent_id,omitempty"`
+	Name      string         `json:"name"`
+	Slug      string         `json:"slug"`
+	Path      string         `json:"path"`
+	Tags      []string       `json:"tags,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// HierarchyRollup aggregates findings and posture for a hierarchy node and all its descendant children (docs/06 section 2).
+type HierarchyRollup struct {
+	HierarchyNode
+	ChildrenCount int            `json:"children_count"`
+	AppCount      int            `json:"app_count"`
+	Open          map[string]int `json:"open"`
+	RiskScore     int            `json:"risk_score"`
+	Exposure      int            `json:"exposure_count"`
+	SLABreached   int            `json:"sla_breached"`
+	PostureScore  int            `json:"posture_score"`
 }
 
 // SLAStanding says how a set of findings did against their deadlines over the last 90 days: those resolved in time,
@@ -86,6 +113,7 @@ type Overview struct {
 	Overdue      []OverdueFinding `json:"overdue"`
 	OverdueTotal int              `json:"overdue_total"`
 	SLA          SLAStanding      `json:"sla"`
+	PostureScore int              `json:"posture_score"`
 	TopApps      []AppSummary     `json:"top_apps"`
 	// Gaps are applications that have not been scanned for 14 days, or never.
 	Gaps []AppSummary `json:"coverage_gaps"`

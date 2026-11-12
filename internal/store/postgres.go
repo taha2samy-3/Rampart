@@ -343,14 +343,16 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				content_hash, weak_fingerprint, first_seen, last_seen, reopened_count,
 				occurrence_count, version, created_at, updated_at, resolved_at, resolution, correlation_key,
 				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified,
-				lineage_key, justification, impact_statement
+				lineage_key, justification, impact_statement, hierarchy_path
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 				$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
 				$25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36,
-				$37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47
+				$37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47,
+				COALESCE((SELECT hierarchy_path FROM application WHERE id = $6), '')
 			)
 			ON CONFLICT (tenant_id, finding_key) DO UPDATE SET
+				hierarchy_path = COALESCE(finding.hierarchy_path, (SELECT hierarchy_path FROM application WHERE id = finding.application_id)),
 				last_seen = EXCLUDED.last_seen,
 				correlation_key = COALESCE(EXCLUDED.correlation_key, finding.correlation_key),
 				-- Findings older than D57 learn their lineage key on their next scan. Justification and impact are
@@ -1497,19 +1499,36 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
+		var hNodeID *uuid.UUID = app.HierarchyNodeID
+		hPath := app.HierarchyPath
+		if hPath != "" && hNodeID == nil {
+			segs := strings.Split(hPath, ".")
+			node, _ := s.EnsureHierarchyPath(ctx, app.TenantID, segs)
+			if node != nil {
+				hNodeID = &node.ID
+			}
+		}
+
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
-			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd')
+			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by,
+			                         hierarchy_node_id, hierarchy_path)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15)
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET
 				name = EXCLUDED.name, description = EXCLUDED.description,
 				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
 				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
 				owners = EXCLUDED.owners, selectors = EXCLUDED.selectors, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
+				hierarchy_node_id = COALESCE(EXCLUDED.hierarchy_node_id, application.hierarchy_node_id),
+				hierarchy_path = COALESCE(EXCLUDED.hierarchy_path, application.hierarchy_path),
 				version = application.version + 1`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
-			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt); err != nil {
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt,
+			hNodeID, nonEmpty(hPath)); err != nil {
 			return err
+		}
+		if hPath != "" {
+			_, _ = tx.Exec(ctx, `UPDATE finding SET hierarchy_path = $1 WHERE tenant_id = $2 AND application_id = $3`, hPath, app.TenantID, app.ID)
 		}
 		if !existed || !scoreContextChanged(prev, app) {
 			return nil

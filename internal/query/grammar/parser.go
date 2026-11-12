@@ -31,7 +31,7 @@ type Query struct {
 
 // KnownFields are the fields of D16, the same list as KNOWN_FIELDS in web/src/lib/grammar.ts.
 var KnownFields = []string{"state", "severity", "risk", "score", "category", "scanner", "rule", "cve", "cwe", "app", "asset",
-	"assettype", "env", "track", "path", "purl", "tag", "owner", "kev", "fix", "sla", "age", "seen", "source", "run"}
+	"assettype", "env", "track", "path", "purl", "tag", "owner", "kev", "fix", "sla", "age", "seen", "source", "run", "hierarchy"}
 
 func isKnownField(f string) bool {
 	for _, k := range KnownFields {

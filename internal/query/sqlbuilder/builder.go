@@ -327,6 +327,16 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 			args = append(args, strings.ToLower(v.Raw))
 			curIdx++
 		}
+	case "hierarchy":
+		for _, v := range term.Values {
+			prefix := v.Raw
+			if v.IsWildcard {
+				prefix = v.Prefix
+			}
+			orClauses = append(orClauses, fmt.Sprintf("(hierarchy_path = $%d OR hierarchy_path LIKE $%d)", curIdx, curIdx+1))
+			args = append(args, prefix, prefix+".%")
+			curIdx += 2
+		}
 	case "tag":
 		for _, v := range term.Values {
 			orClauses = append(orClauses, fmt.Sprintf("$%d = ANY(tags)", curIdx))

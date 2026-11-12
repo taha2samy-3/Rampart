@@ -1,0 +1,17 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSLAPolicy
+metadata:
+  name: cisa-bod
+spec:
+  # CISA Binding Operational Directive (BOD 22-01 & 19-02): critical 15d, high 30d
+  matrix:
+    critical: {critical: 15, high: 15, medium: 15, low: 15}
+    high:     {critical: 30, high: 30, medium: 30, low: 30}
+    medium:   {critical: 90, high: 90, medium: 90, low: 90}
+    low:      {critical: 180, high: 180, medium: 180, low: 180}
+  caps:
+    kevDueDate: true
+    maxDays: 180
+  startFrom: firstSeen
+  restartOnReactivation: true
+  pauseDuringRiskAcceptance: true

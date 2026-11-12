@@ -39,6 +39,22 @@ func (a *API) aggregator(w http.ResponseWriter) (store.Aggregator, bool) {
 	return ag, true
 }
 
+func (a *API) handleListHierarchy(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	rollups, err := a.store.HierarchyRollups(r.Context(), tenantID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to list hierarchy rollups")
+		return
+	}
+	if rollups == nil {
+		rollups = []domain.HierarchyRollup{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": rollups})
+}
+
 func (a *API) handleListApplications(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
 	if !ok {
