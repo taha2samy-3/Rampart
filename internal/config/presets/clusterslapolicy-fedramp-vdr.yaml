@@ -3,7 +3,11 @@ kind: ClusterSLAPolicy
 metadata:
   name: fedramp-vdr
 spec:
-  # FedRAMP Vulnerability Deviation Response (VDR): fast-track deadlines 4d / 14d / 30d / 90d
+  # UNVERIFIED: modeled on FedRAMP's incoming Vulnerability Detection and Response (VDR) standard
+  # (mandatory from 2026-12-07, replacing the legacy monthly-scan model), but the 4/14/30/90-day figures
+  # below could not be confirmed against an official FedRAMP document as of 2026-11-13 and may be
+  # Rampart's own accelerated profile rather than the real VDR schedule -- treat as provisional until
+  # sourced from fedramp.gov and cite the specific clause here.
   matrix:
     critical: {critical: 4,  high: 4,   medium: 4,  low: 4}
     high:     {critical: 14, high: 14,  medium: 14, low: 14}

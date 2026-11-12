@@ -52,21 +52,21 @@ What is built and tested, against the phases below. Everything marked built has 
 
 ## Left for the MVP
 
-Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the code on 2026-11-12 (D54), grouped under the Phase 2 bullet it belongs to and worked through **in the order of those bullets**: a bullet is finished before the next starts (D58). The MVP is done when this list is empty.
+Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the code on 2026-11-13 (D62–D68), grouped under the Phase 2 bullet it belongs to and worked through **in the order of those bullets**: a bullet is finished before the next starts (D58). The MVP is done when this list is empty.
 
 | Phase 2 bullet | Left | From |
 |---|---|---|
 | 1. Detection and disposition, triage, bulk, notes, timeline | — (D59) | |
 | 2. Risk acceptance; VEX | — (D60) | |
-| 3. `RiskPolicy` and `SLAPolicy` with cluster defaults; scoring; deadlines; aggregate read models | `RiskPolicy` with CEL factors, `ClusterRiskPolicy`, `ClusterSLAPolicy` with the presets of 06 section 4; hierarchy (tree, `application.hierarchy_node_id`, filter) and its roll-ups; posture score | D5, E1, B1, D8, G2 |
-| 4. Built-in automation | Ticket-on-critical placeholder (no connector yet) | Phase 2 |
-| 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | `AccessBinding` and `IdentityProvider` resources; hierarchy scopes on bindings (needs bullet 3's hierarchy); CLI device login (RFC 8628) | H3, D8 |
+| 3. `RiskPolicy` and `SLAPolicy` with cluster defaults; scoring; deadlines; aggregate read models | — (D62, D63: CEL factors, `ClusterRiskPolicy`/`ClusterSLAPolicy` with the 06 section 4 presets, hierarchy tree/filter/roll-ups and a posture score now actually normalized by asset count) | D5, E1, B1, D8, G2 |
+| 4. Built-in automation | Ticket-on-critical placeholder (no connector yet, as designed — D66) | Phase 2 |
+| 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | `IdentityProvider`/`ClusterIdentityProvider`: the CRDs exist but `rampart apply` is a no-op that still reports success, with no reconciler, no store and no login wiring behind them (D64 — an open gap, not a placeholder) | H3, D8 |
 | 6. Taxonomies and compliance views | — (OWASP Top 10 2025 built, D58) | |
 | 7. Native parsers; retention | — (D42, D53) | |
-| 8. Overview, application, risk acceptance and administration screens | A manual upload screen (open decision 4) | |
-| P0 rows outside the bullets | `rampart findings` (list, set state) in the CLI (G7); an OpenAPI document and the generated client (G6); the canonical JSON Schemas promised in Phase 0 (doc 19) | G6, G7, Phase 0 |
+| 8. Overview, application, risk acceptance and administration screens | — (D68: manual upload screen built; an inconsistency in its non-gateway fallback path is flagged for a decision, not blocking) | |
+| P0 rows outside the bullets | A generated OpenAPI client (G6) | G6, G7, Phase 0 |
 
-Moved out of the MVP by D54: CVSS vector parsing (D4, P1), CSAF VEX (A8, P1), the `HierarchyNode` resource (P2).
+`rampart findings` (list, set state), the OpenAPI document and the canonical JSON Schemas are done (D67). Moved out of the MVP by D54: CVSS vector parsing (D4, P1), CSAF VEX (A8, P1), the `HierarchyNode` resource (P2).
 
 ## Phase −1 — Decisions and spikes (week 1)
 

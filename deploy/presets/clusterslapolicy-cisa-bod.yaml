@@ -3,7 +3,9 @@ kind: ClusterSLAPolicy
 metadata:
   name: cisa-bod
 spec:
-  # CISA Binding Operational Directive (BOD 22-01 & 19-02): critical 15d, high 30d
+  # CISA BOD 19-02 (internet-accessible systems): critical 15d, high 30d remediation (the medium/low
+  # tiers below are Rampart's own extension, not mandated by 19-02). BOD 22-01's per-KEV-entry due date is
+  # enforced separately via caps.kevDueDate, which overrides with CISA's published date when it is earlier.
   matrix:
     critical: {critical: 15, high: 15, medium: 15, low: 15}
     high:     {critical: 30, high: 30, medium: 30, low: 30}

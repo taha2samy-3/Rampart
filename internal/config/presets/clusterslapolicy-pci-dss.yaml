@@ -3,7 +3,9 @@ kind: ClusterSLAPolicy
 metadata:
   name: pci-dss
 spec:
-  # PCI DSS 4.0.1: critical and high vulnerabilities remediated within 30 days
+  # PCI DSS v4.0.1 requirement 6.3.3: critical/high-risk vulnerabilities patched within 30 days of the
+  # patch's release (11.3.1 further requires a rescan after remediation). Medium/low tiers below are not
+  # separately mandated by 6.3.3 and are Rampart's own extension to fill out the matrix.
   matrix:
     critical: {critical: 30, high: 30, medium: 30, low: 30}
     high:     {critical: 30, high: 30, medium: 30, low: 30}
