@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"rampart/internal/auth"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
+	"rampart/internal/objectstore"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +21,8 @@ import (
 func TestGatewayUploadFlow(t *testing.T) {
 	queue := jobs.NewInMemJobQueue()
 	gw := ingest.NewGateway(queue)
+	objects := objectstore.NewMemory()
+	gw.SetObjectStore(objects)
 
 	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
 	authn := auth.NewAuthenticatorWithStore(gw.Store())
@@ -95,6 +99,17 @@ func TestGatewayUploadFlow(t *testing.T) {
 	if recConflict.Code != http.StatusConflict {
 		t.Errorf("expected 409 Conflict for reused idempotency key with different payload, got %d", recConflict.Code)
 	}
+
+	// 3a. Completing before the object arrived is refused (D9).
+	early, _ := json.Marshal(ingest.CompleteUploadRequest{SHA256: strings.Repeat("a", 64)})
+	reqEarly := httptest.NewRequest("POST", "/ingest/v1/uploads/"+createRes.UploadID+"/complete", bytes.NewReader(early))
+	reqEarly.Header.Set("Authorization", "Bearer "+token)
+	recEarly := httptest.NewRecorder()
+	mux.ServeHTTP(recEarly, reqEarly)
+	if recEarly.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 before the object is uploaded, got %d", recEarly.Code)
+	}
+	objects.Put(strings.TrimPrefix(createRes.PutURL, objects.Base), make([]byte, 1024))
 
 	// 3. Complete Upload
 	completeReq := ingest.CompleteUploadRequest{

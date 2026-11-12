@@ -426,4 +426,3 @@ func scanFinishedOf(c domain.UploadContext) time.Time {
 	}
 	return time.Now().UTC()
 }
-
