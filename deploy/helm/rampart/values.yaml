@@ -80,6 +80,11 @@ database:
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
+  # With seaweedfs.enabled=false: a Secret with the keys accessKey and secretKey. Credentials never go through values.
+  existingSecret: ""
+  # The address clients outside the cluster use to PUT reports (presigned URLs are signed for it).
+  # Empty means the in-cluster endpoint, which only works for clients inside the cluster.
+  externalEndpoint: ""
   region: "us-east-1"
   bucketRaw: "rampart-raw-reports"
   bucketExports: "rampart-exports"

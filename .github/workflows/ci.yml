@@ -79,13 +79,28 @@ jobs:
       # The owner URL. The tests derive the rampart_app and rampart_system URLs from it:
       # a superuser bypasses row-level security, so isolation is never tested as the owner.
       RAMPART_TEST_POSTGRES_URL: postgres://rampart_owner:rampart_password@127.0.0.1:5433/rampart?sslmode=disable
+      # SeaweedFS, the S3 API the presigned-upload tests use (started below).
+      RAMPART_TEST_S3_ENDPOINT: http://127.0.0.1:18333
+      RAMPART_TEST_S3_ACCESS_KEY: ci-access-key-0000001
+      RAMPART_TEST_S3_SECRET_KEY: ci-secret-key-000000000000000000000001
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
+      - name: Start SeaweedFS (S3 API)
+        run: |
+          docker run -d --name seaweedfs -p 127.0.0.1:18333:8333 \
+            -e AWS_ACCESS_KEY_ID="$RAMPART_TEST_S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$RAMPART_TEST_S3_SECRET_KEY" \
+            chrislusf/seaweedfs:4.53 server -dir=/data -s3 -ip.bind=0.0.0.0 -volume.max=100
+          for _ in $(seq 1 60); do
+            if (echo > /dev/tcp/127.0.0.1/18333) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs seaweedfs
+          exit 1
       - name: Race detector
-        run: go test -race -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ 2>&1 | tee /tmp/store.txt
+        run: go test -race -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ ./internal/objectstore/ 2>&1 | tee /tmp/store.txt
       - name: A skipped suite is a failure in CI
         run: "! grep -q -- '--- SKIP' /tmp/store.txt"
       - uses: actions/upload-artifact@v4
