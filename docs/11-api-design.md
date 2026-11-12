@@ -83,7 +83,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 |---|---|
 | `GET /vulnerabilities/{id}` | Canonical record with aliases, CVSS, EPSS, KEV, SSVC, references |
 | `GET /vulnerabilities/{id}/impact` | Applications and assets affected in this tenant |
-| `GET /taxonomies`, `GET /taxonomies/{id}/status` | Frameworks and per-control open findings |
+| `GET /taxonomies`, `GET /taxonomies/{id}/status` | Frameworks and per-control status; `?application=`, `?format=csv` (built, D52) |
 
 **Workflow**
 

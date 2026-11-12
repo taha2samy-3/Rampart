@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
 import { ApplicationRoute } from '@/routes/applications/ApplicationRoute';
+import { ComplianceRoute } from '@/routes/compliance/ComplianceRoute';
 import { AdministrationRoute } from '@/routes/administration/AdministrationRoute';
 import { ApplicationsRoute } from '@/routes/applications/ApplicationsRoute';
 import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/IngestionRoute';
@@ -148,7 +149,9 @@ const applicationRoute = createRoute({
 
 const administrationRoute = createRoute({ getParentRoute: () => appRoute, path: '/administration', component: AdministrationRoute });
 
-const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration']);
+const complianceRoute = createRoute({ getParentRoute: () => appRoute, path: '/compliance', component: ComplianceRoute });
+
+const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -161,7 +164,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   ...(import.meta.env.DEV ? [styleguideRoute] : []),
   tenantLoginRoute,
-  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, overviewRoute, applicationsRoute, applicationRoute, administrationRoute, ...placeholderRoutes]),
+  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, overviewRoute, applicationsRoute, applicationRoute, administrationRoute, complianceRoute, ...placeholderRoutes]),
 ]);
 
 export function makeRouter(history?: RouterHistory) {

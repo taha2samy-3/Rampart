@@ -46,6 +46,9 @@ export interface Scenario {
   sources?: { reported_by?: Reporter[]; also_reported_by?: CorrelatedRef[] } | 'error';
   /** Pages of GET /api/v1/audit; each call returns the next page. 'error' answers 500. */
   audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
+  /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
+  taxonomies?: { id: string; name: string; version: string }[];
+  taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error';
   /** GET /api/v1/me/access: roles on single applications (default none). */
   access?: Record<string, string>;
   /** The access bindings GET /api/v1/access-bindings returns; POST and DELETE are recorded in the calls. */
@@ -140,6 +143,16 @@ export function mockFetch(sc: Scenario): Calls {
       if (st === 409) return json({ type: 'https://rampart.aspm.dev/problems/conflict-version', title: 'The finding was changed by someone else.', status: 409, request_id: 'req_409' }, 409);
       if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
       return json(finding(1));
+    }
+    if (path === '/api/v1/taxonomies') {
+      const items = (sc.taxonomies ?? [{ id: 'owasp-top10-2021', name: 'OWASP Top 10', version: '2021' }]).map((f) => ({ source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10, ...f }));
+      return json({ items });
+    }
+    if (path.startsWith('/api/v1/taxonomies/') && path.endsWith('/status')) {
+      if (sc.taxonomyStatus === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      const id = path.split('/')[4] ?? '';
+      const body = sc.taxonomyStatus?.[id] ?? { status: [] };
+      return json({ id, name: id, version: '1', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: body.status.length, evaluated_at: '2026-11-12T10:00:00Z', window_days: 30, ...body });
     }
     if (path === '/api/v1/me/access') return json({ role: sc.role ?? 'triager', applications: sc.access ?? {} });
     if (path === '/api/v1/access-bindings') {

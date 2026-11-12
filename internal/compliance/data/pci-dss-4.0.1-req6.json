@@ -1,0 +1,16 @@
+{
+  "id": "pci-dss-4.0.1-req6",
+  "name": "PCI DSS, requirement 6 and 8.6.2",
+  "version": "4.0.1",
+  "source": "https://www.pcisecuritystandards.org/document_library/",
+  "kind": "category",
+  "note": "PCI DSS does not list weaknesses by CWE, so each requirement is assessed by the kind of scan that evidences it. A requirement is 'assessed' when such a scan ran in the last 30 days.",
+  "controls": [
+    {"id": "6.2.3", "name": "Bespoke and custom software is reviewed before release to find coding vulnerabilities", "categories": ["sast", "secret"]},
+    {"id": "6.2.4", "name": "Software engineering techniques prevent or mitigate common software attacks", "categories": ["sast", "dast"]},
+    {"id": "6.3.1", "name": "Security vulnerabilities are identified and managed", "categories": ["sca", "container", "sast", "dast"]},
+    {"id": "6.3.3", "name": "System components are protected from known vulnerabilities by installing security patches", "categories": ["sca", "container"]},
+    {"id": "6.4.1", "name": "Public-facing web applications are protected against attacks", "categories": ["dast"]},
+    {"id": "8.6.2", "name": "Passwords for application and system accounts are not hard coded in scripts, configuration files or source code", "categories": ["secret"]}
+  ]
+}

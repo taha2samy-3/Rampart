@@ -193,7 +193,7 @@ describe('findings route', () => {
 
   it('other sections say which phase ships them', async () => {
     mockFetch({ loggedIn: true, findings: [] });
-    renderApp('/compliance');
+    renderApp('/policies');
     expect(await screen.findByText(/ships in Phase 2/)).toBeInTheDocument();
   });
 

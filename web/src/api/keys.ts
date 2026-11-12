@@ -13,6 +13,8 @@ export const qk = {
   audit: (f: { actor?: string; action?: string }) => ['audit', f.actor ?? '', f.action ?? ''] as const,
   access: () => ['access'] as const,
   bindings: () => ['bindings'] as const,
+  taxonomies: () => ['taxonomies'] as const,
+  taxonomyStatus: (id: string, app: string) => ['taxonomies', 'status', id, app] as const,
   notifications: () => ['notifications'] as const,
   applications: {
     list: () => ['applications', 'list'] as const,

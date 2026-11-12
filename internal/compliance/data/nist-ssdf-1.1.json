@@ -1,0 +1,15 @@
+{
+  "id": "nist-ssdf-1.1",
+  "name": "NIST Secure Software Development Framework (SP 800-218)",
+  "version": "1.1",
+  "source": "https://csrc.nist.gov/pubs/sp/800/218/final",
+  "kind": "category",
+  "note": "Practices are assessed by the kind of scan that gives evidence for them, when one ran in the last 30 days.",
+  "controls": [
+    {"id": "PW.4", "name": "Reuse existing, well-secured software: third-party components are checked for known vulnerabilities", "categories": ["sca", "container"]},
+    {"id": "PW.7", "name": "Review and analyze human-readable code to identify vulnerabilities", "categories": ["sast", "secret"]},
+    {"id": "PW.8", "name": "Test executable code to identify vulnerabilities", "categories": ["dast"]},
+    {"id": "PW.9", "name": "Configure software to have secure settings by default", "categories": ["iac", "cspm", "compliance"]},
+    {"id": "RV.1", "name": "Identify and confirm vulnerabilities on an ongoing basis", "categories": ["sca", "container", "sast", "dast"]}
+  ]
+}

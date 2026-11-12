@@ -1,0 +1,15 @@
+{
+  "id": "iso27001-2022-a8",
+  "name": "ISO/IEC 27001, Annex A technology controls",
+  "version": "2022",
+  "source": "https://www.iso.org/standard/27001",
+  "kind": "category",
+  "note": "ISO 27001 asks for processes, not scan results. A control is assessed by the kind of scan that gives evidence for it, when one ran in the last 30 days; the evidence does not replace the process.",
+  "controls": [
+    {"id": "A.5.17", "name": "Authentication information is controlled (no credentials in code or configuration)", "categories": ["secret"]},
+    {"id": "A.8.8", "name": "Management of technical vulnerabilities", "categories": ["sca", "container", "dast"]},
+    {"id": "A.8.9", "name": "Configuration management", "categories": ["iac", "cspm", "compliance"]},
+    {"id": "A.8.28", "name": "Secure coding", "categories": ["sast", "secret"]},
+    {"id": "A.8.29", "name": "Security testing in development and acceptance", "categories": ["sast", "dast", "sca"]}
+  ]
+}

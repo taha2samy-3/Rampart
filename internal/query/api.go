@@ -156,6 +156,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
 	mux.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)
 	mux.HandleFunc("GET /api/v1/audit", a.handleListAudit)
+	mux.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
+	mux.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
 	mux.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
 	mux.HandleFunc("GET /api/v1/access-bindings", a.handleListBindings)
 	mux.HandleFunc("POST /api/v1/access-bindings", a.handleCreateBinding)

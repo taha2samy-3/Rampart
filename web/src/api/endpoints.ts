@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -141,3 +141,14 @@ export async function listBindings(signal?: AbortSignal): Promise<AccessBinding[
 }
 export const createBinding = (b: { subject: string; role: Role; applicationId: string }) => post<AccessBinding>('/api/v1/access-bindings', b);
 export const deleteBinding = (id: string) => del<null>(`/api/v1/access-bindings/${encodeURIComponent(id)}`);
+
+export async function listTaxonomies(signal?: AbortSignal): Promise<Taxonomy[]> {
+  const raw = await get<{ items?: Taxonomy[] | null }>('/api/v1/taxonomies', { signal });
+  return raw.items ?? [];
+}
+export async function getTaxonomyStatus(id: string, application: string | undefined, signal?: AbortSignal): Promise<TaxonomyStatus> {
+  const raw = await get<TaxonomyStatus & { status?: ControlStatus[] | null }>(`/api/v1/taxonomies/${encodeURIComponent(id)}/status`, { query: { application: application || undefined }, signal });
+  return { ...raw, status: raw.status ?? [] };
+}
+export const taxonomyCsvUrl = (id: string, application: string | undefined) =>
+  `/api/v1/taxonomies/${encodeURIComponent(id)}/status?format=csv${application ? `&application=${encodeURIComponent(application)}` : ''}`;

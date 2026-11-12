@@ -282,6 +282,22 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/me') return json(res, { user: { id: 'u-1', email: 'sara.ahmed@acme.example', name: 'Sara Ahmed' }, tenant });
     if (p === '/api/v1/me/tenants') return json(res, TENANTS);
     if (p === '/api/v1/me/permissions') return json(res, { role: 'admin', scopes: ['tenant'] });
+    if (p === '/api/v1/taxonomies') return json(res, { items: [
+      { id: 'owasp-top10-2021', name: 'OWASP Top 10', version: '2021', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10 },
+      { id: 'pci-dss-4.0.1-req6', name: 'PCI DSS, requirement 6 and 8.6.2', version: '4.0.1', source: 'https://www.pcisecuritystandards.org/document_library/', kind: 'category', note: 'PCI DSS does not list weaknesses by CWE, so each requirement is assessed by the kind of scan that evidences it.', controls: 6 },
+    ] });
+    if (p.startsWith('/api/v1/taxonomies/') && p.endsWith('/status')) {
+      const b = (c, h, m, l) => ({ critical: c, high: h, medium: m, low: l });
+      const ctl = (id, name, status, bands, evidence) => ({ id, name, status, open: Object.values(bands).reduce((a, n) => a + n, 0), bands, query: 'cwe:89 state:open', evidence });
+      return json(res, { id: p.split('/')[4], name: 'OWASP Top 10', version: '2021', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10, evaluated_at: new Date().toISOString(), window_days: 30, status: [
+        ctl('A01:2021', 'Broken Access Control', 'open', b(0, 2, 3, 0), ['semgrep']),
+        ctl('A02:2021', 'Cryptographic Failures', 'clear', b(0, 0, 0, 0), ['semgrep', 'trivy']),
+        ctl('A03:2021', 'Injection', 'open', b(2, 1, 4, 1), ['semgrep']),
+        ctl('A04:2021', 'Insecure Design', 'clear', b(0, 0, 0, 0), ['semgrep']),
+        ctl('A06:2021', 'Vulnerable and Outdated Components', 'open', b(1, 5, 2, 0), ['trivy', 'grype']),
+        ctl('A09:2021', 'Security Logging and Monitoring Failures', 'not_assessed', b(0, 0, 0, 0), []),
+      ] });
+    }
     if (p === '/api/v1/me/access') return json(res, { role: 'admin', applications: {} });
     if (p === '/api/v1/access-bindings' && req.method === 'GET') {
       const w = (n) => new Date(Date.now() - n * 86400000).toISOString();

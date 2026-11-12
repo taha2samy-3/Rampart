@@ -308,3 +308,9 @@ export interface AuditFilter { actor?: string; action?: string }
 export interface MyAccess { role: Role; applications: Record<string, Role> }
 /** A role on one application for one person or token. */
 export interface AccessBinding { id: string; subject: string; role: Role; application_id: string; application_name?: string; managed_by: string; created_by: string; created_at: string }
+
+/** A compliance framework (docs/16 D52). */
+export interface Taxonomy { id: string; name: string; version: string; source: string; kind: 'cwe' | 'category'; note?: string; controls: number }
+export type ControlState = 'open' | 'clear' | 'not_assessed';
+export interface ControlStatus { id: string; name: string; status: ControlState; open: number; bands: Record<OpenBand, number>; query: string; evidence?: string[] }
+export interface TaxonomyStatus extends Taxonomy { evaluated_at: string; window_days: number; status: ControlStatus[] }
