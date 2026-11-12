@@ -19,6 +19,10 @@ type AppSummary struct {
 	InternetFacing bool      `json:"internet_facing"`
 	// Open counts the active findings (open, under investigation, affected) by risk band.
 	Open map[string]int `json:"open"`
+	// AssetCount is how many assets belong to this application; the posture score normalizes weighted open risk
+	// by it (docs/06 section 2, D62), so an application is not penalized for having more assets than another at
+	// the same absolute risk.
+	AssetCount int `json:"asset_count"`
 	// RiskScore is the highest score of an active finding (docs/06: application risk is the max).
 	RiskScore int `json:"risk_score"`
 	// Exposure counts the active critical and high findings.

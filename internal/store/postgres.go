@@ -1506,7 +1506,12 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		hPath := app.HierarchyPath
 		if hPath != "" && hNodeID == nil {
 			segs := strings.Split(hPath, ".")
-			node, _ := s.EnsureHierarchyPath(ctx, app.TenantID, segs)
+			// Uses this same transaction (D62), not a second one opened on another pooled connection, so the
+			// hierarchy node and the application row it's attached to commit or roll back together.
+			node, err := ensureHierarchyPathTx(ctx, tx, app.TenantID, segs)
+			if err != nil {
+				return err
+			}
 			if node != nil {
 				hNodeID = &node.ID
 			}

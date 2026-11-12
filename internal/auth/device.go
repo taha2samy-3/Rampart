@@ -67,6 +67,36 @@ func NewDeviceAuthManager(tokenStore TokenStore) *DeviceAuthManager {
 	}
 }
 
+// allScopes is every scope a token may carry (docs/14 section 8). Scopes are not yet enforced anywhere in the
+// API (only the role is, D62); this list keeps the issued token's declared scopes honest with what the CLI
+// asked for, rather than silently ignoring the request and always minting every scope.
+var allScopes = []string{"ingest", "read", "triage", "admin"}
+
+// requestedScopes parses an OAuth scope string (space-separated, RFC 6749 section 3.3) against allScopes. An
+// empty or entirely unrecognized request falls back to every scope, which is what every caller got before this
+// existed, so an older CLI that sends no scope keeps working.
+func requestedScopes(raw string) []string {
+	var out []string
+	for _, s := range strings.Fields(raw) {
+		if contains(allScopes, s) {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return append([]string(nil), allScopes...)
+	}
+	return out
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 const userCodeAlphabet = "BCDFGHJKLMNPQRSTVWXZ23456789"
 
 func generateUserCode() string {
@@ -152,7 +182,7 @@ func (m *DeviceAuthManager) VerifyUserCode(ctx context.Context, rawUserCode stri
 		subject = user.Subject
 	}
 
-	scopes := []string{"ingest", "read", "triage", "admin"}
+	scopes := requestedScopes(req.Scope)
 	duration := 30 * 24 * time.Hour // 30 days
 	rawToken, record, err := GenerateToken(user.TenantID, user.Role, subject, scopes, duration)
 	if err != nil {

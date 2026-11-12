@@ -17,6 +17,20 @@ import (
 // EnsureHierarchyPath walks or creates nodes for segments (e.g. ["fintech", "payments"])
 // ensuring each node exists with its path slug (e.g. "fintech", "fintech.payments") (D17, docs/04).
 func (s *PostgresStore) EnsureHierarchyPath(ctx context.Context, tenantID uuid.UUID, segments []string) (*domain.HierarchyNode, error) {
+	var lastNode *domain.HierarchyNode
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		lastNode, err = ensureHierarchyPathTx(ctx, tx, tenantID, segments)
+		return err
+	})
+	return lastNode, err
+}
+
+// ensureHierarchyPathTx is EnsureHierarchyPath's logic against an already-open transaction, so a caller that is
+// itself inside withTenantTx (e.g. SaveApplication) can create the hierarchy path atomically with its own write
+// instead of opening a second, independent transaction via a fresh pool connection (D62: the two used to commit
+// separately, so a rollback of the outer write could leave a hierarchy_node orphaned).
+func ensureHierarchyPathTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, segments []string) (*domain.HierarchyNode, error) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
@@ -24,7 +38,7 @@ func (s *PostgresStore) EnsureHierarchyPath(ctx context.Context, tenantID uuid.U
 	var lastNode *domain.HierarchyNode
 	var pathParts []string
 
-	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err := func() error {
 		for _, seg := range segments {
 			slug := slugifyHierarchy(seg)
 			if slug == "" {
@@ -89,7 +103,7 @@ func (s *PostgresStore) EnsureHierarchyPath(ctx context.Context, tenantID uuid.U
 			lastNode = &newNode
 		}
 		return nil
-	})
+	}()
 
 	return lastNode, err
 }
@@ -149,7 +163,7 @@ func (s *PostgresStore) HierarchyRollups(ctx context.Context, tenantID uuid.UUID
 
 			// 2. Apps count and findings roll-up (matches this node path or any child path)
 			pathPrefix := n.Path + ".%"
-			var appCount int
+			var appCount, assetCount int
 			var crit, high, med, low, maxRisk, slaBreached int
 
 			row := tx.QueryRow(ctx, `
@@ -159,14 +173,18 @@ func (s *PostgresStore) HierarchyRollups(ctx context.Context, tenantID uuid.UUID
 				       count(f.id) FILTER (WHERE f.risk_band = 'medium'),
 				       count(f.id) FILTER (WHERE f.risk_band = 'low'),
 				       coalesce(max(f.risk_score), 0),
-				       count(f.id) FILTER (WHERE f.sla_breached_at IS NOT NULL)
+				       count(f.id) FILTER (WHERE f.sla_breached_at IS NOT NULL),
+				       (SELECT count(*) FROM asset ast
+				          WHERE ast.tenant_id = $1 AND ast.application_id IN (
+				            SELECT id FROM application
+				            WHERE tenant_id = $1 AND (hierarchy_node_id = $2 OR hierarchy_path = $3 OR hierarchy_path LIKE $4)))
 				FROM application a
 				LEFT JOIN finding f ON f.tenant_id = a.tenant_id AND f.application_id = a.id AND f.state IN `+activeStates+`
 				WHERE a.tenant_id = $1 AND (a.hierarchy_node_id = $2 OR a.hierarchy_path = $3 OR a.hierarchy_path LIKE $4)`,
 				tenantID, n.ID, n.Path, pathPrefix,
 			)
 
-			if err := row.Scan(&appCount, &crit, &high, &med, &low, &maxRisk, &slaBreached); err == nil {
+			if err := row.Scan(&appCount, &crit, &high, &med, &low, &maxRisk, &slaBreached, &assetCount); err == nil {
 				r.AppCount = appCount
 				r.Open["critical"] = crit
 				r.Open["high"] = high
@@ -175,7 +193,9 @@ func (s *PostgresStore) HierarchyRollups(ctx context.Context, tenantID uuid.UUID
 				r.RiskScore = maxRisk
 				r.Exposure = crit + high
 				r.SLABreached = slaBreached
-				r.PostureScore = risk.CalculatePostureScore(r.Open, max(1, appCount), nil, 0)
+				// docs/06 section 2: normalized by the subtree's own asset count (D62), not by application
+				// count, which was the earlier, undocumented stand-in.
+				r.PostureScore = risk.CalculatePostureScore(r.Open, assetCount, nil, 0)
 			}
 
 			rollups = append(rollups, r)

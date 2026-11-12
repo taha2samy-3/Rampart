@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"rampart/internal/domain"
@@ -120,4 +121,92 @@ func TestDeviceAuthorizationFlow(t *testing.T) {
 
 func stringsReader(s string) *bytes.Reader {
 	return bytes.NewReader([]byte(s))
+}
+
+// The device page (GET /auth/device?user_code=...) reflects an untrusted query parameter into HTML. D63: it must
+// never let a crafted user_code or display name break out of the page and run script in a signed-in visitor's
+// session (reflected XSS).
+func TestDevicePageEscapesUntrustedInput(t *testing.T) {
+	h := NewHandlers(HandlerDeps{DeviceAuth: NewDeviceAuthManager(nil)})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	user := &ContextUser{Subject: "a@example.com", Email: `"><script>alert(1)</script>`, TenantID: domain.NewID(), Role: RoleViewer}
+	payload := `XXXX-XXXX"><script>alert(document.cookie)</script>`
+	req := httptest.NewRequest("GET", "/auth/device?user_code="+url.QueryEscape(payload), nil)
+	req = req.WithContext(ContextWithUser(context.Background(), user))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("the page renders an unescaped <script> tag from untrusted input:\n%s", body)
+	}
+	if !strings.Contains(body, "XXXX-XXXX") {
+		t.Fatalf("the safe part of the user code should still render:\n%s", body)
+	}
+}
+
+// The token the device flow mints reflects the scope the CLI asked for (D63): a narrower request is honoured, an
+// empty or unrecognized one falls back to every scope, as every caller got before scope was threaded through.
+func TestDeviceFlowHonoursRequestedScope(t *testing.T) {
+	cases := []struct {
+		requested string
+		want      []string
+	}{
+		{"", allScopes},
+		{"bogus", allScopes},
+		{"read", []string{"read"}},
+		{"read ingest", []string{"read", "ingest"}},
+	}
+	for _, c := range cases {
+		m := NewDeviceAuthManager(NewMemoryTokenStore())
+		res, err := m.CreateDeviceCode("rampart-cli", c.requested, "https://rampart.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		user := &ContextUser{Email: "dev@example.com", TenantID: domain.NewID(), Role: RoleTriager}
+		if err := m.VerifyUserCode(context.Background(), res.UserCode, user); err != nil {
+			t.Fatal(err)
+		}
+		tok, err := m.PollToken(res.DeviceCode, "rampart-cli")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := NewAuthenticatorWithStore(m.tokenStore).AuthenticateRequest(authHeaderRequest(tok.AccessToken))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slicesEqualUnordered(got.Scopes, c.want) {
+			t.Fatalf("requested %q: scopes %v, want %v", c.requested, got.Scopes, c.want)
+		}
+	}
+}
+
+func authHeaderRequest(token string) *http.Request {
+	r := httptest.NewRequest("GET", "/protected", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	return r
+}
+
+func slicesEqualUnordered(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }

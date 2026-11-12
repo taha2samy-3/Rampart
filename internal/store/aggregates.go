@@ -33,17 +33,21 @@ const summaryCols = `a.id, a.slug, a.name, a.business_criticality, a.internet_fa
 	count(f.id) FILTER (WHERE f.risk_band = 'critical'), count(f.id) FILTER (WHERE f.risk_band = 'high'),
 	count(f.id) FILTER (WHERE f.risk_band = 'medium'), count(f.id) FILTER (WHERE f.risk_band = 'low'),
 	coalesce(max(f.risk_score), 0), count(f.id) FILTER (WHERE f.sla_breached_at IS NOT NULL),
-	(SELECT max(r.created_at) FROM ingest_run r WHERE r.tenant_id = a.tenant_id AND r.application_id = a.id AND r.status IN ('completed', 'completed_with_errors'))`
+	(SELECT max(r.created_at) FROM ingest_run r WHERE r.tenant_id = a.tenant_id AND r.application_id = a.id AND r.status IN ('completed', 'completed_with_errors')),
+	(SELECT count(*) FROM asset WHERE asset.tenant_id = a.tenant_id AND asset.application_id = a.id)`
 
 func scanSummary(row pgx.Row) (domain.AppSummary, error) {
 	s := domain.AppSummary{Open: emptyBands()}
 	var c, h, m, l int
-	if err := row.Scan(&s.ID, &s.Slug, &s.Name, &s.Criticality, &s.InternetFacing, &c, &h, &m, &l, &s.RiskScore, &s.SLABreached, &s.LastScan); err != nil {
+	if err := row.Scan(&s.ID, &s.Slug, &s.Name, &s.Criticality, &s.InternetFacing, &c, &h, &m, &l, &s.RiskScore, &s.SLABreached, &s.LastScan, &s.AssetCount); err != nil {
 		return s, err
 	}
 	s.Open["critical"], s.Open["high"], s.Open["medium"], s.Open["low"] = c, h, m, l
 	s.Exposure = c + h
-	s.PostureScore = risk.CalculatePostureScore(s.Open, 1, nil, 0)
+	// docs/06 section 2: weighted open risk normalized by asset count. This was hardcoded to 1 (no
+	// normalization) before D62; an application's own asset count is a scalar subquery, like last_scan above,
+	// so the finding-count aggregates are not fanned out by joining the asset table directly.
+	s.PostureScore = risk.CalculatePostureScore(s.Open, s.AssetCount, nil, 0)
 	return s, nil
 }
 
@@ -211,7 +215,9 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 		return nil, err
 	}
 	stale := time.Now().Add(-14 * 24 * time.Hour)
+	var assetCount int
 	for _, a := range apps {
+		assetCount += a.AssetCount
 		if a.Exposure > 0 || a.RiskScore > 0 {
 			if len(o.TopApps) < 5 {
 				o.TopApps = append(o.TopApps, a)
@@ -221,7 +227,9 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 			o.Gaps = append(o.Gaps, a)
 		}
 	}
-	o.PostureScore = risk.CalculatePostureScore(o.Open, len(apps), o.SLA.Adherence, len(o.Gaps))
+	// docs/06 section 2: the tenant's own asset count (summed from the applications just fetched, so no extra
+	// query), not the number of applications, which was the earlier, undocumented stand-in (D62).
+	o.PostureScore = risk.CalculatePostureScore(o.Open, assetCount, o.SLA.Adherence, len(o.Gaps))
 	return o, nil
 }
 

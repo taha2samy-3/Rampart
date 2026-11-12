@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -569,27 +570,58 @@ func (h *Handlers) devicePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userCode := r.URL.Query().Get("user_code")
+	// The user_code is reflected into the page from an untrusted query parameter (a link the CLI prints or a
+	// QR code), so it is rendered through html/template, not fmt.Fprintf: a raw %s here let `user_code` break out
+	// of the value="" attribute and inject script into a signed-in victim's session (reflected XSS, D63). The
+	// code is also pre-filtered to its own alphabet, as defense in depth.
+	userCode := sanitizeUserCodeForDisplay(r.URL.Query().Get("user_code"))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	_ = devicePageTmpl.Execute(w, devicePageData{Email: user.Email, UserCode: userCode})
+}
+
+// devicePageData is what devicePageTmpl renders; html/template escapes both fields for their HTML context.
+type devicePageData struct {
+	Email    string
+	UserCode string
+}
+
+var devicePageTmpl = template.Must(template.New("device").Parse(`<!DOCTYPE html>
 <html>
 <head><title>Authorize Rampart CLI</title>
 <style>
 body { font-family: sans-serif; max-width: 480px; margin: 40px auto; padding: 20px; line-height: 1.5; }
-input[type="text"] { width: 100%%; padding: 10px; font-size: 18px; margin: 10px 0; text-transform: uppercase; font-family: monospace; letter-spacing: 2px; box-sizing: border-box; }
-button { background: #0066cc; color: #fff; border: 0; padding: 12px 24px; font-size: 16px; border-radius: 4px; cursor: pointer; width: 100%%; }
+input[type="text"] { width: 100%; padding: 10px; font-size: 18px; margin: 10px 0; text-transform: uppercase; font-family: monospace; letter-spacing: 2px; box-sizing: border-box; }
+button { background: #0066cc; color: #fff; border: 0; padding: 12px 24px; font-size: 16px; border-radius: 4px; cursor: pointer; width: 100%; }
 </style>
 </head>
 <body>
 <h2>Authorize Rampart CLI</h2>
-<p>Signed in as <strong>%s</strong></p>
+<p>Signed in as <strong>{{.Email}}</strong></p>
 <form method="POST" action="/auth/device/verify">
 <label for="user_code">Enter user code:</label>
-<input type="text" id="user_code" name="user_code" value="%s" required autofocus placeholder="XXXX-XXXX" />
+<input type="text" id="user_code" name="user_code" value="{{.UserCode}}" required autofocus placeholder="XXXX-XXXX" />
 <button type="submit">Authorize</button>
 </form>
 </body>
-</html>`, user.Email, userCode)
+</html>`))
+
+// sanitizeUserCodeForDisplay keeps only the device user-code alphabet (D54's generateUserCode: 8 characters of
+// BCDFGHJKLMNPQRSTVWXZ23456789, upper-cased, plus the separating '-'), capped at 9 characters, so what reaches
+// the template is always shaped like a real user code even before html/template escapes it.
+func sanitizeUserCodeForDisplay(raw string) string {
+	raw = strings.ToUpper(raw)
+	var b strings.Builder
+	for _, r := range raw {
+		if b.Len() >= 9 {
+			break
+		}
+		if r == '-' || strings.ContainsRune(userCodeAlphabet, r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func (h *Handlers) deviceVerify(w http.ResponseWriter, r *http.Request) {
