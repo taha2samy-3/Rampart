@@ -143,7 +143,8 @@ jobs:
         run: |
           helm template t deploy/helm/rampart \
             --set database.cnpg.enabled=false --set database.existingSecret=db \
-            --set seaweedfs.enabled=false --set objectStorage.endpoint=https://s3.example.com > /dev/null
+            --set seaweedfs.enabled=false --set objectStorage.endpoint=https://s3.example.com \
+            --set objectStorage.existingSecret=s3-creds > /dev/null
       - name: helm template (the first administrator's Secret and the OIDC wiring)
         run: |
           helm template t deploy/helm/rampart --show-only templates/admin-secret.yaml | grep -q 'name: t-rampart-admin'
