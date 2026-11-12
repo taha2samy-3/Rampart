@@ -48,6 +48,16 @@ type Store interface {
 	LookupApplication(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
 	CreateApplication(ctx context.Context, app *domain.Application) error
 
+	// Presigned uploads (D2, D9)
+	CreateUpload(ctx context.Context, u *domain.Upload) error
+	GetUpload(ctx context.Context, tenantID, id uuid.UUID) (*domain.Upload, error)
+	FindUploadByKey(ctx context.Context, tenantID uuid.UUID, key string) (*domain.Upload, error)
+	DeleteUpload(ctx context.Context, tenantID, id uuid.UUID) error
+	// CompleteUpload moves created -> completed and records the declared SHA-256. It reports false,
+	// with no error, when the upload was already completed (a repeated call).
+	CompleteUpload(ctx context.Context, tenantID, id uuid.UUID, sha256 string) (bool, error)
+	FindRunByUpload(ctx context.Context, tenantID, uploadID uuid.UUID) (*domain.IngestRun, error)
+
 	// Ingest Run & Ephemeral Results (D2, D10, D13)
 	CreateIngestRun(ctx context.Context, run *domain.IngestRun) error
 	GetIngestRun(ctx context.Context, tenantID, runID uuid.UUID) (*domain.IngestRun, error)

@@ -369,3 +369,19 @@ type ParseContext struct {
 	Track         string        `json:"track"`
 	UploadContext UploadContext `json:"upload_context"`
 }
+
+// Upload is a presigned upload awaiting, or past, its `complete` call (D2, D9).
+type Upload struct {
+	ID             uuid.UUID     `json:"id"`
+	TenantID       uuid.UUID     `json:"tenant_id"`
+	ScanSourceID   uuid.UUID     `json:"scan_source_id"`
+	IdempotencyKey string        `json:"idempotency_key,omitempty"`
+	RequestHash    string        `json:"request_hash,omitempty"` // SHA-256 of the create request body
+	ObjectRef      string        `json:"object_ref"`
+	SHA256         string        `json:"sha256,omitempty"` // declared at complete
+	SizeBytes      int64         `json:"size_bytes"`       // declared at create, signed into the PUT
+	FormatHint     string        `json:"format_hint,omitempty"`
+	Context        UploadContext `json:"context"`
+	Status         string        `json:"status"` // created | completed
+	CreatedAt      time.Time     `json:"created_at"`
+}

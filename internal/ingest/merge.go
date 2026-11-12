@@ -482,6 +482,7 @@ type MemoryStore struct {
 	sessions              map[string]auth.SessionRecord
 	localAdmins           map[string]*auth.LocalAdmin
 	audits                []auth.AuditEvent
+	uploads               map[string]*domain.Upload
 }
 
 // NewMemoryStore initializes a new MemoryStore.
@@ -506,6 +507,7 @@ func NewMemoryStore() *MemoryStore {
 		members:               make(map[string]memMember),
 		sessions:              make(map[string]auth.SessionRecord),
 		localAdmins:           make(map[string]*auth.LocalAdmin),
+		uploads:               make(map[string]*domain.Upload),
 	}
 }
 
@@ -1137,4 +1139,73 @@ func (m *MemoryStore) AuditEvents() []auth.AuditEvent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return append([]auth.AuditEvent(nil), m.audits...)
+}
+
+// --- uploads for the in-memory store ------------------------------------------------------------
+
+func (m *MemoryStore) CreateUpload(ctx context.Context, u *domain.Upload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if u.IdempotencyKey != "" {
+		for _, o := range m.uploads {
+			if o.TenantID == u.TenantID && o.IdempotencyKey == u.IdempotencyKey {
+				return store.ErrUploadExists
+			}
+		}
+	}
+	cp := *u
+	m.uploads[u.TenantID.String()+":"+u.ID.String()] = &cp
+	return nil
+}
+
+func (m *MemoryStore) GetUpload(ctx context.Context, tenantID, id uuid.UUID) (*domain.Upload, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if u, ok := m.uploads[tenantID.String()+":"+id.String()]; ok {
+		cp := *u
+		return &cp, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (m *MemoryStore) FindUploadByKey(ctx context.Context, tenantID uuid.UUID, key string) (*domain.Upload, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.uploads {
+		if u.TenantID == tenantID && u.IdempotencyKey == key {
+			cp := *u
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) DeleteUpload(ctx context.Context, tenantID, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.uploads, tenantID.String()+":"+id.String())
+	return nil
+}
+
+func (m *MemoryStore) CompleteUpload(ctx context.Context, tenantID, id uuid.UUID, sha256 string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.uploads[tenantID.String()+":"+id.String()]
+	if !ok || u.Status != "created" {
+		return false, nil
+	}
+	u.Status, u.SHA256 = "completed", sha256
+	return true, nil
+}
+
+func (m *MemoryStore) FindRunByUpload(ctx context.Context, tenantID, uploadID uuid.UUID) (*domain.IngestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, r := range m.ingestRuns {
+		if r.TenantID == tenantID && r.UploadID != nil && *r.UploadID == uploadID {
+			cp := *r
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
