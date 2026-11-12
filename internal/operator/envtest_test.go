@@ -211,3 +211,34 @@ func TestScanSourceSyncsItsSecretEncrypted(t *testing.T) {
 		t.Fatal("the Secret was not synced")
 	}
 }
+
+// An SLAPolicy in a tenant's namespace is validated by the CRD schema and by the operator, and its status says
+// whether it is applied (docs/16 D41).
+func TestSLAPolicyShowsItsStatus(t *testing.T) {
+	c, store, _ := startEnv(t)
+	ctx := context.Background()
+	if err := c.Create(ctx, cr("Tenant", "", "acme", map[string]any{"displayName": "Acme", "namespaces": []any{"team-sla"}})); err != nil {
+		t.Fatal(err)
+	}
+	good := cr("SLAPolicy", "team-sla", "default", map[string]any{"matrix": map[string]any{"critical": map[string]any{"critical": int64(1)}}, "caps": map[string]any{"maxDays": int64(90)}})
+	if err := c.Create(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, good, "Reconciled")
+	tn, _ := store.GetTenantByNamespace(ctx, "team-sla")
+	if p, ok := store.SLAPolicy(tn.ID, "team-sla", "default"); !ok || p.Error != "" {
+		t.Fatalf("policy not stored: %+v %v", p, ok)
+	}
+
+	// The API server itself refuses what the schema forbids (days out of range)...
+	if err := c.Create(ctx, cr("SLAPolicy", "team-sla", "bad-range", map[string]any{"matrix": map[string]any{"low": map[string]any{"low": int64(0)}}})); err == nil {
+		t.Fatal("a matrix with 0 days must be refused by the CRD schema")
+	}
+	// ...and the operator refuses, with a reason, what only it can judge (business days are not built).
+	soft := cr("SLAPolicy", "team-sla", "soft", map[string]any{"businessDays": true})
+	if err := c.Create(ctx, soft); err != nil {
+		t.Fatal(err)
+	}
+	st := ready(t, c, soft, "InvalidSpec")
+	_ = st
+}

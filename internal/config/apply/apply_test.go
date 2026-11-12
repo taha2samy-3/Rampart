@@ -79,3 +79,34 @@ func TestApplyDeclarativeResources(t *testing.T) {
 		t.Errorf("unexpected source response: %s", msgSource)
 	}
 }
+
+func TestApplySLAPolicy(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["team-a"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"SLAPolicy","metadata":{"name":"default","namespace":"team-a"},"spec":{"caps":{"maxDays":30}}}`)); err != nil {
+		t.Fatalf("a valid policy: %v", err)
+	}
+	if p, ok := store.SLAPolicy(tn.ID, "team-a", "default"); !ok || p.Error != "" {
+		t.Fatalf("stored: %+v %v", p, ok)
+	}
+
+	// An invalid one is stored with its reason, and the command fails so a pipeline notices.
+	_, err := applier.ApplyDocument(ctx, []byte(`{"kind":"SLAPolicy","metadata":{"name":"default","namespace":"team-a"},"spec":{"startFrom":"verified"}}`))
+	if err == nil || !strings.Contains(err.Error(), "not supported yet") {
+		t.Fatalf("an invalid policy must fail with its reason, got %v", err)
+	}
+	if p, _ := store.SLAPolicy(tn.ID, "team-a", "default"); p.Error == "" {
+		t.Fatal("the reason must be stored")
+	}
+
+	// No tenant owns the namespace.
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"SLAPolicy","metadata":{"name":"x","namespace":"nobody"},"spec":{}}`)); err == nil || !strings.Contains(err.Error(), "TenantNotFound") {
+		t.Fatalf("no tenant: %v", err)
+	}
+}

@@ -39,6 +39,7 @@ var (
 	gvkTenant      = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Tenant"}
 	gvkApplication = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Application"}
 	gvkScanSource  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ScanSource"}
+	gvkSLAPolicy   = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "SLAPolicy"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -67,7 +68,7 @@ type ManagerConfig struct {
 	ServiceAccountNamespace string
 }
 
-// NewManager builds a controller-runtime manager with the three Rampart controllers.
+// NewManager builds a controller-runtime manager with the Rampart controllers.
 func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -121,6 +122,10 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		return op.ReconcileScanSource(ctx, c)
 	}, status: func(c *ScanSourceCR) *ScanSourceStatus { return &c.Status }}
 
+	slaPolicies := &cr[SLAPolicyCR, SLAPolicyStatus]{k: k, gvk: gvkSLAPolicy, reconcile: func(ctx context.Context, c *SLAPolicyCR) (*SLAPolicyStatus, error) {
+		return op.ReconcileSLAPolicy(ctx, c)
+	}, status: func(c *SLAPolicyCR) *SLAPolicyStatus { return &c.Status }}
+
 	gen := builder.WithPredicates(predicate.GenerationChangedPredicate{}) // status writes do not retrigger
 	if err := ctrl.NewControllerManagedBy(mgr).Named("tenant").For(newObj(gvkTenant), gen).Complete(tenants); err != nil {
 		return nil, err
@@ -130,7 +135,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}} {
+	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -321,6 +326,8 @@ func metaOf(obj any) *Metadata {
 	case *ApplicationCR:
 		return &v.Metadata
 	case *ScanSourceCR:
+		return &v.Metadata
+	case *SLAPolicyCR:
 		return &v.Metadata
 	}
 	return nil

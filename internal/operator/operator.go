@@ -14,6 +14,7 @@ type Operator struct {
 	tenants     *TenantReconciler
 	apps        *ApplicationReconciler
 	scanSources *ScanSourceReconciler
+	slaPolicies *SLAPolicyReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -26,6 +27,7 @@ func NewOperator(store apply.ConfigStore, secrets SecretProvider, secretStore Se
 		tenants:     NewTenantReconciler(store),
 		apps:        NewApplicationReconciler(store),
 		scanSources: NewScanSourceReconciler(store, secrets, secretStore),
+		slaPolicies: NewSLAPolicyReconciler(store),
 	}
 }
 
@@ -45,6 +47,12 @@ func (op *Operator) ReconcileApplication(ctx context.Context, cr *ApplicationCR)
 func (op *Operator) ReconcileScanSource(ctx context.Context, cr *ScanSourceCR) (*ScanSourceStatus, error) {
 	op.logger.Debug("reconciling scan source", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
 	return op.scanSources.Reconcile(ctx, cr)
+}
+
+// ReconcileSLAPolicy reconciles an SLAPolicy CR.
+func (op *Operator) ReconcileSLAPolicy(ctx context.Context, cr *SLAPolicyCR) (*SLAPolicyStatus, error) {
+	op.logger.Debug("reconciling sla policy", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.slaPolicies.Reconcile(ctx, cr)
 }
 
 // Start runs background watchers or loops if enabled (D6 operator.mode).

@@ -2019,3 +2019,92 @@ func (s *PostgresStore) MarkSLABreaches(ctx context.Context, tenantID uuid.UUID,
 	})
 	return ids, err
 }
+
+// SaveSLAPolicy stores an SLAPolicy of a tenant (the operator's write, through rampart_system). When the spec
+// changed and is valid, every due date of the tenant must be recomputed: the flag says so.
+func (s *PostgresStore) SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p apply.PolicyObject) error {
+	spec := p.Spec
+	if len(spec) == 0 {
+		spec = []byte("{}")
+	}
+	var applied any
+	if p.Error == "" {
+		applied = spec
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, compile_error, generation, recompute_needed, updated_at)
+		VALUES ($1, $2, 'sla', $3, $4, $5, $9::jsonb, $6, $7, $8, $6, NOW())
+		ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET
+			-- Only a valid spec that differs from the one in force moves the due dates.
+			recompute_needed = policy_object.recompute_needed OR
+				(EXCLUDED.compiled_ok AND policy_object.applied_spec IS DISTINCT FROM EXCLUDED.applied_spec),
+			applied_spec = COALESCE(EXCLUDED.applied_spec, policy_object.applied_spec),
+			spec = EXCLUDED.spec, compiled_ok = EXCLUDED.compiled_ok, compile_error = EXCLUDED.compile_error,
+			generation = EXCLUDED.generation, updated_at = NOW()`,
+		domain.NewID(), tenantID, p.Namespace, p.Name, spec, p.Error == "", nonEmpty(p.Error), p.Generation, applied)
+	return err
+}
+
+// GetSLAPolicySpec returns the spec in force for a tenant: the last valid spec of the policy named "default",
+// else of the one whose name sorts first (docs/06 section 4: the cluster default and the built-in policy are
+// the fallbacks, and the caller falls back when found is false).
+func (s *PostgresStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
+	var spec []byte
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT applied_spec FROM policy_object
+			WHERE tenant_id = $1 AND kind = 'sla' AND applied_spec IS NOT NULL
+			ORDER BY (name = 'default') DESC, name, namespace LIMIT 1`, tenantID).Scan(&spec)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	return spec, err == nil, err
+}
+
+// TenantsNeedingSLARecompute lists the tenants whose SLA policy changed. It reads across tenants: rampart_system.
+func (s *PostgresStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT tenant_id FROM policy_object WHERE kind = 'sla' AND recompute_needed`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// ClearSLARecompute says that the due dates of a tenant now follow its current policy.
+func (s *PostgresStore) ClearSLARecompute(ctx context.Context, tenantID uuid.UUID) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE policy_object SET recompute_needed = FALSE WHERE tenant_id = $1 AND kind = 'sla'`, tenantID)
+		return err
+	})
+}
+
+// ListActiveFindings pages the active findings of a tenant.
+func (s *PostgresStore) ListActiveFindings(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error) {
+	var out []*domain.Finding
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding
+			WHERE tenant_id = $1 AND id > $2 AND state IN ('open', 'under_investigation', 'affected') ORDER BY id LIMIT $3`, tenantID, after, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, f)
+		}
+		return rows.Err()
+	})
+	return out, err
+}

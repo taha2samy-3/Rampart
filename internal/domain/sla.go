@@ -1,6 +1,10 @@
 package domain
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
 	"time"
 )
 
@@ -54,4 +58,70 @@ func (p SLAPolicy) Due(band Severity, criticality string, start time.Time, kevDu
 		return *kevDue
 	}
 	return due
+}
+
+// SLAPolicySpec is the spec of an SLAPolicy object as docs/04 writes it.
+type SLAPolicySpec struct {
+	Matrix map[string]map[string]int `json:"matrix"`
+	Caps   struct {
+		KEVDueDate *bool `json:"kevDueDate"`
+		MaxDays    *int  `json:"maxDays"`
+	} `json:"caps"`
+	StartFrom                 string          `json:"startFrom"`
+	RestartOnReactivation     *bool           `json:"restartOnReactivation"`
+	PauseDuringRiskAcceptance *bool           `json:"pauseDuringRiskAcceptance"`
+	BusinessDays              bool            `json:"businessDays"`
+	Notify                    json.RawMessage `json:"notify"`
+}
+
+// ParseSLAPolicySpec reads and checks the spec of an SLAPolicy. What it leaves out takes the built-in value. What
+// it asks for and this version cannot do (business days, a start other than first seen) is refused with a message,
+// not ignored: a policy that silently does something else would be worse than one that says it is not applied.
+func ParseSLAPolicySpec(raw []byte) (SLAPolicy, error) {
+	var spec SLAPolicySpec
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			return SLAPolicy{}, fmt.Errorf("the spec is not valid: %w", err)
+		}
+	}
+	p := DefaultSLAPolicy()
+	bands := []string{"critical", "high", "medium", "low"}
+	for band, row := range spec.Matrix {
+		if !slices.Contains(bands, band) {
+			return SLAPolicy{}, fmt.Errorf("matrix: %q is not a risk band (critical, high, medium, low)", band)
+		}
+		for crit, days := range row {
+			if !slices.Contains(bands, crit) {
+				return SLAPolicy{}, fmt.Errorf("matrix.%s: %q is not an application criticality (critical, high, medium, low)", band, crit)
+			}
+			if days < 1 || days > 3650 {
+				return SLAPolicy{}, fmt.Errorf("matrix.%s.%s: %d days is not between 1 and 3650", band, crit, days)
+			}
+			p.Matrix[band][crit] = days
+		}
+	}
+	if spec.Caps.KEVDueDate != nil {
+		p.KEVDueDate = *spec.Caps.KEVDueDate
+	}
+	if spec.Caps.MaxDays != nil {
+		if *spec.Caps.MaxDays < 1 || *spec.Caps.MaxDays > 3650 {
+			return SLAPolicy{}, fmt.Errorf("caps.maxDays: %d is not between 1 and 3650", *spec.Caps.MaxDays)
+		}
+		p.MaxDays = *spec.Caps.MaxDays
+	}
+	switch spec.StartFrom {
+	case "", "firstSeen":
+	default:
+		return SLAPolicy{}, fmt.Errorf("startFrom: %q is not supported yet (only firstSeen)", spec.StartFrom)
+	}
+	if spec.BusinessDays {
+		return SLAPolicy{}, errors.New("businessDays: counting business days is not supported yet")
+	}
+	if spec.RestartOnReactivation != nil {
+		p.RestartOnReactivation = *spec.RestartOnReactivation
+	}
+	if spec.PauseDuringRiskAcceptance != nil {
+		p.PauseDuringRiskAcceptance = *spec.PauseDuringRiskAcceptance
+	}
+	return p, nil
 }

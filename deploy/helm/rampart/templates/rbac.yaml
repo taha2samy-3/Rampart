@@ -35,10 +35,10 @@ metadata:
     {{- include "rampart.labels" . | nindent 4 }}
 rules:
   - apiGroups: [rampart.aspm.dev]
-    resources: [tenants, applications, scansources]
+    resources: [tenants, applications, scansources, slapolicies]
     verbs: [get, list, watch]
   - apiGroups: [rampart.aspm.dev]
-    resources: [tenants/status, applications/status, scansources/status, tenants/finalizers, scansources/finalizers]
+    resources: [tenants/status, applications/status, scansources/status, slapolicies/status, tenants/finalizers, scansources/finalizers]
     verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [namespaces]

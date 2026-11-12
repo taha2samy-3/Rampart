@@ -47,6 +47,19 @@ type ConfigStore interface {
 	SaveApplication(ctx context.Context, app domain.Application) error
 	GetApplicationBySlug(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
 	SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error)
+	// SaveSLAPolicy stores an SLAPolicy of a tenant. A spec that failed validation is stored with its error, so
+	// the object's status can say why it is not applied (docs/16 D41).
+	SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
+}
+
+// PolicyObject is a policy as the control plane hands it to the store.
+type PolicyObject struct {
+	Namespace  string
+	Name       string
+	Spec       []byte
+	Generation int64
+	// Error is why the spec was refused; empty when it is valid.
+	Error string
 }
 
 // Applier turns declarative resources into active configuration (normative D3).
@@ -115,6 +128,24 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			}
 		}
 		return fmt.Sprintf("tenant.rampart.aspm.dev/%s configured", t.Slug), nil
+
+	case "slapolicy":
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		obj := PolicyObject{Namespace: namespace, Name: header.Metadata.Name, Spec: header.Spec}
+		if _, err := domain.ParseSLAPolicySpec(header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveSLAPolicy(ctx, tenant.ID, obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: slapolicy %q was stored but is not applied: %s", header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("slapolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
 	case "application":
 		var spec struct {
@@ -235,6 +266,7 @@ type MemoryConfigStore struct {
 	applications map[string]domain.Application
 	scanSources  map[string]uuid.UUID
 	namespaces   map[string]uuid.UUID
+	policies     map[string]PolicyObject
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -244,7 +276,24 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		applications: make(map[string]domain.Application),
 		scanSources:  make(map[string]uuid.UUID),
 		namespaces:   make(map[string]uuid.UUID),
+		policies:     make(map[string]PolicyObject),
 	}
+}
+
+// SaveSLAPolicy stores an SLAPolicy.
+func (m *MemoryConfigStore) SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies[tenantID.String()+":"+p.Namespace+":"+p.Name] = p
+	return nil
+}
+
+// SLAPolicy returns a stored policy, for tests.
+func (m *MemoryConfigStore) SLAPolicy(tenantID uuid.UUID, namespace, name string) (PolicyObject, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.policies[tenantID.String()+":"+namespace+":"+name]
+	return p, ok
 }
 
 func (m *MemoryConfigStore) SaveTenant(ctx context.Context, tenant domain.Tenant) error {

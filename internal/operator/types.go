@@ -127,3 +127,17 @@ type ScanSourceStatus struct {
 	CommonStatus `json:",inline"`
 	ScanSourceID string `json:"scanSourceId,omitempty"`
 }
+
+// SLAPolicyCR represents the SLAPolicy Custom Resource (docs/04). The spec is kept as it came: the domain
+// validates it, so the CRD schema and the API/CLI path share one set of rules.
+type SLAPolicyCR struct {
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Metadata   Metadata        `json:"metadata"`
+	Spec       map[string]any  `json:"spec"`
+	Status     SLAPolicyStatus `json:"status,omitempty"`
+}
+
+type SLAPolicyStatus struct {
+	CommonStatus `json:",inline"`
+}

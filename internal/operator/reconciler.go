@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -221,5 +222,50 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 	status.ObservedGeneration = cr.Metadata.Generation
 	status.ScanSourceID = sourceID.String()
 	status.SetCondition("Ready", "True", "Reconciled", "ScanSource reconciled successfully")
+	return status, nil
+}
+
+// SLAPolicyReconciler handles reconciliation of SLAPolicy custom resources (docs/16 D41).
+type SLAPolicyReconciler struct {
+	store apply.ConfigStore
+}
+
+// NewSLAPolicyReconciler returns a reconciler.
+func NewSLAPolicyReconciler(store apply.ConfigStore) *SLAPolicyReconciler {
+	return &SLAPolicyReconciler{store: store}
+}
+
+// Reconcile stores the policy of the tenant that owns the namespace. A spec that fails validation is stored with
+// its reason, is not applied (the tenant keeps the policy it had, or the built-in one), and says why in Ready.
+func (r *SLAPolicyReconciler) Reconcile(ctx context.Context, cr *SLAPolicyCR) (*SLAPolicyStatus, error) {
+	status := &cr.Status
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	if tenant == nil {
+		status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
+		return status, nil
+	}
+	spec, err := json.Marshal(cr.Spec)
+	if err != nil {
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
+	}
+	obj := apply.PolicyObject{Namespace: cr.Metadata.Namespace, Name: cr.Metadata.Name, Spec: spec, Generation: cr.Metadata.Generation}
+	if _, perr := domain.ParseSLAPolicySpec(spec); perr != nil {
+		obj.Error = perr.Error()
+	}
+	if err := r.store.SaveSLAPolicy(ctx, tenant.ID, obj); err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	status.ObservedGeneration = cr.Metadata.Generation
+	if obj.Error != "" {
+		status.SetCondition("Ready", "False", "InvalidSpec", obj.Error)
+		return status, nil
+	}
+	status.SetCondition("Ready", "True", "Reconciled", "SLAPolicy reconciled; due dates are recomputed in the background")
 	return status, nil
 }

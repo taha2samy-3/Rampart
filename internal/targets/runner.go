@@ -192,7 +192,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	if pgStore != nil {
 		intel = enrich.NewFeedSyncer(pgStore.Pool())
 	}
-	scorer := scoring.New(storeBackend, intel, nil)
+	scorer := scoring.New(storeBackend, intel, scoring.NewDBPolicy(storeBackend)) // the tenant's SLAPolicy, else the built-in one
 	processor.SetScorer(scorer)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()

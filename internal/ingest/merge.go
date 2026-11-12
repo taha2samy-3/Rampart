@@ -1203,6 +1203,37 @@ func (m *MemoryStore) GetDispositionedScopeFindings(ctx context.Context, tenantI
 	return out, nil
 }
 
+// GetSLAPolicySpec: the in-memory store has no policy objects.
+func (m *MemoryStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+// TenantsNeedingSLARecompute: none.
+func (m *MemoryStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+// ClearSLARecompute: nothing to clear.
+func (m *MemoryStore) ClearSLARecompute(ctx context.Context, tenantID uuid.UUID) error { return nil }
+
+// ListActiveFindings pages the active findings of a tenant.
+func (m *MemoryStore) ListActiveFindings(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID == tenantID && f.State.IsActive() && f.ID.String() > after.String() {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // GetApplication returns an application by id.
 func (m *MemoryStore) GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error) {
 	m.mu.RLock()

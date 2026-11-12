@@ -76,6 +76,13 @@ type Store interface {
 	GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (domain.TenantSettings, error)
 	SaveTenantSettings(ctx context.Context, tenantID uuid.UUID, settings domain.TenantSettings) error
 
+	// SLA policy objects (D41): the spec the engine uses for a tenant, and the recompute flag.
+	GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID) (spec []byte, found bool, err error)
+	TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.UUID, error)
+	ClearSLARecompute(ctx context.Context, tenantID uuid.UUID) error
+	// ListActiveFindings pages every active finding of a tenant, ordered by id, after the given id.
+	ListActiveFindings(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error)
+
 	// Scoring and SLA (docs/06, D40)
 	GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error)
 	ListTenantIDs(ctx context.Context) ([]uuid.UUID, error)

@@ -78,7 +78,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	}
 
 	h.syncer = enrich.NewFeedSyncer(sysStore.Pool())
-	h.scorer = scoring.New(appStore, h.syncer, nil)
+	h.scorer = scoring.New(appStore, h.syncer, scoring.NewDBPolicy(appStore))
 	processor := ingest.NewProcessor(appStore, nil, h.objects, nil)
 	processor.SetScorer(h.scorer)
 	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse))

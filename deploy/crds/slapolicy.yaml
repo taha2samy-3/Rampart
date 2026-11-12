@@ -1,0 +1,91 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: slapolicies.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: SLAPolicy
+    listKind: SLAPolicyList
+    plural: slapolicies
+    singular: slapolicy
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                How long a finding may stay open (docs/04, docs/06 section 4). Rows are the risk band, columns the
+                application's business criticality, in days. What is left out takes the built-in value. The operator
+                validates the spec again and reports the reason in status.conditions when it is refused.
+              properties:
+                matrix:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                      minimum: 1
+                      maximum: 3650
+                caps:
+                  type: object
+                  properties:
+                    kevDueDate:
+                      type: boolean
+                    maxDays:
+                      type: integer
+                      minimum: 1
+                      maximum: 3650
+                startFrom:
+                  type: string
+                  enum:
+                    - firstSeen
+                restartOnReactivation:
+                  type: boolean
+                pauseDuringRiskAcceptance:
+                  type: boolean
+                businessDays:
+                  type: boolean
+                  description: Not supported yet; true is refused.
+                notify:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: Accepted and not acted on yet (notifications need connectors).
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,52 @@ type BuiltinPolicy struct{}
 // SLAPolicy returns the built-in policy.
 func (BuiltinPolicy) SLAPolicy(context.Context, uuid.UUID) domain.SLAPolicy {
 	return domain.DefaultSLAPolicy()
+}
+
+// DBPolicy answers with the tenant's SLAPolicy object when one is stored and valid, else the built-in policy
+// (docs/06 section 4). It remembers each answer for a short time, because the engine asks for every batch.
+type DBPolicy struct {
+	store store.Store
+	ttl   time.Duration
+	mu    sync.Mutex
+	cache map[uuid.UUID]cachedPolicy
+}
+
+type cachedPolicy struct {
+	policy domain.SLAPolicy
+	until  time.Time
+}
+
+// NewDBPolicy returns a policy source over the store.
+func NewDBPolicy(s store.Store) *DBPolicy {
+	return &DBPolicy{store: s, ttl: 30 * time.Second, cache: map[uuid.UUID]cachedPolicy{}}
+}
+
+// SLAPolicy returns the policy of the tenant.
+func (d *DBPolicy) SLAPolicy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy {
+	d.mu.Lock()
+	if c, ok := d.cache[tenantID]; ok && time.Now().Before(c.until) {
+		d.mu.Unlock()
+		return c.policy
+	}
+	d.mu.Unlock()
+	policy := domain.DefaultSLAPolicy()
+	if spec, found, err := d.store.GetSLAPolicySpec(ctx, tenantID); err == nil && found {
+		if p, perr := domain.ParseSLAPolicySpec(spec); perr == nil {
+			policy = p
+		}
+	}
+	d.mu.Lock()
+	d.cache[tenantID] = cachedPolicy{policy, time.Now().Add(d.ttl)}
+	d.mu.Unlock()
+	return policy
+}
+
+// Invalidate forgets what it knows about a tenant, so the next question reads the store.
+func (d *DBPolicy) Invalidate(tenantID uuid.UUID) {
+	d.mu.Lock()
+	delete(d.cache, tenantID)
+	d.mu.Unlock()
 }
 
 // Scorer fills the score, band, KEV, EPSS bucket and SLA of findings.
@@ -181,10 +228,23 @@ func setSLA(f *domain.Finding, criticality string, kevDue *time.Time, policy dom
 // band, KEV, EPSS bucket or due date changed. It runs after the feeds change (docs/16 D28: an EPSS or KEV change
 // re-scores). It returns how many findings changed.
 func (s *Scorer) Rescore(ctx context.Context, tenantID uuid.UUID) (int, error) {
+	return s.rescoreAll(ctx, tenantID, s.store.ListFindingsForRescore)
+}
+
+// RecomputeSLA recomputes the due date (and the score) of every active finding of a tenant. It runs when the
+// tenant's SLAPolicy changed (docs/04: "enqueue recompute job when changed").
+func (s *Scorer) RecomputeSLA(ctx context.Context, tenantID uuid.UUID) (int, error) {
+	if inv, ok := s.policy.(interface{ Invalidate(uuid.UUID) }); ok {
+		inv.Invalidate(tenantID)
+	}
+	return s.rescoreAll(ctx, tenantID, s.store.ListActiveFindings)
+}
+
+func (s *Scorer) rescoreAll(ctx context.Context, tenantID uuid.UUID, list func(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error)) (int, error) {
 	changed := 0
 	after := uuid.Nil
 	for {
-		page, err := s.store.ListFindingsForRescore(ctx, tenantID, after, 500)
+		page, err := list(ctx, tenantID, after, 500)
 		if err != nil {
 			return changed, err
 		}
@@ -265,6 +325,21 @@ func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.
 		if err != nil {
 			log.Warn("sla sweep: listing tenants failed", "error", err)
 			return
+		}
+		// A tenant whose SLAPolicy changed has every due date recomputed first, so the breaches below follow the
+		// new policy.
+		if changed, err := sys.TenantsNeedingSLARecompute(ctx); err == nil {
+			for _, t := range changed {
+				n, err := sc.RecomputeSLA(ctx, t)
+				if err != nil {
+					log.Warn("sla recompute failed", "tenant", t, "error", err)
+					continue
+				}
+				if err := sc.store.ClearSLARecompute(ctx, t); err != nil {
+					log.Warn("sla recompute: clearing the flag failed", "tenant", t, "error", err)
+				}
+				log.Info("sla due dates recomputed after a policy change", "tenant", t, "findings", n)
+			}
 		}
 		now := time.Now().UTC()
 		for _, t := range tenants {

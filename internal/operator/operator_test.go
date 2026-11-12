@@ -3,6 +3,7 @@ package operator_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -227,5 +228,46 @@ func TestNamespaceBindingComesOnlyFromTenantSpec(t *testing.T) {
 	st2, _ := op.ReconcileTenant(ctx, &operator.TenantCR{Metadata: operator.Metadata{Name: "team-b"}, Spec: operator.TenantSpec{DisplayName: "B", Namespaces: []string{"payments"}}})
 	if c := st2.GetCondition("Ready"); c == nil || c.Status != "False" || c.Reason != "NamespaceOwnedByOtherTenant" {
 		t.Fatalf("a namespace has one owner, got %+v", c)
+	}
+}
+
+func TestSLAPolicyReconciler(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, nil, nil, nil)
+	policy := func(ns string, spec map[string]any) *operator.SLAPolicyCR {
+		return &operator.SLAPolicyCR{Metadata: operator.Metadata{Name: "default", Namespace: ns, Generation: 3}, Spec: spec}
+	}
+
+	// A namespace no tenant lists: not ready, and nothing is stored.
+	st, err := op.ReconcileSLAPolicy(ctx, policy("nobody", map[string]any{}))
+	if err != nil || st.GetCondition("Ready") == nil || st.GetCondition("Ready").Reason != "TenantNotFound" {
+		t.Fatalf("no tenant: %v %+v", err, st.GetCondition("Ready"))
+	}
+
+	tn := &operator.TenantCR{Metadata: operator.Metadata{Name: "acme"}, Spec: operator.TenantSpec{Namespaces: []string{"team-payments"}}}
+	if _, err := op.ReconcileTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	owner, _ := store.GetTenantBySlug(ctx, "acme")
+
+	// A valid policy is stored and Ready.
+	st, err = op.ReconcileSLAPolicy(ctx, policy("team-payments", map[string]any{"matrix": map[string]any{"critical": map[string]any{"critical": 1}}}))
+	if err != nil || st.GetCondition("Ready").Status != "True" || st.ObservedGeneration != 3 {
+		t.Fatalf("valid policy: %v %+v", err, st)
+	}
+	got, ok := store.SLAPolicy(owner.ID, "team-payments", "default")
+	if !ok || got.Error != "" || got.Generation != 3 {
+		t.Fatalf("stored: %+v %v", got, ok)
+	}
+
+	// An invalid one is stored with its reason, says so in Ready, and is not an error to retry.
+	st, err = op.ReconcileSLAPolicy(ctx, policy("team-payments", map[string]any{"businessDays": true}))
+	c := st.GetCondition("Ready")
+	if err != nil || c.Status != "False" || c.Reason != "InvalidSpec" || !strings.Contains(c.Message, "business days") {
+		t.Fatalf("invalid policy: %v %+v", err, c)
+	}
+	if got, _ := store.SLAPolicy(owner.ID, "team-payments", "default"); got.Error == "" {
+		t.Fatal("the reason must be stored with the spec")
 	}
 }
