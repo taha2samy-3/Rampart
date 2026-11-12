@@ -132,6 +132,15 @@ function Page({ app }: { app: ApplicationPage }) {
             </Table>
           )}
         </section>
+
+        <section className="mt-6" aria-labelledby="app-vex">
+          <h2 id="app-vex" className="mb-1 text-14 font-semibold">{t('apps.vex')}</h2>
+          <p className="m-0 mb-1 text-12 text-ink-2">{t('apps.vexHelp')}</p>
+          <p className="m-0 flex gap-4 text-13">
+            <a href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=openvex`} download>{t('apps.vexOpen')}</a>
+            <a href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=cyclonedx`} download>{t('apps.vexCdx')}</a>
+          </p>
+        </section>
       </article>
     </div>
   );

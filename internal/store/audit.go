@@ -3,10 +3,12 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"rampart/internal/domain"
 )
 
 // AuditRecord is one row of the audit log as the API returns it.
@@ -76,6 +78,46 @@ func (s *PostgresStore) ListAudit(ctx context.Context, tenantID uuid.UUID, f Aud
 			}
 			r.Detail = detail
 			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// VEXMatcher finds the findings a VEX statement is about. Only the PostgreSQL store implements it.
+type VEXMatcher interface {
+	// FindFindingsForVEX returns the findings of a tenant whose vulnerability is one of vulnIDs or an alias of
+	// one (in either direction, docs/16 D19) and whose package has one of the purl bases. appID narrows to one
+	// application when it is not nil.
+	FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error)
+}
+
+// FindFindingsForVEX implements VEXMatcher.
+func (s *PostgresStore) FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error) {
+	ids := make([]string, 0, 2*len(vulnIDs))
+	for _, v := range vulnIDs {
+		ids = append(ids, v, strings.ToUpper(v))
+	}
+	var out []*domain.Finding
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding
+			WHERE tenant_id = $1
+			  AND (vulnerability_id = ANY($2)
+			       OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias = ANY($2))
+			       OR vulnerability_id IN (SELECT alias FROM vulnerability_alias WHERE vulnerability_id = ANY($2)))
+			  AND (purl_base = ANY($3) OR location->'package'->>'purl_base' = ANY($3))
+			  AND ($4::uuid IS NULL OR application_id = $4)
+			ORDER BY id LIMIT 5000`, tenantID, ids, purlBases, appID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, f)
 		}
 		return rows.Err()
 	})

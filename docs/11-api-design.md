@@ -36,7 +36,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET /runs/{id}` | Status and stats of an ingest run |
 | `GET /runs`, `GET /runs/{id}` (on `/api/v1`, query API) | For the UI: runs newest first with a signed cursor (`limit`, `cursor`; answers `{items, next_cursor}`), and one run. Each is the run plus `scanners` (the tools in its report) and `ephemeral` (from an untracked ref, D10) |
 | `POST /sbom` | Convenience alias of `/reports` that forces SBOM handling and DT forwarding rules |
-| `POST /vex` | Upload OpenVEX, CycloneDX VEX or CSAF VEX |
+| `POST /vex` | Upload OpenVEX or CycloneDX VEX; `?application=`, `?dryRun=true` (built, D47; CSAF not built) |
 
 ## Hooks (`/hooks`)
 
@@ -71,7 +71,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET/POST /applications`, `GET/PATCH/DELETE /applications/{id}` | Applications. Those created from CRDs are read-only here and show `managedBy: crd` |
 | `GET /applications/{id}/summary` | Counts, risk, SLA adherence, coverage |
 | `GET /applications/{id}/sbom?format=cyclonedx\|spdx` | Merged SBOM |
-| `GET /applications/{id}/vex?format=openvex\|cyclonedx\|csaf` | Current triage as VEX |
+| `GET /applications/{id}/vex?format=openvex\|cyclonedx` | Current triage as VEX (built, D47; csaf not built) |
 | `GET /hierarchy`, `GET /hierarchy/{id}/rollup` | Business-unit tree and roll-ups |
 | `GET /assets`, `GET /assets/{id}`, `GET /assets/{id}/graph` | Assets and code-to-cloud edges |
 | `GET /components?purl=` | "Where is this package used" across the tenant |

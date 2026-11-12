@@ -29,12 +29,14 @@ const (
 	ErrCodeSHA256Mismatch    = "sha256_mismatch"
 	ErrCodeParse             = "parse_error"
 	ErrCodeUnsupportedFormat = "unsupported_format"
-	ErrCodeReportTooLarge    = "report_too_large"
-	ErrCodeSBOMTooLarge      = "sbom_too_large"
-	ErrCodeRetriesExhausted  = "retries_exhausted"
-	ErrCodeMergeFailed       = "merge_failed"
-	ErrCodeCloseFailed       = "close_failed"
-	ErrCodeObjectMissing     = "object_missing"
+	// ErrCodeVEXDocument: a VEX document is a set of decisions, not a scan report (docs/16 D47).
+	ErrCodeVEXDocument      = "vex_document"
+	ErrCodeReportTooLarge   = "report_too_large"
+	ErrCodeSBOMTooLarge     = "sbom_too_large"
+	ErrCodeRetriesExhausted = "retries_exhausted"
+	ErrCodeMergeFailed      = "merge_failed"
+	ErrCodeCloseFailed      = "close_failed"
+	ErrCodeObjectMissing    = "object_missing"
 )
 
 // Processor turns one uploaded report into findings: verify, stream-parse, merge in batches, close
@@ -433,6 +435,9 @@ func (p *Processor) selectParser(ctx context.Context, hint string, open StreamSo
 		}
 	}
 	id := parser.Descriptor().ID
+	if strings.Contains(id, "openvex") {
+		return nil, false, &jobs.PermanentError{Code: ErrCodeVEXDocument, Err: errors.New("an OpenVEX document is a set of decisions, not a scan report: send it to POST /api/v1/vex")}
+	}
 	return parser, strings.Contains(id, "cyclonedx") || strings.Contains(id, "spdx") || strings.Contains(id, "syft"), nil
 }
 

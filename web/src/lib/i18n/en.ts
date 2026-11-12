@@ -256,6 +256,10 @@ export const en = {
     reasonLabel: 'Reason',
   },
   apps: {
+    vex: 'VEX',
+    vexHelp: 'What has been decided about each vulnerability, for customers and other tools. Import is by CLI: rampart vex import.',
+    vexOpen: 'Download OpenVEX',
+    vexCdx: 'Download CycloneDX VEX',
     title: 'Applications',
     tableLabel: 'Applications',
     colApp: 'Application',
@@ -447,6 +451,7 @@ export const en = {
       sha256_mismatch: 'The file does not match the SHA-256 given when the upload was completed. Nothing was merged. Check the file was not changed, then upload it again.',
       parse_error: 'The report could not be read. It may be truncated or not in the declared format.',
       unsupported_format: 'Rampart does not recognise this report format.',
+      vex_document: 'This is a VEX document: a set of decisions, not a scan report. Send it to POST /api/v1/vex, or use rampart vex import.',
       report_too_large: 'The report is larger than the limit for this tenant.',
       sbom_too_large: 'The SBOM is larger than the limit.',
       retries_exhausted: 'Processing kept failing after repeated attempts. Send the run id to support.',

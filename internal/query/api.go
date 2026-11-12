@@ -160,8 +160,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	mux.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)
 	mux.HandleFunc("GET /api/v1/applications/{id}/sbom/path", a.handleGetAssetSBOMPath)
-	mux.HandleFunc("GET /api/v1/assets/{id}/vex", a.handleGetAssetVEX)
-	mux.HandleFunc("GET /api/v1/applications/{id}/vex", a.handleGetAssetVEX) // alias per doc 11
+	mux.HandleFunc("GET /api/v1/assets/{id}/vex", a.handleExportVEX)
+	mux.HandleFunc("GET /api/v1/applications/{id}/vex", a.handleExportVEX)
+	mux.HandleFunc("POST /api/v1/vex", a.handleImportVEX)
 }
 
 // FindingResponse wraps a finding with its calculated risk and SLA details.
@@ -577,85 +578,6 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchFindingRequest payload for PATCH /api/v1/findings/{id} (docs/11).
-func (a *API) handleGetAssetVEX(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := a.resolveTenant(r)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
-		return
-	}
-
-	idStr := r.PathValue("id")
-	assetID, err := uuid.Parse(idStr)
-	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid UUID"}`, http.StatusBadRequest)
-		return
-	}
-
-	findings, err := a.store.ListFindings(r.Context(), tenantID)
-	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to list findings"}`, http.StatusInternalServerError)
-		return
-	}
-
-	type OpenVEXStatement struct {
-		Vulnerability struct {
-			ID string `json:"@id"`
-		} `json:"vulnerability"`
-		Status          string `json:"status"`
-		Justification   string `json:"justification,omitempty"`
-		Impact          string `json:"impact_statement,omitempty"`
-		ActionStatement string `json:"action_statement,omitempty"`
-	}
-
-	var statements []OpenVEXStatement
-	for _, f := range findings {
-		if f.AssetID == assetID && f.VulnerabilityID != nil {
-			stmt := OpenVEXStatement{}
-			// The mapping of docs/03 section 4: the internal states are a superset of OpenVEX.
-			switch f.State {
-			case domain.StateOpen, domain.StateUnderInvestigation:
-				stmt.Status = "under_investigation"
-			case domain.StateAffected:
-				stmt.Status = "affected"
-				stmt.ActionStatement = firstNonEmptyStr(f.StateReason, "Remediation is required.")
-			case domain.StateNotAffected:
-				stmt.Status, stmt.Justification, stmt.Impact = "not_affected", f.Justification, f.ImpactStatement
-			case domain.StateFixed:
-				stmt.Status = "fixed"
-			case domain.StateRiskAccepted:
-				stmt.Status = "affected"
-				stmt.ActionStatement = "Risk accepted: " + firstNonEmptyStr(f.StateReason, "no reason recorded")
-			default: // out_of_scope and duplicate are not exported
-				continue
-			}
-			stmt.Vulnerability.ID = *f.VulnerabilityID
-			statements = append(statements, stmt)
-		}
-	}
-
-	doc := struct {
-		Context    string             `json:"@context"`
-		ID         string             `json:"@id"`
-		Author     string             `json:"author"`
-		Role       string             `json:"role"`
-		Timestamp  time.Time          `json:"timestamp"`
-		Statements []OpenVEXStatement `json:"statements"`
-	}{
-		Context:    "https://openvex.dev/ns/v0.2.0",
-		ID:         fmt.Sprintf("https://rampart.aspm.dev/vex/%s", assetID),
-		Author:     "Rampart ASPM",
-		Role:       "Security Platform",
-		Timestamp:  time.Now().UTC(),
-		Statements: statements,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(doc)
-}
-
 func matchesQuery(f *domain.Finding, q grammar.Query) bool {
 	for _, t := range q.Terms {
 		matched := false

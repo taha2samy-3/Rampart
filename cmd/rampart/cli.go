@@ -63,6 +63,9 @@ func handleCLI(args []string) (bool, error) {
 	case "gate":
 		return true, runGate(args[1:])
 
+	case "vex":
+		return true, runVEX(args[1:], os.Stdout)
+
 	case "apply":
 		return true, runApply(args[1:])
 
