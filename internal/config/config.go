@@ -413,6 +413,21 @@ func applyEnv(cfg *Config) {
 	if v := get("OBJECT_STORAGE_ENDPOINT"); v != "" {
 		cfg.ObjectStorage.Endpoint = v
 	}
+	if v := get("OBJECT_STORAGE_EXTERNAL_ENDPOINT"); v != "" {
+		cfg.ObjectStorage.ExternalEndpoint = v
+	}
+	if v := get("OBJECT_STORAGE_REGION"); v != "" {
+		cfg.ObjectStorage.Region = v
+	}
+	if v := get("OBJECT_STORAGE_ACCESS_KEY_FILE"); v != "" {
+		cfg.ObjectStorage.AccessKeyFile = v
+	}
+	if v := get("OBJECT_STORAGE_SECRET_KEY_FILE"); v != "" {
+		cfg.ObjectStorage.SecretKeyFile = v
+	}
+	if v := get("OBJECT_STORAGE_USE_PATH_STYLE"); v != "" {
+		cfg.ObjectStorage.UsePathStyle = strings.ToLower(v) == "true" || v == "1"
+	}
 	if v := get("OBJECT_STORAGE_BUCKET_RAW"); v != "" {
 		cfg.ObjectStorage.BucketRaw = v
 	}

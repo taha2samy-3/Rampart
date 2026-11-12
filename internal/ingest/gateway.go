@@ -127,6 +127,14 @@ func (g *Gateway) SetObjectStore(o objectstore.Store) {
 	g.processor.objects = o
 }
 
+// UseProcessor shares one Processor between the gateway (direct uploads) and the River worker.
+func (g *Gateway) UseProcessor(p *Processor) {
+	g.processor = p
+	if g.objects != nil {
+		p.objects = g.objects
+	}
+}
+
 // SetLimits applies ingest.maxReportBytes and ingest.batchRows.
 func (g *Gateway) SetLimits(maxReportBytes int64, batchRows int) {
 	if maxReportBytes > 0 {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"rampart/internal/objectstore"
 	"rampart/internal/operator"
 	"rampart/internal/secrets"
 	"strings"
@@ -170,10 +171,21 @@ func (r *Runner) Run(ctx context.Context) error {
 		})
 	}
 
+	feeds := enrich.NewFeedStore()
+	registry := integrations.DefaultRegistry()
+
+	// One processor serves direct uploads and the River parse worker (D2).
+	objects, err := r.buildObjectStore(ctx)
+	if err != nil {
+		return err
+	}
+	processor := ingest.NewProcessor(storeBackend, registry, objects, r.logger)
+	processor.SetLimits(r.cfg.Ingest.BatchRows, r.cfg.Ingest.MaxReportBytes)
+
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
-		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, nil)
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse))
 		if err != nil {
 			return fmt.Errorf("initializing river job queue: %w", err)
 		}
@@ -196,11 +208,13 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	r.autoApplyDefaultResources(ctx, configBackend)
 
-	feeds := enrich.NewFeedStore()
-	registry := integrations.DefaultRegistry()
-
 	gw := ingest.NewGatewayWithDeps(queue, storeBackend, registry, feeds)
 	gw.SetAuthenticator(authn)
+	gw.SetLimits(r.cfg.Ingest.MaxReportBytes, r.cfg.Ingest.BatchRows)
+	if objects != nil {
+		gw.SetObjectStore(objects)
+	}
+	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
 
@@ -505,6 +519,41 @@ func ReadOrGeneratePassword(path string) (password string, generated bool, err e
 		return "", false, err
 	}
 	return pw, true, nil
+}
+
+// buildObjectStore connects the S3 client when an endpoint is configured; without one, presigned uploads
+// are off and POST /ingest/v1/reports still works. It does not contact the storage except to make
+// sure the bucket exists.
+func (r *Runner) buildObjectStore(ctx context.Context) (objectstore.Store, error) {
+	oc := r.cfg.ObjectStorage
+	if oc.Endpoint == "" {
+		r.logger.Warn("object storage is not configured: presigned uploads are disabled")
+		return nil, nil
+	}
+	var access, secret []byte
+	var err error
+	if oc.AccessKeyFile != "" {
+		if access, err = readSecretFile(oc.AccessKeyFile); err != nil {
+			return nil, fmt.Errorf("reading the object storage access key: %w", err)
+		}
+	}
+	if oc.SecretKeyFile != "" {
+		if secret, err = readSecretFile(oc.SecretKeyFile); err != nil {
+			return nil, fmt.Errorf("reading the object storage secret key: %w", err)
+		}
+	}
+	s3, err := objectstore.NewS3(ctx, objectstore.S3Config{
+		Endpoint: oc.Endpoint, ExternalEndpoint: oc.ExternalEndpoint, Region: oc.Region, Bucket: oc.BucketRaw,
+		AccessKey: string(access), SecretKey: string(secret), UsePathStyle: oc.UsePathStyle,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("object storage: %w", err)
+	}
+	// The bucket is created lazily and may not be reachable yet at start: log, do not fail the process.
+	if err := s3.EnsureBucket(ctx); err != nil {
+		r.logger.Warn("object storage bucket is not ready yet", "error", err)
+	}
+	return s3, nil
 }
 
 // readSecretFile reads a secret from a file, dropping trailing newlines only.
