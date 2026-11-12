@@ -34,11 +34,7 @@ func NewRiverQueue(ctx context.Context, pool *pgxpool.Pool, directURL string, wo
 	}
 
 	if workers == nil {
-		workers = river.NewWorkers()
-		river.AddWorker(workers, &ParseWorker{})
-		river.AddWorker(workers, &EnrichWorker{})
-		river.AddWorker(workers, &PolicyWorker{})
-		river.AddWorker(workers, &NotifyWorker{})
+		workers = NewWorkers(nil)
 	}
 
 	driver := riverpgxv5.New(pool)
@@ -94,7 +90,7 @@ func (q *RiverQueue) EnqueueParse(ctx context.Context, args ParseJobArgs) error 
 		UniqueOpts: river.UniqueOpts{
 			ByArgs: true,
 		},
-		MaxAttempts: 25, // D17 line 334
+		MaxAttempts: ParseMaxAttempts,
 	})
 	return err
 }
@@ -106,7 +102,7 @@ func (q *RiverQueue) EnqueueParseTx(ctx context.Context, tx pgx.Tx, args ParseJo
 		UniqueOpts: river.UniqueOpts{
 			ByArgs: true,
 		},
-		MaxAttempts: 25, // D17 line 334
+		MaxAttempts: ParseMaxAttempts,
 	})
 	return err
 }
@@ -199,17 +195,54 @@ func AcquireTenantSlot(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UU
 	return release, nil
 }
 
+// ParseMaxAttempts is the River retry budget of a parse job (D17: 25 with exponential backoff).
+const ParseMaxAttempts = 25
+
+// PermanentError marks a failure no retry can fix (an unparseable report, a hash mismatch, an unknown
+// format, D17). The worker cancels the job instead of retrying it, and the ingest run carries Code.
+type PermanentError struct {
+	Code string // stable, typed: sha256_mismatch, size_mismatch, parse_error, unsupported_format, ...
+	Err  error
+}
+
+func (e *PermanentError) Error() string { return e.Code + ": " + e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+// IsPermanent reports whether err is, or wraps, a PermanentError.
+func IsPermanent(err error) bool {
+	var p *PermanentError
+	return errors.As(err, &p)
+}
+
+// ParseHandler processes one parse job. attempt starts at 1.
+type ParseHandler func(ctx context.Context, args ParseJobArgs, attempt int) error
+
 // ParseWorker processes parse jobs via River.
 type ParseWorker struct {
 	river.WorkerDefaults[ParseJobArgs]
-	Handler func(ctx context.Context, job *river.Job[ParseJobArgs]) error
+	Handle ParseHandler
 }
 
 func (w *ParseWorker) Work(ctx context.Context, job *river.Job[ParseJobArgs]) error {
-	if w.Handler != nil {
-		return w.Handler(ctx, job)
+	if w.Handle == nil {
+		return ErrNoHandler
 	}
-	return ErrNoHandler
+	err := w.Handle(ctx, job.Args, job.Attempt)
+	if IsPermanent(err) {
+		return river.JobCancel(err) // retrying cannot help
+	}
+	return err
+}
+
+// NewWorkers builds the worker set. A kind with no handler fails its jobs (ErrNoHandler) instead of
+// pretending to have done the work.
+func NewWorkers(parse ParseHandler) *river.Workers {
+	w := river.NewWorkers()
+	river.AddWorker(w, &ParseWorker{Handle: parse})
+	river.AddWorker(w, &EnrichWorker{})
+	river.AddWorker(w, &PolicyWorker{})
+	river.AddWorker(w, &NotifyWorker{})
+	return w
 }
 
 // EnrichWorker processes enrichment jobs via River.
