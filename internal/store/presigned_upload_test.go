@@ -51,7 +51,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore}
 	if ep := os.Getenv("RAMPART_TEST_S3_ENDPOINT"); ep != "" {
 		s3, err := objectstore.NewS3(ctx, objectstore.S3Config{
-			Endpoint: ep, Bucket: "rampart-up-" + strings.ReplaceAll(uuid.NewString()[:8], "-", ""),
+			Endpoint: ep, Bucket: "rampart-upload-tests", // one shared bucket: every bucket costs the object store volumes
 			AccessKey: os.Getenv("RAMPART_TEST_S3_ACCESS_KEY"), SecretKey: os.Getenv("RAMPART_TEST_S3_SECRET_KEY"), UsePathStyle: true,
 		})
 		if err != nil {
