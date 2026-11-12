@@ -19,6 +19,8 @@ import (
 
 var (
 	ErrNotFound = errors.New("store: record not found")
+	// ErrVersionConflict: the finding changed since the caller read it (optimistic locking, docs/11).
+	ErrVersionConflict = errors.New("store: the finding was changed by someone else")
 )
 
 // PostgresStore implements store.Store on PostgreSQL 16+ with Row-Level Security (D4).
@@ -130,7 +132,8 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	coalesce(severity_override_reason, ''), coalesce(cvss_vector, ''),
 	risk_score, state, coalesce(previous_state, ''), coalesce(state_reason, ''),
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
-	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at`
+	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
+	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
 	var (
@@ -146,6 +149,7 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		&overr, &f.CVSSVector, &f.RiskScore, &state, &prevState, &f.StateReason,
 		&detection, &f.ContentHash, &f.WeakFingerprint, &f.FirstSeen, &f.LastSeen,
 		&f.ResolvedAt, &resolution, &f.ReopenedCount, &f.OccurrenceCount, &f.Version, &f.CreatedAt, &f.UpdatedAt,
+		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags,
 	)
 	if err != nil {
 		return nil, err
@@ -248,7 +252,7 @@ func (s *PostgresStore) GetFindingsByKeys(ctx context.Context, tenantID uuid.UUI
 		return results, nil
 	}
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding WHERE tenant_id = $1 AND finding_key = ANY($2)`, tenantID, keys)
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding WHERE tenant_id = $1 AND finding_key = ANY($2) FOR UPDATE`, tenantID, keys)
 		if err != nil {
 			return err
 		}
@@ -307,7 +311,9 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				content_hash = EXCLUDED.content_hash,
 				reopened_count = EXCLUDED.reopened_count,
 				occurrence_count = EXCLUDED.occurrence_count,
-				version = finding.version + 1,
+				-- The merge engine bumps the version where something a person or a query cares about changed. A rescan
+				-- that finds the same issue only moves last_seen, and must not invalidate a version an analyst holds.
+				version = GREATEST(finding.version, EXCLUDED.version),
 				updated_at = NOW()`
 
 		batch := &pgx.Batch{}
@@ -1590,4 +1596,66 @@ func (s *PostgresStore) ListIngestRuns(ctx context.Context, tenantID uuid.UUID, 
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// UpdateFindingTriage writes a human decision (D18) and its timeline events in one transaction. It sets only
+// the triage columns, so it cannot undo what an ingest wrote to the others, and it applies only if the finding is
+// still at expectedVersion (ErrVersionConflict otherwise).
+func (s *PostgresStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var resolution *string
+		if f.Resolution != nil {
+			r := string(*f.Resolution)
+			resolution = &r
+		}
+		prev, reason, just, impact := nonEmpty(string(f.PreviousState)), nonEmpty(f.StateReason), nonEmpty(f.Justification), nonEmpty(f.ImpactStatement)
+		override := f.SeverityOverrideReason
+		tags := f.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		tag, err := tx.Exec(ctx, `
+			UPDATE finding SET
+				state = $4, previous_state = $5, state_reason = $6, resolution = $7, resolved_at = $8,
+				justification = $9, impact_statement = $10, duplicate_of_id = $11,
+				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15,
+				version = version + 1, updated_at = NOW()
+			WHERE tenant_id = $1 AND id = $2 AND version = $3`,
+			tenantID, f.ID, expectedVersion,
+			string(f.State), prev, reason, resolution, f.ResolvedAt,
+			just, impact, f.DuplicateOfID,
+			string(f.Severity), override, tags, f.ReopenedCount)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM finding WHERE tenant_id = $1 AND id = $2)`, tenantID, f.ID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+			return ErrVersionConflict
+		}
+		f.Version = expectedVersion + 1
+		batch := &pgx.Batch{}
+		for _, ev := range events {
+			id := ev.ID
+			if id == domain.NilID {
+				id = domain.NewID()
+			}
+			batch.Queue(`INSERT INTO finding_event (id, tenant_id, finding_id, at, actor, type, "from", "to", note)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, tenantID, ev.FindingID, ev.At, ev.Actor, ev.Type, ev.From, ev.To, ev.Note)
+		}
+		return sendBatch(ctx, tx, batch, "record triage events")
+	})
+}
+
+// nonEmpty maps an empty string to NULL.
+func nonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

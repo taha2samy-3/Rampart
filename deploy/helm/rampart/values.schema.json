@@ -63,7 +63,7 @@
         },
         "minSchemaVersion": {
           "type": "integer",
-          "minimum": 5
+          "minimum": 6
         },
         "cnpg": {
           "type": "object",

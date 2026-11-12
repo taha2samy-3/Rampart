@@ -87,6 +87,13 @@ export interface Finding {
   first_seen: string;
   last_seen?: string;
   occurrence_count?: number;
+  /** For If-Match: a decision applies only to the version the analyst saw (docs/16 D38). */
+  version?: number;
+  state_reason?: string;
+  justification?: string;
+  impact_statement?: string;
+  duplicate_of_id?: string;
+  tags?: string[];
 }
 export interface RiskFactor {
   name: string;
@@ -142,4 +149,24 @@ export interface RunRow {
   scanners: string[];
   /** From an untracked ref: it never changed the inventory (docs/16 D10). */
   ephemeral: boolean;
+}
+
+/** One entry of a finding's timeline (internal/domain FindingEvent). */
+export interface FindingEvent {
+  id: string;
+  at: string;
+  actor: string;
+  type: string;
+  from?: unknown;
+  to?: unknown;
+  note?: string;
+}
+
+/** The body of PATCH /api/v1/findings/{id} (docs/11). */
+export interface TriageBody {
+  state?: FindingState;
+  justification?: string;
+  impactStatement?: string;
+  duplicateOf?: string;
+  note?: string;
 }

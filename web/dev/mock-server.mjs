@@ -96,6 +96,7 @@ function makeFindings() {
         first_seen: new Date(now - (i * 3 + 1) * 86_400_000).toISOString(),
         last_seen: new Date(now - 3_600_000).toISOString(),
         occurrence_count: 1,
+        version: 1,
       },
       risk: { base_severity: band, base_points: BAND_BASE[band], factors, total_score: total, band, has_kev: fs.includes('KEV'), epss_score: 0 },
       sla_due_date: new Date(now + (6 - i) * 86_400_000).toISOString(),
@@ -103,6 +104,34 @@ function makeFindings() {
   }).sort((a, b) => b.risk.total_score - a.risk.total_score);
 }
 const ALL = makeFindings();
+
+// Triage (docs/16 D38): the same rules as internal/domain/triage.go, enough to click through the dialog.
+const JUSTIFICATIONS = ['component_not_present', 'vulnerable_code_not_present', 'vulnerable_code_not_in_execute_path', 'vulnerable_code_cannot_be_controlled_by_adversary', 'inline_mitigations_already_exist'];
+const EVENTS = new Map(); // finding id -> events, oldest first
+const eventsOf = (id) => {
+  if (!EVENTS.has(id)) EVENTS.set(id, [{ id: 'e-' + id, at: new Date(Date.now() - 5 * 86_400_000).toISOString(), actor: 'system:parser', type: 'created' }]);
+  return EVENTS.get(id);
+};
+function applyTriage(row, body, version) {
+  const f = row.finding;
+  if (version !== undefined && version !== f.version) return { status: 409, title: 'The finding was changed by someone else. Reload it and decide again.' };
+  if (!body.state && !body.note) return { status: 400, title: 'nothing to change: give a state, severity, tags or a note' };
+  if (body.state === 'risk_accepted') return { status: 400, title: 'a risk is accepted through a risk acceptance, which needs an owner and an expiry' };
+  if (body.state === 'not_affected' && !JUSTIFICATIONS.includes(body.justification)) return { status: 400, title: 'not_affected needs one of the OpenVEX justifications: ' + JUSTIFICATIONS.join(', ') };
+  if (body.state === 'duplicate' && !body.duplicateOf) return { status: 400, title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself' };
+  const evs = eventsOf(f.id);
+  if (body.state && body.state !== f.state) {
+    evs.push({ id: 'e' + Math.random().toString(36).slice(2), at: new Date().toISOString(), actor: 'user:sara.ahmed@acme.example', type: 'state_changed', from: f.state, to: body.state, note: body.note });
+    f.state = body.state;
+    f.state_reason = body.note;
+    f.justification = body.state === 'not_affected' ? body.justification : undefined;
+    f.impact_statement = body.state === 'not_affected' ? body.impactStatement : undefined;
+  } else if (body.note) {
+    evs.push({ id: 'e' + Math.random().toString(36).slice(2), at: new Date().toISOString(), actor: 'user:sara.ahmed@acme.example', type: 'note_added', note: body.note });
+  }
+  f.version += 1;
+  return null;
+}
 
 function filter(q) {
   let rows = ALL;
@@ -236,6 +265,23 @@ const server = http.createServer((req, res) => {
     if (p.startsWith('/api/v1/runs/')) {
       const r = RUNS.find((x) => x.id === p.split('/').pop());
       return r ? json(res, r) : problem(res, 404, 'Run not found', 'No such run.');
+    }
+    const fm = /^\/api\/v1\/findings\/([^/]+)(\/events)?$/.exec(p);
+    if (fm) {
+      const row = ALL.find((r) => r.finding.id === fm[1]);
+      if (!row) return problem(res, 404, 'Finding not found');
+      if (fm[2] && req.method === 'GET') return json(res, { items: eventsOf(row.finding.id) });
+      if (!fm[2] && req.method === 'PATCH') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const ifMatch = req.headers['if-match'];
+          const err = applyTriage(row, JSON.parse(body || '{}'), ifMatch ? Number(String(ifMatch).replace(/"/g, '')) : undefined);
+          if (err) return problem(res, err.status, err.title, undefined);
+          json(res, row);
+        });
+        return;
+      }
     }
     if (p === '/api/v1/findings') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list findings', 'The database did not answer within 5 s.');

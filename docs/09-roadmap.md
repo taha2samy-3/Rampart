@@ -25,6 +25,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 1: query API on SQL with signed cursors; feed sync (KEV, EPSS, OSV) with aliases (D35) | built; tested on PostgreSQL |
 | Phase 1: ingest throughput goal | **withdrawn** (D35): measured at about 130 s for 100k results, not reached; benchmark removed |
 | Phase 1: `correlation_key` and correlation groups; ephemeral runs with baseline comparison; parser fuzz tests (D37) | built; tested on PostgreSQL |
+| Phase 2: triage actions: state machine with VEX justifications, severity override with reason, tags, notes, timeline, bulk (D38) | built; API tested on PostgreSQL, UI (Change state dialog, timeline) tested with Vitest and checked in a browser. Not built: severity and tag editing in the UI, risk acceptance |
 | Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
 | Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
 | Phase 1: `RekeyJob` (D11) | not built |

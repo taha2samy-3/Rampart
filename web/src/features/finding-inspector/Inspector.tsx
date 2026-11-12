@@ -1,8 +1,11 @@
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import type { FindingRow } from '@/api/types';
-import { BAND_LABEL, BandShape, EmptyState, ScoreBar } from '@/components';
+import type { TFunction } from 'i18next';
+import { getFindingEvents, qk, toProblem } from '@/api';
+import type { FindingEvent, FindingRow } from '@/api/types';
+import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
-import { absoluteDate, dueShort, relativeDays } from '@/lib/format';
+import { absoluteDate, dueShort, relativeDays, shortAge } from '@/lib/format';
 import { factorKind, factorLabel, type SegmentKind } from '@/lib/score';
 
 const SWATCH: Record<SegmentKind, string> = {
@@ -13,7 +16,7 @@ const SWATCH: Record<SegmentKind, string> = {
 };
 
 /** Docked inspector: the same score bar at full width, then the ledger of factors. */
-export function Inspector({ row, selectedId }: { row: FindingRow | undefined; selectedId?: string }) {
+export function Inspector({ row, selectedId, onTriage }: { row: FindingRow | undefined; selectedId?: string; onTriage?: () => void }) {
   const { t } = useTranslation();
   if (!row && selectedId) return <EmptyState title={t('findings.selectTitle')}>{t('findings.inspectorMissing')}</EmptyState>;
   if (!row) return <EmptyState title={t('findings.selectTitle')}>{t('findings.selectBody')}</EmptyState>;
@@ -32,6 +35,19 @@ export function Inspector({ row, selectedId }: { row: FindingRow | undefined; se
     <article aria-label={t('findings.inspector')} className="px-4 py-3">
       <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">{f.title}</h2>
       <p className="mt-1 text-13 text-ink-2">{status}</p>
+      {onTriage && (
+        <div className="mt-3 flex items-center gap-2">
+          <Button onClick={onTriage}>{t('triage.action')}</Button>
+          <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>s</Kbd></span>
+        </div>
+      )}
+      {(f.justification || f.impact_statement || f.state_reason) && (
+        <dl className="m-0 mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
+          {f.justification && <Fact label={t('triage.justifiedAs')} value={t(`triage.justifications.${f.justification}`, { defaultValue: f.justification })} />}
+          {f.impact_statement && <Fact label={t('triage.impactLabel')} value={f.impact_statement} />}
+          {f.state_reason && <Fact label={t('triage.reasonLabel')} value={f.state_reason} />}
+        </dl>
+      )}
 
       <section className="mt-4" aria-labelledby="why-score">
         <div className="mb-1.5 flex items-baseline gap-2">
@@ -75,8 +91,51 @@ export function Inspector({ row, selectedId }: { row: FindingRow | undefined; se
           <Fact label={t('findings.lastSeen')} value={absoluteDate(f.last_seen)} />
         </dl>
       </section>
+
+      <Timeline findingId={f.id} version={f.version} />
     </article>
   );
+}
+
+/** Who did what to this finding, oldest first. Reloads when the finding's version changes. */
+function Timeline({ findingId, version }: { findingId: string; version?: number }) {
+  const { t } = useTranslation();
+  const q = useQuery({
+    queryKey: [...qk.findings.events(findingId), version],
+    queryFn: ({ signal }) => getFindingEvents(findingId, signal),
+    retry: false,
+  });
+  return (
+    <section className="mt-5" aria-labelledby="timeline">
+      <h3 id="timeline" className="mb-1 text-13 font-semibold">{t('triage.timeline')}</h3>
+      {q.isPending && <p className="m-0 text-12 text-ink-2">{t('common.loading')}</p>}
+      {q.isError && <ProblemMessage problem={toProblem(q.error)} title={t('triage.timelineFailed')} onRetry={() => void q.refetch()} />}
+      {q.data && q.data.length === 0 && <p className="m-0 text-12 text-ink-2">{t('triage.timelineEmpty')}</p>}
+      {q.data && q.data.length > 0 && (
+        <ol className="m-0 list-none p-0 text-13">
+          {q.data.map((e) => (
+            <li key={e.id} className="border-b border-rule py-1.5">
+              <p className="m-0">{describe(e, t)}</p>
+              <p className="m-0 text-12 text-ink-2">
+                <time dateTime={e.at} title={absoluteDate(e.at)}>{shortAge(e.at)}</time>
+                {e.note ? ` - ${e.note}` : ''}
+              </p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function describe(e: FindingEvent, t: TFunction): string {
+  const actor = e.actor.startsWith('user:') ? e.actor.slice(5) : e.actor.startsWith('system') ? t('triage.scanActor') : e.actor;
+  const str = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : '');
+  const known = ['created', 'reactivated', 'closed_by_rescan', 'updated', 'recheck_needed', 'state_changed', 'severity_changed', 'tags_changed', 'note_added'];
+  const key = known.includes(e.type) ? e.type : 'default';
+  const from = e.type === 'state_changed' ? t(`state.${str(e.from)}`, { defaultValue: str(e.from) }) : str(e.from);
+  const to = e.type === 'state_changed' ? t(`state.${str(e.to)}`, { defaultValue: str(e.to) }) : str(e.to);
+  return t(`triage.events.${key}`, { actor, from, to, type: e.type });
 }
 
 function Fact({ label, value, mono }: { label: string; value: string | undefined; mono?: boolean }) {

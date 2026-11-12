@@ -20,7 +20,7 @@ export function finding(i: number, band: 'critical' | 'high' | 'medium' | 'low' 
   return {
     finding: {
       id: `f-${i}`, application_id: 'b7e1c9a2-0000', title: `Finding ${i}`, severity: band, risk_score: base + 100,
-      state: 'open', first_seen: '2026-10-01T00:00:00Z', rule_scanner_family: 'semgrep', rule_id: 'r1',
+      state: 'open', version: 3, first_seen: '2026-10-01T00:00:00Z', rule_scanner_family: 'semgrep', rule_id: 'r1',
       location: { file_path: 'src/a.go', start_line: i },
     },
     risk: { base_severity: band, base_points: base, factors: [{ name: 'KEV', points: 100, reason: 'Known exploited' }], total_score: base + 100, band },
@@ -37,6 +37,12 @@ export interface Scenario {
   findings?: ReturnType<typeof finding>[] | 'error';
   /** Pages of runs for GET /api/v1/runs; each call returns the next page. 'error' answers 500. */
   runs?: ReturnType<typeof run>[][] | 'error';
+  /** The signed-in role (default triager). */
+  role?: 'viewer' | 'triager' | 'admin';
+  /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
+  patch?: 200 | 400 | 409;
+  /** The timeline GET /api/v1/findings/{id}/events returns. */
+  events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
 }
 
 export function run(i: number, over: Record<string, unknown> = {}) {
@@ -63,8 +69,15 @@ export function mockFetch(sc: Scenario): Calls {
     }
     if (path === '/auth/session') return sc.loggedIn ? json(SESSION) : json({ type: 'u', title: 'Authentication required', status: 401 }, 401);
     if (path === '/auth/tenant' || path === '/auth/logout') return json(null, 204);
-    if (path === '/api/v1/me/permissions') return json({ role: 'triager', scopes: ['tenant'] });
+    if (path === '/api/v1/me/permissions') return json({ role: sc.role ?? 'triager', scopes: ['tenant'] });
     if (path === '/api/v1/me/tenants') return json([{ id: 't1', slug: 'acme', name: 'Acme' }, { id: 't2', slug: 'globex', name: 'Globex' }]);
+    if (path.startsWith('/api/v1/findings/') && path.endsWith('/events')) return json({ items: sc.events?.length ? sc.events : null });
+    if (path.startsWith('/api/v1/findings/') && (init?.method ?? 'GET') === 'PATCH') {
+      const st = sc.patch ?? 200;
+      if (st === 409) return json({ type: 'https://rampart.aspm.dev/problems/conflict-version', title: 'The finding was changed by someone else.', status: 409, request_id: 'req_409' }, 409);
+      if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
+      return json(finding(1));
+    }
     if (path === '/api/v1/runs') {
       if (sc.runs === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list runs', status: 500, request_id: 'req_runs' }, 500);
       const pages = sc.runs ?? [];

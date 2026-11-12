@@ -51,6 +51,10 @@ type Store interface {
 	// ListCorrelated returns the other findings that share the correlation key of the given finding.
 	ListCorrelated(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Finding, error)
 
+	// UpdateFindingTriage writes a human decision and its events together, only if the finding is still at
+	// expectedVersion (ErrVersionConflict otherwise).
+	UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error
+
 	// Query / Explorer API (D14, D16)
 	ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	GetFinding(ctx context.Context, tenantID, findingID uuid.UUID) (*domain.Finding, []*domain.Occurrence, error)

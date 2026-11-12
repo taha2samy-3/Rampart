@@ -8,6 +8,8 @@ import { Facets } from '@/features/facets/Facets';
 import { FilterBar } from '@/features/filter-bar/FilterBar';
 import { Inspector } from '@/features/finding-inspector/Inspector';
 import { FindingsTable } from '@/features/findings-table/FindingsTable';
+import { TriageDialog } from '@/features/triage/TriageDialog';
+import { useApp } from '@/app/session';
 import { cn } from '@/lib/cn';
 import { parseQuery, removeTerm } from '@/lib/grammar';
 import { useMedia } from '@/lib/useMedia';
@@ -66,6 +68,9 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const tablet = useMedia('(max-width: 899px)');
   const [sheetOpen, setSheetOpen] = useState(false);
   const insp = useInspectorWidth();
+  const { permissions } = useApp();
+  const canTriage = permissions?.role === 'triager' || permissions?.role === 'admin';
+  const [triageOpen, setTriageOpen] = useState(false);
 
   const setSearch = useCallback(
     (patch: Partial<FindingsSearch>) =>
@@ -85,6 +90,19 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total;
   const selectedRow = rows.find((r) => r.finding.id === selectedId);
+  // "s" sets the state of the selected finding (docs/13), unless the keystroke is for a field.
+  useEffect(() => {
+    if (!canTriage || !selectedRow) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 's' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
+      e.preventDefault();
+      setTriageOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canTriage, selectedRow]);
 
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = query;
   const loadMore = useCallback(() => void fetchNextPage(), [fetchNextPage]);
@@ -177,9 +195,10 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
           />
         )}
         <aside aria-label={t('findings.inspector')} className="h-full overflow-y-auto">
-          <Inspector row={selectedRow} selectedId={selectedId} />
+          <Inspector row={selectedRow} selectedId={selectedId} onTriage={canTriage && selectedRow ? () => setTriageOpen(true) : undefined} />
         </aside>
       </div>
+      {selectedRow && <TriageDialog row={selectedRow} open={triageOpen && canTriage} onOpenChange={setTriageOpen} />}
       <Dialog open={sheetOpen && tablet} onOpenChange={setSheetOpen}>
         <DialogContent sheet title={t('findings.facetsTitle')}>
           <Facets q={q} onQueryChange={setQ} />

@@ -57,6 +57,8 @@ export interface RequestOptions {
   query?: Query;
   body?: unknown;
   signal?: AbortSignal;
+  /** Extra request headers, for example If-Match (optimistic locking, docs/11). */
+  headers?: Record<string, string>;
 }
 
 function withQuery(path: string, query?: Query): string {
@@ -72,7 +74,7 @@ function withQuery(path: string, query?: Query): string {
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json, application/problem+json' };
+  const headers: Record<string, string> = { Accept: 'application/json, application/problem+json', ...opts.headers };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (!SAFE.has(method) && csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
@@ -103,3 +105,5 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
 export const get = <T>(path: string, opts?: RequestOptions) => request<T>('GET', path, opts);
 export const post = <T>(path: string, body?: unknown, opts?: RequestOptions) =>
   request<T>('POST', path, { ...opts, body });
+export const patch = <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+  request<T>('PATCH', path, { ...opts, body });

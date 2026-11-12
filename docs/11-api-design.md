@@ -57,10 +57,10 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET /findings` | Explorer. Filters via `q`; `fields=` to trim columns; `groupBy=rule\|cve\|component\|application\|owner` returns aggregates |
 | `GET /findings/{id}` | Detail with risk factor breakdown, taxa, SLA, tickets, and `also_reported_by`: the other findings of the same correlation group (`[{id, scanner, rule_id, state}]`, at most 50; D24: display only, never merged) |
 | `GET /findings/{id}/occurrences` | Per-tool evidence, newest first |
-| `GET /findings/{id}/events` | Timeline |
-| `PATCH /findings/{id}` | Change `state` (+ `justification`, `impactStatement`), `severity` (+ reason), `verified`, `owner`, `tags` |
+| `GET /findings/{id}/events` | Timeline, oldest first |
+| `PATCH /findings/{id}` | Needs `triager`. Change `state` (+ `justification`, required for `not_affected`; `impactStatement`; `duplicateOf` for `duplicate`), `severity` (+ `severityReason`, required), `tags`, add a `note`. `If-Match: "<version>"` or `version` in the body; 409 `conflict-version` when stale (D38). Not built: `verified` (removed, D18) and `owner` |
 | `POST /findings/{id}/notes` | Add note; supports mentions and attachments |
-| `POST /findings/bulk` | `{ids[] \| q, patch{...}}` |
+| `POST /findings/bulk` | `{ids[] \| q, patch{...}}` (exactly one of ids and q). Answers `{matched, updated, unchanged, failed[]}`; at most 1 000 findings, no `bulkOperationId` yet (D38) |
 | `POST /findings/{id}/merge` / `/split` | Manual duplicate handling |
 | `GET /findings/export` | `format=csv\|json\|sarif\|ocsf` |
 

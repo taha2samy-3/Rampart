@@ -882,6 +882,34 @@ func (m *MemoryStore) RecordRunScope(ctx context.Context, scope *domain.IngestRu
 	return nil
 }
 
+// UpdateFindingTriage applies a human decision if the finding is still at expectedVersion.
+func (m *MemoryStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, cur := range m.findings {
+		if cur.TenantID != tenantID || cur.ID != f.ID {
+			continue
+		}
+		if cur.Version != expectedVersion {
+			return store.ErrVersionConflict
+		}
+		cp := *f
+		cp.Version = expectedVersion + 1
+		m.findings[key] = &cp
+		f.Version = cp.Version
+		evKey := tenantID.String() + ":" + f.ID.String()
+		for _, ev := range events {
+			e := *ev
+			if e.ID == domain.NilID {
+				e.ID = domain.NewID()
+			}
+			m.findingEvents[evKey] = append(m.findingEvents[evKey], &e)
+		}
+		return nil
+	}
+	return store.ErrNotFound
+}
+
 // ListIngestRuns returns runs newest first, after the given position.
 func (m *MemoryStore) ListIngestRuns(ctx context.Context, tenantID uuid.UUID, limit int, after *store.RunPosition) ([]*domain.IngestRun, error) {
 	m.mu.RLock()

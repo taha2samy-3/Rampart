@@ -107,6 +107,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/findings", a.handleListFindings)
 	mux.HandleFunc("GET /api/v1/findings/{id}", a.handleGetFinding)
 	mux.HandleFunc("PATCH /api/v1/findings/{id}", a.handlePatchFinding)
+	mux.HandleFunc("POST /api/v1/findings/bulk", a.handleBulkTriage)
+	mux.HandleFunc("GET /api/v1/findings/{id}/events", a.handleFindingEvents)
 	mux.HandleFunc("POST /api/v1/gate", a.handleGate) // D26
 	mux.HandleFunc("GET /api/v1/runs", a.handleListRuns)
 	mux.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
@@ -566,125 +568,6 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchFindingRequest payload for PATCH /api/v1/findings/{id} (docs/11).
-type PatchFindingRequest struct {
-	State           string   `json:"state,omitempty"`
-	Justification   string   `json:"justification,omitempty"`
-	ImpactStatement string   `json:"impactStatement,omitempty"`
-	Severity        string   `json:"severity,omitempty"`
-	SeverityReason  string   `json:"severityReason,omitempty"`
-	Tags            []string `json:"tags,omitempty"`
-}
-
-func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := a.resolveTenant(r)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
-		return
-	}
-
-	idStr := r.PathValue("id")
-	findingID, err := uuid.Parse(idStr)
-	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid finding UUID"}`, http.StatusBadRequest)
-		return
-	}
-
-	var req PatchFindingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid JSON payload"}`, http.StatusBadRequest)
-		return
-	}
-
-	finding, occs, err := a.store.GetFinding(r.Context(), tenantID, findingID)
-	if err != nil || finding == nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"Finding not found"}`, http.StatusNotFound)
-		return
-	}
-
-	var events []*domain.FindingEvent
-
-	if req.State != "" {
-		newState := domain.FindingState(req.State)
-		if !newState.IsValid() {
-			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid finding state"}`, http.StatusBadRequest)
-			return
-		}
-		if err := finding.State.CanTransitionTo(newState); err != nil {
-			http.Error(w, fmt.Sprintf(`{"type":"https://rampart.aspm.dev/problems/validation","title":%q}`, err.Error()), http.StatusBadRequest)
-			return
-		}
-		oldState := finding.State
-		finding.PreviousState = oldState
-		finding.State = newState
-		finding.StateReason = req.Justification
-		finding.Version++
-		finding.UpdatedAt = time.Now().UTC()
-
-		fromStateJSON, _ := json.Marshal(oldState)
-		toStateJSON, _ := json.Marshal(newState)
-		events = append(events, &domain.FindingEvent{
-			ID:        domain.NewID(),
-			FindingID: finding.ID,
-			At:        time.Now().UTC(),
-			Actor:     "user",
-			Type:      "state_changed",
-			From:      fromStateJSON,
-			To:        toStateJSON,
-			Note:      req.Justification,
-		})
-	}
-
-	if req.Severity != "" {
-		newSev := domain.ParseSeverity(req.Severity)
-		finding.Severity = newSev
-		if req.SeverityReason != "" {
-			finding.SeverityOverrideReason = &req.SeverityReason
-		}
-		finding.Version++
-		finding.UpdatedAt = time.Now().UTC()
-	}
-
-	_ = a.store.UpsertFindings(r.Context(), tenantID, []*domain.Finding{finding})
-	if len(events) > 0 {
-		_ = a.store.RecordFindingEvents(r.Context(), tenantID, events)
-	}
-
-	var vulnIDs []string
-	if finding.VulnerabilityID != nil {
-		vulnIDs = []string{*finding.VulnerabilityID}
-	}
-
-	rawF := domain.RawFinding{
-		Severity: finding.Severity,
-		RuleID:   finding.RuleID,
-		Title:    finding.Title,
-	}
-
-	env := finding.Track
-	if env == "" {
-		env = "production"
-	}
-	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-		Environment: env,
-		FirstSeen:   finding.FirstSeen,
-	}, a.feedsFor(r.Context(), vulnIDs))
-
-	slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", finding.FirstSeen, nil)
-
-	res := FindingResponse{
-		Finding:     finding,
-		Risk:        riskBreakdown,
-		SLADueDate:  &slaDue,
-		Occurrences: occs,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(res)
-}
-
 func (a *API) handleGetAssetVEX(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := a.resolveTenant(r)
 	if err != nil {
@@ -711,18 +594,32 @@ func (a *API) handleGetAssetVEX(w http.ResponseWriter, r *http.Request) {
 		Vulnerability struct {
 			ID string `json:"@id"`
 		} `json:"vulnerability"`
-		Status        string `json:"status"`
-		Justification string `json:"justification,omitempty"`
-		Impact        string `json:"impact_statement,omitempty"`
+		Status          string `json:"status"`
+		Justification   string `json:"justification,omitempty"`
+		Impact          string `json:"impact_statement,omitempty"`
+		ActionStatement string `json:"action_statement,omitempty"`
 	}
 
 	var statements []OpenVEXStatement
 	for _, f := range findings {
 		if f.AssetID == assetID && f.VulnerabilityID != nil {
-			status := string(f.State)
-			stmt := OpenVEXStatement{
-				Status:        status,
-				Justification: f.StateReason,
+			stmt := OpenVEXStatement{}
+			// The mapping of docs/03 section 4: the internal states are a superset of OpenVEX.
+			switch f.State {
+			case domain.StateOpen, domain.StateUnderInvestigation:
+				stmt.Status = "under_investigation"
+			case domain.StateAffected:
+				stmt.Status = "affected"
+				stmt.ActionStatement = firstNonEmptyStr(f.StateReason, "Remediation is required.")
+			case domain.StateNotAffected:
+				stmt.Status, stmt.Justification, stmt.Impact = "not_affected", f.Justification, f.ImpactStatement
+			case domain.StateFixed:
+				stmt.Status = "fixed"
+			case domain.StateRiskAccepted:
+				stmt.Status = "affected"
+				stmt.ActionStatement = "Risk accepted: " + firstNonEmptyStr(f.StateReason, "no reason recorded")
+			default: // out_of_scope and duplicate are not exported
+				continue
 			}
 			stmt.Vulnerability.ID = *f.VulnerabilityID
 			statements = append(statements, stmt)
@@ -893,4 +790,13 @@ func severityRank(s domain.Severity) int {
 		return 1
 	}
 	return 0
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

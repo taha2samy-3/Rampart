@@ -314,7 +314,7 @@ func TestQueryAPIPatchAndVEX(t *testing.T) {
 	_ = store.UpsertFindings(context.Background(), tenantID, []*domain.Finding{f})
 
 	// 1. PATCH state to not_affected with justification
-	patchBody := `{"state":"not_affected","justification":"vulnerable_code_not_present","severity":"medium"}`
+	patchBody := `{"state":"not_affected","justification":"vulnerable_code_not_present","severity":"medium","severityReason":"only reachable from the admin network"}`
 	reqPatch := httptest.NewRequest("PATCH", "/api/v1/findings/"+findingID.String(), strings.NewReader(patchBody))
 	reqPatch.Header.Set("Authorization", "Bearer "+token)
 	recPatch := httptest.NewRecorder()

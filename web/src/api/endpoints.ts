@@ -1,5 +1,5 @@
-import { get, post, ProblemError, setCsrfToken } from './client';
-import type { FindingRow, Page, Permissions, RunRow, Session, TenantRef, UiConfig } from './types';
+import { get, patch, post, ProblemError, setCsrfToken } from './client';
+import type { FindingEvent, FindingRow, Page, Permissions, RunRow, Session, TenantRef, TriageBody, UiConfig } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -75,3 +75,12 @@ export async function listRuns(args: { cursor?: string; limit?: number; signal?:
 }
 
 export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1/runs/${encodeURIComponent(id)}`, { signal });
+
+/** Change a finding's state. `version` is the one the analyst saw; a stale one is a 409 (docs/16 D38). */
+export const triageFinding = (id: string, body: TriageBody, version: number | undefined) =>
+  patch<FindingRow>(`/api/v1/findings/${encodeURIComponent(id)}`, body, version === undefined ? undefined : { headers: { 'If-Match': `"${version}"` } });
+
+export async function getFindingEvents(id: string, signal?: AbortSignal): Promise<FindingEvent[]> {
+  const raw = await get<{ items?: FindingEvent[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}/events`, { signal });
+  return raw.items ?? [];
+}
