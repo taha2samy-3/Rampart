@@ -2189,6 +2189,15 @@ func (s *PostgresStore) MarkSLABreaches(ctx context.Context, tenantID uuid.UUID,
 // SaveSLAPolicy stores an SLAPolicy of a tenant (the operator's write, through rampart_system). When the spec
 // changed and is valid, every due date of the tenant must be recomputed: the flag says so.
 func (s *PostgresStore) SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p apply.PolicyObject) error {
+	return s.savePolicy(ctx, tenantID, "sla", p)
+}
+
+// SaveRiskPolicy stores a tenant's RiskPolicy like an SLAPolicy (D62): an invalid spec keeps the one in force.
+func (s *PostgresStore) SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, p apply.PolicyObject) error {
+	return s.savePolicy(ctx, tenantID, "risk", p)
+}
+
+func (s *PostgresStore) savePolicy(ctx context.Context, tenantID uuid.UUID, kind string, p apply.PolicyObject) error {
 	spec := p.Spec
 	if len(spec) == 0 {
 		spec = []byte("{}")
@@ -2199,27 +2208,42 @@ func (s *PostgresStore) SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, compile_error, generation, recompute_needed, updated_at)
-		VALUES ($1, $2, 'sla', $3, $4, $5, $9::jsonb, $6, $7, $8, $6, NOW())
+		VALUES ($1, $2, $10, $3, $4, $5, $9::jsonb, $6, $7, $8, $6, NOW())
 		ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET
-			-- Only a valid spec that differs from the one in force moves the due dates.
+			-- Only a valid spec that differs from the one in force moves scores and due dates.
 			recompute_needed = policy_object.recompute_needed OR
 				(EXCLUDED.compiled_ok AND policy_object.applied_spec IS DISTINCT FROM EXCLUDED.applied_spec),
 			applied_spec = COALESCE(EXCLUDED.applied_spec, policy_object.applied_spec),
 			spec = EXCLUDED.spec, compiled_ok = EXCLUDED.compiled_ok, compile_error = EXCLUDED.compile_error,
 			generation = EXCLUDED.generation, updated_at = NOW()`,
-		domain.NewID(), tenantID, p.Namespace, p.Name, spec, p.Error == "", nonEmpty(p.Error), p.Generation, applied)
+		domain.NewID(), tenantID, p.Namespace, p.Name, spec, p.Error == "", nonEmpty(p.Error), p.Generation, applied, kind)
 	return err
 }
 
 // GetSLAPolicySpec returns the spec in force for a tenant: the last valid spec of the policy named "default",
-// else of the one whose name sorts first (docs/06 section 4: the cluster default and the built-in policy are
-// the fallbacks, and the caller falls back when found is false).
+// else of the one whose name sorts first; then the cluster default (D62). found is false when neither exists and
+// the built-in policy applies (docs/06 section 4).
 func (s *PostgresStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
+	return s.policySpec(ctx, tenantID, "sla")
+}
+
+// GetRiskPolicySpec is GetSLAPolicySpec for the RiskPolicy (D62).
+func (s *PostgresStore) GetRiskPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
+	return s.policySpec(ctx, tenantID, "risk")
+}
+
+func (s *PostgresStore) policySpec(ctx context.Context, tenantID uuid.UUID, kind string) ([]byte, bool, error) {
 	var spec []byte
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT applied_spec FROM policy_object
-			WHERE tenant_id = $1 AND kind = 'sla' AND applied_spec IS NOT NULL
-			ORDER BY (name = 'default') DESC, name, namespace LIMIT 1`, tenantID).Scan(&spec)
+		err := tx.QueryRow(ctx, `SELECT applied_spec FROM policy_object
+			WHERE tenant_id = $1 AND kind = $2 AND applied_spec IS NOT NULL
+			ORDER BY (name = 'default') DESC, name, namespace LIMIT 1`, tenantID, kind).Scan(&spec)
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT applied_spec FROM cluster_policy
+			WHERE kind = $1 AND applied_spec IS NOT NULL
+			ORDER BY (name = 'default') DESC, name LIMIT 1`, kind).Scan(&spec)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
@@ -2227,10 +2251,66 @@ func (s *PostgresStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID
 	return spec, err == nil, err
 }
 
+// SaveClusterPolicy stores a ClusterRiskPolicy or ClusterSLAPolicy (D62). When the spec in force changes, every
+// application of every tenant is flagged, so the SLA sweep re-scores them all: a cluster default is everybody's
+// policy unless a tenant has its own. It writes across tenants: rampart_system.
+func (s *PostgresStore) SaveClusterPolicy(ctx context.Context, kind string, p apply.PolicyObject) error {
+	spec := p.Spec
+	if len(spec) == 0 {
+		spec = []byte("{}")
+	}
+	var applied any
+	if p.Error == "" {
+		applied = spec
+	}
+	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
+		// Whether the spec in force changes, decided against the row as it was (locked), before writing.
+		changed := p.Error == ""
+		if changed {
+			var differs bool
+			err := tx.QueryRow(ctx, `SELECT applied_spec IS DISTINCT FROM $3::jsonb FROM cluster_policy WHERE kind = $1 AND name = $2 FOR UPDATE`,
+				kind, p.Name, spec).Scan(&differs)
+			switch {
+			case err == nil:
+				changed = differs
+			case !errors.Is(err, pgx.ErrNoRows):
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO cluster_policy (kind, name, spec, applied_spec, compiled_ok, compile_error, generation, updated_at)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, NOW())
+			ON CONFLICT (kind, name) DO UPDATE SET
+				applied_spec = COALESCE(EXCLUDED.applied_spec, cluster_policy.applied_spec),
+				spec = EXCLUDED.spec, compiled_ok = EXCLUDED.compiled_ok, compile_error = EXCLUDED.compile_error,
+				generation = EXCLUDED.generation, updated_at = NOW()`,
+			kind, p.Name, spec, applied, p.Error == "", nonEmpty(p.Error), p.Generation); err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE`)
+		return err
+	})
+}
+
+// DeleteClusterPolicy removes a cluster policy; every tenant is re-scored against what is left.
+func (s *PostgresStore) DeleteClusterPolicy(ctx context.Context, kind, name string) error {
+	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM cluster_policy WHERE kind = $1 AND name = $2`, kind, name)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE`)
+		return err
+	})
+}
+
 // TenantsNeedingSLARecompute lists the tenants whose SLA policy changed (D41) or one of whose applications changed
 // the context the score uses or received assets (D55, D56). It reads across tenants: rampart_system.
 func (s *PostgresStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := s.pool.Query(ctx, `SELECT tenant_id FROM policy_object WHERE kind = 'sla' AND recompute_needed
+	rows, err := s.pool.Query(ctx, `SELECT tenant_id FROM policy_object WHERE kind IN ('sla', 'risk') AND recompute_needed
 		UNION SELECT tenant_id FROM application WHERE rescore_needed`)
 	if err != nil {
 		return nil, err
@@ -2250,7 +2330,7 @@ func (s *PostgresStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.
 // ClearSLARecompute says that the due dates of a tenant now follow its current policy.
 func (s *PostgresStore) ClearSLARecompute(ctx context.Context, tenantID uuid.UUID) error {
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE policy_object SET recompute_needed = FALSE WHERE tenant_id = $1 AND kind = 'sla'`, tenantID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE policy_object SET recompute_needed = FALSE WHERE tenant_id = $1 AND kind IN ('sla', 'risk')`, tenantID); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE application SET rescore_needed = FALSE WHERE tenant_id = $1 AND rescore_needed`, tenantID)

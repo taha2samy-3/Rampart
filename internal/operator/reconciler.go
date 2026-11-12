@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"rampart/internal/config/apply"
 	"rampart/internal/domain"
+	"rampart/internal/risk"
 	"rampart/internal/secrets"
 )
 
@@ -251,4 +252,92 @@ func (r *SLAPolicyReconciler) Reconcile(ctx context.Context, cr *SLAPolicyCR) (*
 	}
 	status.SetCondition("Ready", "True", "Reconciled", "SLAPolicy reconciled; due dates are recomputed in the background")
 	return status, nil
+}
+
+// PolicyReconciler reconciles RiskPolicy, ClusterRiskPolicy and ClusterSLAPolicy (D62), the way SLAPolicyReconciler
+// reconciles SLAPolicy (D41): a spec that fails validation is stored with its reason and not applied, and Ready
+// says why. A namespaced policy belongs to the tenant that owns its namespace; a cluster policy to every tenant.
+type PolicyReconciler struct {
+	store   apply.ConfigStore
+	kind    string // risk | sla
+	cluster bool
+	label   string // the resource kind, for messages
+	parse   func([]byte) error
+}
+
+// NewRiskPolicyReconciler reconciles namespaced RiskPolicy resources.
+func NewRiskPolicyReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "risk", label: "RiskPolicy", parse: parseRisk}
+}
+
+// NewClusterRiskPolicyReconciler reconciles ClusterRiskPolicy resources.
+func NewClusterRiskPolicyReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "risk", cluster: true, label: "ClusterRiskPolicy", parse: parseRisk}
+}
+
+// NewClusterSLAPolicyReconciler reconciles ClusterSLAPolicy resources.
+func NewClusterSLAPolicyReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "sla", cluster: true, label: "ClusterSLAPolicy", parse: func(b []byte) error {
+		_, err := domain.ParseSLAPolicySpec(b)
+		return err
+	}}
+}
+
+func parseRisk(b []byte) error {
+	_, err := risk.ParseRiskPolicySpec(b)
+	return err
+}
+
+// Reconcile stores the policy.
+func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	status := &cr.Status
+	spec, err := json.Marshal(cr.Spec)
+	if err != nil {
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
+	}
+	obj := apply.PolicyObject{Namespace: cr.Metadata.Namespace, Name: cr.Metadata.Name, Spec: spec, Generation: cr.Metadata.Generation}
+	if perr := r.parse(spec); perr != nil {
+		obj.Error = perr.Error()
+	}
+	if r.cluster {
+		err = r.store.SaveClusterPolicy(ctx, r.kind, obj)
+	} else {
+		tenant, terr := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+		if terr != nil {
+			status.SetCondition("Ready", "False", "StorageError", terr.Error())
+			return status, terr
+		}
+		if tenant == nil {
+			status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
+			return status, nil
+		}
+		err = r.store.SaveRiskPolicy(ctx, tenant.ID, obj)
+	}
+	if err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	status.ObservedGeneration = cr.Metadata.Generation
+	if obj.Error != "" {
+		status.SetCondition("Ready", "False", "InvalidSpec", obj.Error)
+		return status, nil
+	}
+	status.SetCondition("Ready", "True", "Reconciled", r.label+" reconciled; scores and due dates are recomputed in the background")
+	return status, nil
+}
+
+// Finalize removes the policy; what is left (or the built-in policy) applies, and the findings are re-scored.
+func (r *PolicyReconciler) Finalize(ctx context.Context, cr *PolicyCR) (*PolicyStatus, bool, error) {
+	if r.cluster {
+		return nil, true, r.store.DeleteClusterPolicy(ctx, r.kind, cr.Metadata.Name)
+	}
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if tenant == nil {
+		return nil, true, nil
+	}
+	return nil, true, r.store.DeleteRiskPolicy(ctx, tenant.ID, cr.Metadata.Namespace, cr.Metadata.Name)
 }

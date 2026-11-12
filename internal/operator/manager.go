@@ -41,6 +41,10 @@ var (
 	gvkApplication = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Application"}
 	gvkScanSource  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ScanSource"}
 	gvkSLAPolicy   = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "SLAPolicy"}
+	// D62: risk policies and the cluster-wide defaults.
+	gvkRiskPolicy        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "RiskPolicy"}
+	gvkClusterRiskPolicy = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterRiskPolicy"}
+	gvkClusterSLAPolicy  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSLAPolicy"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -127,7 +131,23 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		return op.ReconcileSLAPolicy(ctx, c)
 	}, status: func(c *SLAPolicyCR) *SLAPolicyStatus { return &c.Status }, finalize: op.FinalizeSLAPolicy}
 
+	policyCR := func(gvk schema.GroupVersionKind, r *PolicyReconciler) *cr[PolicyCR, PolicyStatus] {
+		return &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvk, reconcile: r.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: r.Finalize}
+	}
+	riskPolicies := policyCR(gvkRiskPolicy, NewRiskPolicyReconciler(cfg.Store))
+	clusterRisk := policyCR(gvkClusterRiskPolicy, NewClusterRiskPolicyReconciler(cfg.Store))
+	clusterSLA := policyCR(gvkClusterSLAPolicy, NewClusterSLAPolicyReconciler(cfg.Store))
+
 	gen := builder.WithPredicates(predicate.GenerationChangedPredicate{}) // status writes do not retrigger
+	// Cluster policies belong to no namespace and wait for no tenant.
+	for name, c := range map[string]struct {
+		gvk schema.GroupVersionKind
+		r   reconcile.Reconciler
+	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA}} {
+		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
+			return nil, err
+		}
+	}
 	if err := ctrl.NewControllerManagedBy(mgr).Named("tenant").For(newObj(gvkTenant), gen).Complete(tenants); err != nil {
 		return nil, err
 	}
@@ -136,7 +156,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}} {
+	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

@@ -22,10 +22,11 @@ type Intel interface {
 	Lookup(ctx context.Context, ids []string) (*enrich.FeedStore, error)
 }
 
-// PolicySource says which SLA policy applies to a tenant. The built-in one is the default; a tenant's
-// SLAPolicy object replaces it when one exists.
+// PolicySource says which SLA and risk policies apply to a tenant: the tenant's object, else the cluster default,
+// else the built-in one (docs/06, D41, D62).
 type PolicySource interface {
 	SLAPolicy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy
+	RiskPolicy(ctx context.Context, tenantID uuid.UUID) *risk.Policy
 }
 
 // BuiltinPolicy always answers with the policy of docs/06 section 4.
@@ -35,6 +36,9 @@ type BuiltinPolicy struct{}
 func (BuiltinPolicy) SLAPolicy(context.Context, uuid.UUID) domain.SLAPolicy {
 	return domain.DefaultSLAPolicy()
 }
+
+// RiskPolicy returns the built-in risk policy.
+func (BuiltinPolicy) RiskPolicy(context.Context, uuid.UUID) *risk.Policy { return risk.Builtin() }
 
 // DBPolicy answers with the tenant's SLAPolicy object when one is stored and valid, else the built-in policy
 // (docs/06 section 4). It remembers each answer for a short time, because the engine asks for every batch.
@@ -47,6 +51,7 @@ type DBPolicy struct {
 
 type cachedPolicy struct {
 	policy domain.SLAPolicy
+	risk   *risk.Policy
 	until  time.Time
 }
 
@@ -55,24 +60,42 @@ func NewDBPolicy(s store.Store) *DBPolicy {
 	return &DBPolicy{store: s, ttl: 30 * time.Second, cache: map[uuid.UUID]cachedPolicy{}}
 }
 
-// SLAPolicy returns the policy of the tenant.
+// SLAPolicy returns the SLA policy of the tenant.
 func (d *DBPolicy) SLAPolicy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy {
+	return d.load(ctx, tenantID).policy
+}
+
+// RiskPolicy returns the risk policy of the tenant (D62).
+func (d *DBPolicy) RiskPolicy(ctx context.Context, tenantID uuid.UUID) *risk.Policy {
+	return d.load(ctx, tenantID).risk
+}
+
+func (d *DBPolicy) load(ctx context.Context, tenantID uuid.UUID) cachedPolicy {
 	d.mu.Lock()
 	if c, ok := d.cache[tenantID]; ok && time.Now().Before(c.until) {
 		d.mu.Unlock()
-		return c.policy
+		return c
 	}
 	d.mu.Unlock()
-	policy := domain.DefaultSLAPolicy()
+	c := cachedPolicy{policy: domain.DefaultSLAPolicy(), risk: risk.Builtin(), until: time.Now().Add(d.ttl)}
 	if spec, found, err := d.store.GetSLAPolicySpec(ctx, tenantID); err == nil && found {
 		if p, perr := domain.ParseSLAPolicySpec(spec); perr == nil {
-			policy = p
+			c.policy = p
+		}
+	}
+	// A spec is stored as applied only after it compiled; compiling it again here cannot fail unless the code
+	// changed, and then the built-in policy is the safe answer.
+	if spec, found, err := d.store.GetRiskPolicySpec(ctx, tenantID); err == nil && found {
+		if p, perr := risk.ParseRiskPolicySpec(spec); perr == nil {
+			c.risk = p
+		} else {
+			slog.Warn("risk policy in force no longer compiles; using the built-in policy", "tenant", tenantID, "error", perr)
 		}
 	}
 	d.mu.Lock()
-	d.cache[tenantID] = cachedPolicy{policy, time.Now().Add(d.ttl)}
+	d.cache[tenantID] = c
 	d.mu.Unlock()
-	return policy
+	return c
 }
 
 // Invalidate forgets what it knows about a tenant, so the next question reads the store.
@@ -145,34 +168,47 @@ func (s *Scorer) ScoreBatch(ctx context.Context, tenantID, applicationID uuid.UU
 		}
 	}
 	policy := s.policy.SLAPolicy(ctx, tenantID)
-	now := s.now()
+	rp := s.policy.RiskPolicy(ctx, tenantID)
 	for _, f := range fs {
-		Apply(f, app, feeds, policy, now)
+		Apply(f, app, feeds, rp, policy)
 	}
 	return nil
 }
 
-// Breakdown is the explainable score of a finding: its severity, the intelligence in feeds, and the context of
-// its application. It has no age factor (D28). It also returns the application criticality the SLA uses.
-func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedStore, now time.Time) (risk.ScoreBreakdown, string) {
-	var vulnIDs []string
-	if f.VulnerabilityID != nil && *f.VulnerabilityID != "" {
-		vulnIDs = []string{*f.VulnerabilityID}
+// Breakdown is the explainable score of a finding under a risk policy: its severity, the intelligence in feeds,
+// and the context of its application (docs/06 section 2, D62). It has no age factor (D28). It also returns the
+// application criticality the SLA uses.
+func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedStore, p *risk.Policy) (risk.ScoreBreakdown, string) {
+	if p == nil {
+		p = risk.Builtin()
 	}
-	ctx := risk.Context{Environment: f.Track, Now: now, SecretVerifiedLive: f.SecretVerified}
+	in := risk.Input{Finding: risk.FindingInput{
+		Severity: string(f.Severity), Category: string(f.Category), RuleID: f.RuleID, Scanner: f.RuleScannerFamily,
+		CWEs: f.CWEs, SecretVerified: f.SecretVerified, Track: f.Track,
+	}}
+	if f.VulnerabilityID != nil && *f.VulnerabilityID != "" && feeds != nil {
+		id := *f.VulnerabilityID
+		in.Vuln.ID = id
+		_, in.Vuln.KEV = feeds.GetKEV(id)
+		if e, ok := feeds.GetEPSS(id); ok {
+			in.Vuln.EPSS = e.EPSS
+		}
+	}
 	criticality := "low"
 	if app != nil {
 		criticality = strings.ToLower(app.BusinessCriticality)
-		ctx.BusinessCriticality = criticality
-		ctx.IsInternetFacing = app.InternetFacing
-		for _, c := range app.DataClassification {
-			if c = strings.ToLower(c); c == "pci" || c == "pii" || c == "phi" {
-				ctx.HasSensitiveData = true
-			}
-		}
-		ctx.CompensatingControl = domain.ControlCovers(app.CompensatingControls, f.Category)
+		in.App = risk.AppInput{Criticality: criticality, InternetFacing: app.InternetFacing,
+			DataClassification: lower(app.DataClassification), CompensatingControls: app.CompensatingControls}
 	}
-	return risk.EvaluateRisk(domain.RawFinding{Severity: f.Severity, RuleID: f.RuleID, Title: f.Title}, vulnIDs, ctx, feeds), criticality
+	return p.Evaluate(in), criticality
+}
+
+func lower(v []string) []string {
+	out := make([]string, 0, len(v))
+	for _, s := range v {
+		out = append(out, strings.ToLower(s))
+	}
+	return out
 }
 
 // Explain is Breakdown for the API: the same numbers that are stored, read with the current intelligence.
@@ -185,13 +221,14 @@ func (s *Scorer) Explain(ctx context.Context, tenantID uuid.UUID, f *domain.Find
 		}
 		apps[f.ApplicationID] = app
 	}
-	b, _ := Breakdown(f, app, feeds, s.now())
+	b, _ := Breakdown(f, app, feeds, s.policy.RiskPolicy(ctx, tenantID))
 	return b
 }
 
-// Apply scores one finding in place from its application, the intelligence in feeds, and the SLA policy.
-func Apply(f *domain.Finding, app *domain.Application, feeds *enrich.FeedStore, policy domain.SLAPolicy, now time.Time) {
-	b, criticality := Breakdown(f, app, feeds, now)
+// Apply scores one finding in place from its application, the intelligence in feeds, the risk policy and the
+// SLA policy.
+func Apply(f *domain.Finding, app *domain.Application, feeds *enrich.FeedStore, rp *risk.Policy, policy domain.SLAPolicy) {
+	b, criticality := Breakdown(f, app, feeds, rp)
 	f.RiskScore, f.RiskBand, f.KEV = b.TotalScore, b.Band, b.HasKEV
 	f.EPSSBucket = EPSSBucket(b.EPSSScore)
 

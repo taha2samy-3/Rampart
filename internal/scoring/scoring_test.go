@@ -2,14 +2,13 @@ package scoring
 
 import (
 	"testing"
-	"time"
 
 	"rampart/internal/domain"
 )
 
 func factor(t *testing.T, f *domain.Finding, app *domain.Application, name string) int {
 	t.Helper()
-	b, _ := Breakdown(f, app, nil, time.Now())
+	b, _ := Breakdown(f, app, nil, nil)
 	for _, x := range b.Factors {
 		if x.Name == name {
 			return x.Points
@@ -30,8 +29,8 @@ func TestBreakdown_ApplicationContext(t *testing.T) {
 	if p := factor(t, sast, app, "COMPENSATING_CONTROL"); p != 0 {
 		t.Fatalf("a WAF must not lower a SAST finding: %d", p)
 	}
-	withData, _ := Breakdown(sast, app, nil, time.Now())
-	without, _ := Breakdown(sast, &domain.Application{BusinessCriticality: "critical"}, nil, time.Now())
+	withData, _ := Breakdown(sast, app, nil, nil)
+	without, _ := Breakdown(sast, &domain.Application{BusinessCriticality: "critical"}, nil, nil)
 	if withData.TotalScore-without.TotalScore != 80 {
 		t.Fatalf("sensitive data should add 80: %d vs %d", withData.TotalScore, without.TotalScore)
 	}

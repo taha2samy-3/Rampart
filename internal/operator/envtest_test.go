@@ -245,6 +245,57 @@ func TestSLAPolicyShowsItsStatus(t *testing.T) {
 	_ = st
 }
 
+// A RiskPolicy in a tenant's namespace and a ClusterRiskPolicy are compiled by the operator: a valid one is applied,
+// a condition with a misspelt field is refused with the reason, and the schema refuses what it can (D62). A
+// ClusterSLAPolicy needs no tenant.
+func TestRiskPoliciesShowTheirStatus(t *testing.T) {
+	c, store, _ := startEnv(t)
+	ctx := context.Background()
+	if err := c.Create(ctx, cr("Tenant", "", "acme-risk", map[string]any{"displayName": "Acme", "namespaces": []any{"team-risk"}})); err != nil {
+		t.Fatal(err)
+	}
+	good := cr("RiskPolicy", "team-risk", "default", map[string]any{"factors": []any{
+		map[string]any{"name": "payments", "when": `app.data_classification.exists(d, d == "pci")`, "points": int64(150), "group": "context"},
+	}})
+	if err := c.Create(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, good, "Reconciled")
+	tn, _ := store.GetTenantByNamespace(ctx, "team-risk")
+	if p, ok := store.Policy("risk:" + tn.ID.String() + ":team-risk:default"); !ok || p.Error != "" {
+		t.Fatalf("risk policy not stored: %+v %v", p, ok)
+	}
+	typo := cr("RiskPolicy", "team-risk", "typo", map[string]any{"factors": []any{
+		map[string]any{"name": "x", "when": `app.critcality == "high"`, "points": int64(10)},
+	}})
+	if err := c.Create(ctx, typo); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, typo, "InvalidSpec")
+	if err := c.Create(ctx, cr("RiskPolicy", "team-risk", "big", map[string]any{"factors": []any{
+		map[string]any{"name": "x", "when": "vuln.kev", "points": int64(5000)},
+	}})); err == nil {
+		t.Fatal("points out of range must be refused by the CRD schema")
+	}
+
+	cluster := cr("ClusterRiskPolicy", "", "default", map[string]any{"base": map[string]any{"critical": int64(700)}})
+	if err := c.Create(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, cluster, "Reconciled")
+	if _, ok := store.Policy("cluster:risk:default"); !ok {
+		t.Fatal("cluster risk policy not stored")
+	}
+	clusterSLA := cr("ClusterSLAPolicy", "", "default", map[string]any{"caps": map[string]any{"maxDays": int64(90)}})
+	if err := c.Create(ctx, clusterSLA); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, clusterSLA, "Reconciled")
+	if _, ok := store.Policy("cluster:sla:default"); !ok {
+		t.Fatal("cluster SLA policy not stored")
+	}
+}
+
 func waitNs(t *testing.T, c client.Client, name string) {
 	t.Helper()
 	for i := 0; i < 100; i++ {

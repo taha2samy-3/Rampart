@@ -1,0 +1,104 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterriskpolicies.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterRiskPolicy
+    listKind: ClusterRiskPolicyList
+    plural: clusterriskpolicies
+    singular: clusterriskpolicy
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                The cluster-wide default for how a finding is scored; a tenant's RiskPolicy takes precedence (docs/04, docs/06 section 2, docs/16 D62): base points by severity, factors
+                whose condition is a CEL expression over finding, vuln and app, and the lower bounds of the bands.
+                What is left out takes the built-in value; factors, when given, replace the built-in factors. The
+                operator compiles every condition and reports a refused spec in status.conditions.
+              properties:
+                base:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                    minimum: 0
+                    maximum: 1000
+                factors:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [name, when, points]
+                    properties:
+                      name:
+                        type: string
+                        pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$'
+                      when:
+                        type: string
+                        maxLength: 1024
+                        description: 'A CEL condition, for example app.internet_facing && vuln.kev'
+                      points:
+                        type: integer
+                        minimum: -1000
+                        maximum: 1000
+                      reason:
+                        type: string
+                      group:
+                        type: string
+                        enum: [severity, threat, context, reduction]
+                bands:
+                  type: object
+                  properties:
+                    critical:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+                    high:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+                    medium:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

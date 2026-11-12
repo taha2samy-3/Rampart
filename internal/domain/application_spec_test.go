@@ -38,28 +38,6 @@ func TestApplicationSpec_ToApplication(t *testing.T) {
 	}
 }
 
-// A WAF or an API gateway counts against what a dynamic scan found over HTTP, and nothing else (docs/06 section 2,
-// docs/04's example, D55).
-func TestControlCovers(t *testing.T) {
-	cases := []struct {
-		controls []string
-		category FindingCategory
-		want     bool
-	}{
-		{[]string{"waf"}, CategoryDAST, true},
-		{[]string{"api_gateway"}, CategoryDAST, true},
-		{[]string{"waf"}, CategorySAST, false},
-		{[]string{"waf"}, CategorySCA, false},
-		{[]string{"mtls", "private_network"}, CategoryDAST, false},
-		{nil, CategoryDAST, false},
-	}
-	for _, c := range cases {
-		if got := ControlCovers(c.controls, c.category); got != c.want {
-			t.Fatalf("%v on %s: %v, want %v", c.controls, c.category, got, c.want)
-		}
-	}
-}
-
 func TestApplicationSpec_Selectors(t *testing.T) {
 	id, tenant := uuid.New(), uuid.New()
 	for name, raw := range map[string]string{

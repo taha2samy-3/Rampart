@@ -1241,6 +1241,11 @@ func (m *MemoryStore) GetDispositionedScopeFindings(ctx context.Context, tenantI
 	return out, nil
 }
 
+// GetRiskPolicySpec: the in-memory store has no policy objects.
+func (m *MemoryStore) GetRiskPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
 // GetSLAPolicySpec: the in-memory store has no policy objects.
 func (m *MemoryStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID) ([]byte, bool, error) {
 	return nil, false, nil

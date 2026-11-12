@@ -85,11 +85,10 @@ func (a *API) breakdown(ctx context.Context, tenantID uuid.UUID, f *domain.Findi
 	if a.scorer != nil {
 		return a.scorer.Explain(ctx, tenantID, f, feeds, apps)
 	}
-	env := f.Track
-	if env == "" {
-		env = "production"
-	}
-	return risk.EvaluateRisk(domain.RawFinding{Severity: f.Severity, RuleID: f.RuleID, Title: f.Title}, vulnIDs, risk.Context{Environment: env, FirstSeen: f.FirstSeen}, feeds)
+	// Without a scorer (the in-memory store): the built-in policy, without application context (D62).
+	_ = vulnIDs
+	b, _ := scoring.Breakdown(f, nil, feeds, nil)
+	return b
 }
 
 // slaDue is the stored due date of an active finding, or the built-in policy's when it has not been stored.

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 	"rampart/internal/domain"
+	"rampart/internal/risk"
 )
 
 var (
@@ -50,6 +51,10 @@ type ConfigStore interface {
 	// SaveSLAPolicy stores an SLAPolicy of a tenant. A spec that failed validation is stored with its error, so
 	// the object's status can say why it is not applied (docs/16 D41).
 	SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
+	// SaveRiskPolicy stores a RiskPolicy of a tenant the same way (D62).
+	SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
+	// SaveClusterPolicy stores a ClusterRiskPolicy (kind "risk") or ClusterSLAPolicy (kind "sla") (D62).
+	SaveClusterPolicy(ctx context.Context, kind string, p PolicyObject) error
 	Finalizer
 }
 
@@ -63,6 +68,10 @@ type Finalizer interface {
 	DisableScanSource(ctx context.Context, tenantID uuid.UUID, name string) (int, error)
 	// DeleteSLAPolicy removes the policy; the due dates of the tenant are recomputed against what is left.
 	DeleteSLAPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error
+	// DeleteRiskPolicy removes the policy; the tenant is re-scored against what is left.
+	DeleteRiskPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error
+	// DeleteClusterPolicy removes a cluster policy; every tenant is re-scored against what is left.
+	DeleteClusterPolicy(ctx context.Context, kind, name string) error
 	// TenantHasData says whether the tenant has applications, assets, findings or ingest runs.
 	TenantHasData(ctx context.Context, tenantID uuid.UUID) (bool, error)
 	// PurgeTenant deletes the tenant and everything that belongs to it.
@@ -110,7 +119,8 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		return "", fmt.Errorf("%w: metadata.name is required", ErrInvalidYAML)
 	}
 
-	switch strings.ToLower(header.Kind) {
+	lk := strings.ToLower(header.Kind)
+	switch lk {
 	case "tenant":
 		var spec struct {
 			DisplayName string   `json:"displayName"`
@@ -163,6 +173,41 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			return "", fmt.Errorf("apply: slapolicy %q was stored but is not applied: %s", header.Metadata.Name, obj.Error)
 		}
 		return fmt.Sprintf("slapolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "riskpolicy":
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		obj := PolicyObject{Namespace: namespace, Name: header.Metadata.Name, Spec: header.Spec}
+		if _, err := risk.ParseRiskPolicySpec(header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveRiskPolicy(ctx, tenant.ID, obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: riskpolicy %q was stored but is not applied: %s", header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("riskpolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "clusterriskpolicy", "clusterslapolicy":
+		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
+		if lk == "clusterslapolicy" {
+			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
+		}
+		obj := PolicyObject{Name: header.Metadata.Name, Spec: header.Spec}
+		if err := parse(header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveClusterPolicy(ctx, kind, obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: %s %q was stored but is not applied: %s", lk, header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("%s.rampart.aspm.dev/%s configured", lk, header.Metadata.Name), nil
 
 	case "application":
 		var spec domain.ApplicationSpec
@@ -312,6 +357,22 @@ func (m *MemoryConfigStore) DeleteSLAPolicy(ctx context.Context, tenantID uuid.U
 	return nil
 }
 
+// DeleteRiskPolicy implements Finalizer.
+func (m *MemoryConfigStore) DeleteRiskPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.policies, "risk:"+tenantID.String()+":"+namespace+":"+name)
+	return nil
+}
+
+// DeleteClusterPolicy implements Finalizer.
+func (m *MemoryConfigStore) DeleteClusterPolicy(ctx context.Context, kind, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.policies, "cluster:"+kind+":"+name)
+	return nil
+}
+
 // TenantHasData implements Finalizer.
 func (m *MemoryConfigStore) TenantHasData(ctx context.Context, tenantID uuid.UUID) (bool, error) {
 	m.mu.RLock()
@@ -362,6 +423,31 @@ func (m *MemoryConfigStore) SaveSLAPolicy(ctx context.Context, tenantID uuid.UUI
 	defer m.mu.Unlock()
 	m.policies[tenantID.String()+":"+p.Namespace+":"+p.Name] = p
 	return nil
+}
+
+// SaveRiskPolicy implements ConfigStore.
+func (m *MemoryConfigStore) SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies["risk:"+tenantID.String()+":"+p.Namespace+":"+p.Name] = p
+	return nil
+}
+
+// SaveClusterPolicy implements ConfigStore.
+func (m *MemoryConfigStore) SaveClusterPolicy(ctx context.Context, kind string, p PolicyObject) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies["cluster:"+kind+":"+p.Name] = p
+	return nil
+}
+
+// Policy returns a stored risk or cluster policy by its key ("risk:<tenant>:<ns>:<name>", "cluster:<kind>:<name>"),
+// for tests.
+func (m *MemoryConfigStore) Policy(key string) (PolicyObject, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.policies[key]
+	return p, ok
 }
 
 // SLAPolicy returns a stored policy, for tests.

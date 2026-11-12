@@ -35,10 +35,10 @@ metadata:
     {{- include "rampart.labels" . | nindent 4 }}
 rules:
   - apiGroups: [rampart.aspm.dev]
-    resources: [tenants, applications, scansources, slapolicies]
+    resources: [tenants, applications, scansources, slapolicies, riskpolicies, clusterriskpolicies, clusterslapolicies]
     verbs: [get, list, watch, update, patch] # update: add and remove the finalizer (D49)
   - apiGroups: [rampart.aspm.dev]
-    resources: [tenants/status, applications/status, scansources/status, slapolicies/status, tenants/finalizers, applications/finalizers, scansources/finalizers, slapolicies/finalizers]
+    resources: [tenants/status, applications/status, scansources/status, slapolicies/status, riskpolicies/status, clusterriskpolicies/status, clusterslapolicies/status, tenants/finalizers, applications/finalizers, scansources/finalizers, slapolicies/finalizers, riskpolicies/finalizers, clusterriskpolicies/finalizers, clusterslapolicies/finalizers]
     verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [namespaces]

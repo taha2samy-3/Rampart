@@ -236,7 +236,7 @@ func (s *FeedSyncer) SyncOSVZip(ctx context.Context, path string) (int, error) {
 }
 
 // Lookup returns the intelligence for the given vulnerability ids as a small FeedStore, which
-// risk.EvaluateRisk reads. The query API calls it for the ids on one page, so nothing is held in memory.
+// the risk policy reads (D62). The query API calls it for the ids on one page, so nothing is held in memory.
 func (s *FeedSyncer) Lookup(ctx context.Context, ids []string) (*FeedStore, error) {
 	fs := NewFeedStore()
 	if len(ids) == 0 {

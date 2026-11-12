@@ -58,15 +58,24 @@ func likeEscape(s string) string {
 // DeleteSLAPolicy implements apply.Finalizer. The tenant's due dates are recomputed: the remaining policy, or
 // the built-in one, now applies.
 func (s *PostgresStore) DeleteSLAPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error {
+	return s.deletePolicy(ctx, tenantID, "sla", namespace, name)
+}
+
+// DeleteRiskPolicy implements apply.Finalizer: the tenant is re-scored against what is left (D62).
+func (s *PostgresStore) DeleteRiskPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error {
+	return s.deletePolicy(ctx, tenantID, "risk", namespace, name)
+}
+
+func (s *PostgresStore) deletePolicy(ctx context.Context, tenantID uuid.UUID, kind, namespace, name string) error {
 	// The flag that asks for a recompute lives on policy rows, and the row that carried it is going. A tombstone
 	// row (no applied spec, so it is never a policy in force) carries it instead; the sweep clears the flag.
 	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM policy_object WHERE tenant_id = $1 AND kind = 'sla' AND namespace = $2 AND name = $3`, tenantID, namespace, name); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM policy_object WHERE tenant_id = $1 AND kind = $4 AND namespace = $2 AND name = $3`, tenantID, namespace, name, kind); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, generation, recompute_needed)
-			SELECT gen_random_uuid(), $1, 'sla', '_deleted', 'tombstone', '{}', NULL, TRUE, 0, TRUE
-			ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET recompute_needed = TRUE, updated_at = NOW()`, tenantID)
+			SELECT gen_random_uuid(), $1, $2, '_deleted', 'tombstone', '{}', NULL, TRUE, 0, TRUE
+			ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET recompute_needed = TRUE, updated_at = NOW()`, tenantID, kind)
 		return err
 	})
 }

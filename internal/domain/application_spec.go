@@ -121,21 +121,3 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 		Selectors: Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
 	}, nil
 }
-
-// ControlCovers says whether one of an application's compensating controls reduces the risk of a finding of
-// this category (docs/06 section 2: "compensating control relevant to category"). A web application firewall
-// or an API gateway inspects HTTP requests, so it counts against what a dynamic scan found through HTTP (PCI DSS
-// 4.0.1 requirement 6.4.2 describes a WAF as detecting and preventing web-based attacks); docs/04 gives the same
-// rule as its example. mTLS and a private network change who can reach the application at all, which the
-// internet-exposure factor already carries, so they are recorded and not counted twice.
-func ControlCovers(controls []string, category FindingCategory) bool {
-	if category != CategoryDAST {
-		return false
-	}
-	for _, c := range controls {
-		if c == "waf" || c == "api_gateway" {
-			return true
-		}
-	}
-	return false
-}

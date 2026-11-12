@@ -139,3 +139,10 @@ type SLAPolicyCR struct {
 type SLAPolicyStatus struct {
 	CommonStatus `json:",inline"`
 }
+
+// PolicyCR is every policy resource: SLAPolicy, RiskPolicy, ClusterRiskPolicy and ClusterSLAPolicy share the shape
+// (a spec the domain validates, and conditions), so one reconciler serves them (D62).
+type PolicyCR = SLAPolicyCR
+
+// PolicyStatus is the status of a PolicyCR.
+type PolicyStatus = SLAPolicyStatus
