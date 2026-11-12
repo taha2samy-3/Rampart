@@ -144,7 +144,10 @@ func (h *uploadHarness) upload(payload []byte, key string) (uploadID string, put
 		h.t.Fatal(err)
 	}
 	defer func() { _ = pr.Body.Close() }()
-	_, _ = io.Copy(io.Discard, pr.Body)
+	pb, _ := io.ReadAll(pr.Body)
+	if pr.StatusCode >= 300 {
+		h.t.Logf("PUT %s -> %d %s", res.PutURL, pr.StatusCode, pb)
+	}
 	return res.UploadID, pr.StatusCode
 }
 

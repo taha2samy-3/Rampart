@@ -47,3 +47,4 @@ Complete Phase 1 (Ingest Core) for Rampart ASPM according to the architecture sp
 | SQL injection in dynamic query builder | High | Use positional parameters (`$1, $2, ...`) exclusively for all user-supplied values |
 | Keyset pagination boundary edge cases with nulls or ties | Med | Combine sort column with unique `id` tie-breaker in SQL comparison |
 | Memory exhaustion during large feed downloads | Med | Stream parser (`json.Decoder`, `csv.Reader`) with bounded batch inserts |
+
