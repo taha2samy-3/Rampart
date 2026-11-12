@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"rampart/internal/query/sqlbuilder"
+	"rampart/internal/scoring"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ type API struct {
 	authn   *auth.Authenticator
 	hmacKey []byte
 	intel   IntelSource
+	scorer  *scoring.Scorer
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -70,6 +72,31 @@ func (a *API) feedsFor(ctx context.Context, ids []string) *enrich.FeedStore {
 		return a.feeds
 	}
 	return fs
+}
+
+// SetScorer makes the API explain scores with the same inputs that are stored (application context, no age
+// factor, D28) and report the stored SLA.
+func (a *API) SetScorer(s *scoring.Scorer) { a.scorer = s }
+
+// breakdown is the explainable score of a finding for the response.
+func (a *API) breakdown(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, vulnIDs []string, feeds *enrich.FeedStore, apps map[uuid.UUID]*domain.Application) risk.ScoreBreakdown {
+	if a.scorer != nil {
+		return a.scorer.Explain(ctx, tenantID, f, feeds, apps)
+	}
+	env := f.Track
+	if env == "" {
+		env = "production"
+	}
+	return risk.EvaluateRisk(domain.RawFinding{Severity: f.Severity, RuleID: f.RuleID, Title: f.Title}, vulnIDs, risk.Context{Environment: env, FirstSeen: f.FirstSeen}, feeds)
+}
+
+// slaDue is the stored due date of an active finding, or the built-in policy's when it has not been stored.
+func slaDue(f *domain.Finding, band domain.Severity) *time.Time {
+	if f.SLADue != nil {
+		return f.SLADue
+	}
+	d := risk.CalculateSLADueDate(band, "low", f.FirstSeen, nil)
+	return &d
 }
 
 // SetCursorKey sets the key that signs pagination cursors (D16). Without one, each process uses a random
@@ -316,35 +343,15 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	pageFeeds := a.feedsFor(r.Context(), pageIDs)
 
+	apps := map[uuid.UUID]*domain.Application{}
 	var items []FindingResponse
 	for _, f := range page {
 		var vulnIDs []string
 		if f.VulnerabilityID != nil {
 			vulnIDs = []string{*f.VulnerabilityID}
 		}
-
-		rawF := domain.RawFinding{
-			Severity: f.Severity,
-			RuleID:   f.RuleID,
-			Title:    f.Title,
-		}
-
-		env := f.Track
-		if env == "" {
-			env = "production"
-		}
-		riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-			Environment: env,
-			FirstSeen:   f.FirstSeen,
-		}, pageFeeds)
-
-		slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", f.FirstSeen, nil)
-
-		items = append(items, FindingResponse{
-			Finding:    f,
-			Risk:       riskBreakdown,
-			SLADueDate: &slaDue,
-		})
+		riskBreakdown := a.breakdown(r.Context(), tenantID, f, vulnIDs, pageFeeds, apps)
+		items = append(items, FindingResponse{Finding: f, Risk: riskBreakdown, SLADueDate: slaDue(f, riskBreakdown.Band)})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -383,27 +390,11 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		vulnIDs = []string{*finding.VulnerabilityID}
 	}
 
-	rawF := domain.RawFinding{
-		Severity: finding.Severity,
-		RuleID:   finding.RuleID,
-		Title:    finding.Title,
-	}
-
-	env := finding.Track
-	if env == "" {
-		env = "production"
-	}
-	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
-		Environment: env,
-		FirstSeen:   finding.FirstSeen,
-	}, a.feedsFor(r.Context(), vulnIDs))
-
-	slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", finding.FirstSeen, nil)
-
+	riskBreakdown := a.breakdown(r.Context(), tenantID, finding, vulnIDs, a.feedsFor(r.Context(), vulnIDs), map[uuid.UUID]*domain.Application{})
 	res := FindingResponse{
 		Finding:     finding,
 		Risk:        riskBreakdown,
-		SLADueDate:  &slaDue,
+		SLADueDate:  slaDue(finding, riskBreakdown.Band),
 		Occurrences: occs,
 	}
 	if group, gerr := a.store.ListCorrelated(r.Context(), tenantID, finding.ID); gerr == nil {

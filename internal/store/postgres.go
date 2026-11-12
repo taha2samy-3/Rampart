@@ -133,7 +133,8 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	risk_score, state, coalesce(previous_state, ''), coalesce(state_reason, ''),
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
 	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
-	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id`
+	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id,
+	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
 	var (
@@ -141,6 +142,7 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		locationJSON                                           []byte
 		category, severity, state, prevState, detection, overr string
 		resolution                                             string
+		band                                                   string
 	)
 	err := row.Scan(
 		&f.ID, &f.TenantID, &f.FindingKey, &f.DedupScope, &f.AssetID, &f.ApplicationID, &f.Track,
@@ -150,11 +152,13 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		&detection, &f.ContentHash, &f.WeakFingerprint, &f.FirstSeen, &f.LastSeen,
 		&f.ResolvedAt, &resolution, &f.ReopenedCount, &f.OccurrenceCount, &f.Version, &f.CreatedAt, &f.UpdatedAt,
 		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags, &f.RiskAcceptanceID,
+		&band, &f.KEV, &f.EPSSBucket, &f.SLAStart, &f.SLADue, &f.SLABreachedAt, &f.SLAPausedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	f.Category = domain.FindingCategory(category)
+	f.RiskBand = domain.Severity(band)
 	f.Severity = domain.Severity(severity)
 	f.State = domain.FindingState(state)
 	f.PreviousState = domain.FindingState(prevState)
@@ -283,11 +287,13 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				vulnerability_id, location, severity, tool_severity, severity_override_reason,
 				cvss_vector, risk_score, state, previous_state, state_reason, detection,
 				content_hash, weak_fingerprint, first_seen, last_seen, reopened_count,
-				occurrence_count, version, created_at, updated_at, resolved_at, resolution, correlation_key
+				occurrence_count, version, created_at, updated_at, resolved_at, resolution, correlation_key,
+				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 				$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-				$25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36
+				$25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36,
+				$37, $38, $39, $40, $41, $42, $43
 			)
 			ON CONFLICT (tenant_id, finding_key) DO UPDATE SET
 				last_seen = EXCLUDED.last_seen,
@@ -302,6 +308,15 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				END,
 				cvss_vector = COALESCE(EXCLUDED.cvss_vector, finding.cvss_vector),
 				risk_score = EXCLUDED.risk_score,
+				risk_band = EXCLUDED.risk_band,
+				kev = EXCLUDED.kev,
+				epss_bucket = EXCLUDED.epss_bucket,
+				-- The merge reads these rows under FOR UPDATE and writes back what it read, or the new clock of a
+				-- reactivated finding, so EXCLUDED is the truth here (nothing else can have changed them meanwhile).
+				sla_start = EXCLUDED.sla_start,
+				sla_due_date = EXCLUDED.sla_due_date,
+				sla_breached_at = EXCLUDED.sla_breached_at,
+				sla_paused_at = EXCLUDED.sla_paused_at,
 				state = EXCLUDED.state,
 				previous_state = EXCLUDED.previous_state,
 				state_reason = EXCLUDED.state_reason,
@@ -377,6 +392,7 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				cvssVec, f.RiskScore, string(f.State), prevState, stateReason, detection,
 				f.ContentHash, f.WeakFingerprint, f.FirstSeen, f.LastSeen, f.ReopenedCount,
 				f.OccurrenceCount, f.Version, createdAt, updatedAt, f.ResolvedAt, resolution, corr,
+				riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue, f.SLABreachedAt, f.SLAPausedAt,
 			)
 
 			// D19: Rule and vulnerability metadata unknown to official global feeds populate tenant-local stubs.
@@ -1642,12 +1658,14 @@ func (s *PostgresStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.U
 				state = $4, previous_state = $5, state_reason = $6, resolution = $7, resolved_at = $8,
 				justification = $9, impact_statement = $10, duplicate_of_id = $11,
 				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15, risk_acceptance_id = $16,
+				risk_score = $17, risk_band = $18, sla_due_date = $19, sla_paused_at = $20, sla_breached_at = $21, sla_start = $22,
 				version = version + 1, updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2 AND version = $3`,
 			tenantID, f.ID, expectedVersion,
 			string(f.State), prev, reason, resolution, f.ResolvedAt,
 			just, impact, f.DuplicateOfID,
-			string(f.Severity), override, tags, f.ReopenedCount, f.RiskAcceptanceID)
+			string(f.Severity), override, tags, f.ReopenedCount, f.RiskAcceptanceID,
+			f.RiskScore, riskBand(f), f.SLADue, f.SLAPausedAt, f.SLABreachedAt, f.SLAStart)
 		if err != nil {
 			return err
 		}
@@ -1893,4 +1911,111 @@ func (s *PostgresStore) SaveTenantSettings(ctx context.Context, tenantID uuid.UU
 		_, err := tx.Exec(ctx, `SELECT set_tenant_settings($1::jsonb)`, raw)
 		return err
 	})
+}
+
+// riskBand is the band to store: low when the finding has not been scored yet.
+func riskBand(f *domain.Finding) string {
+	if f.RiskBand == "" {
+		return string(domain.SeverityLow)
+	}
+	return string(f.RiskBand)
+}
+
+// GetApplication returns one application by id.
+func (s *PostgresStore) GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error) {
+	var app domain.Application
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing, lifecycle, version, created_at
+			FROM application WHERE tenant_id = $1 AND id = $2`, tenantID, id).Scan(
+			&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing, &app.Lifecycle, &app.Version, &app.CreatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &app, nil
+}
+
+// ListTenantIDs lists every tenant. It reads across tenants, so it is for rampart_system.
+func (s *PostgresStore) ListTenantIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id FROM tenant ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// ListFindingsForRescore pages active or accepted findings that carry a vulnerability id.
+func (s *PostgresStore) ListFindingsForRescore(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error) {
+	var out []*domain.Finding
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding
+			WHERE tenant_id = $1 AND id > $2 AND vulnerability_id IS NOT NULL
+			  AND state IN ('open', 'under_investigation', 'affected', 'risk_accepted')
+			ORDER BY id LIMIT $3`, tenantID, after, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, f)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// UpdateFindingRisk stores the scoring fields of findings, and nothing else (no version bump: a re-score is not a decision).
+func (s *PostgresStore) UpdateFindingRisk(ctx context.Context, tenantID uuid.UUID, fs []*domain.Finding) error {
+	if len(fs) == 0 {
+		return nil
+	}
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		batch := &pgx.Batch{}
+		for _, f := range fs {
+			batch.Queue(`UPDATE finding SET risk_score = $3, risk_band = $4, kev = $5, epss_bucket = $6, sla_start = $7, sla_due_date = $8
+				WHERE tenant_id = $1 AND id = $2`, tenantID, f.ID, f.RiskScore, riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue)
+		}
+		return sendBatch(ctx, tx, batch, "update finding risk")
+	})
+}
+
+// MarkSLABreaches marks active, unpaused findings whose due date has passed.
+func (s *PostgresStore) MarkSLABreaches(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE finding SET sla_breached_at = $2
+			WHERE tenant_id = $1 AND state IN ('open', 'under_investigation', 'affected')
+			  AND sla_due_date IS NOT NULL AND sla_due_date <= $2 AND sla_breached_at IS NULL AND sla_paused_at IS NULL
+			RETURNING id`, tenantID, now)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	return ids, err
 }

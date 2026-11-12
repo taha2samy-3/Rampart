@@ -13,6 +13,7 @@ import (
 	"os"
 	"rampart/internal/objectstore"
 	"rampart/internal/operator"
+	"rampart/internal/scoring"
 	"rampart/internal/secrets"
 	"rampart/internal/workflow"
 	"strings"
@@ -185,6 +186,14 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	processor := ingest.NewProcessor(storeBackend, registry, objects, r.logger)
 	processor.SetLimits(r.cfg.Ingest.BatchRows, r.cfg.Ingest.MaxReportBytes)
+	// Every finding is stored with its score, band and SLA (docs/16 D28, D40), from the threat intelligence the feed
+	// sync keeps in the global vulnerability table.
+	var intel scoring.Intel
+	if pgStore != nil {
+		intel = enrich.NewFeedSyncer(pgStore.Pool())
+	}
+	scorer := scoring.New(storeBackend, intel, nil)
+	processor.SetScorer(scorer)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	if pgStore != nil {
@@ -221,9 +230,19 @@ func (r *Runner) Run(ctx context.Context) error {
 	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
+	queryAPI.SetScorer(scorer)
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
 		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))
+	}
+	// Findings whose SLA has run out are marked every 15 minutes (docs/06 section 4).
+	{
+		sys := store.Store(storeBackend)
+		var sysPool *pgxpool.Pool
+		if sysStore != nil {
+			sys, sysPool = sysStore, sysStore.Pool()
+		}
+		go scoring.RunSweeper(ctx, scorer, sys, sysPool, 15*time.Minute, r.logger)
 	}
 	// Risk acceptances that run out are ended as their onExpiry says (docs/16 D39). Every 15 minutes is plenty:
 	// an acceptance is measured in days.
@@ -233,7 +252,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		if sysStore != nil {
 			sys, sysPool = sysStore, sysStore.Pool()
 		}
-		go workflow.RunExpirySweeper(ctx, workflow.New(storeBackend), sys, sysPool, 15*time.Minute, r.logger)
+		expiry := workflow.New(storeBackend)
+		expiry.SetScorer(scorer)
+		go workflow.RunExpirySweeper(ctx, expiry, sys, sysPool, 15*time.Minute, r.logger)
 	}
 	if r.cfg.Feeds.Enabled {
 		if sysStore == nil {
@@ -243,6 +264,7 @@ func (r *Runner) Run(ctx context.Context) error {
 				KEVURL: r.cfg.Feeds.KEVURL, EPSSURL: r.cfg.Feeds.EPSSURL, OSVBaseURL: r.cfg.Feeds.OSVBaseURL,
 				OSVEcosystems: r.cfg.Feeds.OSVEcosystems, Interval: r.cfg.Feeds.Interval,
 			}
+			fc.OnSynced = func(c context.Context) { scoring.RescoreAll(c, scorer, sysStore, r.logger) }
 			go enrich.RunScheduler(ctx, sysStore.Pool(), fc, r.logger)
 			r.logger.Info("feed sync started", "interval", r.cfg.Feeds.Interval, "osv_ecosystems", r.cfg.Feeds.OSVEcosystems)
 		}

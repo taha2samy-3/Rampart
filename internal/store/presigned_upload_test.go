@@ -23,6 +23,7 @@ import (
 	"rampart/internal/jobs"
 	"rampart/internal/objectstore"
 	"rampart/internal/query"
+	"rampart/internal/scoring"
 	"rampart/internal/store"
 )
 
@@ -40,6 +41,8 @@ type uploadHarness struct {
 	pool    *pgxpool.Pool
 	store   *store.PostgresStore
 	sys     *store.PostgresStore
+	scorer  *scoring.Scorer
+	syncer  *enrich.FeedSyncer
 	app     interface {
 		ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	}
@@ -74,7 +77,10 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 		h.objects = h.mem
 	}
 
+	h.syncer = enrich.NewFeedSyncer(sysStore.Pool())
+	h.scorer = scoring.New(appStore, h.syncer, nil)
 	processor := ingest.NewProcessor(appStore, nil, h.objects, nil)
+	processor.SetScorer(h.scorer)
 	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +102,10 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	gw.SetAuthenticator(authn)
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
-	query.NewAPIWithAuth(appStore, enrich.NewFeedStore(), authn).RegisterRoutes(mux) // the gate lives on the query API (D26)
+	api := query.NewAPIWithAuth(appStore, enrich.NewFeedStore(), authn) // the gate lives on the query API (D26)
+	api.SetScorer(h.scorer)
+	api.SetIntelSource(h.syncer)
+	api.RegisterRoutes(mux)
 	h.server = httptest.NewServer(mux)
 	t.Cleanup(h.server.Close)
 	return h

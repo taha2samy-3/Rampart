@@ -12,13 +12,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"rampart/internal/domain"
+	"rampart/internal/scoring"
 	"rampart/internal/store"
 )
 
 // Service runs risk-acceptance steps against a store.
 type Service struct {
-	store store.Store
-	now   func() time.Time
+	store  store.Store
+	scorer *scoring.Scorer // optional: it carries the SLA policy and re-scores a finding whose clock moved
+	now    func() time.Time
+}
+
+// SetScorer lets the service pause and resume the SLA clock of the findings it accepts and releases.
+func (s *Service) SetScorer(sc *scoring.Scorer) { s.scorer = sc }
+
+func (s *Service) policy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy {
+	if s.scorer != nil {
+		return s.scorer.Policy(ctx, tenantID)
+	}
+	return domain.DefaultSLAPolicy()
 }
 
 // New returns a Service.
@@ -225,6 +237,10 @@ func (s *Service) apply(ctx context.Context, st store.Store, ra *domain.RiskAcce
 			return applied, skipped, err
 		}
 		events = append(events, &domain.FindingEvent{ID: domain.NewID(), FindingID: id, At: now, Actor: actor, Type: "risk_acceptance_approved", Note: ra.ID.String()})
+		if s.policy(ctx, ra.TenantID).PauseDuringRiskAcceptance && f.SLAPausedAt == nil { // docs/06 section 4
+			paused := now
+			f.SLAPausedAt = &paused
+		}
 		if err := st.UpdateFindingTriage(ctx, ra.TenantID, f, version, events); err != nil {
 			return applied, skipped, err
 		}
@@ -250,6 +266,7 @@ func (s *Service) release(ctx context.Context, st store.Store, ra *domain.RiskAc
 			if err != nil {
 				return n, err
 			}
+			s.resumeSLA(ctx, f, ra, now)
 		}
 		events = append(events, &domain.FindingEvent{ID: domain.NewID(), FindingID: id, At: now, Actor: actor, Type: "risk_acceptance_" + why, Note: firstNonEmpty(note, ra.ID.String())})
 		if err := st.UpdateFindingTriage(ctx, ra.TenantID, f, version, events); err != nil {
@@ -258,6 +275,39 @@ func (s *Service) release(ctx context.Context, st store.Store, ra *domain.RiskAc
 		n++
 	}
 	return n, nil
+}
+
+// resumeSLA restarts the clock of a finding whose acceptance ended: the time it spent accepted is not counted
+// (the due date moves by it), or the clock starts again from now when the acceptance says so (docs/06 section 4).
+func (s *Service) resumeSLA(ctx context.Context, f *domain.Finding, ra *domain.RiskAcceptance, now time.Time) {
+	if f.SLAPausedAt == nil {
+		return
+	}
+	paused := now.Sub(*f.SLAPausedAt)
+	f.SLAPausedAt = nil
+	if ra.RestartSLAOnExpiry {
+		f.SLAStart, f.SLADue, f.SLABreachedAt = &now, nil, nil
+		s.rescore(ctx, f)
+		return
+	}
+	// Shift the start with the due date, so a later re-score (which counts from the start) keeps the time that
+	// was spent accepted out of the clock.
+	if f.SLAStart != nil {
+		start := f.SLAStart.Add(paused)
+		f.SLAStart = &start
+	}
+	if f.SLADue != nil {
+		due := f.SLADue.Add(paused)
+		f.SLADue = &due
+	}
+	s.rescore(ctx, f)
+}
+
+// rescore recomputes the due date of an active finding whose clock moved.
+func (s *Service) rescore(ctx context.Context, f *domain.Finding) {
+	if s.scorer != nil && f.State.IsActive() {
+		_ = s.scorer.ScoreBatch(ctx, f.TenantID, f.ApplicationID, []*domain.Finding{f})
+	}
 }
 
 // restoreTarget is where a finding goes when its acceptance ends (docs/16 D18): resolved when no scanner reports

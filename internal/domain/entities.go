@@ -255,9 +255,20 @@ type Finding struct {
 	SeverityOverrideReason *string         `json:"severity_override_reason,omitempty"`
 	CVSSVector             string          `json:"cvss_vector,omitempty"`
 	RiskScore              int             `json:"risk_score"` // 0–1000 explainable score
-	State                  FindingState    `json:"state"`      // OpenVEX disposition (D18)
-	PreviousState          FindingState    `json:"previous_state,omitempty"`
-	StateReason            string          `json:"state_reason,omitempty"`
+	// RiskBand, KEV and EPSSBucket are stored with the score so the explorer can filter and sort in SQL (D28);
+	// the factors that depend on time (age) are not in the stored score, they are evaluated when read.
+	RiskBand   Severity `json:"risk_band"`
+	KEV        bool     `json:"kev"`
+	EPSSBucket string   `json:"epss_bucket,omitempty"`
+	// The SLA clock (docs/06 section 4): it starts at SLAStart (first seen), ends at SLADue, stops while
+	// SLAPausedAt is set (a risk acceptance), and SLABreachedAt records the first time the due date passed.
+	SLAStart      *time.Time   `json:"sla_start,omitempty"`
+	SLADue        *time.Time   `json:"sla_due_date,omitempty"`
+	SLABreachedAt *time.Time   `json:"sla_breached_at,omitempty"`
+	SLAPausedAt   *time.Time   `json:"sla_paused_at,omitempty"`
+	State         FindingState `json:"state"` // OpenVEX disposition (D18)
+	PreviousState FindingState `json:"previous_state,omitempty"`
+	StateReason   string       `json:"state_reason,omitempty"`
 	// Justification and ImpactStatement belong to a not_affected decision (OpenVEX); DuplicateOfID to a duplicate.
 	Justification   string     `json:"justification,omitempty"`
 	ImpactStatement string     `json:"impact_statement,omitempty"`

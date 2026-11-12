@@ -56,7 +56,7 @@ func (a *API) handleRequestAcceptance(w http.ResponseWriter, r *http.Request) {
 		}
 		req.FindingIDs = append(req.FindingIDs, id)
 	}
-	out, err := workflow.New(a.store).Request(r.Context(), tenantID, actorOf(user), req)
+	out, err := a.workflow().Request(r.Context(), tenantID, actorOf(user), req)
 	if err != nil {
 		acceptanceProblem(w, err)
 		return
@@ -132,7 +132,7 @@ func (a *API) decide(action string) http.HandlerFunc {
 		}
 		var body decisionBody
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
-		svc := workflow.New(a.store)
+		svc := a.workflow()
 		actor := actorOf(user)
 		switch action {
 		case "approve":
@@ -225,4 +225,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// workflow is the risk-acceptance service, with the scorer so that the SLA clock stops and starts with it.
+func (a *API) workflow() *workflow.Service {
+	svc := workflow.New(a.store)
+	svc.SetScorer(a.scorer)
+	return svc
 }

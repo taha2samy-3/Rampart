@@ -71,8 +71,19 @@ type Store = store.Store
 
 // Engine implements the normative D13 deduplication and reimport merge algorithm.
 type Engine struct {
-	store Store
+	store  Store
+	scorer Scorer
 }
+
+// Scorer computes the risk score, band and SLA of findings before they are stored (internal/scoring).
+type Scorer interface {
+	ScoreBatch(ctx context.Context, tenantID, applicationID uuid.UUID, fs []*domain.Finding) error
+	// Policy is the SLA policy of the tenant: reactivation restarts the clock when it says so.
+	Policy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy
+}
+
+// SetScorer makes the engine score the findings it creates, reactivates or updates.
+func (e *Engine) SetScorer(s Scorer) { e.scorer = s }
 
 // NewEngine creates a new merge engine.
 func NewEngine(store Store) *Engine {
@@ -169,6 +180,7 @@ func (e *Engine) mergeBatch(
 
 	var findingsToUpsert []*domain.Finding
 	var occurrencesToUpsert []*domain.Occurrence
+	var toScore []*domain.Finding // created, reactivated or changed: their score or SLA may have moved
 
 	// D24: identifiers that are aliases of a CVE correlate under the CVE.
 	var vulnIDs []string
@@ -226,6 +238,7 @@ func (e *Engine) mergeBatch(
 				UpdatedAt:         rec.SeenAt,
 			}
 			outcome.Created++
+			toScore = append(toScore, targetFinding)
 			addEvent(targetFinding, "created", rec.SeenAt)
 			outcome.Fresh = append(outcome.Fresh, freshResult(scope.TenantID, runID, rec))
 		} else {
@@ -251,6 +264,11 @@ func (e *Engine) mergeBatch(
 					targetFinding.ReopenedCount++
 					targetFinding.Version++
 					outcome.Reactivated++
+					toScore = append(toScore, targetFinding)
+					if e.scorer != nil && e.scorer.Policy(ctx, scope.TenantID).RestartOnReactivation { // docs/06 section 4
+						start := rec.SeenAt
+						targetFinding.SLAStart, targetFinding.SLABreachedAt, targetFinding.SLADue = &start, nil, nil
+					}
 					addEvent(targetFinding, "reactivated", rec.SeenAt)
 					outcome.Fresh = append(outcome.Fresh, freshResult(scope.TenantID, runID, rec))
 				}
@@ -273,6 +291,7 @@ func (e *Engine) mergeBatch(
 				targetFinding.ContentHash = rec.ContentHash
 				targetFinding.Version++
 				outcome.Updated++
+				toScore = append(toScore, targetFinding)
 				addEvent(targetFinding, "updated", rec.SeenAt)
 			} else {
 				// Untouched: rescan sees identical issue
@@ -313,6 +332,13 @@ func (e *Engine) mergeBatch(
 	// Ephemeral runs (e.g. untracked PR branches per D10, D13) do not mutate the long-lived inventory
 	if opts.IsEphemeral {
 		return outcome, nil
+	}
+
+	// Score what is new or changed before it is stored, so the explorer can filter and sort on it (D28).
+	if e.scorer != nil && len(toScore) > 0 {
+		if err := e.scorer.ScoreBatch(ctx, scope.TenantID, applicationID, toScore); err != nil {
+			return outcome, fmt.Errorf("ingest: scoring failed: %w", err)
+		}
 	}
 
 	// Persist findings and occurrences
@@ -1175,6 +1201,84 @@ func (m *MemoryStore) GetDispositionedScopeFindings(ctx context.Context, tenantI
 		}
 	}
 	return out, nil
+}
+
+// GetApplication returns an application by id.
+func (m *MemoryStore) GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.applications {
+		if a.TenantID == tenantID && a.ID == id {
+			cp := *a
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+// ListTenantIDs lists the tenants the in-memory store knows.
+func (m *MemoryStore) ListTenantIDs(ctx context.Context) ([]uuid.UUID, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[uuid.UUID]bool{}
+	var out []uuid.UUID
+	for _, f := range m.findings {
+		if !seen[f.TenantID] {
+			seen[f.TenantID] = true
+			out = append(out, f.TenantID)
+		}
+	}
+	return out, nil
+}
+
+// ListFindingsForRescore pages active or accepted findings that carry a vulnerability id.
+func (m *MemoryStore) ListFindingsForRescore(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID != tenantID || f.VulnerabilityID == nil || f.ID.String() <= after.String() {
+			continue
+		}
+		if f.State.IsActive() || f.State == domain.StateRiskAccepted {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// UpdateFindingRisk stores the scoring fields of findings.
+func (m *MemoryStore) UpdateFindingRisk(ctx context.Context, tenantID uuid.UUID, fs []*domain.Finding) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, f := range fs {
+		for _, cur := range m.findings {
+			if cur.TenantID == tenantID && cur.ID == f.ID {
+				cur.RiskScore, cur.RiskBand, cur.KEV, cur.EPSSBucket, cur.SLAStart, cur.SLADue = f.RiskScore, f.RiskBand, f.KEV, f.EPSSBucket, f.SLAStart, f.SLADue
+			}
+		}
+	}
+	return nil
+}
+
+// MarkSLABreaches marks active, unpaused findings whose due date has passed.
+func (m *MemoryStore) MarkSLABreaches(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for _, f := range m.findings {
+		if f.TenantID == tenantID && f.State.IsActive() && f.SLADue != nil && !f.SLADue.After(now) && f.SLABreachedAt == nil && f.SLAPausedAt == nil {
+			t := now
+			f.SLABreachedAt = &t
+			ids = append(ids, f.ID)
+		}
+	}
+	return ids, nil
 }
 
 // RecordRunResult records ephemeral scan run findings.

@@ -64,6 +64,9 @@ func NewProcessor(store Store, registry *integrations.Registry, objects objectst
 		batchRows: 5000, maxReport: 512 << 20, maxSBOMBytes: 256 << 20}
 }
 
+// SetScorer makes the processor store each finding's risk score, band and SLA (internal/scoring).
+func (p *Processor) SetScorer(s Scorer) { p.engine.SetScorer(s) }
+
 // SetLimits overrides the batch size and the size caps (ingest.batchRows, ingest.maxReportBytes).
 func (p *Processor) SetLimits(batchRows int, maxReport int64) {
 	if batchRows > 0 {

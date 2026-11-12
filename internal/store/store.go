@@ -76,6 +76,17 @@ type Store interface {
 	GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (domain.TenantSettings, error)
 	SaveTenantSettings(ctx context.Context, tenantID uuid.UUID, settings domain.TenantSettings) error
 
+	// Scoring and SLA (docs/06, D40)
+	GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error)
+	ListTenantIDs(ctx context.Context) ([]uuid.UUID, error)
+	// ListFindingsForRescore pages the findings a re-score concerns (active or risk_accepted with a
+	// vulnerability id), ordered by id, starting after the given id.
+	ListFindingsForRescore(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]*domain.Finding, error)
+	// UpdateFindingRisk stores score, band, KEV, EPSS bucket and SLA start and due date, and nothing else.
+	UpdateFindingRisk(ctx context.Context, tenantID uuid.UUID, fs []*domain.Finding) error
+	// MarkSLABreaches sets sla_breached_at on active, unpaused findings past their due date and returns their ids.
+	MarkSLABreaches(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]uuid.UUID, error)
+
 	// Query / Explorer API (D14, D16)
 	ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	GetFinding(ctx context.Context, tenantID, findingID uuid.UUID) (*domain.Finding, []*domain.Occurrence, error)

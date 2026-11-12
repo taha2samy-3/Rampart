@@ -13,7 +13,6 @@ import (
 	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/query/grammar"
-	"rampart/internal/risk"
 	"rampart/internal/store"
 )
 
@@ -120,6 +119,12 @@ func (a *API) triageOne(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, p
 	if err != nil {
 		return nil, nil, err
 	}
+	// A decision can move the score (a severity override) and the SLA (a state that is active again): store both.
+	if a.scorer != nil {
+		if err := a.scorer.ScoreBatch(ctx, tenantID, finding.ApplicationID, []*domain.Finding{finding}); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := a.store.UpdateFindingTriage(ctx, tenantID, finding, version, events); err != nil {
 		return nil, nil, err
 	}
@@ -168,16 +173,10 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 	if finding.VulnerabilityID != nil {
 		vulnIDs = []string{*finding.VulnerabilityID}
 	}
-	env := finding.Track
-	if env == "" {
-		env = "production"
-	}
-	breakdown := risk.EvaluateRisk(domain.RawFinding{Severity: finding.Severity, RuleID: finding.RuleID, Title: finding.Title}, vulnIDs,
-		risk.Context{Environment: env, FirstSeen: finding.FirstSeen}, a.feedsFor(r.Context(), vulnIDs))
-	slaDue := risk.CalculateSLADueDate(breakdown.Band, "critical", finding.FirstSeen, nil)
+	breakdown := a.breakdown(r.Context(), tenantID, finding, vulnIDs, a.feedsFor(r.Context(), vulnIDs), map[uuid.UUID]*domain.Application{})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", `"`+strconv.Itoa(finding.Version)+`"`)
-	_ = json.NewEncoder(w).Encode(FindingResponse{Finding: finding, Risk: breakdown, SLADueDate: &slaDue, Occurrences: occs})
+	_ = json.NewEncoder(w).Encode(FindingResponse{Finding: finding, Risk: breakdown, SLADueDate: slaDue(finding, breakdown.Band), Occurrences: occs})
 }
 
 // BulkRequest is POST /findings/bulk: the same decision for the findings named by id, or matched by a filter.

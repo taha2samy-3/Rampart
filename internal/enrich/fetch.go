@@ -41,6 +41,8 @@ type FeedConfig struct {
 	Interval      time.Duration
 	HTTPClient    *http.Client
 	TempDir       string
+	// OnSynced runs after a round that changed the feeds, so findings can be re-scored (docs/16 D28).
+	OnSynced func(ctx context.Context)
 }
 
 func (c *FeedConfig) defaults() {
@@ -305,6 +307,9 @@ func RunScheduler(ctx context.Context, pool *pgxpool.Pool, cfg FeedConfig, log *
 		defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockKey) }()
 		if err := syncer.SyncAll(ctx, cfg, log); err != nil {
 			log.Warn("feed sync finished with errors", "error", err)
+		}
+		if cfg.OnSynced != nil {
+			cfg.OnSynced(ctx) // even after a partial round: one feed may have changed
 		}
 	}
 	// Do not hit the upstream on every restart: skip the start-up round when KEV synced recently.
