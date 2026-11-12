@@ -17,7 +17,7 @@ const SWATCH: Record<SegmentKind, string> = {
 };
 
 /** Docked inspector: the same score bar at full width, then the ledger of factors. */
-export function Inspector({ row, selectedId, onTriage, onAccept }: { row: FindingRow | undefined; selectedId?: string; onTriage?: () => void; onAccept?: () => void }) {
+export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row: FindingRow | undefined; selectedId?: string; onTriage?: () => void; onAccept?: () => void; onEdit?: () => void }) {
   const { t } = useTranslation();
   if (!row && selectedId) return <EmptyState title={t('findings.selectTitle')}>{t('findings.inspectorMissing')}</EmptyState>;
   if (!row) return <EmptyState title={t('findings.selectTitle')}>{t('findings.selectBody')}</EmptyState>;
@@ -42,6 +42,12 @@ export function Inspector({ row, selectedId, onTriage, onAccept }: { row: Findin
             {t('triage.action')}
             <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>s</Kbd></span>
           </Button>
+          {onEdit && (
+            <Button onClick={onEdit}>
+              {t('edit.action')}
+              <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>a</Kbd></span>
+            </Button>
+          )}
           {onAccept && ['open', 'under_investigation', 'affected'].includes(f.state) && (
             <Button onClick={onAccept}>
               {t('acceptance.action')}
@@ -51,8 +57,11 @@ export function Inspector({ row, selectedId, onTriage, onAccept }: { row: Findin
         </div>
       )}
       {f.risk_acceptance_id && <AcceptedLine id={f.risk_acceptance_id} />}
-      {(f.justification || f.impact_statement || f.state_reason) && (
+      {(f.justification || f.impact_statement || f.state_reason || f.owner || f.tags?.length || f.severity_override_reason) && (
         <dl className="m-0 mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
+          {f.owner && <Fact label={t('triage.ownerLabel')} value={f.owner} />}
+          {f.tags && f.tags.length > 0 && <Fact label={t('triage.tagsLabel')} value={f.tags.join(', ')} />}
+          {f.severity_override_reason && <Fact label={t('triage.severityOverridden')} value={f.severity_override_reason} />}
           {f.justification && <Fact label={t('triage.justifiedAs')} value={t(`triage.justifications.${f.justification}`, { defaultValue: f.justification })} />}
           {f.impact_statement && <Fact label={t('triage.impactLabel')} value={f.impact_statement} />}
           {f.state_reason && <Fact label={t('triage.reasonLabel')} value={f.state_reason} />}

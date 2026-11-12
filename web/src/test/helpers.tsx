@@ -40,6 +40,8 @@ export interface Scenario {
   runs?: ReturnType<typeof run>[][] | 'error';
   /** The signed-in role (default triager). */
   role?: 'viewer' | 'triager' | 'admin';
+  /** What POST /api/v1/findings/bulk answers (default: one changed, one refused). */
+  bulk?: { matched: number; updated: number; unchanged: number; failed: { id: string; error: string }[] | null };
   /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
   patch?: 200 | 400 | 409;
   /** What GET /api/v1/findings/{id} answers for the Reported by section. */
@@ -138,6 +140,9 @@ export function mockFetch(sc: Scenario): Calls {
       return json({ finding: {}, reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
     }
     if (path.startsWith('/api/v1/findings/') && path.endsWith('/events')) return json({ items: sc.events?.length ? sc.events : null });
+    if (path === '/api/v1/findings/bulk' && init?.method === 'POST') {
+      return json(sc.bulk ?? { matched: 2, updated: 1, unchanged: 0, failed: [{ id: 'f-2-0000-0000', error: 'your role does not allow this on its application' }] });
+    }
     if (path.startsWith('/api/v1/findings/') && (init?.method ?? 'GET') === 'PATCH') {
       const st = sc.patch ?? 200;
       if (st === 409) return json({ type: 'https://rampart.aspm.dev/problems/conflict-version', title: 'The finding was changed by someone else.', status: 409, request_id: 'req_409' }, 409);

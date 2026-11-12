@@ -95,6 +95,9 @@ export interface Finding {
   duplicate_of_id?: string;
   tags?: string[];
   risk_acceptance_id?: string;
+  /** The member who works on it (D59). */
+  owner?: string;
+  severity_override_reason?: string;
 }
 export interface RiskFactor {
   name: string;
@@ -178,6 +181,28 @@ export interface TriageBody {
   impactStatement?: string;
   duplicateOf?: string;
   note?: string;
+  /** An override; severityReason is then required (docs/16 D38). */
+  severity?: Severity;
+  severityReason?: string;
+  /** Replaces every tag. In bulk use addTags and removeTags, which keep each finding's own (D59). */
+  tags?: string[];
+  addTags?: string[];
+  removeTags?: string[];
+  /** The e-mail of a member of the tenant; "" clears it (D59). */
+  owner?: string;
+}
+
+/** POST /api/v1/findings/bulk: exactly one of ids and q (docs/16 D38). */
+export interface BulkBody {
+  ids?: string[];
+  q?: string;
+  patch: TriageBody;
+}
+export interface BulkResult {
+  matched: number;
+  updated: number;
+  unchanged: number;
+  failed: { id: string; error: string }[] | null;
 }
 
 export type AcceptanceStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'revoked';

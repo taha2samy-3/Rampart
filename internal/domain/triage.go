@@ -46,6 +46,9 @@ type TriageRequest struct {
 	Tags            *[]string // nil: tags stay; an empty list clears them
 	DuplicateOf     *uuid.UUID
 	Note            string
+	// Owner assigns the finding: nil leaves it, "" clears it, an e-mail sets it (D59). The caller checks that the
+	// e-mail belongs to a member of the tenant; ApplyTriage only normalizes it.
+	Owner *string
 	// ViaRiskAcceptance is set only by the risk-acceptance flow (owner, expiry, approval; docs/01 C5). It is not
 	// part of any API body: a plain decision cannot accept a risk, because that would be an acceptance that never expires.
 	ViaRiskAcceptance bool
@@ -137,8 +140,15 @@ func ApplyTriage(f *Finding, req TriageRequest, actor string, now time.Time) ([]
 	} else if req.DuplicateOf != nil {
 		return nil, &TriageError{Msg: "duplicateOf belongs to a duplicate decision"}
 	}
-	changed := stateChange || req.Severity != "" || req.Tags != nil || note != "" || strings.TrimSpace(req.ImpactStatement) != ""
-	if !changed || (stateChange && req.State == f.State && justification == "" && req.Severity == "" && req.Tags == nil && note == "") {
+	var owner string
+	if req.Owner != nil {
+		owner = strings.ToLower(strings.TrimSpace(*req.Owner))
+		if owner != "" && (!strings.Contains(owner, "@") || len(owner) > 254) {
+			return nil, &TriageError{Msg: "owner must be the e-mail of a member of the tenant, or empty to clear it"}
+		}
+	}
+	changed := stateChange || req.Severity != "" || req.Tags != nil || note != "" || strings.TrimSpace(req.ImpactStatement) != "" || req.Owner != nil
+	if !changed || (stateChange && req.State == f.State && justification == "" && req.Severity == "" && req.Tags == nil && note == "" && req.Owner == nil) {
 		return nil, ErrNothingToChange
 	}
 
@@ -210,6 +220,10 @@ func ApplyTriage(f *Finding, req TriageRequest, actor string, now time.Time) ([]
 	if req.Tags != nil && !slices.Equal(f.Tags, tags) {
 		event("tags_changed", f.Tags, tags, "")
 		f.Tags = tags
+	}
+	if req.Owner != nil && owner != f.Owner {
+		event("owner_changed", f.Owner, owner, "")
+		f.Owner = owner
 	}
 	if note != "" {
 		event("note_added", nil, nil, note)

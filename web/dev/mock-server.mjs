@@ -139,7 +139,10 @@ const eventsOf = (id) => {
 function applyTriage(row, body, version) {
   const f = row.finding;
   if (version !== undefined && version !== f.version) return { status: 409, title: 'The finding was changed by someone else. Reload it and decide again.' };
-  if (!body.state && !body.note) return { status: 400, title: 'nothing to change: give a state, severity, tags or a note' };
+  const touches = body.state || body.note || body.owner !== undefined || body.severity || body.tags || body.addTags || body.removeTags;
+  if (!touches) return { status: 400, title: 'nothing to change: give a state, severity, tags, an owner or a note' };
+  if (body.severity && !body.severityReason) return { status: 400, title: 'a severity override needs a reason' };
+  if (body.owner && !body.owner.endsWith('@acme.example')) return { status: 400, title: 'the owner must be a member of this tenant: ' + body.owner + ' is not' };
   if (body.state === 'risk_accepted') return { status: 400, title: 'a risk is accepted through a risk acceptance, which needs an owner and an expiry' };
   if (body.state === 'not_affected' && !JUSTIFICATIONS.includes(body.justification)) return { status: 400, title: 'not_affected needs one of the OpenVEX justifications: ' + JUSTIFICATIONS.join(', ') };
   if (body.state === 'duplicate' && !body.duplicateOf) return { status: 400, title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself' };
@@ -152,6 +155,23 @@ function applyTriage(row, body, version) {
     f.impact_statement = body.state === 'not_affected' ? body.impactStatement : undefined;
   } else if (body.note) {
     evs.push({ id: 'e' + Math.random().toString(36).slice(2), at: new Date().toISOString(), actor: 'user:sara.ahmed@acme.example', type: 'note_added', note: body.note });
+  }
+  const now = () => new Date().toISOString();
+  const id = () => 'e' + Math.random().toString(36).slice(2);
+  if (body.owner !== undefined && body.owner !== (f.owner ?? '')) {
+    evs.push({ id: id(), at: now(), actor: 'user:sara.ahmed@acme.example', type: 'owner_changed', from: f.owner ?? '', to: body.owner });
+    f.owner = body.owner || undefined;
+  }
+  if (body.severity && body.severity !== f.severity) {
+    evs.push({ id: id(), at: now(), actor: 'user:sara.ahmed@acme.example', type: 'severity_changed', from: f.severity, to: body.severity, note: body.severityReason });
+    f.severity = body.severity;
+    f.severity_override_reason = body.severityReason;
+  }
+  let tags = body.tags ?? f.tags ?? [];
+  if (body.addTags || body.removeTags) tags = [...new Set([...(f.tags ?? []), ...(body.addTags ?? [])])].filter((t) => !(body.removeTags ?? []).includes(t));
+  if (tags.join() !== (f.tags ?? []).join()) {
+    evs.push({ id: id(), at: now(), actor: 'user:sara.ahmed@acme.example', type: 'tags_changed' });
+    f.tags = [...tags].sort();
   }
   f.version += 1;
   return null;
@@ -355,6 +375,22 @@ const server = http.createServer((req, res) => {
     if (p.startsWith('/api/v1/runs/')) {
       const r = RUNS.find((x) => x.id === p.split('/').pop());
       return r ? json(res, r) : problem(res, 404, 'Run not found', 'No such run.');
+    }
+    if (p === '/api/v1/findings/bulk' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const b = JSON.parse(body || '{}');
+        const rows = b.ids ? ALL.filter((r) => b.ids.includes(r.finding.id)) : filter(b.q ?? '');
+        const out = { matched: rows.length, updated: 0, unchanged: 0, failed: [] };
+        for (const r of rows) {
+          const err = applyTriage(r, b.patch ?? {}, undefined);
+          if (err) out.failed.push({ id: r.finding.id, error: err.title });
+          else out.updated++;
+        }
+        json(res, out);
+      });
+      return;
     }
     const fm = /^\/api\/v1\/findings\/([^/]+)(\/events)?$/.exec(p);
     if (fm) {

@@ -130,3 +130,14 @@ func (s *PostgresStore) DeleteSession(ctx context.Context, tenantID, sessionID u
 		return err
 	})
 }
+
+// IsTenantMemberEmail says whether an active person with this e-mail (any case) is a member of the tenant (D59).
+func (s *PostgresStore) IsTenantMemberEmail(ctx context.Context, tenantID uuid.UUID, email string) (bool, error) {
+	var ok bool
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM tenant_member m JOIN app_user u ON u.id = m.user_id
+			WHERE m.tenant_id = $1 AND lower(u.email) = lower($2) AND u.status = 'active')`, tenantID, email).Scan(&ok)
+	})
+	return ok, err
+}

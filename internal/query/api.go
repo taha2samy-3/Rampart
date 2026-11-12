@@ -259,6 +259,55 @@ func (a *API) resolveTenant(r *http.Request) (uuid.UUID, error) {
 	return domain.NilID, auth.ErrUnauthorized
 }
 
+// meOf is who "me" is: the caller's e-mail, or a token's subject when that is an e-mail (D48 matches subjects the
+// same way), or "".
+func meOf(u *auth.ContextUser) string {
+	if u == nil {
+		return ""
+	}
+	if u.Email != "" {
+		return strings.ToLower(u.Email)
+	}
+	if strings.Contains(u.Subject, "@") {
+		return strings.ToLower(u.Subject)
+	}
+	return ""
+}
+
+// callerEmail is meOf for the request's caller.
+func (a *API) callerEmail(r *http.Request) string {
+	if u, ok := auth.FromContext(r.Context()); ok && u != nil {
+		return meOf(u)
+	}
+	if a.authn != nil {
+		if u, err := a.authn.AuthenticateRequest(r); err == nil && u != nil {
+			return meOf(u)
+		}
+	}
+	return ""
+}
+
+// expandMe replaces owner:me with the caller's e-mail ("My work", docs/13). A caller without an e-mail owns
+// nothing, so the term matches nothing rather than being dropped (D59).
+func expandMe(q *grammar.Query, email string) {
+	if q == nil {
+		return
+	}
+	for i := range q.Terms {
+		if q.Terms[i].Field != "owner" {
+			continue
+		}
+		for j := range q.Terms[i].Values {
+			if strings.EqualFold(q.Terms[i].Values[j].Raw, "me") {
+				if email == "" {
+					email = "\x00no-owner"
+				}
+				q.Terms[i].Values[j].Raw = email
+			}
+		}
+	}
+}
+
 func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := a.resolveTenant(r)
 	if err != nil {
@@ -278,6 +327,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parsedQuery = &pq
+		expandMe(parsedQuery, a.callerEmail(r))
 	}
 	sortKey := r.URL.Query().Get("sort")
 	if sortKey == "" {

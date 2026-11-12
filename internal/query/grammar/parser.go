@@ -29,7 +29,22 @@ type Query struct {
 	Terms []Term
 }
 
-// Parse turns a query string into a structured Query AST per normative D16 EBNF.
+// KnownFields are the fields of D16, the same list as KNOWN_FIELDS in web/src/lib/grammar.ts.
+var KnownFields = []string{"state", "severity", "risk", "score", "category", "scanner", "rule", "cve", "cwe", "app", "asset",
+	"assettype", "env", "track", "path", "purl", "tag", "owner", "kev", "fix", "sla", "age", "seen", "source", "run"}
+
+func isKnownField(f string) bool {
+	for _, k := range KnownFields {
+		if k == f {
+			return true
+		}
+	}
+	return false
+}
+
+// Parse turns a query string into a structured Query AST per normative D16 EBNF. An unknown field is an error,
+// never ignored: an ignored term widens the match, and a bulk change by filter would then reach findings the
+// person did not mean (D59). Free text that contains a colon (a URL) is written in quotes.
 func Parse(q string) (Query, error) {
 	var terms []Term
 	tokens := tokenize(q)
@@ -49,6 +64,9 @@ func Parse(q string) (Query, error) {
 		colonIdx := strings.Index(tok, ":")
 		if colonIdx != -1 {
 			field := strings.ToLower(tok[:colonIdx])
+			if !isKnownField(field) {
+				return Query{}, fmt.Errorf("unknown field %q (known: %s); put free text that contains a colon in quotes", field, strings.Join(KnownFields, ", "))
+			}
 			valStr := tok[colonIdx+1:]
 			values := parseValues(valStr)
 

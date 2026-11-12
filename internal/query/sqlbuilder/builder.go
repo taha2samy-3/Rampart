@@ -309,6 +309,24 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 			args = append(args, prefix+"%")
 			curIdx++
 		}
+	case "assettype":
+		for _, v := range term.Values {
+			orClauses = append(orClauses, fmt.Sprintf("asset_id IN (SELECT id FROM asset WHERE type = $%d)", curIdx))
+			args = append(args, strings.ToLower(v.Raw))
+			curIdx++
+		}
+	case "owner":
+		// owner:<e-mail>, owner:none for unassigned; owner:me is replaced by the caller's e-mail before the
+		// query is built (D59).
+		for _, v := range term.Values {
+			if strings.EqualFold(v.Raw, "none") {
+				orClauses = append(orClauses, "owner IS NULL")
+				continue
+			}
+			orClauses = append(orClauses, fmt.Sprintf("owner = $%d", curIdx))
+			args = append(args, strings.ToLower(v.Raw))
+			curIdx++
+		}
 	case "tag":
 		for _, v := range term.Values {
 			orClauses = append(orClauses, fmt.Sprintf("$%d = ANY(tags)", curIdx))
@@ -397,7 +415,12 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 	}
 
 	if len(orClauses) == 0 {
-		return "", nil, startIdx
+		// A term none of whose values could be read (cwe:abc, score:high) matches nothing, never everything:
+		// dropping it would widen the match (D59).
+		if term.Negated {
+			return "TRUE", nil, startIdx
+		}
+		return "FALSE", nil, startIdx
 	}
 
 	combined := strings.Join(orClauses, " OR ")

@@ -10,6 +10,8 @@ import { Inspector } from '@/features/finding-inspector/Inspector';
 import { FindingsTable } from '@/features/findings-table/FindingsTable';
 import { AcceptanceDialog } from '@/features/acceptance/AcceptanceDialog';
 import { TriageDialog } from '@/features/triage/TriageDialog';
+import { EditDialog } from '@/features/triage/EditDialog';
+import { BulkBar } from '@/features/bulk/BulkBar';
 import { useAccess } from '@/app/useAccess';
 import { cn } from '@/lib/cn';
 import { parseQuery, removeTerm } from '@/lib/grammar';
@@ -69,16 +71,39 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const tablet = useMedia('(max-width: 899px)');
   const [sheetOpen, setSheetOpen] = useState(false);
   const insp = useInspectorWidth();
-  const { can } = useAccess();
+  const { can, canAnywhere } = useAccess();
   const [triageOpen, setTriageOpen] = useState(false);
   const [acceptOpen, setAcceptOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  // Findings picked for a bulk change, and whether "all matching" replaced them with the filter (docs/13).
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  const [allMatching, setAllMatching] = useState(false);
+  const clearChecked = useCallback(() => {
+    setChecked(new Set());
+    setAllMatching(false);
+  }, []);
+  const toggleChecked = useCallback((id: string) => {
+    setAllMatching(false);
+    setChecked((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const setSearch = useCallback(
     (patch: Partial<FindingsSearch>) =>
       void navigate({ to: '/findings', search: (prev: FindingsSearch) => ({ ...prev, ...patch }), replace: true }),
     [navigate],
   );
-  const setQ = useCallback((next: string) => setSearch({ q: next || undefined, sel: undefined }), [setSearch]);
+  const setQ = useCallback(
+    (next: string) => {
+      clearChecked(); // a selection belongs to the list it was made in
+      setSearch({ q: next || undefined, sel: undefined });
+    },
+    [setSearch, clearChecked],
+  );
 
   const query = useInfiniteQuery({
     queryKey: qk.findings.list(q, sort),
@@ -93,15 +118,19 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const selectedRow = rows.find((r) => r.finding.id === selectedId);
   // A decision is offered where the caller's role on the finding's application reaches it (D48).
   const canTriage = can(selectedRow?.finding.application_id, 'triager');
+  // Selecting for a bulk change is offered to anyone who may decide somewhere; the server decides each finding
+  // by its application and reports the ones it refused (D48).
+  const canTriageAny = canAnywhere('triager');
   // "s" sets the state of the selected finding (docs/13), unless the keystroke is for a field.
   useEffect(() => {
     if (!canTriage || !selectedRow) return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== 's' && e.key !== 'e') || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if ((e.key !== 's' && e.key !== 'e' && e.key !== 'a') || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
       e.preventDefault();
       if (e.key === 's') setTriageOpen(true);
+      else if (e.key === 'a') setEditOpen(true);
       else if (['open', 'under_investigation', 'affected'].includes(selectedRow.finding.state)) setAcceptOpen(true);
     };
     window.addEventListener('keydown', onKey);
@@ -163,6 +192,8 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
         hasMore={!!hasNextPage}
         loadingMore={isFetchingNextPage}
         onLoadMore={loadMore}
+        checked={checked}
+        onToggleChecked={canTriageAny ? toggleChecked : undefined}
       />
     );
   }
@@ -177,6 +208,16 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
       <section aria-label={t('findings.title')} className="flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
         <FilterBar q={q} onQueryChange={setQ} total={total} onOpenFilters={tablet ? () => setSheetOpen(true) : undefined} />
         {list}
+        {(checked.size > 0 || allMatching) && (
+          <BulkBar
+            ids={[...checked]}
+            all={allMatching}
+            total={total}
+            q={q}
+            onSelectAll={() => setAllMatching(true)}
+            onClear={clearChecked}
+          />
+        )}
       </section>
       <div
         className={cn(
@@ -199,10 +240,17 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
           />
         )}
         <aside aria-label={t('findings.inspector')} className="h-full overflow-y-auto">
-          <Inspector row={selectedRow} selectedId={selectedId} onTriage={canTriage && selectedRow ? () => setTriageOpen(true) : undefined} onAccept={canTriage && selectedRow ? () => setAcceptOpen(true) : undefined} />
+          <Inspector
+            row={selectedRow}
+            selectedId={selectedId}
+            onTriage={canTriage && selectedRow ? () => setTriageOpen(true) : undefined}
+            onAccept={canTriage && selectedRow ? () => setAcceptOpen(true) : undefined}
+            onEdit={canTriage && selectedRow ? () => setEditOpen(true) : undefined}
+          />
         </aside>
       </div>
       {selectedRow && <TriageDialog row={selectedRow} open={triageOpen && canTriage} onOpenChange={setTriageOpen} />}
+      {selectedRow && <EditDialog row={selectedRow} open={editOpen && canTriage} onOpenChange={setEditOpen} />}
       {selectedRow && <AcceptanceDialog row={selectedRow} open={acceptOpen && canTriage} onOpenChange={setAcceptOpen} />}
       <Dialog open={sheetOpen && tablet} onOpenChange={setSheetOpen}>
         <DialogContent sheet title={t('findings.facetsTitle')}>

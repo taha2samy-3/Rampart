@@ -28,8 +28,14 @@ type PatchFindingRequest struct {
 	Severity        string    `json:"severity,omitempty"`
 	SeverityReason  string    `json:"severityReason,omitempty"`
 	Tags            *[]string `json:"tags,omitempty"`
-	DuplicateOf     string    `json:"duplicateOf,omitempty"`
-	Note            string    `json:"note,omitempty"`
+	// AddTags and RemoveTags change tags without replacing the others, which is what a bulk change needs: "tags"
+	// replaces the whole list, and in bulk would wipe each finding's own tags (D59). Not together with "tags".
+	AddTags     []string `json:"addTags,omitempty"`
+	RemoveTags  []string `json:"removeTags,omitempty"`
+	DuplicateOf string   `json:"duplicateOf,omitempty"`
+	Note        string   `json:"note,omitempty"`
+	// Owner: the e-mail of a member of the tenant, or "" to clear (D59). Absent leaves it.
+	Owner *string `json:"owner,omitempty"`
 	// Version is the version the caller read; the If-Match header says the same and wins. Without either,
 	// the decision applies to the version read at the start of the request.
 	Version *int `json:"version,omitempty"`
@@ -38,7 +44,7 @@ type PatchFindingRequest struct {
 func (p PatchFindingRequest) toTriage() (domain.TriageRequest, error) {
 	req := domain.TriageRequest{
 		State: domain.FindingState(p.State), Justification: p.Justification, ImpactStatement: p.ImpactStatement,
-		Severity: p.Severity, SeverityReason: p.SeverityReason, Tags: p.Tags, Note: p.Note,
+		Severity: p.Severity, SeverityReason: p.SeverityReason, Tags: p.Tags, Note: p.Note, Owner: p.Owner,
 	}
 	if p.DuplicateOf != "" {
 		id, err := uuid.Parse(p.DuplicateOf)
@@ -105,6 +111,35 @@ func (a *API) triageOne(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, p
 	req, err := p.toTriage()
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(p.AddTags) > 0 || len(p.RemoveTags) > 0 {
+		if p.Tags != nil {
+			return nil, nil, &domain.TriageError{Msg: "give tags, or addTags and removeTags, not both"}
+		}
+		drop := map[string]bool{}
+		for _, t := range p.RemoveTags {
+			drop[strings.TrimSpace(t)] = true
+		}
+		next := []string{}
+		for _, t := range append(append([]string{}, finding.Tags...), p.AddTags...) {
+			if !drop[strings.TrimSpace(t)] {
+				next = append(next, t)
+			}
+		}
+		req.Tags = &next // ApplyTriage trims, removes duplicates, sorts and bounds them
+	}
+	if req.Owner != nil && strings.TrimSpace(*req.Owner) != "" { // an owner is a member of this tenant (D59)
+		if ms, ok := a.store.(interface {
+			IsTenantMemberEmail(ctx context.Context, tenantID uuid.UUID, email string) (bool, error)
+		}); ok {
+			member, merr := ms.IsTenantMemberEmail(ctx, tenantID, strings.TrimSpace(*req.Owner))
+			if merr != nil {
+				return nil, nil, merr
+			}
+			if !member {
+				return nil, nil, &domain.TriageError{Msg: "the owner must be a member of this tenant: " + strings.TrimSpace(*req.Owner) + " is not"}
+			}
+		}
 	}
 	if req.DuplicateOf != nil { // the original must be another finding of this tenant
 		if orig, _, derr := a.store.GetFinding(ctx, tenantID, *req.DuplicateOf); derr != nil || orig == nil {
@@ -234,7 +269,7 @@ func (a *API) handleBulkTriage(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, id)
 		}
 	} else {
-		matched, err := a.matchIDs(r.Context(), tenantID, req.Q)
+		matched, err := a.matchIDs(r.Context(), tenantID, req.Q, meOf(user))
 		if err != nil {
 			var ge *grammarError
 			if errors.As(err, &ge) {
@@ -293,11 +328,12 @@ type grammarError struct{ msg string }
 func (e *grammarError) Error() string { return e.msg }
 
 // matchIDs returns the ids a filter matches, at most MaxBulk+1 (one more than allowed, to know it is too many).
-func (a *API) matchIDs(ctx context.Context, tenantID uuid.UUID, q string) ([]uuid.UUID, error) {
+func (a *API) matchIDs(ctx context.Context, tenantID uuid.UUID, q, callerEmail string) ([]uuid.UUID, error) {
 	pq, err := grammar.Parse(q)
 	if err != nil {
 		return nil, &grammarError{"Invalid query syntax: " + err.Error()}
 	}
+	expandMe(&pq, callerEmail)
 	var found []*domain.Finding
 	if fq, ok := a.store.(FindingQuerier); ok {
 		found, err = fq.QueryFindings(ctx, tenantID, &pq, "-score", MaxBulk+1, nil)

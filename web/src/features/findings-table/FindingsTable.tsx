@@ -33,6 +33,8 @@ export function FindingsTable({
   hasMore,
   loadingMore,
   onLoadMore,
+  checked,
+  onToggleChecked,
 }: {
   rows: FindingRow[];
   selectedId: string | undefined;
@@ -43,6 +45,9 @@ export function FindingsTable({
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  /** Findings picked for a bulk change (docs/13: x selects); absent when the caller may not triage. */
+  checked?: ReadonlySet<string>;
+  onToggleChecked?: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -107,6 +112,9 @@ export function FindingsTable({
     } else if (e.key === 'End') {
       e.preventDefault();
       move(Infinity);
+    } else if (e.key === 'x' && onToggleChecked && selectedId) {
+      e.preventDefault();
+      onToggleChecked(selectedId);
     }
   };
   useEffect(() => {
@@ -127,6 +135,7 @@ export function FindingsTable({
     <div ref={scrollRef} className="@container/list min-h-0 flex-1 overflow-auto">
       <Table role="grid" aria-label={t('findings.tableLabel')} aria-rowcount={modelRows.length} onKeyDown={onKeyDown}>
         <colgroup>
+          {onToggleChecked && <col className="w-[32px]" />}
           <col className="w-[150px]" />
           <col />
           <col className={cn('w-[88px]', HIDE_NARROW)} />
@@ -136,6 +145,7 @@ export function FindingsTable({
         </colgroup>
         <THead className="sticky top-0 z-10">
           <tr role="row">
+            {onToggleChecked && <Th><span className="sr-only">{t('bulk.action')}</span></Th>}
             <Th sort={sortState} onSort={onToggleSort}>{t('findings.colScore')}</Th>
             <Th>{t('findings.colFinding')}</Th>
             <Th className={HIDE_NARROW}>{t('findings.colApplication')}</Th>
@@ -147,7 +157,7 @@ export function FindingsTable({
         <TBody>
           {padTop > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={6} className="p-0" style={{ blockSize: padTop }} />
+              <td colSpan={onToggleChecked ? 7 : 6} className="p-0" style={{ blockSize: padTop }} />
             </tr>
           )}
           {items.map((vi) => {
@@ -170,7 +180,19 @@ export function FindingsTable({
                 className="cursor-default align-middle focus-visible:outline-offset-[-2px]"
                 style={{ blockSize: rowH }}
               >
-                <Td className={cn('py-0', selected && 'shadow-[inset_3px_0_0_var(--accent)]')}>
+                {onToggleChecked && (
+                  <Td className={cn('py-0 pe-0', selected && 'shadow-[inset_3px_0_0_var(--accent)]')} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      tabIndex={-1}
+                      aria-label={t('bulk.select', { title: f.title })}
+                      checked={checked?.has(f.id) ?? false}
+                      onChange={() => onToggleChecked(f.id)}
+                      className="size-3.5 accent-[var(--accent)] align-middle"
+                    />
+                  </Td>
+                )}
+                <Td className={cn('py-0', selected && !onToggleChecked && 'shadow-[inset_3px_0_0_var(--accent)]')}>
                   <span className="flex items-center gap-2">
                     <BandShape band={band} size={12} />
                     <span className="w-9 text-end text-14 font-semibold tnum">{r.risk?.total_score ?? f.risk_score}</span>
@@ -198,7 +220,7 @@ export function FindingsTable({
           })}
           {padBottom > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={6} className="p-0" style={{ blockSize: padBottom }} />
+              <td colSpan={onToggleChecked ? 7 : 6} className="p-0" style={{ blockSize: padBottom }} />
             </tr>
           )}
         </TBody>

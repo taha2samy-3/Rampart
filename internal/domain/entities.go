@@ -281,10 +281,12 @@ type Finding struct {
 	PreviousState FindingState `json:"previous_state,omitempty"`
 	StateReason   string       `json:"state_reason,omitempty"`
 	// Justification and ImpactStatement belong to a not_affected decision (OpenVEX); DuplicateOfID to a duplicate.
-	Justification   string     `json:"justification,omitempty"`
-	ImpactStatement string     `json:"impact_statement,omitempty"`
-	DuplicateOfID   *uuid.UUID `json:"duplicate_of_id,omitempty"`
-	Tags            []string   `json:"tags,omitempty"`
+	Justification   string `json:"justification,omitempty"`
+	ImpactStatement string `json:"impact_statement,omitempty"`
+	// Owner is the e-mail of the member of the tenant who works on the finding, or empty (D59).
+	Owner         string     `json:"owner,omitempty"`
+	DuplicateOfID *uuid.UUID `json:"duplicate_of_id,omitempty"`
+	Tags          []string   `json:"tags,omitempty"`
 	// RiskAcceptanceID is set while the finding is risk_accepted through a risk acceptance (D39).
 	RiskAcceptanceID *uuid.UUID      `json:"risk_acceptance_id,omitempty"`
 	Detection        DetectionStatus `json:"detection"` // present | absent (D18)

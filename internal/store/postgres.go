@@ -136,7 +136,8 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
 	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
 	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id,
-	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified`
+	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified,
+	coalesce(owner, '')`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
 	var (
@@ -155,6 +156,7 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		&f.ResolvedAt, &resolution, &f.ReopenedCount, &f.OccurrenceCount, &f.Version, &f.CreatedAt, &f.UpdatedAt,
 		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags, &f.RiskAcceptanceID,
 		&band, &f.KEV, &f.EPSSBucket, &f.SLAStart, &f.SLADue, &f.SLABreachedAt, &f.SLAPausedAt, &f.SecretVerified,
+		&f.Owner,
 	)
 	if err != nil {
 		return nil, err
@@ -1822,13 +1824,14 @@ func (s *PostgresStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.U
 				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15, risk_acceptance_id = $16,
 				risk_score = $17, risk_band = $18, sla_due_date = $19, sla_paused_at = $20, sla_breached_at = $21, sla_start = $22,
 				sla_warned_at = CASE WHEN sla_due_date IS DISTINCT FROM $19 THEN NULL ELSE sla_warned_at END,
+				owner = $23,
 				version = version + 1, updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2 AND version = $3`,
 			tenantID, f.ID, expectedVersion,
 			string(f.State), prev, reason, resolution, f.ResolvedAt,
 			just, impact, f.DuplicateOfID,
 			string(f.Severity), override, tags, f.ReopenedCount, f.RiskAcceptanceID,
-			f.RiskScore, riskBand(f), f.SLADue, f.SLAPausedAt, f.SLABreachedAt, f.SLAStart)
+			f.RiskScore, riskBand(f), f.SLADue, f.SLAPausedAt, f.SLABreachedAt, f.SLAStart, nonEmpty(f.Owner))
 		if err != nil {
 			return err
 		}
