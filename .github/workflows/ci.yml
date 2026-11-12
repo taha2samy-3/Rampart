@@ -341,9 +341,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push by digest
         id: push
-        env:
-          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
         run: |
+          repo_lower=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          export KO_DOCKER_REPO="ghcr.io/${repo_lower}"
           REF=$(ko build --bare --tags "${GITHUB_SHA}" ./cmd/rampart)
           echo "image=${REF%@*}" >> "$GITHUB_OUTPUT"
           echo "digest=${REF#*@}" >> "$GITHUB_OUTPUT"
