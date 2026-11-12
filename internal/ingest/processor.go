@@ -57,6 +57,9 @@ func NewProcessor(store Store, registry *integrations.Registry, objects objectst
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if registry == nil {
+		registry = integrations.DefaultRegistry()
+	}
 	return &Processor{store: store, engine: NewEngine(store), registry: registry, objects: objects, logger: logger,
 		batchRows: 5000, maxReport: 512 << 20, maxSBOMBytes: 256 << 20}
 }
