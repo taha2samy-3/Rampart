@@ -1,0 +1,36 @@
+[
+  {
+    "Description": "AWS Access Key",
+    "StartLine": 3,
+    "EndLine": 3,
+    "StartColumn": 20,
+    "EndColumn": 40,
+    "Match": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "config/prod.env",
+    "Commit": "9f2c1a8d3e0b4c5d6e7f8a9b0c1d2e3f4a5b6c7d",
+    "Entropy": 3.68,
+    "Author": "Omar",
+    "Email": "omar@acme.example",
+    "Date": "2026-10-01T10:00:00Z",
+    "Message": "add prod env",
+    "Tags": ["key", "AWS"],
+    "RuleID": "aws-access-token",
+    "Fingerprint": "9f2c1a8d:config/prod.env:aws-access-token:3"
+  },
+  {
+    "Description": "Generic API Key",
+    "StartLine": 15,
+    "EndLine": 15,
+    "StartColumn": 1,
+    "EndColumn": 52,
+    "Match": "api_key = \"7f3a9c1e5b2d48f6a0c9e1d3b5a7f9c2e4d6b8a0\"",
+    "Secret": "7f3a9c1e5b2d48f6a0c9e1d3b5a7f9c2e4d6b8a0",
+    "File": "scripts\\deploy.py",
+    "Commit": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+    "Entropy": 4.1,
+    "Tags": [],
+    "RuleID": "generic-api-key",
+    "Fingerprint": "1a2b3c4d:scripts/deploy.py:generic-api-key:15"
+  }
+]

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/package-url/packageurl-go"
@@ -133,4 +134,35 @@ func CanonicalPURL(raw string) (canonical string, purlBase string, err error) {
 	purlBase = p.ToString()
 
 	return canonical, purlBase, nil
+}
+
+// CanonicalVulnID picks the identifier a finding is keyed and shown by (docs/16 D11): a CVE if there is one (the
+// lowest, if several), else the lowest GHSA, else the first identifier. CVE ids are upper-cased, GHSA ids have a
+// lower-cased body (docs/05 section 3); other identifiers are kept as written.
+func CanonicalVulnID(ids []string) string {
+	var cves, ghsas []string
+	first := ""
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		switch upper := strings.ToUpper(id); {
+		case strings.HasPrefix(upper, "CVE-"):
+			cves = append(cves, upper)
+		case strings.HasPrefix(upper, "GHSA-"):
+			ghsas = append(ghsas, "GHSA-"+strings.ToLower(id[len("GHSA-"):]))
+		case first == "":
+			first = id
+		}
+	}
+	switch {
+	case len(cves) > 0:
+		sort.Strings(cves)
+		return cves[0]
+	case len(ghsas) > 0:
+		sort.Strings(ghsas)
+		return ghsas[0]
+	}
+	return first
 }

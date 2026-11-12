@@ -134,7 +134,7 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
 	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
 	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id,
-	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at`
+	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
 	var (
@@ -152,7 +152,7 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		&detection, &f.ContentHash, &f.WeakFingerprint, &f.FirstSeen, &f.LastSeen,
 		&f.ResolvedAt, &resolution, &f.ReopenedCount, &f.OccurrenceCount, &f.Version, &f.CreatedAt, &f.UpdatedAt,
 		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags, &f.RiskAcceptanceID,
-		&band, &f.KEV, &f.EPSSBucket, &f.SLAStart, &f.SLADue, &f.SLABreachedAt, &f.SLAPausedAt,
+		&band, &f.KEV, &f.EPSSBucket, &f.SLAStart, &f.SLADue, &f.SLABreachedAt, &f.SLAPausedAt, &f.SecretVerified,
 	)
 	if err != nil {
 		return nil, err
@@ -288,12 +288,12 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				cvss_vector, risk_score, state, previous_state, state_reason, detection,
 				content_hash, weak_fingerprint, first_seen, last_seen, reopened_count,
 				occurrence_count, version, created_at, updated_at, resolved_at, resolution, correlation_key,
-				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at
+				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 				$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
 				$25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36,
-				$37, $38, $39, $40, $41, $42, $43
+				$37, $38, $39, $40, $41, $42, $43, $44
 			)
 			ON CONFLICT (tenant_id, finding_key) DO UPDATE SET
 				last_seen = EXCLUDED.last_seen,
@@ -317,6 +317,7 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				sla_due_date = EXCLUDED.sla_due_date,
 				sla_breached_at = EXCLUDED.sla_breached_at,
 				sla_paused_at = EXCLUDED.sla_paused_at,
+				secret_verified = EXCLUDED.secret_verified,
 				state = EXCLUDED.state,
 				previous_state = EXCLUDED.previous_state,
 				state_reason = EXCLUDED.state_reason,
@@ -392,7 +393,7 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				cvssVec, f.RiskScore, string(f.State), prevState, stateReason, detection,
 				f.ContentHash, f.WeakFingerprint, f.FirstSeen, f.LastSeen, f.ReopenedCount,
 				f.OccurrenceCount, f.Version, createdAt, updatedAt, f.ResolvedAt, resolution, corr,
-				riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue, f.SLABreachedAt, f.SLAPausedAt,
+				riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue, f.SLABreachedAt, f.SLAPausedAt, f.SecretVerified,
 			)
 
 			// D19: Rule and vulnerability metadata unknown to official global feeds populate tenant-local stubs.

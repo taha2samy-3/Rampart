@@ -29,6 +29,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 2: risk acceptance with owner, expiry, optional approval, revoke, expiry sweeper; tenant settings (D39) | built; API tested on PostgreSQL, UI (request dialog, Workflow page) tested with Vitest. Not built: notifications, SLA pause, exceptions by selector |
 | Phase 2: stored risk score, band and SLA; re-score on feed changes; SLA breach sweep; pause on risk acceptance; restart on reactivation (D40) | built; tested on PostgreSQL. Not built: `RiskPolicy` and `SLAPolicy` objects, `businessDays`, SLA notifications |
 | Phase 2: `SLAPolicy` custom resource (operator, CRD, `rampart apply`, recompute on change) (D41) | built; tested with envtest and on PostgreSQL. Not built: `ClusterSLAPolicy`, per-application selection, `RiskPolicy` (needs CEL) |
+| Phase 2: native parsers: Trivy, Grype, Semgrep, Gitleaks, TruffleHog (D42), with secrets never stored and TruffleHog verification in the score | built; fuzzed and tested on PostgreSQL. Not built: detect-secrets, image name from the report |
 | Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
 | Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
 | Phase 1: `RekeyJob` (D11) | not built |

@@ -54,3 +54,23 @@ func TestCleanPathAndURL(t *testing.T) {
 		t.Errorf("unexpected NormalizeURL: %q", got)
 	}
 }
+
+func TestCanonicalVulnID(t *testing.T) {
+	cases := []struct {
+		ids  []string
+		want string
+	}{
+		{[]string{"GHSA-jfh8-c2jp-5v3q", "CVE-2021-44228"}, "CVE-2021-44228"}, // a CVE beats the id Grype matched on
+		{[]string{"cve-2021-44228"}, "CVE-2021-44228"},                        // upper-cased
+		{[]string{"CVE-2022-2", "CVE-2021-9", "GHSA-aaaa-bbbb-cccc"}, "CVE-2021-9"},
+		{[]string{"GHSA-ZZZZ-aaaa-bbbb", "GHSA-AAAA-bbbb-cccc"}, "GHSA-aaaa-bbbb-cccc"}, // the smallest GHSA, lower-cased body
+		{[]string{"PYSEC-2021-1", "OSV-2020-1"}, "PYSEC-2021-1"},                        // else the first, as written
+		{[]string{"", "  ", "RUSTSEC-2020-0001"}, "RUSTSEC-2020-0001"},
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := normalize.CanonicalVulnID(c.ids); got != c.want {
+			t.Errorf("CanonicalVulnID(%v) = %q, want %q", c.ids, got, c.want)
+		}
+	}
+}

@@ -257,9 +257,11 @@ type Finding struct {
 	RiskScore              int             `json:"risk_score"` // 0–1000 explainable score
 	// RiskBand, KEV and EPSSBucket are stored with the score so the explorer can filter and sort in SQL (D28);
 	// the factors that depend on time (age) are not in the stored score, they are evaluated when read.
-	RiskBand   Severity `json:"risk_band"`
-	KEV        bool     `json:"kev"`
-	EPSSBucket string   `json:"epss_bucket,omitempty"`
+	RiskBand Severity `json:"risk_band"`
+	// SecretVerified is set while the scanner that found a secret says it is live.
+	SecretVerified bool   `json:"secret_verified,omitempty"`
+	KEV            bool   `json:"kev"`
+	EPSSBucket     string `json:"epss_bucket,omitempty"`
 	// The SLA clock (docs/06 section 4): it starts at SLAStart (first seen), ends at SLADue, stops while
 	// SLAPausedAt is set (a risk acceptance), and SLABreachedAt records the first time the due date passed.
 	SLAStart      *time.Time   `json:"sla_start,omitempty"`
@@ -365,8 +367,10 @@ type RawFinding struct {
 	VulnIDs         []string        `json:"vuln_ids,omitempty"` // CVE, GHSA, OSV
 	CVSSVector      string          `json:"cvss_vector,omitempty"`
 	SecretValue     string          `json:"secret_value,omitempty"` // For generating secret_hash
-	VEX             *VEXStatement   `json:"vex,omitempty"`
-	RawPayload      json.RawMessage `json:"raw_payload,omitempty"`
+	// SecretVerified: the scanner tried the credential against its provider and it is live (docs/06 SECRET_VERIFIED).
+	SecretVerified bool            `json:"secret_verified,omitempty"`
+	VEX            *VEXStatement   `json:"vex,omitempty"`
+	RawPayload     json.RawMessage `json:"raw_payload,omitempty"`
 }
 
 // VEXStatement captures vulnerability exploitability exchange statements (OpenVEX / CSAF / CycloneDX VEX).

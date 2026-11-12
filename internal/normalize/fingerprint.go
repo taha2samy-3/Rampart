@@ -88,10 +88,7 @@ func ComputeFingerprint(params FingerprintParams) FingerprintResult {
 
 	case domain.CategorySCA:
 		// SCA: canonical_vuln_id, purl_base, manifest_path (or image_repository)
-		vulnID := ""
-		if len(params.RawFinding.VulnIDs) > 0 {
-			vulnID = NFC(params.RawFinding.VulnIDs[0])
-		}
+		vulnID := NFC(CanonicalVulnID(params.RawFinding.VulnIDs)) // the CVE when there is one (D11)
 		purlBase := ""
 		manifest := ""
 		if loc.Package != nil {

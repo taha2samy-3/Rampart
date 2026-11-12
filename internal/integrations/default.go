@@ -7,10 +7,15 @@ import (
 
 	"rampart/internal/domain"
 	"rampart/internal/parsers/cyclonedx"
+	"rampart/internal/parsers/gitleaks"
+	"rampart/internal/parsers/grype"
 	"rampart/internal/parsers/openvex"
 	"rampart/internal/parsers/sarif"
+	"rampart/internal/parsers/semgrep"
 	"rampart/internal/parsers/spdx"
 	"rampart/internal/parsers/syft"
+	"rampart/internal/parsers/trivy"
+	"rampart/internal/parsers/trufflehog"
 )
 
 type streamingParser interface {
@@ -104,6 +109,24 @@ func DefaultRegistry() *Registry {
 		},
 		parser: syft.NewParser(),
 	})
+
+	// 6. The native JSON reports of the four most used scanners (docs/05, D15). Their SARIF output goes through the
+	// SARIF parser; these read what the tools write by default, with more detail than SARIF carries.
+	for _, p := range []struct {
+		id, name, version, desc string
+		parser                  streamingParser
+	}{
+		{"builtin:trivy", "Trivy Parser (JSON)", "2", "Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations, licenses", trivy.NewParser()},
+		{"builtin:grype", "Grype Parser (JSON)", "1", "Grype JSON: vulnerability matches with their related identifiers", grype.NewParser()},
+		{"builtin:semgrep", "Semgrep Parser (JSON)", "1", "Semgrep JSON: code findings with CWE, location and code snippet hash", semgrep.NewParser()},
+		{"builtin:trufflehog", "TruffleHog Parser (JSON lines)", "3", "TruffleHog JSON lines: secrets, with whether the credential is live; the secret is hashed and never stored", trufflehog.NewParser()},
+		{"builtin:gitleaks", "Gitleaks Parser (JSON)", "1", "Gitleaks JSON: secrets found in a repository; the secret is hashed and never stored", gitleaks.NewParser()},
+	} {
+		_ = reg.RegisterParser(&parserAdapter{
+			desc:   Descriptor{ID: p.id, Name: p.name, Kind: KindParser, Version: p.version, SupportLevel: SupportBuiltin, Description: p.desc},
+			parser: p.parser,
+		})
+	}
 
 	return reg
 }

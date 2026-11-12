@@ -159,7 +159,7 @@ func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedSto
 	if f.VulnerabilityID != nil && *f.VulnerabilityID != "" {
 		vulnIDs = []string{*f.VulnerabilityID}
 	}
-	ctx := risk.Context{Environment: f.Track, Now: now}
+	ctx := risk.Context{Environment: f.Track, Now: now, SecretVerifiedLive: f.SecretVerified}
 	criticality := "low"
 	if app != nil {
 		criticality = strings.ToLower(app.BusinessCriticality)

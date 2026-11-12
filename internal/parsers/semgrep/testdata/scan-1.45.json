@@ -1,0 +1,43 @@
+{
+  "version": "1.45.0",
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.dangerous-system-call.dangerous-system-call",
+      "path": "app/handlers/export.py",
+      "start": {"line": 42, "col": 5, "offset": 1180},
+      "end": {"line": 42, "col": 38, "offset": 1213},
+      "extra": {
+        "message": "Found user-controlled data used in a system call. This can lead to command injection. Use subprocess with a list of arguments instead.",
+        "severity": "ERROR",
+        "lines": "os.system(\"convert \" + filename)",
+        "metadata": {"cwe": ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"], "category": "security", "confidence": "HIGH"}
+      }
+    },
+    {
+      "check_id": "javascript.express.security.audit.xss.direct-response-write",
+      "path": "src/routes/greet.js",
+      "start": {"line": 7, "col": 3},
+      "end": {"line": 7, "col": 40},
+      "extra": {
+        "message": "Detected directly writing to a Response object from user-controllable data.",
+        "severity": "WARNING",
+        "lines": "requires login",
+        "metadata": {"cwe": "CWE-79: Improper Neutralization of Input During Web Page Generation", "category": "security"}
+      }
+    },
+    {
+      "check_id": "generic.secrets.security.detected-aws-access-key-id-value.detected-aws-access-key-id-value",
+      "path": "config/prod.env",
+      "start": {"line": 3, "col": 20},
+      "end": {"line": 3, "col": 40},
+      "extra": {
+        "message": "AWS Access Key ID Value detected.",
+        "severity": "ERROR",
+        "lines": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+        "metadata": {"category": "security"}
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {"scanned": ["app/handlers/export.py", "src/routes/greet.js", "config/prod.env"]}
+}

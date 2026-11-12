@@ -22,21 +22,22 @@ type CloseScope = domain.CloseScope
 
 // StagedRecord represents a normalized record ready for batch merge (D13).
 type StagedRecord struct {
-	ScannerFamily string // the scanner (semgrep, trivy...), which defines the close scope (D11, D13)
-	FindingKey    string
-	Category      domain.FindingCategory
-	RuleID        string
-	Title         string
-	Description   string
-	ToolSeverity  string
-	Severity      domain.Severity
-	Location      domain.Location
-	CWEs          []int
-	VulnID        string
-	CVSSVector    string
-	ContentHash   string
-	SeenAt        time.Time
-	RawPayload    []byte
+	ScannerFamily  string // the scanner (semgrep, trivy...), which defines the close scope (D11, D13)
+	FindingKey     string
+	Category       domain.FindingCategory
+	RuleID         string
+	Title          string
+	Description    string
+	ToolSeverity   string
+	Severity       domain.Severity
+	Location       domain.Location
+	CWEs           []int
+	VulnID         string
+	CVSSVector     string
+	SecretVerified bool // the scanner says the credential is live
+	ContentHash    string
+	SeenAt         time.Time
+	RawPayload     []byte
 }
 
 // MergeOutcome records the result breakdown of a batch merge.
@@ -222,6 +223,7 @@ func (e *Engine) mergeBatch(
 				Description:       rec.Description,
 				CWEs:              rec.CWEs,
 				VulnerabilityID:   vulnPtr(rec.VulnID),
+				SecretVerified:    rec.SecretVerified,
 				CorrelationKey:    CorrelationKey(rec, firstNonEmptyStr(canon[rec.VulnID], rec.VulnID), scope.AssetID, scope.Track),
 				Location:          rec.Location,
 				Severity:          rec.Severity,
@@ -279,6 +281,19 @@ func (e *Engine) mergeBatch(
 				targetFinding.Version++
 				outcome.Updated++
 				addEvent(targetFinding, "recheck_needed", rec.SeenAt)
+			} else if existing.SecretVerified != rec.SecretVerified && rec.Category == domain.CategorySecret {
+				// The credential became live, or stopped being live: it changes the score, not the identity.
+				targetFinding.SecretVerified = rec.SecretVerified
+				if opts.FieldMerge != "keep" {
+					targetFinding.Severity = rec.Severity
+					targetFinding.ToolSeverity = rec.ToolSeverity
+					targetFinding.Description = rec.Description
+				}
+				targetFinding.ContentHash = rec.ContentHash
+				targetFinding.Version++
+				outcome.Updated++
+				toScore = append(toScore, targetFinding)
+				addEvent(targetFinding, "updated", rec.SeenAt)
 			} else if existing.ContentHash != rec.ContentHash {
 				// Updated: scanner changed title, description, or location
 				if opts.FieldMerge != "keep" {

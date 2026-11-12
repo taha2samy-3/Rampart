@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"io"
 	"net/http"
+	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
 	"strings"
 	"time"
@@ -335,10 +336,7 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 
 	// D10: asset, application and track from the declared context. Without a parsed report the asset is
 	// a repository, or an image when the context names one.
-	cat := domain.CategorySAST
-	if strings.Contains(strings.ToLower(upload.FormatHint), "bom") || strings.Contains(strings.ToLower(upload.FormatHint), "spdx") || strings.Contains(strings.ToLower(upload.FormatHint), "syft") {
-		cat = domain.CategorySCA
-	}
+	cat := g.categoryOf(r.Context(), upload)
 	var runID uuid.UUID
 	err = g.store.InTenantTx(r.Context(), tenantID, func(st Store) error {
 		won, err := st.CompleteUpload(r.Context(), tenantID, uploadID, req.SHA256)
@@ -660,8 +658,37 @@ func firstNonEmpty(vals ...string) string {
 // canonicalVulnID is the vulnerability identifier of a finding, empty for non-SCA
 // findings: a SAST rule id is not a vulnerability id (D14, D11).
 func canonicalVulnID(f domain.RawFinding) string {
-	if len(f.VulnIDs) > 0 {
-		return f.VulnIDs[0]
+	return normalize.CanonicalVulnID(f.VulnIDs)
+}
+
+// categoryOf says what kind of findings an upload will hold, so the asset can be chosen before the report is parsed
+// (D10): from the format the client declared, else from the parser that recognises the first 64 KiB of the object,
+// the same detection the worker will use. SCA reports of an image go to an image asset, code reports to a repository.
+func (g *Gateway) categoryOf(ctx context.Context, u *domain.Upload) domain.FindingCategory {
+	var parser integrations.ParserContract
+	if hint := strings.ToLower(u.FormatHint); hint != "" {
+		if p, err := g.registry.GetParser("builtin:" + hint); err == nil {
+			parser = p
+		}
 	}
-	return ""
+	if parser == nil && g.objects != nil {
+		if rc, err := g.objects.Open(ctx, u.ObjectRef); err == nil {
+			head := make([]byte, 64<<10)
+			n, _ := io.ReadFull(rc, head)
+			_ = rc.Close()
+			if p, score := g.registry.DetectParser(head[:n], "", ""); p != nil && score >= 40 {
+				parser = p
+			}
+		}
+	}
+	if parser == nil {
+		return domain.CategorySAST
+	}
+	switch id := parser.Descriptor().ID; {
+	case strings.Contains(id, "trivy"), strings.Contains(id, "grype"), strings.Contains(id, "cyclonedx"), strings.Contains(id, "spdx"), strings.Contains(id, "syft"), strings.Contains(id, "openvex"):
+		return domain.CategorySCA
+	case strings.Contains(id, "gitleaks"), strings.Contains(id, "trufflehog"):
+		return domain.CategorySecret
+	}
+	return domain.CategorySAST
 }

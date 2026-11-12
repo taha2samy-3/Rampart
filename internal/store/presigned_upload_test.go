@@ -42,8 +42,10 @@ type uploadHarness struct {
 	store   *store.PostgresStore
 	sys     *store.PostgresStore
 	scorer  *scoring.Scorer
-	syncer  *enrich.FeedSyncer
-	app     interface {
+	// formatHint is the format the harness declares at upload; empty lets the processor detect it.
+	formatHint string
+	syncer     *enrich.FeedSyncer
+	app        interface {
 		ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	}
 }
@@ -59,7 +61,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 		t.Fatal(err)
 	}
 
-	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore, pool: sysStore.Pool(), store: appStore, sys: sysStore} // the system role bypasses RLS: the check sees every row
+	h := &uploadHarness{formatHint: "sarif", t: t, tenant: tenant.ID, app: appStore, pool: sysStore.Pool(), store: appStore, sys: sysStore} // the system role bypasses RLS: the check sees every row
 	if ep := os.Getenv("RAMPART_TEST_S3_ENDPOINT"); ep != "" {
 		s3, err := objectstore.NewS3(ctx, objectstore.S3Config{
 			Endpoint: ep, Bucket: "rampart-upload-tests", // one shared bucket: every bucket costs the object store volumes
@@ -145,7 +147,7 @@ func (h *uploadHarness) uploadWith(payload []byte, key string, uctx domain.Uploa
 		headers["Idempotency-Key"] = key
 	}
 	code, body := h.call("POST", "/ingest/v1/uploads", ingest.CreateUploadRequest{
-		ScanSourceID: "default", FormatHint: "sarif", SizeBytes: int64(len(payload)),
+		ScanSourceID: "default", FormatHint: h.formatHint, SizeBytes: int64(len(payload)),
 		Context: uctx,
 	}, headers)
 	if code != http.StatusCreated && code != http.StatusOK {
