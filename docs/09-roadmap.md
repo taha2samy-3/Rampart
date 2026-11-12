@@ -21,7 +21,8 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 0: web shell, login, empty workbench; OIDC sign-in; first administrator | built and verified in a real browser against Dex and PostgreSQL |
 | Phase 0: operator finalizers (D21), per-tenant `ScanSource` revocation, network policies, `ServiceMonitor` | not built |
 | Phase 1: upload API (direct), SARIF and CycloneDX parsers, normalization, fingerprints, merge and close, tracks, ephemeral runs, query API with the grammar (in memory), roles and API tokens | built; the query API still filters in memory |
-| Phase 1: presigned upload with a parse worker, object storage client, feed sync (OSV, KEV, EPSS), SQL query builder with signed cursors, ingest benchmark | not built |
+| Phase 1: presigned upload with a parse worker, object storage client (D34) | built; tested against PostgreSQL, River and SeaweedFS |
+| Phase 1: feed sync (OSV, KEV, EPSS), SQL query builder with signed cursors, ingest benchmark | not built |
 
 ## Phase −1 — Decisions and spikes (week 1)
 
