@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
 	"rampart/internal/jobs"
@@ -191,10 +190,6 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	if parseErr != nil {
 		return Result{Stats: stats}, &jobs.PermanentError{Code: ErrCodeParse, Err: parseErr}
 	}
-	if int64(stats.Parsed) < 0 || reader.Buffered() < 0 { // keep the compiler honest about reader use
-		return Result{}, errors.New("unreachable")
-	}
-
 	// A report with no findings has no tool to read: the scope is the named scanner or the parser id,
 	// so a clean rescan can still close what that scope reported before.
 	if len(order) == 0 {
@@ -432,4 +427,3 @@ func scanFinishedOf(c domain.UploadContext) time.Time {
 	return time.Now().UTC()
 }
 
-var _ = uuid.Nil

@@ -498,224 +498,56 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	// D10: ephemeral is decided by the ref (PRs, feature branches), not by the track name.
 	isEphemeral := IsEphemeral(uploadCtx.Branch, nil)
 
-	parseCtx := domain.ParseContext{
-		TenantID:      tenantID,
-		ScanSourceID:  sourceID,
-		ScannerFamily: scannerFamily,
-		Track:         track,
-		UploadContext: uploadCtx,
-	}
-
-	// 1. Stream findings
-	var staged []StagedRecord
-	for rawFinding, err := range selectedParser.Parse(r.Context(), bytes.NewReader(data), parseCtx) {
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"type":"https://rampart.aspm.dev/problems/validation","title":%q}`, err.Error()), http.StatusBadRequest)
-			return
-		}
-
-		// Compute D11 deterministic fingerprint
-		fpFamily := firstNonEmpty(scannerOverride, rawFinding.ScannerFamily, scannerFamily)
-		fpResult := normalize.ComputeFingerprint(normalize.FingerprintParams{
-			TenantID:      tenantID,
-			AssetID:       asset.ID,
-			ApplicationID: appID,
-			Track:         track,
-			Scope:         normalize.ScopeAsset,
-			Family:        fpFamily,
-			Category:      rawFinding.Category,
-			RuleID:        rawFinding.RuleID,
-			RawFinding:    rawFinding,
-		})
-
-		// Compute D13 content hash
-		contentHash := normalize.ComputeContentHash(
-			rawFinding.Title,
-			rawFinding.Description,
-			rawFinding.ToolSeverity,
-			rawFinding.CVSSVector,
-			"",
-			rawFinding.Location.PrimaryPath(),
-		)
-
-		staged = append(staged, StagedRecord{
-			ScannerFamily: fpFamily,
-			FindingKey:    fpResult.FindingKey,
-			Category:      rawFinding.Category,
-			RuleID:        rawFinding.RuleID,
-			Title:         rawFinding.Title,
-			Description:   rawFinding.Description,
-			ToolSeverity:  rawFinding.ToolSeverity,
-			Severity:      rawFinding.Severity,
-			Location:      rawFinding.Location,
-			CWEs:          rawFinding.CWEs,
-			VulnID:        canonicalVulnID(rawFinding),
-			CVSSVector:    rawFinding.CVSSVector,
-			ContentHash:   contentHash,
-			SeenAt:        scanFinished,
-			RawPayload:    rawFinding.RawPayload,
-		})
-	}
-
-	// D13: the close scope is (source, scanner family, asset, track). A SARIF file from
-	// Trivy must never close what Semgrep reported, so records are grouped by scanner.
-	// A report with no findings has no scanner to read; the `scanner` parameter names
-	// it, otherwise the scope is the parser id and a clean rescan closes nothing.
-	var families []string
-	byFamily := make(map[string][]StagedRecord)
-	for _, rec := range staged {
-		if _, seen := byFamily[rec.ScannerFamily]; !seen {
-			families = append(families, rec.ScannerFamily)
-		}
-		byFamily[rec.ScannerFamily] = append(byFamily[rec.ScannerFamily], rec)
-	}
-	if len(families) == 0 {
-		families = []string{firstNonEmpty(scannerOverride, scannerFamily)}
-	}
-	runFamily := families[0]
-
-	// D2: the run exists (and is visible) before any finding is touched. The stale check
-	// only looks at completed runs, so registering the scopes first is safe.
+	// D2: the run exists (and is visible) before any finding is touched.
+	isSBOM := forceSBOM || strings.Contains(scannerFamily, "cyclonedx") || strings.Contains(scannerFamily, "spdx") || strings.Contains(scannerFamily, "syft")
 	run := &domain.IngestRun{
-		ID:            runID,
-		TenantID:      tenantID,
-		ScanSourceID:  sourceID,
-		ApplicationID: appID,
-		AssetID:       asset.ID,
-		Track:         track,
-		ScannerFamily: runFamily,
-		Format:        scannerFamily,
-		Context:       uploadCtx,
-		ScanFinished:  scanFinished,
-		Status:        domain.RunMerging,
-		CreatedAt:     time.Now().UTC(),
+		ID: runID, TenantID: tenantID, ScanSourceID: sourceID, ApplicationID: appID, AssetID: asset.ID, Track: track,
+		ScannerFamily: firstNonEmpty(scannerOverride, scannerFamily), Format: scannerFamily, Context: uploadCtx,
+		ScanFinished: scanFinished, Status: domain.RunMerging, CreatedAt: time.Now().UTC(),
 	}
 	if err := g.store.CreateIngestRun(r.Context(), run); err != nil {
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to create ingest run"}`, http.StatusInternalServerError)
 		return
 	}
-	scopeOf := func(family string) CloseScope {
-		return CloseScope{TenantID: tenantID, ScanSourceID: sourceID, ScannerFamily: family, AssetID: asset.ID, Track: track}
-	}
-	for _, fam := range families {
-		if err := g.store.RecordRunScope(r.Context(), &domain.IngestRunScope{
-			IngestRunID: runID, TenantID: tenantID, ScanSourceID: sourceID,
-			ScannerFamily: fam, AssetID: asset.ID, Track: track,
-		}); err != nil {
-			g.finishRun(r.Context(), run, domain.RunFailed, "record_scope_failed")
-			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to record run scope"}`, http.StatusInternalServerError)
+
+	res, err := g.processor.Process(r.Context(), ProcessParams{
+		Run: run, Parser: selectedParser, ScannerOverride: scannerOverride, ScanFinished: scanFinished,
+		IsEphemeral: isEphemeral, IsSBOM: isSBOM,
+		Open: func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	})
+	if err != nil {
+		var perm *jobs.PermanentError
+		if errors.As(err, &perm) {
+			g.processor.Finish(r.Context(), run, domain.RunFailed, perm.Code)
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type": "https://rampart.aspm.dev/problems/validation", "title": "The report could not be parsed",
+				"status": http.StatusBadRequest, "detail": perm.Err.Error(), "code": perm.Code, "ingestRunId": runID.String(),
+			})
 			return
 		}
+		g.processor.Finish(r.Context(), run, domain.RunFailed, ErrCodeMergeFailed)
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Ingest failed"}`, http.StatusInternalServerError)
+		return
 	}
-
-	var outcome MergeOutcome
-	finalStatus, finalReason := domain.RunCompleted, ""
-	staleScopes := 0
-	for _, fam := range families {
-		scope := scopeOf(fam)
-		out, err := g.engine.MergeBatchWithOptions(r.Context(), scope, runID, appID, byFamily[fam], MergeOptions{
-			FieldMerge:   "scanner",
-			ScanFinished: scanFinished,
-			IsEphemeral:  isEphemeral,
-		})
-		if errors.Is(err, ErrRunStale) {
-			staleScopes++
-			continue // stored, visible, not merged, nothing closed for this scope (D13)
-		}
-		if err != nil {
-			g.finishRun(r.Context(), run, domain.RunFailed, "merge_failed")
-			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Merge batch failed"}`, http.StatusInternalServerError)
-			return
-		}
-		outcome.Created += out.Created
-		outcome.Updated += out.Updated
-		outcome.Untouched += out.Untouched
-		outcome.Reactivated += out.Reactivated
-
-		// Close step (skipped for ephemeral runs, D10). The mass-close guard (D22) holds a
-		// suspicious close for a maintainer instead of fixing half the inventory.
-		if !isEphemeral {
-			closeRes, err := g.engine.CloseScopeStepWithGuard(r.Context(), scope, runID, true)
-			if err != nil {
-				g.finishRun(r.Context(), run, domain.RunFailed, "close_failed")
-				http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Close step failed"}`, http.StatusInternalServerError)
-				return
-			}
-			outcome.Closed += closeRes.Closed
-			if closeRes.HeldForConfirmation {
-				finalStatus, finalReason = domain.RunCompletedWithErrors, "close_held"
-			}
-		}
-	}
-	if staleScopes == len(families) {
-		g.finishRun(r.Context(), run, domain.RunStale, "")
+	if res.Status == domain.RunStale {
+		g.processor.Finish(r.Context(), run, domain.RunStale, "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(DirectReportResponse{IngestRunID: runID.String(), Status: "stale"})
 		return
 	}
-
-	componentCount := 0
-	// If forceSBOM or parser is CycloneDX/SPDX/Syft, extract SBOM inventory and dependency graph
-	if forceSBOM || strings.Contains(scannerFamily, "cyclonedx") || strings.Contains(scannerFamily, "spdx") || strings.Contains(scannerFamily, "syft") {
-		var (
-			extractedSBOM *domain.SBOM
-			components    []domain.SBOMComponent
-		)
-		if strings.Contains(scannerFamily, "cyclonedx") {
-			cdxP := cyclonedx.NewParser()
-			extractedSBOM, components, _, _ = cdxP.ParseSBOM(bytes.NewReader(data))
-		} else if strings.Contains(scannerFamily, "spdx") {
-			spdxP := spdx.NewParser()
-			extractedSBOM, components, _, _ = spdxP.ParseSBOM(bytes.NewReader(data))
-		} else if strings.Contains(scannerFamily, "syft") {
-			syftP := syft.NewParser()
-			extractedSBOM, components, _, _ = syftP.ParseSBOM(bytes.NewReader(data))
-		}
-
-		if len(components) > 0 {
-			componentCount = len(components)
-			if extractedSBOM == nil {
-				extractedSBOM = &domain.SBOM{
-					ID:        domain.NewID(),
-					Format:    scannerFamily,
-					CreatedAt: time.Now().UTC(),
-				}
-			}
-			extractedSBOM.TenantID = tenantID
-			extractedSBOM.AssetID = asset.ID
-			extractedSBOM.IngestRunID = runID
-			extractedSBOM.ComponentCount = componentCount
-
-			_ = g.store.SaveSBOM(r.Context(), extractedSBOM, components)
-		}
-	}
-
-	run.Stats = domain.IngestStats{
-		Parsed:      len(staged),
-		Created:     outcome.Created,
-		Updated:     outcome.Updated,
-		Untouched:   outcome.Untouched,
-		Reactivated: outcome.Reactivated,
-		Closed:      outcome.Closed,
-	}
-	g.finishRun(r.Context(), run, finalStatus, finalReason)
-
-	res := DirectReportResponse{
-		IngestRunID:    runID.String(),
-		Status:         string(finalStatus),
-		Staged:         len(staged),
-		Created:        outcome.Created,
-		Updated:        outcome.Updated,
-		Untouched:      outcome.Untouched,
-		Reactivated:    outcome.Reactivated,
-		Closed:         outcome.Closed,
-		ComponentCount: componentCount,
-	}
+	run.Stats = res.Stats
+	g.processor.Finish(r.Context(), run, res.Status, res.Reason)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(res)
+	_ = json.NewEncoder(w).Encode(DirectReportResponse{
+		IngestRunID: runID.String(), Status: string(res.Status), Staged: res.Stats.Parsed, Created: res.Stats.Created,
+		Updated: res.Stats.Updated, Untouched: res.Stats.Untouched, Reactivated: res.Stats.Reactivated,
+		Closed: res.Stats.Closed, ComponentCount: res.Components,
+	})
 }
 
 func (g *Gateway) handleGetRun(w http.ResponseWriter, r *http.Request) {
