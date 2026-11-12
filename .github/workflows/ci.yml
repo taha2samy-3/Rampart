@@ -61,6 +61,10 @@ jobs:
           for p in sarif:FuzzSarifParse cyclonedx:FuzzCyclonedxParse spdx:FuzzSpdxParse syft:FuzzSyftParse openvex:FuzzOpenvexParse trivy:FuzzTrivyParse grype:FuzzGrypeParse semgrep:FuzzSemgrepParse gitleaks:FuzzGitleaksParse trufflehog:FuzzTrufflehogParse; do
             go test "./internal/parsers/${p%%:*}" -run '^$' -fuzz "^${p##*:}\$" -fuzztime 30s
           done
+      - name: Fuzz the other untrusted inputs (30 s each)
+        run: |
+          go test ./internal/domain -run '^$' -fuzz '^FuzzCheckProof$' -fuzztime 30s
+          go test ./internal/query/grammar -run '^$' -fuzz '^FuzzParse$' -fuzztime 30s
       - uses: actions/upload-artifact@v4
         with: {name: coverage-unit, path: coverage-unit.out}
 
@@ -162,6 +166,15 @@ jobs:
           helm template t deploy/helm/rampart --set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml | grep -q 'kind: ServiceMonitor'
           # an external database with no address to allow is refused, not opened to everyone
           if helm template t deploy/helm/rampart --set networkPolicy.enabled=true --set database.cnpg.enabled=false --set database.existingSecret=db > /dev/null 2>&1; then echo 'an external database needs networkPolicy.database.to'; exit 1; fi
+      - name: helm template (the maintenance CronJob runs as the owner with the retention settings, D53)
+        run: |
+          out=$(helm template t deploy/helm/rampart --show-only templates/maintenance-cronjob.yaml)
+          echo "$out" | grep -q 'kind: CronJob'
+          echo "$out" | grep -q 'args: \["maintenance"\]'
+          echo "$out" | grep -q 'RAMPART_DATABASE_MIGRATE_URL'
+          echo "$out" | grep -q 'RAMPART_RETENTION_AUDIT_DAYS'
+          # The server never holds the owner's credentials.
+          if helm template t deploy/helm/rampart --show-only templates/deployment.yaml | grep -q 'RAMPART_DATABASE_MIGRATE_URL'; then exit 1; fi
       - name: helm template (upgrade renders the pre-upgrade hook)
         run: |
           helm template t deploy/helm/rampart --is-upgrade | grep -q 'helm.sh/hook": pre-upgrade'
@@ -203,11 +216,46 @@ jobs:
           path: web/dist
           retention-days: 7
 
+  web-browser:
+    # The SPA in a real Chromium against the dev mock (web/dev/mock-server.mjs): selection, the bulk bar, Edit and
+    # proof files (docs/13 section 1, docs/16 D59, D60, D61). Any console error fails a test.
+    name: Web UI in a browser (Playwright)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Install Chromium for Playwright
+        run: bunx playwright install --with-deps chromium
+      - run: bun --bun run e2e
+        env:
+          CI: "true"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
   e2e:
     # Installs the Helm chart and exercises the operator on a throwaway kind cluster that exists only
     # inside this job. hack/e2e/kind.sh refuses to run against anything that is not a local kind cluster.
     name: Helm and operator on kind
-    needs: [test-unit, test-store, test-operator, helm, web]
+    needs: [test-unit, test-store, test-operator, helm, web, web-browser]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:

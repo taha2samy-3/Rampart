@@ -53,3 +53,25 @@ func TestCheckProof(t *testing.T) {
 		t.Fatalf("a long name is shortened keeping its extension: %d %v", len(name), err)
 	}
 }
+
+// FuzzCheckProof: any name and bytes give an answer, never a panic; an accepted name has no path, colon or
+// control character and keeps an allowed extension (D60, D61).
+func FuzzCheckProof(f *testing.F) {
+	f.Add("approval.pdf", []byte("%PDF-1.7"))
+	f.Add(`C:\x\..\notes.md`, []byte("# notes"))
+	f.Add("a.txt:b.exe", []byte{0})
+	f.Fuzz(func(t *testing.T, name string, head []byte) {
+		clean, ctype, err := CheckProof(name, head, int64(len(head)))
+		if err != nil {
+			return
+		}
+		if ctype == "" || strings.ContainsAny(clean, "/\\:") || strings.HasPrefix(clean, ".") || len(clean) > MaxProofNameLen {
+			t.Fatalf("accepted a bad name %q (%q)", clean, ctype)
+		}
+		for _, r := range clean {
+			if r < 0x20 || r == 0x7f {
+				t.Fatalf("control character in %q", clean)
+			}
+		}
+	})
+}

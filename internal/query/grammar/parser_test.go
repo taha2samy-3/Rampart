@@ -85,3 +85,22 @@ func TestBuildSQLWhere(t *testing.T) {
 		t.Errorf("unexpected arg values: %v", args)
 	}
 }
+
+// FuzzParse: a filter is user input that reaches SQL through the builder; any string parses or is refused,
+// never panics, and a parsed field is always a known one (D59, D61).
+func FuzzParse(f *testing.F) {
+	f.Add(`severity:critical,high -state:fixed age:>30d cve:CVE-2024-* "sql injection"`)
+	f.Add(`owner:me ownr:none`)
+	f.Add(`"unterminated`)
+	f.Fuzz(func(t *testing.T, q string) {
+		parsed, err := Parse(q)
+		if err != nil {
+			return
+		}
+		for _, term := range parsed.Terms {
+			if term.Field != "" && !isKnownField(term.Field) {
+				t.Fatalf("parsed an unknown field %q from %q", term.Field, q)
+			}
+		}
+	})
+}
