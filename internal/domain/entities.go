@@ -391,6 +391,24 @@ type ParseContext struct {
 	ScannerFamily string        `json:"scanner_family"`
 	Track         string        `json:"track"`
 	UploadContext UploadContext `json:"upload_context"`
+	// RecordError, when set, receives each record a parser could not read, so the rest of the report is still
+	// processed (docs/16 D13: a run with record errors ends completed_with_errors). A parser that finds it nil
+	// stops at the first bad record, as before.
+	RecordError func(RecordError) `json:"-"`
+}
+
+// RecordError is one record of a report that could not be read: where it is in the report, and why, without the
+// record's content (a report can hold secrets).
+type RecordError struct {
+	Where   string `json:"where"`
+	Message string `json:"message"`
+}
+
+func (e *RecordError) Error() string {
+	if e.Where == "" {
+		return e.Message
+	}
+	return e.Where + ": " + e.Message
 }
 
 // Upload is a presigned upload awaiting, or past, its `complete` call (D2, D9).

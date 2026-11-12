@@ -88,7 +88,7 @@ func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext)
 			if key != "matches" {
 				return parseutil.Skip(dec)
 			}
-			return parseutil.Array(dec, func() error {
+			return parseutil.ArrayWith(dec, pc, "matches", func() error {
 				var m match
 				raw, err := parseutil.Element(dec, &m)
 				if err != nil {

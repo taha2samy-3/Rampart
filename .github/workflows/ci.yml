@@ -155,6 +155,13 @@ jobs:
           helm template t deploy/helm/rampart --show-only templates/admin-secret.yaml | grep -q 'name: t-rampart-admin'
           if helm template t deploy/helm/rampart --set auth.bootstrapAdmin.enabled=false --show-only templates/deployment.yaml | grep -q BOOTSTRAP_ADMIN; then echo 'the admin must be off when disabled'; exit 1; fi
           helm template t deploy/helm/rampart --set auth.oidc.issuer=https://idp.example.com --set auth.oidc.clientId=rampart --set auth.oidc.clientSecretName=oidc --show-only templates/deployment.yaml | grep -q RAMPART_AUTH_OIDC_ISSUER
+      - name: helm template (network policy and ServiceMonitor)
+        run: |
+          helm template t deploy/helm/rampart --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml | grep -q 'name: t-rampart-default-deny'
+          if helm template t deploy/helm/rampart --show-only templates/networkpolicy.yaml 2>/dev/null | grep -q NetworkPolicy; then echo 'no policy unless enabled'; exit 1; fi
+          helm template t deploy/helm/rampart --set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml | grep -q 'kind: ServiceMonitor'
+          # an external database with no address to allow is refused, not opened to everyone
+          if helm template t deploy/helm/rampart --set networkPolicy.enabled=true --set database.cnpg.enabled=false --set database.existingSecret=db > /dev/null 2>&1; then echo 'an external database needs networkPolicy.database.to'; exit 1; fi
       - name: helm template (upgrade renders the pre-upgrade hook)
         run: |
           helm template t deploy/helm/rampart --is-upgrade | grep -q 'helm.sh/hook": pre-upgrade'

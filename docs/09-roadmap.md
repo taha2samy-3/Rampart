@@ -19,7 +19,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 0: River jobs (own schema), `internal/config/apply`, operator on controller-runtime (envtest), secret sync (encrypted), Helm chart, Docker Compose | built |
 | Phase 0: CI (lint, parallel test suites, envtest, Helm, web, Compose, kind e2e, signing, SBOM, provenance) | built; e2e and publish not yet run on GitHub |
 | Phase 0: web shell, login, empty workbench; OIDC sign-in; first administrator | built and verified in a real browser against Dex and PostgreSQL |
-| Phase 0: operator finalizers (D21), per-tenant `ScanSource` revocation, network policies, `ServiceMonitor` | not built |
+| Phase 0: operator finalizers (D21): Application orphaned, ScanSource disabled with its tokens revoked, SLAPolicy removed, Tenant refused while it has data unless `Purge`; NetworkPolicy and `ServiceMonitor` in the chart (D49) | built; finalizers tested with envtest and on PostgreSQL, the chart in CI. Not built: policies for the data services, `Archive`, the name-conflict condition |
 | Phase 1: upload API (direct), SARIF and CycloneDX parsers, normalization, fingerprints, merge and close, tracks, ephemeral runs, query API with the grammar (in memory), roles and API tokens | built; the query API still filters in memory |
 | Phase 1: presigned upload with a parse worker, object storage client (D34) | built; tested against PostgreSQL, River and SeaweedFS |
 | Phase 1: query API on SQL with signed cursors; feed sync (KEV, EPSS, OSV) with aliases (D35) | built; tested on PostgreSQL |
@@ -38,7 +38,8 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 2: native parsers: Trivy, Grype, Semgrep, Gitleaks, TruffleHog (D42), with secrets never stored and TruffleHog verification in the score | built; fuzzed and tested on PostgreSQL. Not built: detect-secrets, image name from the report |
 | Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
 | Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
-| Phase 1: `RekeyJob` (D11) | not built |
+| Phase 1: `RekeyJob`: a GHSA-keyed finding moves to its CVE's key after the alias arrives, merging with an existing one; the old key still finds it (D50) | built; tested on PostgreSQL. Not built: alias expiry, other categories |
+| Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 
 ## Phase −1 — Decisions and spikes (week 1)
 

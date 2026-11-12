@@ -76,7 +76,9 @@ type where struct {
 func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
 	return func(yield func(domain.RawFinding, error) bool) {
 		dec := json.NewDecoder(io.LimitReader(r, 1<<40))
+		n := 0
 		for dec.More() {
+			n++
 			if ctx.Err() != nil {
 				return
 			}
@@ -91,6 +93,10 @@ func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext)
 			}
 			var f finding
 			if err := json.Unmarshal(raw, &f); err != nil {
+				if pc.RecordError != nil { // one bad record does not stop the report
+					pc.RecordError(domain.RecordError{Where: fmt.Sprintf("record %d", n), Message: "the record does not have the shape this tool writes (" + err.Error() + ")"})
+					continue
+				}
 				yield(domain.RawFinding{}, fmt.Errorf("trufflehog: %w", err))
 				return
 			}

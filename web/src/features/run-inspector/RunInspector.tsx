@@ -1,7 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { getRun, qk } from '@/api';
 import type { RunRow, RunStatus } from '@/api/types';
 import { EmptyState } from '@/components';
 import { absoluteDate } from '@/lib/format';
+import { useAccess } from '@/app/useAccess';
 
 /** The steps of one run, in order (docs/16: queued, parsing, merging, enriching, scoring, completed). */
 const STEPS: RunStatus[] = ['queued', 'parsing', 'merging', 'enriching', 'scoring', 'completed'];
@@ -15,6 +18,9 @@ function stepIndex(status: RunStatus): number {
 /** Docked detail for one ingest run: how far it got, what it did, where it came from, what went wrong. */
 export function RunInspector({ run, selectedId }: { run: RunRow | undefined; selectedId?: string }) {
   const { t } = useTranslation();
+  const { canAnywhere } = useAccess();
+  // The list does not carry the unreadable records; the run asks for them when it has any.
+  const detail = useQuery({ queryKey: qk.runs.one(run?.id ?? ''), queryFn: ({ signal }) => getRun(run!.id, signal), enabled: !!run && run.stats.record_errors > 0, retry: false });
   if (!run && selectedId) return <EmptyState title={t('ingestion.selectTitle')}>{t('ingestion.missing')}</EmptyState>;
   if (!run) return <EmptyState title={t('ingestion.selectTitle')}>{t('ingestion.selectBody')}</EmptyState>;
 
@@ -47,6 +53,23 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <h3 id="run-error" className="mb-1 text-13 font-semibold">{t('ingestion.error')}</h3>
           <p className="m-0 text-13">{t(`ingestion.errors.${run.error}`, { defaultValue: t('ingestion.errors.default') })}</p>
           <p className="m-0 mt-1 font-mono text-12 text-ink-2">{run.error}</p>
+        </section>
+      )}
+
+      {run.stats.record_errors > 0 && (
+        <section className="mt-4" aria-labelledby="run-unread">
+          <h3 id="run-unread" className="mb-1 text-13 font-semibold">{t('ingestion.unreadRecords')}</h3>
+          <ul className="m-0 list-none p-0 text-13">
+            {(detail.data?.record_error_list ?? []).map((e, i) => (
+              <li key={i} className="border-b border-rule py-1.5">
+                <span className="font-mono text-12">{e.where}</span>
+                <span className="block text-12 text-ink-2 [overflow-wrap:anywhere]">{e.message}</span>
+              </li>
+            ))}
+          </ul>
+          {run.stats.record_errors > (detail.data?.record_error_list?.length ?? 0) && detail.data && (
+            <p className="m-0 mt-1 text-12 text-ink-2">{t('ingestion.unreadMore', { count: detail.data.record_error_list?.length ?? 0 })}</p>
+          )}
         </section>
       )}
 
@@ -98,6 +121,13 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <Row label={t('ingestion.colWhen')} value={absoluteDate(run.created_at)} />
         </dl>
       </section>
+
+      {run.has_report && canAnywhere('maintainer') && (
+        <p className="m-0 mt-5 text-13">
+          <a href={`/api/v1/runs/${encodeURIComponent(run.id)}/report`} download>{t('ingestion.rawReport')}</a>
+          <span className="mt-0.5 block text-12 text-ink-2">{t('ingestion.rawReportHelp')}</span>
+        </p>
+      )}
     </article>
   );
 }

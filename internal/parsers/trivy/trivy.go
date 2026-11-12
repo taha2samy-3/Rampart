@@ -136,7 +136,7 @@ func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext)
 				return dec.Decode(&meta)
 			case "Results":
 				return parseutil.Array(dec, func() error {
-					return walkResult(dec, artifact, artifactType, meta.OS.Family, emit)
+					return walkResult(dec, pc, artifact, artifactType, meta.OS.Family, emit)
 				})
 			}
 			return parseutil.Skip(dec)
@@ -147,7 +147,7 @@ func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext)
 	}
 }
 
-func walkResult(dec *json.Decoder, artifact, artifactType, osFamily string, emit func(domain.RawFinding) error) error {
+func walkResult(dec *json.Decoder, pc domain.ParseContext, artifact, artifactType, osFamily string, emit func(domain.RawFinding) error) error {
 	var res result
 	image := ""
 	if artifactType == "container_image" {
@@ -162,7 +162,7 @@ func walkResult(dec *json.Decoder, artifact, artifactType, osFamily string, emit
 		case "Type":
 			return dec.Decode(&res.typ)
 		case "Vulnerabilities":
-			return parseutil.Array(dec, func() error {
+			return parseutil.ArrayWith(dec, pc, "Vulnerabilities", func() error {
 				var v vuln
 				raw, err := parseutil.Element(dec, &v)
 				if err != nil {
@@ -174,7 +174,7 @@ func walkResult(dec *json.Decoder, artifact, artifactType, osFamily string, emit
 				return emit(mapVuln(v, raw, res, osFamily, image))
 			})
 		case "Secrets":
-			return parseutil.Array(dec, func() error {
+			return parseutil.ArrayWith(dec, pc, "Secrets", func() error {
 				var s secret
 				raw, err := parseutil.Element(dec, &s)
 				if err != nil {
@@ -183,7 +183,7 @@ func walkResult(dec *json.Decoder, artifact, artifactType, osFamily string, emit
 				return emit(mapSecret(s, raw, res))
 			})
 		case "Misconfigurations":
-			return parseutil.Array(dec, func() error {
+			return parseutil.ArrayWith(dec, pc, "Misconfigurations", func() error {
 				var m misconfig
 				raw, err := parseutil.Element(dec, &m)
 				if err != nil {
@@ -195,7 +195,7 @@ func walkResult(dec *json.Decoder, artifact, artifactType, osFamily string, emit
 				return emit(mapMisconfig(m, raw, res))
 			})
 		case "Licenses":
-			return parseutil.Array(dec, func() error {
+			return parseutil.ArrayWith(dec, pc, "Licenses", func() error {
 				var l license
 				raw, err := parseutil.Element(dec, &l)
 				if err != nil {

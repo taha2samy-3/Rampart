@@ -50,6 +50,23 @@ type ConfigStore interface {
 	// SaveSLAPolicy stores an SLAPolicy of a tenant. A spec that failed validation is stored with its error, so
 	// the object's status can say why it is not applied (docs/16 D41).
 	SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
+	Finalizer
+}
+
+// Finalizer is what deleting a custom resource asks of the store (docs/16 D21, D49). Every method can be called
+// again after a failure: the operator retries a finalizer until it succeeds.
+type Finalizer interface {
+	// OrphanApplication keeps the application and its findings and marks it as no longer managed by a resource.
+	OrphanApplication(ctx context.Context, tenantID uuid.UUID, slug string) error
+	// DisableScanSource disables the source, revokes the tokens bound to it and removes its secret material.
+	// History is kept. It returns how many tokens it revoked.
+	DisableScanSource(ctx context.Context, tenantID uuid.UUID, name string) (int, error)
+	// DeleteSLAPolicy removes the policy; the due dates of the tenant are recomputed against what is left.
+	DeleteSLAPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error
+	// TenantHasData says whether the tenant has applications, assets, findings or ingest runs.
+	TenantHasData(ctx context.Context, tenantID uuid.UUID) (bool, error)
+	// PurgeTenant deletes the tenant and everything that belongs to it.
+	PurgeTenant(ctx context.Context, tenantID uuid.UUID) error
 }
 
 // PolicyObject is a policy as the control plane hands it to the store.
@@ -262,6 +279,10 @@ func defaultNamespace(ns string) string {
 // MemoryConfigStore provides an in-memory implementation of ConfigStore.
 type MemoryConfigStore struct {
 	mu           sync.RWMutex
+	orphaned     map[string]bool
+	disabled     map[string]bool
+	withData     map[uuid.UUID]bool
+	purged       map[uuid.UUID]bool
 	tenants      map[string]domain.Tenant
 	applications map[string]domain.Application
 	scanSources  map[string]uuid.UUID
@@ -277,7 +298,79 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		scanSources:  make(map[string]uuid.UUID),
 		namespaces:   make(map[string]uuid.UUID),
 		policies:     make(map[string]PolicyObject),
+		orphaned:     make(map[string]bool),
+		disabled:     make(map[string]bool),
+		withData:     make(map[uuid.UUID]bool),
+		purged:       make(map[uuid.UUID]bool),
 	}
+}
+
+// OrphanApplication implements Finalizer.
+func (m *MemoryConfigStore) OrphanApplication(ctx context.Context, tenantID uuid.UUID, slug string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.orphaned[tenantID.String()+":"+slug] = true
+	return nil
+}
+
+// DisableScanSource implements Finalizer.
+func (m *MemoryConfigStore) DisableScanSource(ctx context.Context, tenantID uuid.UUID, name string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.disabled[tenantID.String()+":"+name] = true
+	return 0, nil
+}
+
+// DeleteSLAPolicy implements Finalizer.
+func (m *MemoryConfigStore) DeleteSLAPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.policies, tenantID.String()+":"+namespace+":"+name)
+	return nil
+}
+
+// TenantHasData implements Finalizer.
+func (m *MemoryConfigStore) TenantHasData(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.withData[tenantID], nil
+}
+
+// PurgeTenant implements Finalizer.
+func (m *MemoryConfigStore) PurgeTenant(ctx context.Context, tenantID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.purged[tenantID] = true
+	for slug, t := range m.tenants {
+		if t.ID == tenantID {
+			delete(m.tenants, slug)
+		}
+	}
+	return nil
+}
+
+// SetHasData makes TenantHasData answer true for a tenant, for tests.
+func (m *MemoryConfigStore) SetHasData(tenantID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.withData[tenantID] = true
+}
+
+// Orphaned, Disabled and Purged tell what the finalizers did, for tests.
+func (m *MemoryConfigStore) Orphaned(tenantID uuid.UUID, slug string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.orphaned[tenantID.String()+":"+slug]
+}
+func (m *MemoryConfigStore) Disabled(tenantID uuid.UUID, name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.disabled[tenantID.String()+":"+name]
+}
+func (m *MemoryConfigStore) Purged(tenantID uuid.UUID) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.purged[tenantID]
 }
 
 // SaveSLAPolicy stores an SLAPolicy.

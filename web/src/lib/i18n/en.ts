@@ -401,6 +401,10 @@ export const en = {
     skipped: '{{count}} finding(s) were skipped because they changed since the request.',
   },
   ingestion: {
+    unreadRecords: 'Records that could not be read',
+    unreadMore: 'The first {{count}} are shown.',
+    rawReport: 'Download the raw report',
+    rawReportHelp: 'The report as the scanner wrote it. It can contain the secrets a scanner found, so only maintainers can download it, and each download is recorded.',
     title: 'Ingest runs',
     tableLabel: 'Ingest runs',
     colRun: 'Run',
@@ -468,6 +472,7 @@ export const en = {
       sha256_mismatch: 'The file does not match the SHA-256 given when the upload was completed. Nothing was merged. Check the file was not changed, then upload it again.',
       parse_error: 'The report could not be read. It may be truncated or not in the declared format.',
       unsupported_format: 'Rampart does not recognise this report format.',
+      record_errors: 'Some records of the report could not be read. The rest was merged; nothing was closed, because the report may be missing findings.',
       vex_document: 'This is a VEX document: a set of decisions, not a scan report. Send it to POST /api/v1/vex, or use rampart vex import.',
       report_too_large: 'The report is larger than the limit for this tenant.',
       sbom_too_large: 'The SBOM is larger than the limit.',

@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -114,17 +115,17 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 			}
 		}
 		return st, err
-	}, status: func(c *TenantCR) *TenantStatus { return &c.Status }}
+	}, status: func(c *TenantCR) *TenantStatus { return &c.Status }, finalize: op.FinalizeTenant}
 	apps := &cr[ApplicationCR, ApplicationStatus]{k: k, gvk: gvkApplication, reconcile: func(ctx context.Context, c *ApplicationCR) (*ApplicationStatus, error) {
 		return op.ReconcileApplication(ctx, c)
-	}, status: func(c *ApplicationCR) *ApplicationStatus { return &c.Status }}
+	}, status: func(c *ApplicationCR) *ApplicationStatus { return &c.Status }, finalize: op.FinalizeApplication}
 	sources := &cr[ScanSourceCR, ScanSourceStatus]{k: k, gvk: gvkScanSource, reconcile: func(ctx context.Context, c *ScanSourceCR) (*ScanSourceStatus, error) {
 		return op.ReconcileScanSource(ctx, c)
-	}, status: func(c *ScanSourceCR) *ScanSourceStatus { return &c.Status }}
+	}, status: func(c *ScanSourceCR) *ScanSourceStatus { return &c.Status }, finalize: op.FinalizeScanSource}
 
 	slaPolicies := &cr[SLAPolicyCR, SLAPolicyStatus]{k: k, gvk: gvkSLAPolicy, reconcile: func(ctx context.Context, c *SLAPolicyCR) (*SLAPolicyStatus, error) {
 		return op.ReconcileSLAPolicy(ctx, c)
-	}, status: func(c *SLAPolicyCR) *SLAPolicyStatus { return &c.Status }}
+	}, status: func(c *SLAPolicyCR) *SLAPolicyStatus { return &c.Status }, finalize: op.FinalizeSLAPolicy}
 
 	gen := builder.WithPredicates(predicate.GenerationChangedPredicate{}) // status writes do not retrigger
 	if err := ctrl.NewControllerManagedBy(mgr).Named("tenant").For(newObj(gvkTenant), gen).Complete(tenants); err != nil {
@@ -238,6 +239,9 @@ type cr[T any, S any] struct {
 	gvk       schema.GroupVersionKind
 	reconcile func(context.Context, *T) (*S, error)
 	status    func(*T) *S
+	// finalize runs when the resource is deleted. It returns done=false to keep the resource (and the status to
+	// write, if any) and try again later. A kind without one has no finalizer.
+	finalize func(context.Context, *T) (*S, bool, error)
 }
 
 func (r *cr[T, S]) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -246,7 +250,13 @@ func (r *cr[T, S]) Reconcile(ctx context.Context, req reconcile.Request) (reconc
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if u.GetDeletionTimestamp() != nil {
-		return reconcile.Result{}, nil // rows are kept (D21); nothing to finalize yet
+		return r.finalizeDeleted(ctx, u)
+	}
+	if r.finalize != nil && !controllerutil.ContainsFinalizer(u, Finalizer) {
+		controllerutil.AddFinalizer(u, Finalizer)
+		if err := r.k.c.Update(ctx, u); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 	var obj T
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &obj); err != nil {
@@ -271,6 +281,35 @@ func (r *cr[T, S]) Reconcile(ctx context.Context, req reconcile.Request) (reconc
 		return reconcile.Result{RequeueAfter: r.k.retryInterval()}, nil
 	}
 	return reconcile.Result{}, nil
+}
+
+// finalizeDeleted does the work a deletion needs (docs/16 D21, D49), then lets the resource go. The work can be
+// repeated: if the operator stops halfway, the next pass does it again.
+func (r *cr[T, S]) finalizeDeleted(ctx context.Context, u *unstructured.Unstructured) (reconcile.Result, error) {
+	if r.finalize == nil || !controllerutil.ContainsFinalizer(u, Finalizer) {
+		return reconcile.Result{}, nil
+	}
+	var obj T
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &obj); err != nil {
+		return reconcile.Result{}, fmt.Errorf("decoding %s %s/%s: %w", r.gvk.Kind, u.GetNamespace(), u.GetName(), err)
+	}
+	if m := metaOf(&obj); m != nil {
+		m.Generation = u.GetGeneration()
+	}
+	st, done, err := r.finalize(ctx, &obj)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if !done {
+		if st != nil {
+			if err := r.writeStatus(ctx, u, st); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+		return reconcile.Result{RequeueAfter: r.k.retryInterval()}, nil
+	}
+	controllerutil.RemoveFinalizer(u, Finalizer)
+	return reconcile.Result{}, client.IgnoreNotFound(r.k.c.Update(ctx, u))
 }
 
 func (r *cr[T, S]) writeStatus(ctx context.Context, u *unstructured.Unstructured, st *S) error {

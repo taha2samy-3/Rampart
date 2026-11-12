@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"log/slog"
 	"strings"
@@ -118,8 +119,10 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	}
 	run := pp.Run
 	parserID := pp.Parser.Descriptor().ID
+	recs := &recordErrors{}
 	parseCtx := domain.ParseContext{
 		TenantID: run.TenantID, ScanSourceID: run.ScanSourceID, ScannerFamily: parserID, Track: run.Track, UploadContext: run.Context,
+		RecordError: recs.add,
 	}
 	fams := map[string]*famState{}
 	var order []string
@@ -229,6 +232,10 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 		if pp.IsEphemeral { // D10: no close for ephemeral runs
 			continue
 		}
+		if recs.n > 0 { // D13: a report with records we could not read may be missing findings; closing on it would hide them
+			status, reason = domain.RunCompletedWithErrors, "record_errors"
+			continue
+		}
 		res, err := p.engine.CloseScopeStepWithGuard(ctx, f.scope, run.ID, true)
 		if err != nil {
 			return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeCloseFailed, err)
@@ -243,6 +250,10 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	}
 	stats.Created, stats.Updated, stats.Untouched, stats.Reactivated, stats.Closed =
 		total.Created, total.Updated, total.Untouched, total.Reactivated, closed
+	stats.RecordErrors = recs.n
+	if err := p.saveRecordErrors(ctx, run, recs); err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
 	// What is new in this run, for the CI gate; replaced, not appended, so a retried job does not double it.
 	if err := p.store.ReplaceRunResults(ctx, run.TenantID, run.ID, fresh); err != nil {
 		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
@@ -257,6 +268,32 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 		res.Components = n
 	}
 	return res, nil
+}
+
+// maxRecordErrors is how many unreadable records a run keeps; the count is of all of them.
+const maxRecordErrors = 100
+
+// recordErrors collects the records a parser could not read.
+type recordErrors struct {
+	n    int
+	kept []domain.RecordError
+}
+
+func (r *recordErrors) add(e domain.RecordError) {
+	r.n++
+	if len(r.kept) < maxRecordErrors {
+		r.kept = append(r.kept, e)
+	}
+}
+
+// save stores what a run could not read, if the store keeps it.
+func (p *Processor) saveRecordErrors(ctx context.Context, run *domain.IngestRun, rec *recordErrors) error {
+	if w, ok := p.store.(interface {
+		ReplaceRunErrors(ctx context.Context, tenantID, runID uuid.UUID, errs []domain.RecordError) error
+	}); ok {
+		return w.ReplaceRunErrors(ctx, run.TenantID, run.ID, rec.kept)
+	}
+	return nil
 }
 
 func (p *Processor) openError(err error) error {
@@ -457,7 +494,8 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 	run := pp.Run
 	baseline := firstNonEmpty(pp.BaselineTrack, "main")
 	parserID := pp.Parser.Descriptor().ID
-	parseCtx := domain.ParseContext{TenantID: run.TenantID, ScanSourceID: run.ScanSourceID, ScannerFamily: parserID, Track: run.Track, UploadContext: run.Context}
+	recs := &recordErrors{}
+	parseCtx := domain.ParseContext{TenantID: run.TenantID, ScanSourceID: run.ScanSourceID, ScannerFamily: parserID, Track: run.Track, UploadContext: run.Context, RecordError: recs.add}
 
 	var stats domain.IngestStats
 	var results []*domain.IngestRunResult
@@ -481,6 +519,9 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 		}
 		for _, b := range buf {
 			ex, ok := existing[b.rec.FindingKey]
+			if ok && ex.FindingKey != b.rec.FindingKey { // found through an old key (D50): the baseline finding is present
+				seen[b.family][ex.FindingKey] = true
+			}
 			isNew := !ok || ex.Detection != domain.DetectionPresent // absent from the baseline track (D26)
 			if isNew {
 				stats.Created++
@@ -566,5 +607,13 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 	if err := p.store.ReplaceRunResults(ctx, run.TenantID, run.ID, results); err != nil {
 		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
 	}
-	return Result{Status: domain.RunCompleted, Stats: stats}, nil
+	stats.RecordErrors = recs.n
+	if err := p.saveRecordErrors(ctx, run, recs); err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
+	status := domain.RunCompleted
+	if recs.n > 0 {
+		status = domain.RunCompletedWithErrors
+	}
+	return Result{Status: status, Stats: stats}, nil
 }

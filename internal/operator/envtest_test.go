@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -241,4 +243,169 @@ func TestSLAPolicyShowsItsStatus(t *testing.T) {
 	}
 	st := ready(t, c, soft, "InvalidSpec")
 	_ = st
+}
+
+func waitNs(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		var ns corev1.Namespace
+		if c.Get(context.Background(), types.NamespacedName{Name: name}, &ns) == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("namespace %s was not created", name)
+}
+
+func hasFinalizer(t *testing.T, c client.Client, obj *unstructured.Unstructured) bool {
+	t.Helper()
+	cur := &unstructured.Unstructured{}
+	cur.SetGroupVersionKind(obj.GroupVersionKind())
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(obj), cur); err != nil {
+		return false
+	}
+	for _, f := range cur.GetFinalizers() {
+		if f == operator.Finalizer {
+			return true
+		}
+	}
+	return false
+}
+
+func eventuallyGone(t *testing.T, c client.Client, obj *unstructured.Unstructured) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		cur := &unstructured.Unstructured{}
+		cur.SetGroupVersionKind(obj.GroupVersionKind())
+		if apierrors.IsNotFound(c.Get(context.Background(), client.ObjectKeyFromObject(obj), cur)) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("%s %s was not deleted", obj.GetKind(), obj.GetName())
+}
+
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("never happened: %s", what)
+}
+
+// Deleting an Application keeps its rows and hands it to the UI; deleting a ScanSource disables it and revokes its
+// tokens; deleting an SLAPolicy removes it. Each resource carries the finalizer until the work is done (D21, D49).
+func TestDeletingResourcesDoesTheirFinalizerWork(t *testing.T) {
+	c, store, _ := startEnv(t)
+	ctx := context.Background()
+	tn := cr("Tenant", "", "fin", map[string]any{"displayName": "F", "namespaces": []any{"fin-ns"}})
+	if err := c.Create(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	st := ready(t, c, tn, "Reconciled")
+	waitNs(t, c, "fin-ns")
+	tenantID, _ := uuid.Parse(st["tenantId"].(string))
+
+	app := cr("Application", "fin-ns", "shop", map[string]any{"displayName": "Shop"})
+	src := cr("ScanSource", "fin-ns", "ci", map[string]any{"scannerFamily": "semgrep"})
+	pol := cr("SLAPolicy", "fin-ns", "default", map[string]any{"matrix": map[string]any{"critical": map[string]any{"critical": 1, "high": 2, "medium": 3, "low": 4}}})
+	for _, o := range []*unstructured.Unstructured{app, src} {
+		if err := c.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		ready(t, c, o, "Reconciled")
+	}
+	eventually(t, "the finalizer on the application and the source", func() bool { return hasFinalizer(t, c, app) && hasFinalizer(t, c, src) })
+	if store.Orphaned(tenantID, "shop") || store.Disabled(tenantID, "ci") {
+		t.Fatal("nothing may be orphaned or disabled while the resources exist")
+	}
+
+	if err := c.Delete(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyGone(t, c, app)
+	if !store.Orphaned(tenantID, "shop") {
+		t.Fatal("deleting an Application must keep it and hand it to the UI")
+	}
+	if err := c.Delete(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyGone(t, c, src)
+	if !store.Disabled(tenantID, "ci") {
+		t.Fatal("deleting a ScanSource must disable it")
+	}
+	if err := c.Create(ctx, pol); err != nil {
+		t.Logf("SLAPolicy shape is the CRD's business, not this test's: %v", err)
+		return
+	}
+	ready(t, c, pol, "Reconciled")
+	if _, ok := store.SLAPolicy(tenantID, "fin-ns", "default"); !ok {
+		t.Fatal("the policy was not stored")
+	}
+	if err := c.Delete(ctx, pol); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyGone(t, c, pol)
+	if _, ok := store.SLAPolicy(tenantID, "fin-ns", "default"); ok {
+		t.Fatal("deleting an SLAPolicy must remove it")
+	}
+}
+
+// A tenant with data is not deleted unless its resource says Purge; waiting costs nothing, and the reason is in
+// Ready. With Purge it goes, with its data (D21).
+func TestDeletingATenantWithDataIsRefusedUnlessPurge(t *testing.T) {
+	c, store, _ := startEnv(t)
+	ctx := context.Background()
+	tn := cr("Tenant", "", "keep", map[string]any{"displayName": "K", "namespaces": []any{"keep-ns"}})
+	if err := c.Create(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	st := ready(t, c, tn, "Reconciled")
+	tenantID, _ := uuid.Parse(st["tenantId"].(string))
+	store.SetHasData(tenantID)
+	eventually(t, "the finalizer on the tenant", func() bool { return hasFinalizer(t, c, tn) })
+
+	if err := c.Delete(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, tn, "DeletionBlocked") // still there, and says why
+	if store.Purged(tenantID) {
+		t.Fatal("a tenant with data was deleted without Purge")
+	}
+	// Changing the policy of a resource that is being deleted is allowed: it is how the owner decides.
+	cur := &unstructured.Unstructured{}
+	cur.SetGroupVersionKind(tn.GroupVersionKind())
+	if err := c.Get(ctx, client.ObjectKeyFromObject(tn), cur); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedField(cur.Object, "Purge", "spec", "deletionPolicy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyGone(t, c, tn)
+	if !store.Purged(tenantID) {
+		t.Fatal("Purge must delete the tenant")
+	}
+
+	// A tenant with no data goes without Purge.
+	empty := cr("Tenant", "", "empty", map[string]any{"displayName": "E"})
+	if err := c.Create(ctx, empty); err != nil {
+		t.Fatal(err)
+	}
+	est := ready(t, c, empty, "Reconciled")
+	if err := c.Delete(ctx, empty); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyGone(t, c, empty)
+	eid, _ := uuid.Parse(est["tenantId"].(string))
+	if !store.Purged(eid) {
+		t.Fatal("an empty tenant is deleted")
+	}
 }

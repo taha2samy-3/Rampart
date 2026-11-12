@@ -107,6 +107,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	api := query.NewAPIWithAuth(appStore, enrich.NewFeedStore(), authn) // the gate lives on the query API (D26)
 	api.SetScorer(h.scorer)
 	api.SetIntelSource(h.syncer)
+	api.SetObjectStore(h.objects)
 	api.RegisterRoutes(mux)
 	h.server = httptest.NewServer(mux)
 	t.Cleanup(h.server.Close)

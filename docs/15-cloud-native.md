@@ -89,7 +89,7 @@ Indicative sizing (starting points, tuned by load tests):
 | KEDA | Postgres (read-only role on a queue-depth view) | scaling |
 | Prometheus | all targets `/metrics` | scraping |
 
-  In air-gapped mode the `enrich` egress rule points only at the internal mirror.
+  In air-gapped mode the `enrich` egress rule points only at the internal mirror. The chart renders this for the monolithic install as `networkPolicy.*` (docs/16 D49).
 - A service mesh is optional. The design needs no east-west HTTP between targets, so mTLS matters mainly for Postgres (TLS enforced by CNPG) and object storage.
 
 ## 6. Data services

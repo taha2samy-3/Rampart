@@ -138,6 +138,10 @@ export interface RunRow {
   track: string;
   /** A stable code when the run failed, for example sha256_mismatch. */
   error?: string;
+  /** The raw report can be downloaded by a maintainer. */
+  has_report?: boolean;
+  /** The first records the run could not read, and where they are (the single-run GET only). */
+  record_error_list?: { where: string; message: string }[];
   stats: {
     parsed: number; created: number; updated: number; untouched: number;
     reactivated: number; closed: number; record_errors: number; weak_fingerprints: number;

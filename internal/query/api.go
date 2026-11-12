@@ -24,6 +24,7 @@ import (
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/graph"
+	"rampart/internal/objectstore"
 	"rampart/internal/query/grammar"
 	"rampart/internal/risk"
 	"rampart/internal/store"
@@ -40,6 +41,7 @@ type API struct {
 	feeds   *enrich.FeedStore
 	authn   *auth.Authenticator
 	hmacKey []byte
+	objects objectstore.Store
 	intel   IntelSource
 	scorer  *scoring.Scorer
 }
@@ -99,6 +101,9 @@ func slaDue(f *domain.Finding, band domain.Severity) *time.Time {
 	return &d
 }
 
+// SetObjectStore gives the API the store the raw reports are in, so a run's report can be downloaded.
+func (a *API) SetObjectStore(o objectstore.Store) { a.objects = o }
+
 // SetCursorKey sets the key that signs pagination cursors (D16). Without one, each process uses a random
 // key, so a cursor never outlives the process that issued it.
 func (a *API) SetCursorKey(key []byte) { a.hmacKey = append([]byte(nil), key...) }
@@ -151,6 +156,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
 	mux.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)
 	mux.HandleFunc("GET /api/v1/audit", a.handleListAudit)
+	mux.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
 	mux.HandleFunc("GET /api/v1/access-bindings", a.handleListBindings)
 	mux.HandleFunc("POST /api/v1/access-bindings", a.handleCreateBinding)
 	mux.HandleFunc("DELETE /api/v1/access-bindings/{id}", a.handleDeleteBinding)

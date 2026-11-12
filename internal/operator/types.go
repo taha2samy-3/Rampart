@@ -73,6 +73,8 @@ type Metadata struct {
 type TenantSpec struct {
 	DisplayName string   `json:"displayName"`
 	Namespaces  []string `json:"namespaces,omitempty"`
+	// DeletionPolicy is Retain (default: a tenant with data is not deleted) or Purge (docs/16 D21).
+	DeletionPolicy string `json:"deletionPolicy,omitempty"`
 }
 
 type TenantStatus struct {

@@ -124,6 +124,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET/POST /teams`, `GET/POST /bindings` | Teams and role bindings not managed by CRDs |
 | `GET /notifications`, `POST /notifications/read` | In-app notifications of the caller; mark all read (built, D45) |
 | `GET/POST /access-bindings`, `DELETE /access-bindings/{id}`, `GET /me/access` | Roles on single applications (built, D48) |
+| `GET /runs/{id}/report` | The raw report as the scanner wrote it; maintainer role; audited (built, D51) |
 | `GET /audit` | Audit events with cursor; `format=csv\|ndjson` exports (built, D46) |
 | `GET /settings`, `PATCH /settings` | Tenant settings |
 | `GET /openapi.json` | Contract |

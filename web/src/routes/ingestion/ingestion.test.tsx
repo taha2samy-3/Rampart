@@ -47,6 +47,31 @@ describe('ingest runs', () => {
     expect(steps.find((li) => li.getAttribute('aria-current') === 'step')).toHaveTextContent('Merging');
   });
 
+  it('lists the records it could not read, with where they are, and offers the raw report to a maintainer', async () => {
+    const bad = run(1, {
+      status: 'completed_with_errors', error: 'record_errors', has_report: true,
+      stats: { parsed: 3, created: 1, updated: 0, untouched: 1, reactivated: 0, closed: 0, record_errors: 2, weak_fingerprints: 0 },
+      record_error_list: [{ where: 'results 2', message: 'the record does not have the shape this tool writes' }, { where: 'results 9', message: 'the record does not have the shape this tool writes' }],
+    });
+    mockFetch({ loggedIn: true, role: 'admin', runs: [[bad]] });
+    renderApp('/ingestion?sel=00000001-aaaa-bbbb-cccc-000000000000');
+    const insp = await screen.findByRole('complementary', { name: 'Run details' });
+    expect(await within(insp).findByText('results 2')).toBeInTheDocument();
+    expect(within(insp).getByText('results 9')).toBeInTheDocument();
+    expect(within(insp).getByText(/nothing was closed/)).toBeInTheDocument();
+    const link = within(insp).getByRole('link', { name: 'Download the raw report' });
+    expect(link).toHaveAttribute('href', '/api/v1/runs/00000001-aaaa-bbbb-cccc-000000000000/report');
+    expect(await axe(insp)).toHaveNoViolations();
+  });
+
+  it('does not offer the raw report below the maintainer role', async () => {
+    mockFetch({ loggedIn: true, role: 'triager', runs: [[run(1, { has_report: true })]] });
+    renderApp('/ingestion?sel=00000001-aaaa-bbbb-cccc-000000000000');
+    const insp = await screen.findByRole('complementary', { name: 'Run details' });
+    await within(insp).findByRole('heading', { name: 'Where it came from' });
+    expect(within(insp).queryByRole('link', { name: 'Download the raw report' })).toBeNull();
+  });
+
   it('a pull-request run says it changed no finding', async () => {
     mockFetch({ loggedIn: true, runs: [[run(1, { ephemeral: true, context: { repository: 'github.com/acme/shop', branch: 'pr/12', commit: 'f00dbabe' } })]] });
     renderApp('/ingestion?sel=00000001-aaaa-bbbb-cccc-000000000000');

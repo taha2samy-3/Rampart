@@ -73,7 +73,7 @@ const redacted = "[redacted]"
 func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
 	return func(yield func(domain.RawFinding, error) bool) {
 		dec := json.NewDecoder(r)
-		err := parseutil.Array(dec, func() error {
+		err := parseutil.ArrayWith(dec, pc, "findings", func() error {
 			var l leak
 			raw, err := parseutil.Element(dec, &l)
 			if err != nil {

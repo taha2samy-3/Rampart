@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"rampart/internal/query/grammar"
 	"rampart/internal/query/sqlbuilder"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -233,7 +234,11 @@ func (s *PostgresStore) EnsureScanSource(ctx context.Context, tenantID uuid.UUID
 		} else {
 			q = `SELECT id FROM scan_source WHERE tenant_id = $1 AND name = $2`
 		}
-		err := tx.QueryRow(ctx, q, tenantID, arg).Scan(&id)
+		var disabled *time.Time
+		err := tx.QueryRow(ctx, strings.Replace(q, "SELECT id FROM", "SELECT id, disabled_at FROM", 1), tenantID, arg).Scan(&id, &disabled)
+		if err == nil && disabled != nil {
+			return ErrSourceDisabled
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			if ref != "default" {
 				return ErrNotFound
@@ -268,7 +273,53 @@ func (s *PostgresStore) GetFindingsByKeys(ctx context.Context, tenantID uuid.UUI
 			}
 			results[f.FindingKey] = f
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		// A key a finding used to have still finds it (docs/16 D11, D50): a scan that keeps reporting an
+		// identifier the finding was re-keyed away from must update that finding, not create a second one.
+		var missing []string
+		for _, k := range keys {
+			if _, ok := results[k]; !ok {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) == 0 {
+			return nil
+		}
+		type pair struct {
+			old string
+			id  uuid.UUID
+		}
+		var pairs []pair
+		ar, err := tx.Query(ctx, `SELECT old_key, finding_id FROM finding_key_alias WHERE tenant_id = $1 AND old_key = ANY($2)`, tenantID, missing)
+		if err != nil {
+			return err
+		}
+		for ar.Next() {
+			var p pair
+			if err := ar.Scan(&p.old, &p.id); err != nil {
+				ar.Close()
+				return err
+			}
+			pairs = append(pairs, p)
+		}
+		ar.Close()
+		if err := ar.Err(); err != nil {
+			return err
+		}
+		for _, p := range pairs {
+			f, err := scanFinding(tx.QueryRow(ctx, `SELECT `+findingCols+` FROM finding WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, p.id))
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			results[p.old] = f
+		}
+		return nil
 	})
 	return results, err
 }
@@ -1384,7 +1435,30 @@ func (s *PostgresStore) GetTenantByNamespace(ctx context.Context, namespace stri
 
 // SaveApplication implements apply.ConfigStore.
 func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Application) error {
-	return s.CreateApplication(ctx, &app)
+	// Who owns the row decides what a resource may do to it (docs/16 D21, D49): a new row is made by the
+	// resource; one the resource let go (none) is taken back when it returns; one made in the UI stays the UI's.
+	var existing string
+	var existed bool
+	if err := s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT managed_by FROM application WHERE tenant_id = $1 AND slug = $2`, app.TenantID, app.Slug).Scan(&existing)
+		existed = err == nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := s.CreateApplication(ctx, &app); err != nil {
+		return err
+	}
+	if existed && existing == "ui" {
+		return nil
+	}
+	return s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE application SET managed_by = 'crd' WHERE tenant_id = $1 AND slug = $2`, app.TenantID, app.Slug)
+		return err
+	})
 }
 
 // GetApplicationBySlug implements apply.ConfigStore.
@@ -1407,7 +1481,7 @@ func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, 
 			INSERT INTO scan_source (id, tenant_id, name, type, scanner_family, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (tenant_id, name) DO UPDATE SET
-				scanner_family = EXCLUDED.scanner_family
+				scanner_family = EXCLUDED.scanner_family, disabled_at = NULL
 			RETURNING id`
 		scanType := scannerFamily
 		if scanType == "" {

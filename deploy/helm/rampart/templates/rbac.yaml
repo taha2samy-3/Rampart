@@ -36,9 +36,9 @@ metadata:
 rules:
   - apiGroups: [rampart.aspm.dev]
     resources: [tenants, applications, scansources, slapolicies]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch, update, patch] # update: add and remove the finalizer (D49)
   - apiGroups: [rampart.aspm.dev]
-    resources: [tenants/status, applications/status, scansources/status, slapolicies/status, tenants/finalizers, scansources/finalizers]
+    resources: [tenants/status, applications/status, scansources/status, slapolicies/status, tenants/finalizers, applications/finalizers, scansources/finalizers, slapolicies/finalizers]
     verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [namespaces]

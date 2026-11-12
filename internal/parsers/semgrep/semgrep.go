@@ -85,7 +85,7 @@ func (p *Parser) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext)
 			case "version":
 				return dec.Decode(&version)
 			case "results":
-				return parseutil.Array(dec, func() error {
+				return parseutil.ArrayWith(dec, pc, "results", func() error {
 					var res result
 					raw, err := parseutil.Element(dec, &res)
 					if err != nil {

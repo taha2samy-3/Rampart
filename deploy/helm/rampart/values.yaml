@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 13
+  minSchemaVersion: 15
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -135,6 +135,46 @@ auth:
 operator:
   enabled: true
   mode: auto
+
+# Prometheus (docs/15 section 7). The ops port serves /metrics and is never routed through the ingress.
+metrics:
+  serviceMonitor:
+    enabled: false          # needs the prometheus-operator CRDs
+    interval: 30s
+    scrapeTimeout: 10s
+    namespace: ""           # empty: the release namespace
+    labels: {}              # for example {release: kube-prometheus-stack}
+
+# NetworkPolicy (docs/15 section 5, docs/16 D49): the pods of this release get default-deny in both directions,
+# then only what they need. Data services (the bundled PostgreSQL cluster and SeaweedFS) are not denied by
+# this chart: their own charts and operators own their policies. Needs a CNI that enforces NetworkPolicy.
+networkPolicy:
+  enabled: false
+  # Who may reach the HTTP port: the ingress controller, and anything else that calls the API. The default is
+  # every namespace; narrow it, for example
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  ingressFrom:
+    - namespaceSelector: {}
+  # Who may scrape the ops port.
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  # Where the operator reaches the Kubernetes API. Empty: any address on port 443 and 6443.
+  kubeApiCidrs: []
+  # Outbound HTTPS to the internet: feeds (KEV, EPSS, OSV), the identity provider, connectors and
+  # Dependency-Track. Turn off in an air-gapped install and list the mirrors in egressExtra.
+  allowHttpsEgress: true
+  # Where PostgreSQL and the object store are when the chart does not run them (database.cnpg.enabled=false,
+  # seaweedfs.enabled=false): a list of NetworkPolicy peers and ports.
+  database:
+    to: []
+    port: 5432
+  objectStore:
+    to: []
+    port: 443
+  # Extra egress rules, verbatim NetworkPolicy egress entries.
+  egressExtra: []
 
 nodeSelector: {}
 tolerations: []

@@ -110,9 +110,32 @@ func Element(dec *json.Decoder, v any) (json.RawMessage, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
-		return raw, err
+		// The decoder is past this element, so the walk can go on. The message names the field and the type, never
+		// the value: a report can hold secrets.
+		return raw, &domain.RecordError{Message: "the record does not have the shape this tool writes (" + err.Error() + ")"}
 	}
 	return raw, nil
+}
+
+// ArrayWith is Array for an array of records: an element that cannot be read (Element says so with a
+// *domain.RecordError) is reported to pc.RecordError, with its position as "<label> N", and the walk goes on.
+// Without a receiver it behaves as Array.
+func ArrayWith(dec *json.Decoder, pc domain.ParseContext, label string, each func() error) error {
+	i := 0
+	return Array(dec, func() error {
+		i++
+		err := each()
+		var re *domain.RecordError
+		if errors.As(err, &re) && pc.RecordError != nil {
+			rec := *re
+			if rec.Where == "" {
+				rec.Where = fmt.Sprintf("%s %d", label, i)
+			}
+			pc.RecordError(rec)
+			return nil
+		}
+		return err
+	})
 }
 
 // SeverityFromScore maps a CVSS base score to a severity (docs/05 section 3).

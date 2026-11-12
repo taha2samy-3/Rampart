@@ -1,0 +1,102 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Default-deny for the pods of this release, then the allow-lists of docs/15 section 5 that apply to a
+monolithic install: HTTP in, the ops port for Prometheus, DNS, PostgreSQL, the object store, the Kubernetes API
+(the operator) and HTTPS out (feeds, identity provider, connectors).
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rampart.fullname" . }}-default-deny
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rampart.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rampart.fullname" . }}-allow
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rampart.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+    - from:
+        {{- toYaml .Values.networkPolicy.metricsFrom | nindent 8 }}
+      ports:
+        - port: ops
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    # PostgreSQL
+    - to:
+        {{- if .Values.database.cnpg.enabled }}
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "rampart.cnpgName" . }}
+        {{- else }}
+        {{- if not .Values.networkPolicy.database.to }}{{ fail "networkPolicy.database.to is required when database.cnpg.enabled=false" }}{{ end }}
+        {{- toYaml .Values.networkPolicy.database.to | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.database.port }}
+          protocol: TCP
+    # Object storage
+    - to:
+        {{- if .Values.seaweedfs.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "rampart.name" . }}-objectstore
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- else }}
+        {{- if not .Values.networkPolicy.objectStore.to }}{{ fail "networkPolicy.objectStore.to is required when seaweedfs.enabled=false" }}{{ end }}
+        {{- toYaml .Values.networkPolicy.objectStore.to | nindent 8 }}
+        {{- end }}
+      ports:
+        {{- if .Values.seaweedfs.enabled }}
+        - port: 8333
+        {{- else }}
+        - port: {{ .Values.networkPolicy.objectStore.port }}
+        {{- end }}
+          protocol: TCP
+    {{- if .Values.operator.enabled }}
+    # The operator reconciles through the Kubernetes API.
+    - {{- if .Values.networkPolicy.kubeApiCidrs }}
+      to:
+        {{- range .Values.networkPolicy.kubeApiCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+        - {port: 6443, protocol: TCP}
+    {{- end }}
+    {{- if .Values.networkPolicy.allowHttpsEgress }}
+    # Feeds, the identity provider, connectors, Dependency-Track.
+    - ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+    {{- with .Values.networkPolicy.egressExtra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

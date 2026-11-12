@@ -18,6 +18,12 @@ rules:
       - applications/status
       - scansources
       - scansources/status
+      - slapolicies
+      - slapolicies/status
+      - tenants/finalizers
+      - applications/finalizers
+      - scansources/finalizers
+      - slapolicies/finalizers
     verbs:
       - get
       - list

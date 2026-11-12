@@ -228,6 +228,10 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 			problemJSON(w, http.StatusNotFound, "not-found", "Scan source not found", "")
 			return
 		}
+		if errors.Is(err, store.ErrSourceDisabled) {
+			problemJSON(w, http.StatusForbidden, "forbidden", "This scan source is disabled", "Its resource was deleted. Apply it again to enable it.")
+			return
+		}
 		problemJSON(w, http.StatusInternalServerError, "internal", "Failed to resolve the scan source", "")
 		return
 	}
@@ -474,6 +478,10 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"Scan source not found"}`, http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, store.ErrSourceDisabled) {
+			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/forbidden","title":"This scan source is disabled"}`, http.StatusForbidden)
 			return
 		}
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve scan source"}`, http.StatusInternalServerError)

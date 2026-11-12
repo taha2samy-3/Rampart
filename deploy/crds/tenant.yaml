@@ -37,6 +37,14 @@ spec:
                   items:
                     type: string
                     maxLength: 63
+                deletionPolicy:
+                  description: >-
+                    What deleting this resource does. Retain (default) refuses to delete a tenant that has data: the
+                    resource stays, with Ready=False and reason DeletionBlocked. Purge deletes the tenant and everything
+                    that belongs to it (D21).
+                  type: string
+                  enum: [Retain, Purge]
+                  default: Retain
               required:
                 - displayName
             status:

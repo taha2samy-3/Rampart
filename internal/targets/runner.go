@@ -264,7 +264,11 @@ func (r *Runner) Run(ctx context.Context) error {
 				KEVURL: r.cfg.Feeds.KEVURL, EPSSURL: r.cfg.Feeds.EPSSURL, OSVBaseURL: r.cfg.Feeds.OSVBaseURL,
 				OSVEcosystems: r.cfg.Feeds.OSVEcosystems, Interval: r.cfg.Feeds.Interval,
 			}
-			fc.OnSynced = func(c context.Context) { scoring.RescoreAll(c, scorer, sysStore, r.logger) }
+			fc.OnSynced = func(c context.Context) {
+				// New aliases first: a finding keyed by a GHSA id moves to its CVE's key, then everything is re-scored (D50).
+				ingest.RekeyAll(c, sysStore, sysStore.ListTenantIDs, r.logger)
+				scoring.RescoreAll(c, scorer, sysStore, r.logger)
+			}
 			go enrich.RunScheduler(ctx, sysStore.Pool(), fc, r.logger)
 			r.logger.Info("feed sync started", "interval", r.cfg.Feeds.Interval, "osv_ecosystems", r.cfg.Feeds.OSVEcosystems)
 		}
@@ -284,6 +288,9 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	if isAll || contains(targetList, "query-api") {
 		r.logger.Info("mounting query-api routes on /api/v1")
+		if objects != nil {
+			queryAPI.SetObjectStore(objects)
+		}
 		queryAPI.RegisterRoutes(mux)
 	}
 
