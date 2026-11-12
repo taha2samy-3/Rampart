@@ -1499,7 +1499,7 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		var hNodeID *uuid.UUID = app.HierarchyNodeID
+		hNodeID := app.HierarchyNodeID
 		hPath := app.HierarchyPath
 		if hPath != "" && hNodeID == nil {
 			segs := strings.Split(hPath, ".")

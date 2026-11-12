@@ -194,7 +194,7 @@ func Compile(spec RiskPolicySpec) (*Policy, error) {
 		}
 		p.bands[k] = v
 	}
-	if !(p.bands["critical"] > p.bands["high"] && p.bands["high"] > p.bands["medium"] && p.bands["medium"] > 0 && p.bands["critical"] <= 1000) {
+	if p.bands["critical"] <= p.bands["high"] || p.bands["high"] <= p.bands["medium"] || p.bands["medium"] <= 0 || p.bands["critical"] > 1000 {
 		return nil, fmt.Errorf("%w: bands must satisfy 1000 >= critical > high > medium > 0", ErrPolicy)
 	}
 	factors := spec.Factors
