@@ -207,3 +207,66 @@ export interface AcceptanceBody {
   expiresAt: string;
   onExpiry?: 'reactivate' | 'notify_only';
 }
+
+export type OpenBand = 'critical' | 'high' | 'medium' | 'low';
+
+/** internal/domain AppSummary: an application seen through its active findings. */
+export interface AppSummary {
+  id: string;
+  slug: string;
+  name: string;
+  business_criticality: string;
+  internet_facing: boolean;
+  open: Record<OpenBand, number>;
+  risk_score: number;
+  exposure_count: number;
+  sla_breached: number;
+  last_scan?: string;
+}
+export interface SlaStanding {
+  within: number;
+  late: number;
+  breached: number;
+  adherence?: number;
+}
+export interface CoverageRow {
+  asset_id: string;
+  asset: string;
+  scanner: string;
+  last_scan: string;
+}
+export interface TopFinding {
+  id: string;
+  title: string;
+  band: string;
+  risk_score: number;
+  state: string;
+  sla_due_date?: string;
+}
+export interface ApplicationPage extends AppSummary {
+  sla: SlaStanding;
+  mttr: { band: OpenBand; days: number; fixed: number }[];
+  coverage: CoverageRow[];
+  top_findings: TopFinding[];
+}
+export interface OverdueFinding {
+  id: string;
+  title: string;
+  band: string;
+  due: string;
+  app_slug: string;
+  app_name: string;
+}
+export interface Overview {
+  changes: { since: string; new: number; reopened: number; fixed: number };
+  open: Record<OpenBand, number>;
+  overdue: OverdueFinding[];
+  overdue_total: number;
+  sla: SlaStanding;
+  top_apps: AppSummary[];
+  coverage_gaps: AppSummary[];
+}
+export interface TrendPoint {
+  day: string;
+  value: number;
+}

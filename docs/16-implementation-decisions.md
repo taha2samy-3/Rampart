@@ -643,3 +643,13 @@ Built as D2 and D9 specify. What was decided while building it:
 - **Fixes found on the way.** (1) The canonical vulnerability id was the first one the parser gave; D11 says a CVE, else the lowest GHSA, else the first: Grype reports the GHSA it matched on and the CVE related to it, so findings were keyed and shown by the GHSA. `normalize.CanonicalVulnID` now does what D11 says, in the fingerprint and in the pipeline. (2) A presigned upload chose its asset before reading the report, from the format the client declared, so an image scan without a declared format became a repository asset. It now detects the parser from the first 64 KiB, as the worker does: SCA reports of an image go to an image asset (D10).
 - **Not built.** Reading the image name from the report when the client gave no `imageRef` (D10 says the report target is an image); Trivy's `Packages` (an SBOM inside a vulnerability report) and its Kubernetes and cloud scans; Grype's ignored matches; detect-secrets (listed in docs/05).
 
+
+## D43. Overview and Applications (Phase 2)
+
+- **Live aggregate queries, not read models.** docs/09 names `application_summary` and `trend_daily` tables. At the size this version targets, one grouped query over the active findings (indexed by tenant and application) answers in milliseconds and cannot be stale, so no table, refresher or migration was added (schema version stays 10). If a tenant outgrows it, the same `Aggregator` interface can be backed by a table.
+- **Endpoints** (all tenant-scoped through RLS): `GET /applications` (summary rows), `GET /applications/{id}/summary` (adds SLA standing, MTTR, coverage and `top_findings`), `GET /overview?sinceHours=` and `GET /trends?metric=open|new|closed&days=` (at most 180).
+- **SLA adherence** is `within / (within + late + breached)` over the last 90 days of resolved findings, where still-open findings past their deadline count as breached. MTTR is the mean of `resolved_at - first_seen` per band over the same window.
+- **Coverage** is the last completed run of each asset and scanner, from `ingest_run_scope`. "Not scanned lately" lists applications with no completed scan in 14 days, or never.
+- **Trend limits.** History is rebuilt from `first_seen` and `resolved_at`, so a finding that was reopened shows as open for its whole life, and accepted findings count as closed. A daily snapshot table would remove both; not built.
+- **Not built.** "Newly exploited" in the Overview (needs KEV/EPSS change history); a per-finding list of every tool that reported it (a finding shows the family of its rule only).
+- **UI** follows docs/13 §6: sentences and ruled lists, no tiles or pills, colour only for risk; the trend is a plain line with a text alternative and a table behind "Show the numbers".

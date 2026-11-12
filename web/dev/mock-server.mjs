@@ -26,6 +26,30 @@ const RUNS = [
   { id: '01a1ceb1-5e3b-7d02-b7c8-91f0a2e48c33', status: 'completed', created_at: new Date(Date.now() - 3 * 86_400_000).toISOString(), scanner_family: 'sarif', format: 'sarif', track: 'main', stats: RUN_STATS(48, 4, 1, 43, 0, 2), context: { repository: 'github.com/acme/shop', branch: 'main', commit: '3a77d90b12' }, scanners: ['semgrep'], ephemeral: false },
 ];
 
+// Applications and the overview (internal/query/overview.go).
+const bands = (critical, high, medium, low) => ({ critical, high, medium, low });
+const day = (n) => new Date(Date.now() - n * 86_400_000).toISOString();
+const APP_ROWS = [
+  { id: 'a0000001-0000-4000-8000-000000000001', slug: 'checkout', name: 'Checkout', business_criticality: 'critical', internet_facing: true, open: bands(3, 6, 4, 2), risk_score: 1000, exposure_count: 9, sla_breached: 4, last_scan: day(0.1) },
+  { id: 'a0000001-0000-4000-8000-000000000002', slug: 'billing', name: 'Billing', business_criticality: 'high', internet_facing: false, open: bands(0, 3, 5, 1), risk_score: 650, exposure_count: 3, sla_breached: 1, last_scan: day(2) },
+  { id: 'a0000001-0000-4000-8000-000000000003', slug: 'search', name: 'Search', business_criticality: 'medium', internet_facing: true, open: bands(0, 1, 2, 4), risk_score: 420, exposure_count: 1, sla_breached: 0, last_scan: day(21) },
+  { id: 'a0000001-0000-4000-8000-000000000004', slug: 'ledger', name: 'Ledger', business_criticality: 'high', internet_facing: false, open: bands(0, 0, 0, 0), risk_score: 0, exposure_count: 0, sla_breached: 0 },
+];
+const TREND = Array.from({ length: 30 }, (_, i) => ({ day: new Date(Date.now() - (29 - i) * 86_400_000).toISOString().slice(0, 10), value: Math.round(70 + Math.sin(i / 4) * 8 + i * 0.6) }));
+const OVERVIEW = () => ({
+  changes: { since: day(1), new: 14, reopened: 2, fixed: 9 },
+  open: bands(3, 10, 11, 7),
+  overdue_total: 5,
+  overdue: [
+    { id: 'f0000000-0000-4000-8000-000000000001', title: 'Hard-coded JWT signing secret', band: 'critical', due: day(9), app_slug: 'checkout', app_name: 'Checkout' },
+    { id: 'f0000000-0000-4000-8000-000000000002', title: 'SQL injection in order search', band: 'critical', due: day(4), app_slug: 'checkout', app_name: 'Checkout' },
+    { id: 'f0000000-0000-4000-8000-000000000003', title: 'Server-side request forgery in webhook fetch', band: 'high', due: day(2), app_slug: 'billing', app_name: 'Billing' },
+  ],
+  sla: { within: 41, late: 7, breached: 5, adherence: 41 / 53 },
+  top_apps: APP_ROWS.filter((a) => a.risk_score > 0),
+  coverage_gaps: [APP_ROWS[2], APP_ROWS[3]],
+});
+
 const BAND_BASE = { critical: 600, high: 400, medium: 200, low: 80, info: 10 };
 const F = {
   KEV: [300, 'Vulnerability listed in CISA Known Exploited Vulnerabilities catalog'],
@@ -258,6 +282,24 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/me') return json(res, { user: { id: 'u-1', email: 'sara.ahmed@acme.example', name: 'Sara Ahmed' }, tenant });
     if (p === '/api/v1/me/tenants') return json(res, TENANTS);
     if (p === '/api/v1/me/permissions') return json(res, { role: 'triager', scopes: ['tenant'] });
+    if (p === '/api/v1/applications') return json(res, { items: APP_ROWS });
+    const am = /^\/api\/v1\/applications\/([^/]+)\/summary$/.exec(p);
+    if (am) {
+      const a = APP_ROWS.find((x) => x.id === am[1]);
+      if (!a) return problem(res, 404, 'Application not found', 'No such application.');
+      return json(res, {
+        ...a, sla: { within: 14, late: 3, breached: a.sla_breached, adherence: 14 / (17 + a.sla_breached) },
+        mttr: [{ band: 'critical', days: 3.2, fixed: 3 }, { band: 'high', days: 11.8, fixed: 9 }],
+        coverage: [
+          { asset_id: 'as-1', asset: `github.com/acme/${a.slug}`, scanner: 'semgrep', last_scan: day(0.2) },
+          { asset_id: 'as-1', asset: `github.com/acme/${a.slug}`, scanner: 'gitleaks', last_scan: day(0.2) },
+          { asset_id: 'as-2', asset: `registry.acme.example/${a.slug}`, scanner: 'trivy', last_scan: day(6) },
+        ],
+        top_findings: ALL.slice(0, 5).map((r) => ({ id: r.finding.id, title: r.finding.title, band: r.risk.band, risk_score: r.risk.total_score, state: r.finding.state, sla_due_date: r.sla_due_date })),
+      });
+    }
+    if (p === '/api/v1/dashboards/overview') return json(res, OVERVIEW());
+    if (p === '/api/v1/metrics/trend') return json(res, { metric: 'open', points: TREND });
     if (p === '/api/v1/runs') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list runs', 'The database did not answer within 5 s.');
       return json(res, { items: dataMode === 'empty' ? null : RUNS, next_cursor: '' });

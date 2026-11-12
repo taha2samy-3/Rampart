@@ -42,6 +42,11 @@ export interface Scenario {
   /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
   patch?: 200 | 400 | 409;
   /** The timeline GET /api/v1/findings/{id}/events returns. */
+  /** GET /api/v1/applications, and the page of each (by id). */
+  apps?: ReturnType<typeof app>[] | 'error';
+  appPages?: Record<string, ReturnType<typeof appPage>>;
+  overview?: ReturnType<typeof overviewData> | 'error';
+  trend?: { day: string; value: number }[];
   /** Risk acceptances GET /api/v1/risk-acceptances returns (filtered by ?status=). */
   acceptances?: ReturnType<typeof acceptance>[];
   /** What POST /api/v1/risk-acceptances answers: approved at once (default), pending, or a 400. */
@@ -49,6 +54,35 @@ export interface Scenario {
   /** What POST .../approve|reject|revoke answers: 200 (default) or 400. */
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
+}
+
+export function app(i: number, over: Record<string, unknown> = {}) {
+  return {
+    id: `app-${i}`, slug: `app-${i}`, name: `Application ${i}`, business_criticality: 'high', internet_facing: false,
+    open: { critical: 2, high: 5, medium: 0, low: 1 }, risk_score: 870, exposure_count: 7, sla_breached: 1, last_scan: '2026-11-11T10:00:00Z', ...over,
+  };
+}
+
+export function appPage(i: number, over: Record<string, unknown> = {}) {
+  return {
+    ...app(i), sla: { within: 3, late: 1, breached: 1, adherence: 0.6 }, mttr: [{ band: 'high', days: 6.5, fixed: 4 }],
+    coverage: [{ asset_id: 'as-1', asset: 'github.com/acme/shop', scanner: 'semgrep', last_scan: '2026-11-11T10:00:00Z' }],
+    top_findings: [{ id: 'f-1', title: 'SQL injection in order search', band: 'critical', risk_score: 870, state: 'open', sla_due_date: '2026-11-20T00:00:00Z' }],
+    ...over,
+  };
+}
+
+export function overviewData(over: Record<string, unknown> = {}) {
+  return {
+    changes: { since: '2026-11-11T10:00:00Z', new: 12, reopened: 3, fixed: 7 },
+    open: { critical: 2, high: 5, medium: 9, low: 4 },
+    overdue: [{ id: 'f-9', title: 'Hard-coded JWT signing secret', band: 'critical', due: '2026-11-05T00:00:00Z', app_slug: 'app-1', app_name: 'Application 1' }],
+    overdue_total: 14,
+    sla: { within: 30, late: 5, breached: 5, adherence: 0.75 },
+    top_apps: [app(1), app(2, { risk_score: 400, open: { critical: 0, high: 1, medium: 0, low: 0 } })],
+    coverage_gaps: [app(3, { last_scan: undefined })],
+    ...over,
+  };
 }
 
 export function acceptance(i: number, over: Record<string, unknown> = {}) {
@@ -91,6 +125,19 @@ export function mockFetch(sc: Scenario): Calls {
       if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
       return json(finding(1));
     }
+    if (path === '/api/v1/applications') {
+      if (sc.apps === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list applications', status: 500, request_id: 'req_apps' }, 500);
+      return json({ items: sc.apps?.length ? sc.apps : null });
+    }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/summary')) {
+      const page = sc.appPages?.[path.split('/')[4] ?? ''];
+      return page ? json(page) : json({ type: 'https://rampart.aspm.dev/problems/not-found', title: 'Application not found', status: 404 }, 404);
+    }
+    if (path === '/api/v1/dashboards/overview') {
+      if (sc.overview === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed', status: 500, request_id: 'req_ov' }, 500);
+      return json(sc.overview ?? overviewData());
+    }
+    if (path === '/api/v1/metrics/trend') return json({ metric: 'open', points: sc.trend ?? [] });
     if (path === '/api/v1/settings') return json({ riskAcceptanceApproval: false, riskAcceptanceMaxDays: 90 });
     if (path === '/api/v1/risk-acceptances' && (init?.method ?? 'GET') === 'POST') {
       if (sc.accept === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'this tenant allows an acceptance of at most 90 days', status: 400 }, 400);

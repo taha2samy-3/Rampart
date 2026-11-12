@@ -6,7 +6,10 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
+import { ApplicationRoute } from '@/routes/applications/ApplicationRoute';
+import { ApplicationsRoute } from '@/routes/applications/ApplicationsRoute';
 import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/IngestionRoute';
+import { OverviewRoute } from '@/routes/overview/OverviewRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
 import { WorkflowRoute, type WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
 import type { AcceptanceStatus } from '@/api/types';
@@ -132,7 +135,18 @@ const workflowRoute = createRoute({
   },
 });
 
-const placeholderRoutes = NAV_ITEMS.filter((n) => n.id !== 'findings' && n.id !== 'ingestion' && n.id !== 'workflow').map((item) =>
+const overviewRoute = createRoute({ getParentRoute: () => appRoute, path: '/overview', component: OverviewRoute });
+const applicationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/applications', component: ApplicationsRoute });
+const applicationRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/applications/$id',
+  component: function Application() {
+    return <ApplicationRoute id={applicationRoute.useParams().id} />;
+  },
+});
+
+const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications']);
+const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
 
@@ -144,7 +158,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   ...(import.meta.env.DEV ? [styleguideRoute] : []),
   tenantLoginRoute,
-  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, ...placeholderRoutes]),
+  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, overviewRoute, applicationsRoute, applicationRoute, ...placeholderRoutes]),
 ]);
 
 export function makeRouter(history?: RouterHistory) {

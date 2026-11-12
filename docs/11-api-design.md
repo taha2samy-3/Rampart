@@ -106,7 +106,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 
 | Method and path | Purpose |
 |---|---|
-| `GET /dashboards/overview` | Posture score, open by band, trend, MTTR, SLA |
+| `GET /dashboards/overview` | Posture score, open by band, trend, MTTR, SLA (built as `GET /overview` and `GET /trends`, D43) |
 | `GET /metrics/trend?metric=open\|new\|closed\|mttr&interval=day` | Time series from read models |
 | `POST /report-jobs`, `GET /report-jobs/{id}` | Generate PDF/CSV/JSON report or evidence bundle |
 | `POST /gate` | Body `{source, context{commit\|imageDigest}, expect[], wait?, timeoutSeconds?, failOn?}`. Returns `{pass, reasons[], summary{new, fixed, existing}, blocking[], runs[]}`; fails closed; `failOn` defaults to `critical` (D37). "New" is relative to the baseline track. Not built: `byBand`, `url`, `sarif` |

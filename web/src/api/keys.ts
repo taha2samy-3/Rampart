@@ -10,6 +10,12 @@ export const qk = {
     one: (id: string) => ['acceptances', 'one', id] as const,
   },
   settings: () => ['settings'] as const,
+  applications: {
+    list: () => ['applications', 'list'] as const,
+    one: (id: string) => ['applications', 'one', id] as const,
+  },
+  overview: () => ['overview'] as const,
+  trend: (metric: string, days: number) => ['trend', metric, days] as const,
   runs: {
     all: () => ['runs'] as const,
     list: () => ['runs', 'list'] as const,

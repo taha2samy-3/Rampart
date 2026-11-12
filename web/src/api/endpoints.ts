@@ -1,5 +1,5 @@
 import { get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, FindingEvent, FindingRow, Page, Permissions, RunRow, RiskAcceptance, Session, TenantRef, TenantSettings, TriageBody, UiConfig } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, FindingEvent, FindingRow, Page, Permissions, RunRow, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -94,3 +94,14 @@ export const getAcceptance = (id: string, signal?: AbortSignal) => get<RiskAccep
 export const decideAcceptance = (id: string, action: 'approve' | 'reject' | 'revoke', note?: string) =>
   post<unknown>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}/${action}`, note ? { note } : {});
 export const getSettings = (signal?: AbortSignal) => get<TenantSettings>('/api/v1/settings', { signal });
+
+export async function listApplications(signal?: AbortSignal): Promise<AppSummary[]> {
+  const raw = await get<{ items?: AppSummary[] | null }>('/api/v1/applications', { signal });
+  return raw.items ?? [];
+}
+export const getApplication = (id: string, signal?: AbortSignal) => get<ApplicationPage>(`/api/v1/applications/${encodeURIComponent(id)}/summary`, { signal });
+export const getOverview = (signal?: AbortSignal) => get<Overview>('/api/v1/dashboards/overview', { signal });
+export async function getTrend(metric: 'open' | 'new' | 'closed', days: number, signal?: AbortSignal): Promise<TrendPoint[]> {
+  const raw = await get<{ points?: TrendPoint[] | null }>('/api/v1/metrics/trend', { query: { metric, days }, signal });
+  return raw.points ?? [];
+}
