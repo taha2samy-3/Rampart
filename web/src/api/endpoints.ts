@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -79,6 +79,16 @@ export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1
 /** Change a finding's state. `version` is the one the analyst saw; a stale one is a 409 (docs/16 D38). */
 export const triageFinding = (id: string, body: TriageBody, version: number | undefined) =>
   patch<FindingRow>(`/api/v1/findings/${encodeURIComponent(id)}`, body, version === undefined ? undefined : { headers: { 'If-Match': `"${version}"` } });
+
+/** Proof files of a risk acceptance (D60); the download link is the API path, served as an attachment. */
+export const listProofs = (id: string, signal?: AbortSignal) =>
+  get<{ items: Proof[] }>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}/proofs`, { signal }).then((r) => r.items ?? []);
+export const proofHref = (id: string, proof: string) => `/api/v1/risk-acceptances/${encodeURIComponent(id)}/proofs/${encodeURIComponent(proof)}`;
+export function uploadProof(id: string, file: File) {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  return post<Proof>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}/proofs`, fd);
+}
 
 /** Decide many findings at once, by ids or by the current filter (docs/16 D38, D59). */
 export const bulkTriage = (body: BulkBody) => post<BulkResult>('/api/v1/findings/bulk', body);

@@ -67,6 +67,9 @@ export interface Scenario {
   acceptances?: ReturnType<typeof acceptance>[];
   /** What POST /api/v1/risk-acceptances answers: approved at once (default), pending, or a 400. */
   accept?: 'approved' | 'pending' | 400;
+  /** Proof files GET .../proofs returns; what POST .../proofs answers (201 by default, or 422). */
+  proofs?: { id: string; name: string; content_type: string; size_bytes: number; uploaded_by: string; uploaded_at: string }[];
+  proofUpload?: 201 | 422;
   /** What POST .../approve|reject|revoke answers: 200 (default) or 400. */
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
@@ -200,6 +203,13 @@ export function mockFetch(sc: Scenario): Calls {
       const all = sc.acceptances ?? [];
       const items = status ? all.filter((a) => a.status === status) : all;
       return json({ items: items.length ? items : null });
+    }
+    if (path.startsWith('/api/v1/risk-acceptances/') && path.endsWith('/proofs')) {
+      if (init?.method === 'POST') {
+        if (sc.proofUpload === 422) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'proof refused: .docx files are not accepted; use PDF, PNG, JPEG, plain text, Markdown or a saved e-mail (.eml)', status: 422 }, 422);
+        return json({ id: 'p-new', name: 'new.pdf', content_type: 'application/pdf', size_bytes: 10, uploaded_by: 'user:sara@acme.example', uploaded_at: '2026-11-12T10:00:00Z' }, 201);
+      }
+      return json({ items: sc.proofs ?? [] });
     }
     if (path.startsWith('/api/v1/risk-acceptances/')) {
       const parts = path.split('/');

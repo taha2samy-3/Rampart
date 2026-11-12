@@ -90,6 +90,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | Method and path | Purpose |
 |---|---|
 | `GET/POST /risk-acceptances`, `POST /risk-acceptances/{id}/approve\|reject\|revoke` | Exception workflow |
+| `GET/POST /risk-acceptances/{id}/proofs`, `GET /risk-acceptances/{id}/proofs/{proof}` | Proof files: multipart `file` (PDF, PNG, JPEG, text, Markdown, .eml; ≤ 10 MiB; ≤ 10); download as an attachment, audited (built, D60) |
 | `GET/POST /groups`, `POST /groups/{id}/ticket` | Finding groups and one ticket per group |
 | `POST /findings/{id}/tickets` | Create or link a ticket through a connector |
 | `GET /sla/summary`, `GET /sla/breaches` | Adherence and breach lists |

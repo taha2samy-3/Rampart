@@ -28,6 +28,9 @@ type Store interface {
 	Stat(ctx context.Context, key string) (int64, error)
 	// Open streams an object. The caller closes the reader.
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
+	// Write stores a small object the server itself received (a risk-acceptance proof, D60). Reports never come
+	// through here: they go straight to storage on a presigned URL (D9).
+	Write(ctx context.Context, key string, data []byte, contentType string) error
 	// Delete removes an object; deleting a missing object is not an error.
 	Delete(ctx context.Context, key string) error
 	// EnsureBucket creates the bucket if it does not exist.

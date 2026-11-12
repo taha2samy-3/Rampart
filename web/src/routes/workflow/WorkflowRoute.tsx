@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { decideAcceptance, listAcceptances, qk, toProblem } from '@/api';
+import { decideAcceptance, listAcceptances, listProofs, proofHref, qk, toProblem, uploadProof } from '@/api';
 import type { AcceptanceStatus, RiskAcceptance } from '@/api/types';
 import { Button, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
 import { useSession } from '@/app/session';
@@ -168,6 +168,8 @@ function Detail({ ra }: { ra: RiskAcceptance }) {
       )}
       {problem && <ProblemMessage className="mt-3" problem={{ ...problem, detail: problem.detail ?? (problem.status === 400 ? problem.title : undefined) }} title={t('acceptance.decisionFailed')} />}
 
+      <Proofs id={ra.id} canAdd={live && (isAdmin || mine)} />
+
       <div className="mt-4 flex flex-wrap gap-2">
         {!asking && canApprove && <Button variant="primary" loading={mutation.isPending} onClick={() => mutation.mutate('approve')}>{t('acceptance.approve')}</Button>}
         {!asking && canApprove && <Button onClick={() => setAsking('reject')}>{t('acceptance.reject')}</Button>}
@@ -183,4 +185,65 @@ function Detail({ ra }: { ra: RiskAcceptance }) {
       </div>
     </article>
   );
+}
+
+/** Files that support the decision (docs/16 D60): listed for everyone who can read it, added by its people. */
+function Proofs({ id, canAdd }: { id: string; canAdd: boolean }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const inputId = useId();
+  const list = useQuery({ queryKey: qk.acceptances.proofs(id), queryFn: ({ signal }) => listProofs(id, signal) });
+  const upload = useMutation({
+    mutationFn: (file: File) => uploadProof(id, file),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.acceptances.proofs(id) });
+      toast.info(t('proofs.done'));
+    },
+  });
+  const problem = upload.isError ? toProblem(upload.error) : null;
+  const items = list.data ?? [];
+  return (
+    <section className="mt-4" aria-labelledby={`${inputId}-h`}>
+      <h3 id={`${inputId}-h`} className="m-0 mb-1 text-13 font-semibold">{t('proofs.title')}</h3>
+      {items.length === 0 && !list.isPending && <p className="m-0 text-13 text-ink-2">{t('proofs.empty')}</p>}
+      {items.length > 0 && (
+        <ul className="m-0 list-none p-0 text-13">
+          {items.map((p) => (
+            <li key={p.id} className="border-b border-rule py-1.5">
+              <a href={proofHref(id, p.id)} download={p.name} className="[overflow-wrap:anywhere]">{p.name}</a>
+              <span className="block text-12 text-ink-2">
+                {t('proofs.by', { size: formatBytes(p.size_bytes), who: p.uploaded_by.replace(/^user:/, ''), when: absoluteDate(p.uploaded_at) })}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {canAdd && (
+        <div className="mt-2 flex flex-col gap-1">
+          <label htmlFor={inputId} className="text-13 font-medium">{t('proofs.add')}</label>
+          <input
+            id={inputId}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.txt,.md,.eml"
+            disabled={upload.isPending}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) upload.mutate(f);
+              e.target.value = '';
+            }}
+            className="text-13 file:me-2 file:rounded-ctl file:border file:border-rule file:bg-surface file:px-2.5 file:py-1 file:text-13 file:text-ink"
+          />
+          <p className="m-0 text-12 text-ink-2">{upload.isPending ? t('proofs.uploading') : t('proofs.help')}</p>
+        </div>
+      )}
+      {problem && <ProblemMessage className="mt-2" problem={{ ...problem, detail: problem.detail ?? problem.title }} title={t('proofs.failed')} />}
+    </section>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1 << 20) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1 << 20)).toFixed(1)} MB`;
 }

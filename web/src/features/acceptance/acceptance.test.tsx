@@ -132,6 +132,37 @@ describe('the workflow page', () => {
     expect(within(detail).getByRole('button', { name: 'Withdraw' })).toBeInTheDocument();
   });
 
+  it('lists the proof as downloads, and lets the person who asked attach a file (D60)', async () => {
+    const proof = { id: 'p-1', name: 'CISO approval.pdf', content_type: 'application/pdf', size_bytes: 52_000, uploaded_by: 'user:sara@acme.example', uploaded_at: '2026-11-11T09:00:00Z' };
+    const calls = mockFetch({ loggedIn: true, role: 'triager', acceptances: [pending], proofs: [proof] });
+    renderApp('/workflow?sel=acc-1');
+    const detail = await screen.findByRole('complementary', { name: 'Risk acceptance details' });
+    const link = await within(detail).findByRole('link', { name: 'CISO approval.pdf' });
+    expect(link).toHaveAttribute('href', '/api/v1/risk-acceptances/acc-1/proofs/p-1');
+    expect(within(detail).getByText(/51 KB, attached by sara@acme.example/)).toBeInTheDocument();
+    expect(await axe(detail)).toHaveNoViolations();
+    await userEvent.upload(within(detail).getByLabelText('Attach a file'), new File(['%PDF-1.7'], 'minutes.pdf', { type: 'application/pdf' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/risk-acceptances/acc-1/proofs')).toBe(true));
+    expect(await screen.findByText('File attached')).toBeInTheDocument();
+  });
+
+  it('says why a file was refused, and offers no upload to someone unrelated', async () => {
+    mockFetch({ loggedIn: true, role: 'triager', acceptances: [pending], proofUpload: 422 });
+    renderApp('/workflow?sel=acc-1');
+    const detail = await screen.findByRole('complementary', { name: 'Risk acceptance details' });
+    expect(await within(detail).findByText('No proof is attached.')).toBeInTheDocument();
+    await userEvent.upload(within(detail).getByLabelText('Attach a file'), new File(['PK'], 'minutes.docx'), { applyAccept: false });
+    expect(await within(detail).findByText(/.docx files are not accepted/)).toBeInTheDocument();
+  });
+
+  it('a triager who did not ask cannot attach proof', async () => {
+    mockFetch({ loggedIn: true, role: 'triager', acceptances: [theirs] });
+    renderApp('/workflow?sel=acc-3');
+    const detail = await screen.findByRole('complementary', { name: 'Risk acceptance details' });
+    await within(detail).findByText('No proof is attached.');
+    expect(within(detail).queryByLabelText('Attach a file')).toBeNull();
+  });
+
   it('a triager cannot approve or reject', async () => {
     mockFetch({ loggedIn: true, role: 'triager', acceptances: [theirs] });
     renderApp('/workflow?sel=acc-3');

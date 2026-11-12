@@ -46,6 +46,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 2: a not_affected or out_of_scope decision follows the issue to the asset's other tracks, for new findings with the same evidence; the gate does not count them as new (D57) | built; tested on PostgreSQL and in unit tests |
 | Phase 2: OWASP Top 10 2025 as a sixth framework, from OWASP's category pages, with the A03 correction; the newer version listed first (D58) | built; tested in unit tests and on PostgreSQL |
 | Phase 2 bullet 1: owners on findings (single and bulk, members only), `owner:` with `none` and `me`, tags added and removed in bulk; in the UI: selection with `x` and boxes, the bulk bar with "select all matching", Edit (`a`) for owner, severity and tags; the filter refuses unknown fields and unreadable values instead of widening the match (D59) | built; tested on PostgreSQL and with Vitest (axe on both dialogs), checked in Chromium against the dev mock in light and dark |
+| Phase 2 bullet 2: proof files on a risk acceptance: allow-listed by extension and content, at most ten of 10 MiB, stored under a server-chosen name, downloaded only as attachments and audited, never removed (D60) | built; tested in unit tests, on PostgreSQL and with Vitest (axe), checked in Chromium against the dev mock |
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 
 ## Left for the MVP
@@ -55,7 +56,7 @@ Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the
 | Phase 2 bullet | Left | From |
 |---|---|---|
 | 1. Detection and disposition, triage, bulk, notes, timeline | — (D59) | |
-| 2. Risk acceptance; VEX | Proof files on a risk acceptance | C5 |
+| 2. Risk acceptance; VEX | — (D60) | |
 | 3. `RiskPolicy` and `SLAPolicy` with cluster defaults; scoring; deadlines; aggregate read models | `RiskPolicy` with CEL factors, `ClusterRiskPolicy`, `ClusterSLAPolicy` with the presets of 06 section 4; hierarchy (tree, `application.hierarchy_node_id`, filter) and its roll-ups; posture score | D5, E1, B1, D8, G2 |
 | 4. Built-in automation | Ticket-on-critical placeholder (no connector yet) | Phase 2 |
 | 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | `AccessBinding` and `IdentityProvider` resources; hierarchy scopes on bindings (needs bullet 3's hierarchy); CLI device login (RFC 8628) | H3, D8 |

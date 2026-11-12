@@ -1,6 +1,7 @@
 package objectstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -86,6 +87,15 @@ func (s *S3) PresignPut(ctx context.Context, key string, size int64, ttl time.Du
 		headers[http.CanonicalHeaderKey(k)] = strings.Join(v, ",")
 	}
 	return Presigned{URL: req.URL, Headers: headers, Expires: time.Now().Add(ttl)}, nil
+}
+
+// Write implements Store.
+func (s *S3) Write(ctx context.Context, key string, data []byte, contentType string) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))), ContentType: aws.String(contentType),
+	})
+	return err
 }
 
 // Stat implements Store.

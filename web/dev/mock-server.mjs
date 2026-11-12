@@ -136,6 +136,16 @@ const eventsOf = (id) => {
   if (!EVENTS.has(id)) EVENTS.set(id, [{ id: 'e-' + id, at: new Date(Date.now() - 5 * 86_400_000).toISOString(), actor: 'system:parser', type: 'created' }]);
   return EVENTS.get(id);
 };
+const ACCEPTANCES = [
+  { id: 'ra-31', status: 'approved', justification: 'The payments admin API is only reachable over the VPN', owner: 'user:sara.ahmed@acme.example', requester: 'user:sara.ahmed@acme.example', approver: 'user:boss@acme.example', expires_at: new Date(Date.now() + 40 * 86400000).toISOString(), on_expiry: 'reactivate', created_at: new Date(Date.now() - 5 * 86400000).toISOString(), finding_ids: ['f-1', 'f-2'] },
+];
+const PROOFS = {
+  'ra-31': [
+    { id: 'p1', name: 'CISO approval - payments admin.pdf', content_type: 'application/pdf', size_bytes: 184320, uploaded_by: 'user:sara.ahmed@acme.example', uploaded_at: new Date(Date.now() - 5 * 86400000).toISOString() },
+    { id: 'p2', name: 'RE- VPN-only access confirmed.eml', content_type: 'text/plain; charset=utf-8', size_bytes: 6120, uploaded_by: 'user:boss@acme.example', uploaded_at: new Date(Date.now() - 4 * 86400000).toISOString() },
+  ],
+};
+
 function applyTriage(row, body, version) {
   const f = row.finding;
   if (version !== undefined && version !== f.version) return { status: 409, title: 'The finding was changed by someone else. Reload it and decide again.' };
@@ -375,6 +385,25 @@ const server = http.createServer((req, res) => {
     if (p.startsWith('/api/v1/runs/')) {
       const r = RUNS.find((x) => x.id === p.split('/').pop());
       return r ? json(res, r) : problem(res, 404, 'Run not found', 'No such run.');
+    }
+    if (p === '/api/v1/risk-acceptances' && req.method === 'GET') return json(res, { items: ACCEPTANCES });
+    const ram = /^\/api\/v1\/risk-acceptances\/([^/]+)(\/proofs)?$/.exec(p);
+    if (ram) {
+      const ra = ACCEPTANCES.find((x) => x.id === ram[1]);
+      if (!ra) return problem(res, 404, 'Risk acceptance not found');
+      if (!ram[2]) return json(res, ra);
+      if (req.method === 'POST') {
+        // The real server checks the file's bytes; the mock only reads the name it was given.
+        let size = 0;
+        req.on('data', (c) => (size += c.length));
+        req.on('end', () => {
+          const p2 = { id: 'p' + Math.random().toString(36).slice(2), name: 'attached.pdf', content_type: 'application/pdf', size_bytes: size, uploaded_by: 'user:sara.ahmed@acme.example', uploaded_at: new Date().toISOString() };
+          (PROOFS[ra.id] ??= []).push(p2);
+          json(res, p2, 201);
+        });
+        return;
+      }
+      return json(res, { items: PROOFS[ra.id] ?? [] });
     }
     if (p === '/api/v1/findings/bulk' && req.method === 'POST') {
       let body = '';

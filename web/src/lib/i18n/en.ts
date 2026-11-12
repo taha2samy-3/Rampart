@@ -413,6 +413,16 @@ export const en = {
     gapsHelp: 'Applications with no completed scan in 14 days.',
     gapsEmpty: 'Every application was scanned in the last 14 days.',
   },
+  proofs: {
+    title: 'Proof',
+    empty: 'No proof is attached.',
+    add: 'Attach a file',
+    help: 'PDF, PNG, JPEG, plain text, Markdown or a saved e-mail (.eml), up to 10 MB. Files cannot be removed once attached.',
+    uploading: 'Attaching',
+    done: 'File attached',
+    failed: 'The file was not attached',
+    by: '{{size}}, attached by {{who}} {{when}}',
+  },
   acceptance: {
     action: 'Request risk acceptance',
     title: 'Request risk acceptance',

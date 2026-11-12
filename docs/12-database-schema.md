@@ -20,6 +20,15 @@ Sketch of the v1 schema. Final DDL lives in `internal/store/migrations` (goose).
 > | Add `action_ledger`, `tenant_queue_limit` | D25 |
 > | `api_token.scan_source_id` optional | D17 |
 > | All secondary indexes start with `tenant_id`; published filter and sort matrix decides the index set | D28 |
+> | `finding.asset_id` and `finding.application_id` lose their foreign keys | D36 |
+> | `ingest_run.holds_secrets`, `ingest_run.report_purged_at`; retention indexes (migration 16) | D53 |
+> | `application.compensating_controls`; ingest-made applications are `managed_by = none` (17) | D55 |
+> | `application.selectors`, `application.rescore_needed` (18) | D56 |
+> | `finding.lineage_key` (19) | D57 |
+> | `finding.owner` (20) | D59 |
+> | `risk_acceptance_proof`, insert-only for the application role (21) | D60 |
+>
+> From schema version 6 on, each decision in 16 names its migration; `internal/store/migrations` is the DDL.
 
 ## Conventions
 

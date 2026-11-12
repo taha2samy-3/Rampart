@@ -75,7 +75,8 @@ const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json, application/problem+json', ...opts.headers };
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  const form = typeof FormData !== 'undefined' && opts.body instanceof FormData; // a file upload sets its own boundary
+  if (opts.body !== undefined && !form) headers['Content-Type'] = 'application/json';
   if (!SAFE.has(method) && csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
   let res: Response;
@@ -84,7 +85,7 @@ export async function request<T>(method: string, path: string, opts: RequestOpti
       method,
       headers,
       credentials: 'same-origin',
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      body: opts.body === undefined ? undefined : form ? (opts.body as FormData) : JSON.stringify(opts.body),
       signal: opts.signal,
     });
   } catch (e) {

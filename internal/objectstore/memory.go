@@ -27,6 +27,12 @@ func (m *Memory) Put(key string, data []byte) {
 	m.objects[key] = append([]byte(nil), data...)
 }
 
+// Write implements Store.
+func (m *Memory) Write(_ context.Context, key string, data []byte, _ string) error {
+	m.Put(key, data)
+	return nil
+}
+
 // PresignPut implements Store.
 func (m *Memory) PresignPut(_ context.Context, key string, size int64, ttl time.Duration) (Presigned, error) {
 	return Presigned{URL: m.Base + key, Headers: map[string]string{"Content-Length": itoa(size)}, Expires: time.Now().Add(ttl)}, nil

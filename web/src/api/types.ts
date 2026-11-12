@@ -192,6 +192,16 @@ export interface TriageBody {
   owner?: string;
 }
 
+/** A file that supports a risk acceptance (docs/16 D60). */
+export interface Proof {
+  id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+
 /** POST /api/v1/findings/bulk: exactly one of ids and q (docs/16 D38). */
 export interface BulkBody {
   ids?: string[];
