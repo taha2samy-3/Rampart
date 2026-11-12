@@ -54,7 +54,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | Method and path | Purpose |
 |---|---|
 | `GET /findings` | Explorer. Filters via `q`; `fields=` to trim columns; `groupBy=rule\|cve\|component\|application\|owner` returns aggregates |
-| `GET /findings/{id}` | Detail with risk factor breakdown, taxa, SLA, tickets |
+| `GET /findings/{id}` | Detail with risk factor breakdown, taxa, SLA, tickets, and `also_reported_by`: the other findings of the same correlation group (`[{id, scanner, rule_id, state}]`, at most 50; D24: display only, never merged) |
 | `GET /findings/{id}/occurrences` | Per-tool evidence, newest first |
 | `GET /findings/{id}/events` | Timeline |
 | `PATCH /findings/{id}` | Change `state` (+ `justification`, `impactStatement`), `severity` (+ reason), `verified`, `owner`, `tags` |
@@ -108,7 +108,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET /dashboards/overview` | Posture score, open by band, trend, MTTR, SLA |
 | `GET /metrics/trend?metric=open\|new\|closed\|mttr&interval=day` | Time series from read models |
 | `POST /report-jobs`, `GET /report-jobs/{id}` | Generate PDF/CSV/JSON report or evidence bundle |
-| `POST /gate` | Body `{source, context, expect[], wait?, timeoutSeconds?}`. Returns `{pass, reasons[], summary{new, fixed, byBand}, url, sarif?}`. "New" is relative to the baseline track |
+| `POST /gate` | Body `{source, context{commit\|imageDigest}, expect[], wait?, timeoutSeconds?, failOn?}`. Returns `{pass, reasons[], summary{new, fixed, existing}, blocking[], runs[]}`; fails closed; `failOn` defaults to `critical` (D37). "New" is relative to the baseline track. Not built: `byBand`, `url`, `sarif` |
 | `GET /stream` | Server-Sent Events, filtered by the caller's scope and coalesced |
 | `GET /operations/{id}` | Progress of bulk actions and exports |
 | `GET /ui-config` | Public UI configuration |

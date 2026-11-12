@@ -2,6 +2,8 @@ package targets
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -217,6 +219,29 @@ func (r *Runner) Run(ctx context.Context) error {
 	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
+	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
+	if pgStore != nil {
+		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))
+	}
+	if r.cfg.Feeds.Enabled {
+		if sysStore == nil {
+			r.logger.Warn("feeds.enabled needs database.systemUrl (the global tables are written by rampart_system); feed sync is off")
+		} else {
+			fc := enrich.FeedConfig{
+				KEVURL: r.cfg.Feeds.KEVURL, EPSSURL: r.cfg.Feeds.EPSSURL, OSVBaseURL: r.cfg.Feeds.OSVBaseURL,
+				OSVEcosystems: r.cfg.Feeds.OSVEcosystems, Interval: r.cfg.Feeds.Interval,
+			}
+			go enrich.RunScheduler(ctx, sysStore.Pool(), fc, r.logger)
+			r.logger.Info("feed sync started", "interval", r.cfg.Feeds.Interval, "osv_ecosystems", r.cfg.Feeds.OSVEcosystems)
+		}
+	}
+	// Cursors are signed with a key derived from the session key, which every replica shares, so a cursor
+	// issued by one replica is valid on another. Without a session key each process signs with its own.
+	if key, kerr := readSecretFile(r.cfg.Auth.Session.KeyFile); kerr == nil && len(key) > 0 {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte("rampart/query-cursor/v1"))
+		queryAPI.SetCursorKey(mac.Sum(nil))
+	}
 
 	if isAll || contains(targetList, "ingest-gateway") {
 		r.logger.Info("mounting ingest-gateway routes on /ingest/v1")

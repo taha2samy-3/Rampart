@@ -45,6 +45,9 @@ type MergeOutcome struct {
 	Untouched   int
 	Reactivated int
 	Closed      int
+	// Fresh lists the findings this batch created or reactivated: what is new in the run (D26). The CI gate
+	// reads it back as ingest_run_result rows, so "new" never depends on a clock.
+	Fresh []*domain.IngestRunResult
 }
 
 // MergeOptions configures behavioral policies during merge and close (D13).
@@ -166,6 +169,18 @@ func (e *Engine) mergeBatch(
 	var findingsToUpsert []*domain.Finding
 	var occurrencesToUpsert []*domain.Occurrence
 
+	// D24: identifiers that are aliases of a CVE correlate under the CVE.
+	var vulnIDs []string
+	for _, rec := range dedupMap {
+		if rec.Category == domain.CategorySCA && rec.VulnID != "" {
+			vulnIDs = append(vulnIDs, rec.VulnID)
+		}
+	}
+	canon, err := st.CanonicalVulnIDs(ctx, scope.TenantID, vulnIDs)
+	if err != nil {
+		return outcome, fmt.Errorf("ingest: failed to resolve aliases: %w", err)
+	}
+
 	for _, rec := range dedupMap {
 		existing, exists := existingFindings[rec.FindingKey]
 
@@ -194,6 +209,7 @@ func (e *Engine) mergeBatch(
 				Description:       rec.Description,
 				CWEs:              rec.CWEs,
 				VulnerabilityID:   vulnPtr(rec.VulnID),
+				CorrelationKey:    CorrelationKey(rec, firstNonEmptyStr(canon[rec.VulnID], rec.VulnID), scope.AssetID, scope.Track),
 				Location:          rec.Location,
 				Severity:          rec.Severity,
 				ToolSeverity:      rec.ToolSeverity,
@@ -210,6 +226,7 @@ func (e *Engine) mergeBatch(
 			}
 			outcome.Created++
 			addEvent(targetFinding, "created", rec.SeenAt)
+			outcome.Fresh = append(outcome.Fresh, freshResult(scope.TenantID, runID, rec))
 		} else {
 			targetFinding = existing
 			if rec.SeenAt.After(targetFinding.LastSeen) {
@@ -234,6 +251,7 @@ func (e *Engine) mergeBatch(
 					targetFinding.Version++
 					outcome.Reactivated++
 					addEvent(targetFinding, "reactivated", rec.SeenAt)
+					outcome.Fresh = append(outcome.Fresh, freshResult(scope.TenantID, runID, rec))
 				}
 			} else if existing.State == domain.StateNotAffected && existing.ContentHash != rec.ContentHash {
 				// Code changed at location: flag not_affected finding for re-review (D18 line 358)
@@ -664,6 +682,35 @@ func (m *MemoryStore) GetSBOM(ctx context.Context, tenantID, assetID uuid.UUID) 
 }
 
 // ListFindings returns all findings for a given tenant.
+// CanonicalVulnIDs: the in-memory store has no alias table.
+func (m *MemoryStore) CanonicalVulnIDs(ctx context.Context, tenantID uuid.UUID, ids []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+// ListCorrelated returns the other findings that share the correlation key of a finding.
+func (m *MemoryStore) ListCorrelated(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Finding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var self *domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID == tenantID && f.ID == findingID {
+			self = f
+			break
+		}
+	}
+	if self == nil || self.CorrelationKey == "" {
+		return nil, nil
+	}
+	var out []*domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID == tenantID && f.ID != findingID && f.CorrelationKey == self.CorrelationKey {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
 func (m *MemoryStore) ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -828,10 +875,65 @@ func (m *MemoryStore) RecordRunScope(ctx context.Context, scope *domain.IngestRu
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	composite := fmt.Sprintf("%s:%s:%s:%s", scope.TenantID, scope.IngestRunID, scope.AssetID, scope.Track)
+	composite := fmt.Sprintf("%s:%s:%s:%s:%s", scope.TenantID, scope.IngestRunID, scope.ScannerFamily, scope.AssetID, scope.Track)
 	cp := *scope
 	m.ingestRunScopes[composite] = &cp
 	return nil
+}
+
+// ListRunScopes returns the scanner families a run reported on.
+func (m *MemoryStore) ListRunScopes(ctx context.Context, tenantID, runID uuid.UUID) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []string
+	for _, sc := range m.ingestRunScopes {
+		if sc.TenantID == tenantID && sc.IngestRunID == runID {
+			out = append(out, sc.ScannerFamily)
+		}
+	}
+	return out, nil
+}
+
+// ReplaceRunResults stores the ephemeral results of a run, replacing earlier rows of the same run.
+func (m *MemoryStore) ReplaceRunResults(ctx context.Context, tenantID, runID uuid.UUID, results []*domain.IngestRunResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var list []*domain.IngestRunResult
+	for _, r := range results {
+		cp := *r
+		list = append(list, &cp)
+	}
+	m.ingestRunResults[fmt.Sprintf("%s:%s", tenantID, runID)] = list
+	return nil
+}
+
+// ListRunResults returns the ephemeral results of a run.
+func (m *MemoryStore) ListRunResults(ctx context.Context, tenantID, runID uuid.UUID) ([]*domain.IngestRunResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.IngestRunResult
+	for _, r := range m.ingestRunResults[fmt.Sprintf("%s:%s", tenantID, runID)] {
+		cp := *r
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+// ListRunsForGate returns the runs of a source that carry the commit or image digest.
+func (m *MemoryStore) ListRunsForGate(ctx context.Context, tenantID, scanSourceID uuid.UUID, commit, imageDigest string) ([]*domain.IngestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.IngestRun
+	for _, r := range m.ingestRuns {
+		if r.TenantID != tenantID || (scanSourceID != uuid.Nil && r.ScanSourceID != scanSourceID) {
+			continue
+		}
+		if (commit != "" && r.Context.Commit == commit) || (imageDigest != "" && r.Context.ImageDigest == imageDigest) {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
 }
 
 // RecordRunResult records ephemeral scan run findings.
@@ -1208,4 +1310,18 @@ func (m *MemoryStore) FindRunByUpload(ctx context.Context, tenantID, uploadID uu
 		}
 	}
 	return nil, nil
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func freshResult(tenant, run uuid.UUID, rec StagedRecord) *domain.IngestRunResult {
+	return &domain.IngestRunResult{TenantID: tenant, IngestRunID: run, FindingKey: rec.FindingKey, IsNew: true,
+		Severity: rec.Severity, Category: rec.Category, Location: rec.Location, CreatedAt: rec.SeenAt}
 }

@@ -49,7 +49,10 @@ func NewRiverQueue(ctx context.Context, pool *pgxpool.Pool, directURL string, wo
 			"notify":           {MaxWorkers: 20},
 		},
 		FetchPollInterval: 1 * time.Second,
-		Schema:            "river", // doc 12; keep in sync with store.RiverSchema
+		// River cancels a job after one minute by default. A parse job streams a report of up to 512 MiB
+		// (D6) and must not be cut off mid-merge; progress is committed per batch, so a retry resumes safely.
+		JobTimeout: 30 * time.Minute,
+		Schema:     "river", // doc 12; keep in sync with store.RiverSchema
 	}
 
 	// D4 line 55: If no direct URL, River runs in poll-only mode

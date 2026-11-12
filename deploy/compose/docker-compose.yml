@@ -84,6 +84,9 @@ services:
       RAMPART_OBJECT_STORAGE_EXTERNAL_ENDPOINT: "http://localhost:8333"
       RAMPART_OBJECT_STORAGE_ACCESS_KEY_FILE: "/run/secrets/s3_access_key"
       RAMPART_OBJECT_STORAGE_SECRET_KEY_FILE: "/run/secrets/s3_secret_key"
+      # Threat intelligence (KEV, EPSS) is downloaded from CISA and FIRST. Off here so the quick start works
+      # offline; set to "true" to see KEV and EPSS on findings.
+      RAMPART_FEEDS_ENABLED: "false"
       RAMPART_SERVER_HTTP_ADDR: ":8080"
       RAMPART_SERVER_OPS_ADDR: ":9090"
       RAMPART_LOG_LEVEL: "info"

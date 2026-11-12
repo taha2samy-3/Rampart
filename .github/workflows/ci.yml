@@ -56,6 +56,11 @@ jobs:
         run: |
           mapfile -t pkgs < <(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
           go test -race -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic "${pkgs[@]}"
+      - name: Fuzz the report parsers (30 s each)
+        run: |
+          for p in sarif:FuzzSarifParse cyclonedx:FuzzCyclonedxParse spdx:FuzzSpdxParse syft:FuzzSyftParse openvex:FuzzOpenvexParse; do
+            go test "./internal/parsers/${p%%:*}" -run '^$' -fuzz "^${p##*:}\$" -fuzztime 30s
+          done
       - uses: actions/upload-artifact@v4
         with: {name: coverage-unit, path: coverage-unit.out}
 

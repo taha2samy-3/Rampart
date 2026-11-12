@@ -203,7 +203,19 @@ func mapResultToRawFinding(
 	if toolSev == "" {
 		toolSev = "warning"
 	}
-	normSev := mapSarifLevelToSeverity(toolSev, res.Properties)
+	// The rule's security-severity applies unless the result carries its own.
+	sevProps := res.Properties
+	if ruleSev := ruleMeta.Properties.SecuritySeverity; ruleSev != nil {
+		if _, own := sevProps["security-severity"]; !own {
+			merged := map[string]any{}
+			for k, v := range sevProps {
+				merged[k] = v
+			}
+			merged["security-severity"] = ruleSev
+			sevProps = merged
+		}
+	}
+	normSev := mapSarifLevelToSeverity(toolSev, sevProps)
 
 	// Extract primary location
 	var loc domain.Location
@@ -425,6 +437,9 @@ type sarifRule struct {
 	} `json:"help"`
 	Properties struct {
 		Tags []string `json:"tags"`
+		// SecuritySeverity is where CodeQL, Semgrep, Trivy and most SARIF producers put the CVSS-like
+		// score (0 to 10): on the rule, not on each result. It may be a string or a number.
+		SecuritySeverity any `json:"security-severity"`
 	} `json:"properties"`
 }
 

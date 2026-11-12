@@ -21,6 +21,7 @@ type Config struct {
 	Telemetry     TelemetryConfig     `json:"telemetry" yaml:"telemetry"`
 	Operator      OperatorConfig      `json:"operator" yaml:"operator"`
 	Auth          AuthConfig          `json:"auth" yaml:"auth"`
+	Feeds         FeedsConfig         `json:"feeds" yaml:"feeds"`
 }
 
 // AuthConfig holds authentication settings (D6, D3, D8).
@@ -131,6 +132,17 @@ type ObjectStorageConfig struct {
 	UsePathStyle     bool   `json:"use_path_style" yaml:"usePathStyle"`
 }
 
+// FeedsConfig controls threat-intelligence sync (KEV, EPSS, OSV; D19). Needs database.systemUrl, because
+// the global tables are written by rampart_system. Every URL can point at an internal mirror.
+type FeedsConfig struct {
+	Enabled       bool          `json:"enabled" yaml:"enabled"`
+	Interval      time.Duration `json:"interval" yaml:"interval"`
+	KEVURL        string        `json:"kev_url" yaml:"kevUrl"`
+	EPSSURL       string        `json:"epss_url" yaml:"epssUrl"`
+	OSVBaseURL    string        `json:"osv_base_url" yaml:"osvBaseUrl"`
+	OSVEcosystems []string      `json:"osv_ecosystems" yaml:"osvEcosystems"`
+}
+
 type IngestConfig struct {
 	MaxReportBytes int64 `json:"max_report_bytes" yaml:"maxReportBytes"`
 	BatchRows      int   `json:"batch_rows" yaml:"batchRows"`
@@ -174,6 +186,7 @@ func DefaultConfig() *Config {
 			Region:        "us-east-1",
 			UsePathStyle:  true,
 		},
+		Feeds: FeedsConfig{Interval: 6 * time.Hour},
 		Ingest: IngestConfig{
 			MaxReportBytes: 536870912, // 512 MiB per D6
 			BatchRows:      5000,      // 5 000 rows per transaction per D2
@@ -430,6 +443,31 @@ func applyEnv(cfg *Config) {
 	}
 	if v := get("OBJECT_STORAGE_BUCKET_RAW"); v != "" {
 		cfg.ObjectStorage.BucketRaw = v
+	}
+	if v := get("FEEDS_ENABLED"); v != "" {
+		cfg.Feeds.Enabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := get("FEEDS_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Feeds.Interval = d
+		}
+	}
+	if v := get("FEEDS_KEV_URL"); v != "" {
+		cfg.Feeds.KEVURL = v
+	}
+	if v := get("FEEDS_EPSS_URL"); v != "" {
+		cfg.Feeds.EPSSURL = v
+	}
+	if v := get("FEEDS_OSV_BASE_URL"); v != "" {
+		cfg.Feeds.OSVBaseURL = v
+	}
+	if v := get("FEEDS_OSV_ECOSYSTEMS"); v != "" {
+		cfg.Feeds.OSVEcosystems = nil
+		for _, e := range strings.Split(v, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				cfg.Feeds.OSVEcosystems = append(cfg.Feeds.OSVEcosystems, e)
+			}
+		}
 	}
 	if v := get("INGEST_MAX_REPORT_BYTES"); v != "" {
 		if val, err := strconv.ParseInt(v, 10, 64); err == nil {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +18,11 @@ import (
 	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/enrich"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
 	"rampart/internal/objectstore"
+	"rampart/internal/query"
 )
 
 // uploadHarness is the real pipeline: PostgreSQL (RLS, rampart_app), River, the gateway and the
@@ -32,6 +35,8 @@ type uploadHarness struct {
 	tenant  uuid.UUID
 	objects objectstore.Store
 	mem     *objectstore.Memory
+	timeout time.Duration
+	pool    *pgxpool.Pool
 	app     interface {
 		ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	}
@@ -48,7 +53,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 		t.Fatal(err)
 	}
 
-	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore}
+	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore, pool: sysStore.Pool()} // the system role bypasses RLS: the check sees every row
 	if ep := os.Getenv("RAMPART_TEST_S3_ENDPOINT"); ep != "" {
 		s3, err := objectstore.NewS3(ctx, objectstore.S3Config{
 			Endpoint: ep, Bucket: "rampart-upload-tests", // one shared bucket: every bucket costs the object store volumes
@@ -88,6 +93,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	gw.SetAuthenticator(authn)
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
+	query.NewAPIWithAuth(appStore, enrich.NewFeedStore(), authn).RegisterRoutes(mux) // the gate lives on the query API (D26)
 	h.server = httptest.NewServer(mux)
 	t.Cleanup(h.server.Close)
 	return h
@@ -117,13 +123,18 @@ func (h *uploadHarness) call(method, path string, body any, headers map[string]s
 // upload runs create + PUT and returns the upload id. It returns the PUT status as well.
 func (h *uploadHarness) upload(payload []byte, key string) (uploadID string, putStatus int) {
 	h.t.Helper()
+	return h.uploadWith(payload, key, domain.UploadContext{Repository: "github.com/acme/up-test", Branch: "main"})
+}
+
+func (h *uploadHarness) uploadWith(payload []byte, key string, uctx domain.UploadContext) (uploadID string, putStatus int) {
+	h.t.Helper()
 	headers := map[string]string{}
 	if key != "" {
 		headers["Idempotency-Key"] = key
 	}
 	code, body := h.call("POST", "/ingest/v1/uploads", ingest.CreateUploadRequest{
 		ScanSourceID: "default", FormatHint: "sarif", SizeBytes: int64(len(payload)),
-		Context: domain.UploadContext{Repository: "github.com/acme/up-test", Branch: "main"},
+		Context: uctx,
 	}, headers)
 	if code != http.StatusCreated && code != http.StatusOK {
 		h.t.Fatalf("create upload: %d %s", code, body)
@@ -153,7 +164,7 @@ func (h *uploadHarness) upload(payload []byte, key string) (uploadID string, put
 
 func (h *uploadHarness) waitRun(runID string) domain.IngestRun {
 	h.t.Helper()
-	deadline := time.Now().Add(45 * time.Second)
+	deadline := time.Now().Add(h.runTimeout())
 	for time.Now().Before(deadline) {
 		code, body := h.call("GET", "/ingest/v1/runs/"+runID, nil, nil)
 		if code == http.StatusOK {
@@ -207,6 +218,17 @@ func TestPresignedUpload_EndToEnd(t *testing.T) {
 	}
 	if len(findings) == 0 {
 		t.Fatal("the worker finished but no findings were written")
+	}
+	// D36: the foreign keys to asset and application are gone from finding, so the application upholds them.
+	var orphans int
+	if err := h.pool.QueryRow(ctx0(), `
+		SELECT count(*) FROM finding f WHERE f.tenant_id = $1
+		  AND (NOT EXISTS (SELECT 1 FROM asset a WHERE a.id = f.asset_id)
+		    OR NOT EXISTS (SELECT 1 FROM application p WHERE p.id = f.application_id))`, h.tenant).Scan(&orphans); err != nil {
+		t.Fatal(err)
+	}
+	if orphans != 0 {
+		t.Fatalf("%d findings point at an asset or application that does not exist", orphans)
 	}
 	t.Logf("%d findings from the uploaded report; run stats %+v", len(findings), run.Stats)
 }
@@ -286,3 +308,13 @@ func TestPresignedUpload_RefusesWrongSizeAndOversize(t *testing.T) {
 		t.Fatalf("complete without an object: want 422, got %d %s", code, body)
 	}
 }
+
+// runTimeout is how long waitRun waits; the benchmark raises it.
+func (h *uploadHarness) runTimeout() time.Duration {
+	if h.timeout > 0 {
+		return h.timeout
+	}
+	return 45 * time.Second
+}
+
+func ctx0() context.Context { return context.Background() }

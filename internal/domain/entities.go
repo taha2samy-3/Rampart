@@ -236,8 +236,9 @@ type IngestRunResult struct {
 type Finding struct {
 	ID                     uuid.UUID       `json:"id"`
 	TenantID               uuid.UUID       `json:"tenant_id"`
-	FindingKey             string          `json:"finding_key"` // SHA-256 deterministic fingerprint (D11)
-	DedupScope             string          `json:"dedup_scope"` // asset | application | tenant
+	FindingKey             string          `json:"finding_key"`               // SHA-256 deterministic fingerprint (D11)
+	CorrelationKey         string          `json:"correlation_key,omitempty"` // groups findings of different tools for display (D24)
+	DedupScope             string          `json:"dedup_scope"`               // asset | application | tenant
 	AssetID                uuid.UUID       `json:"asset_id"`
 	ApplicationID          uuid.UUID       `json:"application_id"`
 	Track                  string          `json:"track"` // Named branch or environment line (D10)

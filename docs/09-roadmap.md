@@ -22,7 +22,11 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 0: operator finalizers (D21), per-tenant `ScanSource` revocation, network policies, `ServiceMonitor` | not built |
 | Phase 1: upload API (direct), SARIF and CycloneDX parsers, normalization, fingerprints, merge and close, tracks, ephemeral runs, query API with the grammar (in memory), roles and API tokens | built; the query API still filters in memory |
 | Phase 1: presigned upload with a parse worker, object storage client (D34) | built; tested against PostgreSQL, River and SeaweedFS |
-| Phase 1: feed sync (OSV, KEV, EPSS), SQL query builder with signed cursors, ingest benchmark | not built |
+| Phase 1: query API on SQL with signed cursors; feed sync (KEV, EPSS, OSV) with aliases (D35) | built; tested on PostgreSQL |
+| Phase 1: ingest throughput goal | **withdrawn** (D35): measured at about 130 s for 100k results, not reached; benchmark removed |
+| Phase 1: `correlation_key` and correlation groups; ephemeral runs with baseline comparison; parser fuzz tests (D37) | built; tested on PostgreSQL |
+| Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
+| Phase 1: `RekeyJob` (D11), ingest run page in the UI | not built |
 
 ## Phase −1 — Decisions and spikes (week 1)
 
@@ -58,7 +62,7 @@ What is built and tested, against the phases below. Everything marked built has 
 - Query API with the filter grammar (D16), cursors, the supported filter and sort matrix.
 - Workbench: query bar, facets, table with score bar, docked inspector, ingest run page.
 - Auth: one OIDC provider from config, roles `viewer`, `triager`, `admin` at tenant scope, API tokens, `rampart login --token`, `rampart upload`.
-- **Exit**: the Phase −1 ingest benchmark passes in CI; golden tests prove rescans dedupe, close and reactivate correctly, including concurrent and out-of-order runs; EPSS and KEV visible on findings; cross-tenant leak test green.
+- **Exit**: golden tests prove rescans dedupe, close and reactivate correctly, including concurrent and out-of-order runs; EPSS and KEV visible on findings; cross-tenant leak test green.
 
 ## Phase 2 — Triage, risk, deadlines → MVP (weeks 12–17)
 

@@ -1,14 +1,18 @@
 package query
 
 import (
+	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"rampart/internal/query/sqlbuilder"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,7 +39,42 @@ type API struct {
 	feeds   *enrich.FeedStore
 	authn   *auth.Authenticator
 	hmacKey []byte
+	intel   IntelSource
 }
+
+// FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
+// stores (the in-memory one used by tests) fall back to filtering in memory.
+type FindingQuerier interface {
+	QueryFindings(ctx context.Context, tenantID uuid.UUID, q *grammar.Query, sortKey string, limit int, cur *sqlbuilder.Cursor) ([]*domain.Finding, error)
+	CountFindings(ctx context.Context, tenantID uuid.UUID, q *grammar.Query) (int, error)
+}
+
+// IntelSource looks up KEV and EPSS data for vulnerability ids (PostgreSQL: the global vulnerability
+// table that the feed sync fills).
+type IntelSource interface {
+	Lookup(ctx context.Context, ids []string) (*enrich.FeedStore, error)
+}
+
+// SetIntelSource makes the API read threat intelligence from the database, per page, instead of from the
+// in-memory feed store.
+func (a *API) SetIntelSource(src IntelSource) { a.intel = src }
+
+// feedsFor returns the feed data to score findings with the given vulnerability ids.
+func (a *API) feedsFor(ctx context.Context, ids []string) *enrich.FeedStore {
+	if a.intel == nil || len(ids) == 0 {
+		return a.feeds
+	}
+	fs, err := a.intel.Lookup(ctx, ids)
+	if err != nil {
+		slog.Warn("threat intelligence lookup failed; scoring without it", "error", err)
+		return a.feeds
+	}
+	return fs
+}
+
+// SetCursorKey sets the key that signs pagination cursors (D16). Without one, each process uses a random
+// key, so a cursor never outlives the process that issued it.
+func (a *API) SetCursorKey(key []byte) { a.hmacKey = append([]byte(nil), key...) }
 
 // NewAPI creates an instance of API backed by an ingest store and threat intelligence feeds.
 func NewAPI(s store.Store, feeds *enrich.FeedStore) *API {
@@ -51,8 +90,16 @@ func NewAPIWithAuth(s store.Store, feeds *enrich.FeedStore, authn *auth.Authenti
 		store:   s,
 		feeds:   feeds,
 		authn:   authn,
-		hmacKey: []byte("rampart-cursor-hmac-secret-v1"),
+		hmacKey: randomKey(),
 	}
+}
+
+func randomKey() []byte {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		panic("query: no randomness for the cursor key: " + err.Error())
+	}
+	return k
 }
 
 // RegisterRoutes mounts all /api/v1 routes onto the router.
@@ -60,6 +107,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/findings", a.handleListFindings)
 	mux.HandleFunc("GET /api/v1/findings/{id}", a.handleGetFinding)
 	mux.HandleFunc("PATCH /api/v1/findings/{id}", a.handlePatchFinding)
+	mux.HandleFunc("POST /api/v1/gate", a.handleGate) // D26
 	mux.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
 	mux.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleGetAssetSBOM) // alias per doc 11
 	mux.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
@@ -76,6 +124,16 @@ type FindingResponse struct {
 	Risk        risk.ScoreBreakdown  `json:"risk"`
 	SLADueDate  *time.Time           `json:"sla_due_date,omitempty"`
 	Occurrences []*domain.Occurrence `json:"occurrences,omitempty"`
+	// AlsoReportedBy lists findings of other tools that share this finding's correlation key (D24).
+	AlsoReportedBy []CorrelatedRef `json:"also_reported_by,omitempty"`
+}
+
+// CorrelatedRef points at a finding in the same correlation group.
+type CorrelatedRef struct {
+	ID      uuid.UUID `json:"id"`
+	Scanner string    `json:"scanner"`
+	RuleID  string    `json:"rule_id"`
+	State   string    `json:"state"`
 }
 
 // ListFindingsResponse return payload.
@@ -149,14 +207,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Fetch raw findings for tenant (isolated by RLS)
-	all, err := a.store.ListFindings(r.Context(), tenantID)
-	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to list findings"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// 2. Parse query string filter ?q=
+	// 1. Parse the filter ?q= and the sort.
 	qParam := r.URL.Query().Get("q")
 	var parsedQuery *grammar.Query
 	if qParam != "" {
@@ -167,24 +218,10 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		}
 		parsedQuery = &pq
 	}
-
-	// 3. Filter findings
-	var filtered []*domain.Finding
-	for _, f := range all {
-		if parsedQuery != nil && !matchesQuery(f, *parsedQuery) {
-			continue
-		}
-		filtered = append(filtered, f)
-	}
-
-	// 4. Sort findings
 	sortKey := r.URL.Query().Get("sort")
 	if sortKey == "" {
 		sortKey = "-score"
 	}
-	sortFindings(filtered, sortKey)
-
-	// 5. Pagination with HMAC signed cursor (D16)
 	limit := DefaultLimit
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if parsedL, err := strconv.Atoi(lStr); err == nil && parsedL > 0 {
@@ -194,25 +231,78 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	cursorParam := r.URL.Query().Get("cursor")
 
-	offset := 0
-	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
-		if parsedOffset, err := a.decodeCursor(cursor, sortKey, qParam); err == nil {
-			offset = parsedOffset
+	var page []*domain.Finding
+	var total int
+	nextCursor := ""
+
+	if fq, ok := a.store.(FindingQuerier); ok {
+		// 2a. SQL path: filter, sort and keyset pagination run in the database (D16).
+		var cur *sqlbuilder.Cursor
+		if cursorParam != "" {
+			c, err := sqlbuilder.DecodeCursor(cursorParam, a.hmacKey)
+			if err != nil || c.SortKey != sortKey || c.Filter != qParam {
+				problem(w, http.StatusBadRequest, "validation", "The cursor is invalid or no longer matches the filter or sort")
+				return
+			}
+			cur = c
+		}
+		rows, err := fq.QueryFindings(r.Context(), tenantID, parsedQuery, sortKey, limit, cur)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "Failed to list findings")
+			return
+		}
+		if total, err = fq.CountFindings(r.Context(), tenantID, parsedQuery); err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "Failed to count findings")
+			return
+		}
+		if len(rows) > limit { // the extra row only proves there is a next page
+			rows = rows[:limit]
+			last := rows[len(rows)-1]
+			nextCursor = (&sqlbuilder.Cursor{SortKey: sortKey, SortVal: sortValue(sortKey, last), ID: last.ID.String(), Filter: qParam}).Encode(a.hmacKey)
+		}
+		page = rows
+	} else {
+		// 2b. In-memory path (tests and development with the in-memory store).
+		all, err := a.store.ListFindings(r.Context(), tenantID)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "Failed to list findings")
+			return
+		}
+		var filtered []*domain.Finding
+		for _, f := range all {
+			if parsedQuery != nil && !matchesQuery(f, *parsedQuery) {
+				continue
+			}
+			filtered = append(filtered, f)
+		}
+		sortFindings(filtered, sortKey)
+		offset := 0
+		if cursorParam != "" {
+			off, err := a.decodeCursor(cursorParam, sortKey, qParam)
+			if err != nil {
+				problem(w, http.StatusBadRequest, "validation", "The cursor is invalid or no longer matches the filter or sort")
+				return
+			}
+			offset = off
+		}
+		total = len(filtered)
+		start := min(offset, total)
+		end := min(start+limit, total)
+		page = filtered[start:end]
+		if end < total {
+			nextCursor = a.encodeCursor(end, sortKey, qParam)
 		}
 	}
 
-	total := len(filtered)
-	start := offset
-	if start > total {
-		start = total
+	var pageIDs []string
+	for _, f := range page {
+		if f.VulnerabilityID != nil {
+			pageIDs = append(pageIDs, *f.VulnerabilityID)
+		}
 	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
-
-	page := filtered[start:end]
+	pageFeeds := a.feedsFor(r.Context(), pageIDs)
 
 	var items []FindingResponse
 	for _, f := range page {
@@ -234,7 +324,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
 			Environment: env,
 			FirstSeen:   f.FirstSeen,
-		}, a.feeds)
+		}, pageFeeds)
 
 		slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", f.FirstSeen, nil)
 
@@ -243,11 +333,6 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 			Risk:       riskBreakdown,
 			SLADueDate: &slaDue,
 		})
-	}
-
-	nextCursor := ""
-	if end < total {
-		nextCursor = a.encodeCursor(end, sortKey, qParam)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -299,7 +384,7 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
 		Environment: env,
 		FirstSeen:   finding.FirstSeen,
-	}, a.feeds)
+	}, a.feedsFor(r.Context(), vulnIDs))
 
 	slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", finding.FirstSeen, nil)
 
@@ -308,6 +393,11 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		Risk:        riskBreakdown,
 		SLADueDate:  &slaDue,
 		Occurrences: occs,
+	}
+	if group, gerr := a.store.ListCorrelated(r.Context(), tenantID, finding.ID); gerr == nil {
+		for _, g := range group {
+			res.AlsoReportedBy = append(res.AlsoReportedBy, CorrelatedRef{ID: g.ID, Scanner: g.RuleScannerFamily, RuleID: g.RuleID, State: string(g.State)})
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -577,7 +667,7 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 	riskBreakdown := risk.EvaluateRisk(rawF, vulnIDs, risk.Context{
 		Environment: env,
 		FirstSeen:   finding.FirstSeen,
-	}, a.feeds)
+	}, a.feedsFor(r.Context(), vulnIDs))
 
 	slaDue := risk.CalculateSLADueDate(riskBreakdown.Band, "critical", finding.FirstSeen, nil)
 
@@ -767,4 +857,38 @@ func sortFindings(findings []*domain.Finding, sortKey string) {
 			return findings[i].Severity.Rank() > findings[j].Severity.Rank()
 		})
 	}
+}
+
+func problem(w http.ResponseWriter, status int, typ, title string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"type": "https://rampart.aspm.dev/problems/" + typ, "title": title, "status": status})
+}
+
+// sortValue is the value of the sort column for the last row of a page, which the next page continues from.
+func sortValue(sortKey string, f *domain.Finding) string {
+	switch sortKey {
+	case "seen", "-seen":
+		return f.LastSeen.UTC().Format(time.RFC3339Nano)
+	case "age", "-age":
+		return f.FirstSeen.UTC().Format(time.RFC3339Nano)
+	case "severity":
+		return strconv.Itoa(severityRank(f.Severity))
+	default:
+		return strconv.Itoa(f.RiskScore)
+	}
+}
+
+func severityRank(s domain.Severity) int {
+	switch s {
+	case domain.SeverityCritical:
+		return 4
+	case domain.SeverityHigh:
+		return 3
+	case domain.SeverityMedium:
+		return 2
+	case domain.SeverityLow:
+		return 1
+	}
+	return 0
 }

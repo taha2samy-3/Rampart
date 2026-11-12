@@ -69,6 +69,27 @@ spec:
               value: /etc/rampart/secrets/s3-secret-key
             - name: RAMPART_OBJECT_STORAGE_BUCKET_RAW
               value: {{ .Values.objectStorage.bucketRaw | quote }}
+            # Threat intelligence (KEV, EPSS, optionally OSV). Needs egress, or a mirror set in the URLs below.
+            - name: RAMPART_FEEDS_ENABLED
+              value: {{ .Values.feeds.enabled | quote }}
+            - name: RAMPART_FEEDS_INTERVAL
+              value: {{ .Values.feeds.interval | quote }}
+            {{- with .Values.feeds.kevUrl }}
+            - name: RAMPART_FEEDS_KEV_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.feeds.epssUrl }}
+            - name: RAMPART_FEEDS_EPSS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.feeds.osvBaseUrl }}
+            - name: RAMPART_FEEDS_OSV_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.feeds.osvEcosystems }}
+            - name: RAMPART_FEEDS_OSV_ECOSYSTEMS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: RAMPART_LOG_LEVEL
               value: {{ .Values.telemetry.logLevel | quote }}
             - name: RAMPART_LOG_FORMAT

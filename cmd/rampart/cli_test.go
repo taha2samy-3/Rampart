@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,10 +95,26 @@ spec:
 		t.Fatalf("expected sbom path command to succeed, got %v", err)
 	}
 
-	// 6. Test CLI gate command (fails on critical findings because semgrep/cdx uploaded findings)
-	handled, err = handleCLI([]string{"gate", "--server", ts.URL, "--token", token, "--fail-on", "critical"})
-	if !handled || err == nil {
-		t.Errorf("expected gate to fail on critical findings, got err: %v", err)
+	// 6. The gate evaluates the runs of one build, found by commit, against what the pipeline declared.
+	// A report with a rule nobody has reported before, so this build has something new.
+	gatePath := filepath.Join(t.TempDir(), "gate.sarif")
+	if err := os.WriteFile(gatePath, []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"semgrep","rules":[{"id":"gate.only.rule","properties":{"security-severity":"9.8"}}]}},"results":[{"ruleId":"gate.only.rule","message":{"text":"new problem"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/gate.go"},"region":{"startLine":3}}}]}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI("upload", gatePath, "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--branch", "main"); err != nil {
+		t.Fatalf("upload with a commit: %v", err)
+	}
+	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--expect", "semgrep", "--fail-on", "critical", "--wait=false"); err == nil {
+		t.Error("a build whose run created a critical finding must fail the gate")
+	}
+	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--expect", "semgrep", "--fail-on", "critical", "--wait=false"); err == nil {
+		t.Error("the verdict must not change on a second call")
+	}
+	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--expect", "semgrep,trivy", "--fail-on", "critical", "--wait=false"); err == nil {
+		t.Error("a declared run that was never uploaded (trivy) must not pass")
+	}
+	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--expect", "semgrep"); err == nil {
+		t.Error("the gate needs a commit or an image digest")
 	}
 }
 
@@ -155,4 +172,12 @@ func TestAdminSetPasswordValidatesBeforeTouchingTheDatabase(t *testing.T) {
 	if err := runAdmin([]string{"set-password", "--password", "x"}, strings.NewReader("")); err == nil {
 		t.Error("there must be no --password flag: it would show up in process listings")
 	}
+}
+
+func runCLI(args ...string) error {
+	handled, err := handleCLI(args)
+	if !handled {
+		return fmt.Errorf("command %q not handled", args[0])
+	}
+	return err
 }

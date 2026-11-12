@@ -38,6 +38,13 @@ type Store interface {
 	RecordFindingEvents(ctx context.Context, tenantID uuid.UUID, events []*domain.FindingEvent) error
 	GetFindingEvents(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.FindingEvent, error)
 
+	// Aliases and correlation (D11, D19, D24)
+	// CanonicalVulnIDs maps each given identifier to its canonical id (the CVE it is an alias of). Identifiers
+	// without a known alias are absent from the result.
+	CanonicalVulnIDs(ctx context.Context, tenantID uuid.UUID, ids []string) (map[string]string, error)
+	// ListCorrelated returns the other findings that share the correlation key of the given finding.
+	ListCorrelated(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Finding, error)
+
 	// Query / Explorer API (D14, D16)
 	ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	GetFinding(ctx context.Context, tenantID, findingID uuid.UUID) (*domain.Finding, []*domain.Occurrence, error)
@@ -64,6 +71,13 @@ type Store interface {
 	UpdateIngestRun(ctx context.Context, run *domain.IngestRun) error
 	RecordRunScope(ctx context.Context, scope *domain.IngestRunScope) error
 	RecordRunResult(ctx context.Context, result *domain.IngestRunResult) error
+	// ReplaceRunResults stores the ephemeral results of a run, replacing earlier rows of the same run (D10).
+	ReplaceRunResults(ctx context.Context, tenantID, runID uuid.UUID, results []*domain.IngestRunResult) error
+	// ListRunScopes returns the scanner families a run reported on (the tools in its report).
+	ListRunScopes(ctx context.Context, tenantID, runID uuid.UUID) ([]string, error)
+	ListRunResults(ctx context.Context, tenantID, runID uuid.UUID) ([]*domain.IngestRunResult, error)
+	// ListRunsForGate returns the runs a CI gate waits for: those of the source that carry the commit or image digest.
+	ListRunsForGate(ctx context.Context, tenantID, scanSourceID uuid.UUID, commit, imageDigest string) ([]*domain.IngestRun, error)
 
 	// SBOM & Dependency Graph (docs/12)
 	SaveSBOM(ctx context.Context, sbom *domain.SBOM, components []domain.SBOMComponent) error

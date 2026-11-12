@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 3
+  minSchemaVersion: 5
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -89,6 +89,16 @@ objectStorage:
   bucketRaw: "rampart-raw-reports"
   bucketExports: "rampart-exports"
   usePathStyle: true
+
+# Threat intelligence feeds (docs/16 D35). KEV and EPSS are small; OSV is large, so it is opt-in per ecosystem.
+# For an air-gapped cluster, point the URLs at an internal mirror (same file layout as upstream).
+feeds:
+  enabled: true
+  interval: 6h
+  kevUrl: ""
+  epssUrl: ""
+  osvBaseUrl: ""
+  osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
 
 seaweedfs:
   enabled: true

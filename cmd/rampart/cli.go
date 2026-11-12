@@ -111,7 +111,18 @@ func runUpload(args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
 	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
 	source := fs.String("source", "", "Scan source ID")
-	track := fs.String("track", "main", "Track or branch")
+	ci := detectCI()
+	track := fs.String("track", "", "Track or branch (default: the CI branch, else main)")
+	branch := fs.String("branch", "", "Branch or ref; a pull request ref makes the run ephemeral (D10)")
+	commit := fs.String("commit", ci.Commit, "Commit the report is for (default: from the CI environment)")
+	repository := fs.String("repository", ci.Repository, "Repository, for example github.com/acme/shop")
+	imageRef := fs.String("image-ref", "", "Container image reference")
+	imageDigest := fs.String("image-digest", "", "Container image digest")
+	environment := fs.String("environment", "", "Environment, for example production")
+	scanner := fs.String("scanner", "", "Scanner name when the report does not say")
+	format := fs.String("format", "", "Report format hint")
+	buildID := fs.String("build-id", ci.BuildID, "Build id")
+	pipelineURL := fs.String("pipeline-url", ci.PipelineURL, "Pipeline URL")
 	token := fs.String("token", "", "API token")
 
 	files, err := parseFlexibleFlags(fs, args)
@@ -134,7 +145,14 @@ func runUpload(args []string) error {
 	if *source != "" {
 		_ = w.WriteField("source", *source)
 	}
-	_ = w.WriteField("track", *track)
+	ref := firstNonEmptyCLI(*branch, *track, ci.Ref, "main")
+	_ = w.WriteField("branch", ref)
+	for k, v := range map[string]string{"commit": *commit, "repository": *repository, "imageRef": *imageRef, "imageDigest": *imageDigest,
+		"environment": *environment, "scanner": *scanner, "format": *format, "buildId": *buildID, "pipelineUrl": *pipelineURL} {
+		if v != "" {
+			_ = w.WriteField(k, v)
+		}
+	}
 
 	part, err := w.CreateFormFile("file", filepath.Base(filePath))
 	if err != nil {
@@ -517,77 +535,117 @@ func runMigrate(args []string) error {
 
 func runGate(args []string) error {
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
+	ci := detectCI()
 	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
-	source := fs.String("source", "", "Scan source ID")
+	source := fs.String("source", "", "Scan source (default: the tenant's default source)")
 	token := fs.String("token", "", "API token")
-	failOn := fs.String("fail-on", "critical", "Fail threshold severity: critical | high | medium | low")
+	commit := fs.String("commit", ci.Commit, "Commit whose runs the gate evaluates (default: from the CI environment)")
+	imageDigest := fs.String("image-digest", "", "Image digest whose runs the gate evaluates")
+	expect := fs.String("expect", "", "What the pipeline uploads, comma separated, for example semgrep,trivy,sbom")
+	wait := fs.Bool("wait", true, "Wait for the declared runs to finish")
+	timeout := fs.Duration("timeout", 5*time.Minute, "How long to wait (at most 30m)")
+	failOn := fs.String("fail-on", "critical", "A new or reactivated finding at this severity or above fails the gate: critical | high | medium | low")
 
-	_, err := parseFlexibleFlags(fs, args)
+	if _, err := parseFlexibleFlags(fs, args); err != nil {
+		return err
+	}
+	if *commit == "" && *imageDigest == "" {
+		return fmt.Errorf("--commit or --image-digest is required (it is how the gate finds the runs of this build)")
+	}
+	var want []string
+	for _, e := range strings.Split(*expect, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			want = append(want, e)
+		}
+	}
+	if len(want) == 0 {
+		return fmt.Errorf("--expect is required: declare what the pipeline uploads, for example --expect semgrep,trivy")
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"source": *source, "context": map[string]string{"commit": *commit, "imageDigest": *imageDigest},
+		"expect": want, "wait": *wait, "timeoutSeconds": int(timeout.Seconds()), "failOn": *failOn,
+	})
+	req, err := http.NewRequest("POST", strings.TrimRight(*server, "/")+"/api/v1/gate", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-
-	url := strings.TrimRight(*server, "/") + "/api/v1/findings?q=state:open,affected,under_investigation"
-	if *source != "" {
-		url += " source:" + *source
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
+	req.Header.Set("Content-Type", "application/json")
 	if tok := resolveToken(*token); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: *timeout + 30*time.Second}).Do(req)
 	if err != nil {
-		return fmt.Errorf("gate check request failed: %w", err)
+		return fmt.Errorf("gate request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(b))
 	}
-
-	var listRes struct {
-		Items []struct {
-			Finding struct {
-				ID       string `json:"id"`
-				RuleID   string `json:"rule_id"`
-				Title    string `json:"title"`
-				Severity string `json:"severity"`
-			} `json:"finding"`
-		} `json:"items"`
-		Total int `json:"total"`
+	var res struct {
+		Pass    bool     `json:"pass"`
+		Reasons []string `json:"reasons"`
+		Summary struct {
+			New, Fixed, Existing int
+		} `json:"summary"`
+		Blocking []struct {
+			Severity string `json:"severity"`
+			Title    string `json:"title"`
+			Key      string `json:"key"`
+			Path     string `json:"path"`
+		} `json:"blocking"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&listRes); err != nil {
-		return fmt.Errorf("failed to decode gate response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return fmt.Errorf("failed to decode the gate response: %w", err)
 	}
-
-	failRank := severityRank(*failOn)
-	var blocking []string
-
-	for _, item := range listRes.Items {
-		if severityRank(item.Finding.Severity) >= failRank {
-			blocking = append(blocking, fmt.Sprintf("[%s] %s: %s (%s)",
-				strings.ToUpper(item.Finding.Severity), item.Finding.RuleID, item.Finding.Title, item.Finding.ID))
-		}
+	fmt.Printf("new %d, fixed %d, existing %d\n", res.Summary.New, res.Summary.Fixed, res.Summary.Existing)
+	for _, b := range res.Blocking {
+		fmt.Printf("  - [%s] %s %s\n", strings.ToUpper(b.Severity), firstNonEmptyCLI(b.Title, b.Key), b.Path)
 	}
-
-	if len(blocking) > 0 {
-		fmt.Printf("CI Gate FAILED! Found %d blocking finding(s) with severity >= %s:\n", len(blocking), *failOn)
-		for _, b := range blocking {
-			fmt.Printf("  - %s\n", b)
-		}
-		return fmt.Errorf("gate check failed: %d blocking issues", len(blocking))
+	if !res.Pass {
+		fmt.Printf("Gate FAILED: %s\n", strings.Join(res.Reasons, "; "))
+		return fmt.Errorf("gate failed")
 	}
-
-	fmt.Printf("CI Gate PASSED: 0 blocking findings (fail threshold: %s)\n", *failOn)
+	fmt.Printf("Gate PASSED: %s\n", strings.Join(res.Reasons, "; "))
 	return nil
+}
+
+// ciInfo is what the CI system already knows about the build.
+type ciInfo struct{ Commit, Ref, Repository, BuildID, PipelineURL string }
+
+// detectCI reads GitHub Actions and GitLab CI variables, so a pipeline step needs no flags for them. A pull
+// request ref is passed through, which makes the run ephemeral (D10).
+func detectCI() ciInfo {
+	env := os.Getenv
+	switch {
+	case env("GITHUB_ACTIONS") == "true":
+		ref := env("GITHUB_REF_NAME")
+		if strings.HasPrefix(env("GITHUB_REF"), "refs/pull/") {
+			ref = env("GITHUB_REF")
+		}
+		url := ""
+		if env("GITHUB_REPOSITORY") != "" && env("GITHUB_RUN_ID") != "" {
+			url = env("GITHUB_SERVER_URL") + "/" + env("GITHUB_REPOSITORY") + "/actions/runs/" + env("GITHUB_RUN_ID")
+		}
+		return ciInfo{env("GITHUB_SHA"), ref, "github.com/" + env("GITHUB_REPOSITORY"), env("GITHUB_RUN_ID"), url}
+	case env("GITLAB_CI") == "true":
+		ref := env("CI_COMMIT_REF_NAME")
+		if env("CI_MERGE_REQUEST_IID") != "" {
+			ref = "merge-requests/" + env("CI_MERGE_REQUEST_IID")
+		}
+		return ciInfo{env("CI_COMMIT_SHA"), ref, strings.TrimPrefix(strings.TrimPrefix(env("CI_PROJECT_URL"), "https://"), "http://"), env("CI_PIPELINE_ID"), env("CI_PIPELINE_URL")}
+	}
+	return ciInfo{}
+}
+
+func firstNonEmptyCLI(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func severityRank(s string) int {

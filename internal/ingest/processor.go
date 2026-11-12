@@ -85,6 +85,7 @@ type ProcessParams struct {
 	ScannerOverride string // names the scanner when the report has no findings to read it from
 	ScanFinished    time.Time
 	IsEphemeral     bool
+	BaselineTrack   string // the track an ephemeral run is compared with (D10 mapping.baselineTrack, default main)
 	IsSBOM          bool
 	Open            StreamSource
 }
@@ -107,6 +108,9 @@ type famState struct {
 // Process streams the report and applies it. Findings committed by earlier batches are kept when a
 // later step fails, and nothing is closed (D2). Errors that retrying cannot fix are *jobs.PermanentError.
 func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, error) {
+	if pp.IsEphemeral && !pp.IsSBOM {
+		return p.processEphemeral(ctx, pp)
+	}
 	run := pp.Run
 	parserID := pp.Parser.Descriptor().ID
 	parseCtx := domain.ParseContext{
@@ -116,6 +120,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	var order []string
 	var stats domain.IngestStats
 	var total MergeOutcome
+	var fresh []*domain.IngestRunResult // created or reactivated by this run (D26)
 	opts := MergeOptions{FieldMerge: "scanner", ScanFinished: pp.ScanFinished, IsEphemeral: pp.IsEphemeral}
 
 	getFam := func(family string) (*famState, error) {
@@ -150,6 +155,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 		total.Updated += out.Updated
 		total.Untouched += out.Untouched
 		total.Reactivated += out.Reactivated
+		fresh = append(fresh, out.Fresh...)
 		return nil
 	}
 
@@ -232,6 +238,10 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	}
 	stats.Created, stats.Updated, stats.Untouched, stats.Reactivated, stats.Closed =
 		total.Created, total.Updated, total.Untouched, total.Reactivated, closed
+	// What is new in this run, for the CI gate; replaced, not appended, so a retried job does not double it.
+	if err := p.store.ReplaceRunResults(ctx, run.TenantID, run.ID, fresh); err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
 
 	res := Result{Status: status, Reason: reason, Stats: stats}
 	if pp.IsSBOM {
@@ -428,4 +438,125 @@ func scanFinishedOf(c domain.UploadContext) time.Time {
 		return c.ScanFinished.UTC()
 	}
 	return time.Now().UTC()
+}
+
+// processEphemeral handles a run from an untracked ref (a pull request, a feature branch; D10). It parses and
+// fingerprints the report against the baseline track, stores one result row per finding (new, existing) and
+// one per baseline finding the run no longer has (fixed), and changes nothing in the inventory: no finding,
+// occurrence, event or close. The CI gate reads these rows (D26). Stats: Created is new, Untouched is
+// existing, Closed is fixed.
+func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Result, error) {
+	run := pp.Run
+	baseline := firstNonEmpty(pp.BaselineTrack, "main")
+	parserID := pp.Parser.Descriptor().ID
+	parseCtx := domain.ParseContext{TenantID: run.TenantID, ScanSourceID: run.ScanSourceID, ScannerFamily: parserID, Track: run.Track, UploadContext: run.Context}
+
+	var stats domain.IngestStats
+	var results []*domain.IngestRunResult
+	seen := map[string]map[string]bool{} // family -> baseline finding keys present in this run
+	type pending struct {
+		family string
+		rec    StagedRecord
+	}
+	var buf []pending
+	flush := func() error {
+		if len(buf) == 0 {
+			return nil
+		}
+		keys := make([]string, 0, len(buf))
+		for _, b := range buf {
+			keys = append(keys, b.rec.FindingKey)
+		}
+		existing, err := p.store.GetFindingsByKeys(ctx, run.TenantID, keys)
+		if err != nil {
+			return err
+		}
+		for _, b := range buf {
+			ex, ok := existing[b.rec.FindingKey]
+			isNew := !ok || ex.Detection != domain.DetectionPresent // absent from the baseline track (D26)
+			if isNew {
+				stats.Created++
+			} else {
+				stats.Untouched++
+			}
+			results = append(results, &domain.IngestRunResult{
+				TenantID: run.TenantID, IngestRunID: run.ID, FindingKey: b.rec.FindingKey, IsNew: isNew,
+				Severity: b.rec.Severity, Category: b.rec.Category, Location: b.rec.Location, CreatedAt: pp.ScanFinished,
+			})
+		}
+		buf = buf[:0]
+		return nil
+	}
+
+	rc, err := pp.Open(ctx)
+	if err != nil {
+		return Result{}, p.openError(err)
+	}
+	reader := bufio.NewReaderSize(io.LimitReader(rc, p.maxReport+1), 256<<10)
+	var parseErr error
+	for raw, perr := range pp.Parser.Parse(ctx, reader, parseCtx) {
+		if perr != nil {
+			parseErr = perr
+			break
+		}
+		stats.Parsed++
+		family := firstNonEmpty(pp.ScannerOverride, raw.ScannerFamily, parserID)
+		fp := normalize.ComputeFingerprint(normalize.FingerprintParams{
+			TenantID: run.TenantID, AssetID: run.AssetID, ApplicationID: run.ApplicationID, Track: baseline,
+			Scope: normalize.ScopeAsset, Family: family, Category: raw.Category, RuleID: raw.RuleID, RawFinding: raw,
+		})
+		if seen[family] == nil {
+			seen[family] = map[string]bool{}
+		}
+		if seen[family][fp.FindingKey] {
+			continue // the same finding twice in one report counts once
+		}
+		seen[family][fp.FindingKey] = true
+		buf = append(buf, pending{family, StagedRecord{FindingKey: fp.FindingKey, Category: raw.Category, Severity: raw.Severity, Location: raw.Location}})
+		if len(buf) >= p.batchRows {
+			if err := flush(); err != nil {
+				_ = rc.Close()
+				return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+			}
+		}
+	}
+	_ = rc.Close()
+	if parseErr != nil {
+		return Result{Stats: stats}, &jobs.PermanentError{Code: ErrCodeParse, Err: parseErr}
+	}
+	if err := flush(); err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
+
+	// Fixed: reported on the baseline track by the scanners of this run, and absent now.
+	if len(seen) == 0 {
+		seen[firstNonEmpty(pp.ScannerOverride, parserID)] = map[string]bool{}
+	}
+	for family := range seen { // the tools of this run, so a gate can find it by the scanner it expects
+		if err := p.store.RecordRunScope(ctx, &domain.IngestRunScope{
+			IngestRunID: run.ID, TenantID: run.TenantID, ScanSourceID: run.ScanSourceID, ScannerFamily: family, AssetID: run.AssetID, Track: run.Track,
+		}); err != nil {
+			return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+		}
+	}
+	active, err := p.store.GetActiveScopeFindings(ctx, run.TenantID, run.AssetID, baseline)
+	if err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
+	for _, f := range active {
+		fam, inRun := seen[f.RuleScannerFamily]
+		if !inRun || fam[f.FindingKey] {
+			continue
+		}
+		stats.Closed++
+		results = append(results, &domain.IngestRunResult{
+			TenantID: run.TenantID, IngestRunID: run.ID, FindingKey: f.FindingKey, IsFixed: true,
+			Severity: f.Severity, Category: f.Category, Location: f.Location, CreatedAt: pp.ScanFinished,
+		})
+	}
+	// Replacing, not appending: a retried job must not double the rows.
+	if err := p.store.ReplaceRunResults(ctx, run.TenantID, run.ID, results); err != nil {
+		return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeMergeFailed, err)
+	}
+	return Result{Status: domain.RunCompleted, Stats: stats}, nil
 }
