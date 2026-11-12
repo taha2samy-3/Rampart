@@ -380,6 +380,25 @@ func (e *Engine) mergeBatch(
 		}
 	}
 
+	// Ticket-on-critical placeholder automation (docs/09, docs/16 D25, D29):
+	// A critical finding reserves ticket creation in action_ledger so duplicate tickets are prevented.
+	for _, f := range findingsToUpsert {
+		if f.Severity == domain.SeverityCritical || f.RiskBand == domain.SeverityCritical {
+			reserved, err := st.ReserveAction(ctx, scope.TenantID, domain.PolicyTicketOnCriticalID, f.ID, domain.ActionCreateTicket)
+			if err == nil && reserved {
+				events = append(events, &domain.FindingEvent{
+					ID:        domain.NewID(),
+					FindingID: f.ID,
+					At:        f.LastSeen,
+					Actor:     "system:policy",
+					Type:      "ticket_created",
+					Note:      "Ticket creation requested for critical finding (connector placeholder)",
+					To:        json.RawMessage(`{"action":"create_ticket","rule":"ticket-on-critical","status":"pending_connector"}`),
+				})
+			}
+		}
+	}
+
 	// Persist findings and occurrences
 	if err := st.UpsertFindings(ctx, scope.TenantID, findingsToUpsert); err != nil {
 		return outcome, fmt.Errorf("ingest: upserting findings failed: %w", err)
@@ -596,6 +615,7 @@ type MemoryStore struct {
 	localAdmins           map[string]*auth.LocalAdmin
 	audits                []auth.AuditEvent
 	uploads               map[string]*domain.Upload
+	actionLedger          map[string]bool
 }
 
 // NewMemoryStore initializes a new MemoryStore.
@@ -623,6 +643,7 @@ func NewMemoryStore() *MemoryStore {
 		sessions:              make(map[string]auth.SessionRecord),
 		localAdmins:           make(map[string]*auth.LocalAdmin),
 		uploads:               make(map[string]*domain.Upload),
+		actionLedger:          make(map[string]bool),
 	}
 }
 
@@ -1755,6 +1776,18 @@ func (m *MemoryStore) FindRunByUpload(ctx context.Context, tenantID, uploadID uu
 		}
 	}
 	return nil, nil
+}
+
+// ReserveAction reserves an action in the memory store action ledger (docs/16 D25).
+func (m *MemoryStore) ReserveAction(ctx context.Context, tenantID, policyID, findingID uuid.UUID, action string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := fmt.Sprintf("%s:%s:%s:%s", tenantID, policyID, findingID, action)
+	if m.actionLedger[key] {
+		return false, nil
+	}
+	m.actionLedger[key] = true
+	return true, nil
 }
 
 func firstNonEmptyStr(vals ...string) string {

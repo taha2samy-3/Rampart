@@ -149,4 +149,9 @@ type Store interface {
 	// Tenant Bootstrap & Verification (Phase 0)
 	CreateTenant(ctx context.Context, tenant *domain.Tenant) error
 	GetTenant(ctx context.Context, tenantID uuid.UUID) (*domain.Tenant, error)
+
+	// Automation & Action Ledger (docs/16 D25, D29)
+	// ReserveAction reserves a side effect (ticket, notification) in action_ledger so a retried
+	// or repeated event cannot create a second ticket. Returns true if newly reserved.
+	ReserveAction(ctx context.Context, tenantID, policyID, findingID uuid.UUID, action string) (bool, error)
 }

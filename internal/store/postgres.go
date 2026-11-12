@@ -2520,3 +2520,22 @@ type prefixed struct {
 }
 
 func (p prefixed) Scan(dest ...any) error { return p.row.Scan(append([]any{p.first}, dest...)...) }
+
+// ReserveAction reserves a side effect (ticket, notification) in action_ledger so a retried
+// or repeated event cannot create a second ticket (docs/16 D25).
+func (s *PostgresStore) ReserveAction(ctx context.Context, tenantID, policyID, findingID uuid.UUID, action string) (bool, error) {
+	var reserved bool
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO action_ledger (tenant_id, policy_id, finding_id, action, created_at)
+			VALUES ($1, $2, $3, $4, NOW())
+			ON CONFLICT (tenant_id, policy_id, finding_id, action) DO NOTHING
+		`, tenantID, policyID, findingID, action)
+		if err != nil {
+			return err
+		}
+		reserved = tag.RowsAffected() > 0
+		return nil
+	})
+	return reserved, err
+}
