@@ -378,6 +378,12 @@ const server = http.createServer((req, res) => {
     }
     if (p === '/api/v1/dashboards/overview') return json(res, OVERVIEW());
     if (p === '/api/v1/metrics/trend') return json(res, { metric: 'open', points: TREND });
+    if (p === '/api/v1/uploads/direct' && req.method === 'POST') {
+      return json(res, { ingestRunId: '00000001-aaaa-bbbb-cccc-000000000001', status: 'completed' }, 201);
+    }
+    if ((p === '/api/v1/openapi.json' || p === '/openapi.json') && req.method === 'GET') {
+      return json(res, { openapi: '3.0.3', info: { title: 'Rampart API', version: '1.0.0' } });
+    }
     if (p === '/api/v1/runs') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list runs', 'The database did not answer within 5 s.');
       return json(res, { items: dataMode === 'empty' ? null : RUNS, next_cursor: '' });

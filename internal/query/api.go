@@ -24,6 +24,7 @@ import (
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/graph"
+	"rampart/internal/ingest"
 	"rampart/internal/objectstore"
 	"rampart/internal/query/grammar"
 	"rampart/internal/risk"
@@ -44,6 +45,7 @@ type API struct {
 	objects objectstore.Store
 	intel   IntelSource
 	scorer  *scoring.Scorer
+	gw      *ingest.Gateway
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -178,6 +180,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/assets/{id}/vex", a.handleExportVEX)
 	mux.HandleFunc("GET /api/v1/applications/{id}/vex", a.handleExportVEX)
 	mux.HandleFunc("POST /api/v1/vex", a.handleImportVEX)
+	mux.HandleFunc("POST /api/v1/uploads", a.handleCreateUpload)
+	mux.HandleFunc("POST /api/v1/uploads/{id}/complete", a.handleCompleteUpload)
+	mux.HandleFunc("POST /api/v1/uploads/direct", a.handleDirectUpload)
+	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
+	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
 }
 
 // FindingResponse wraps a finding with its calculated risk and SLA details.

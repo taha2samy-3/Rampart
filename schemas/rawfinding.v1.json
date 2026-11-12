@@ -1,0 +1,190 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rampart.aspm.dev/schemas/rawfinding.v1.json",
+  "title": "RawFinding",
+  "description": "Canonical finding document emitted by parsers and sources in Rampart ASPM (docs/19 §3)",
+  "type": "object",
+  "required": [
+    "rule_id",
+    "scanner_family",
+    "category",
+    "severity",
+    "title"
+  ],
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "description": "Tool-specific rule or vulnerability identifier"
+    },
+    "rule_name": {
+      "type": "string",
+      "description": "Human-readable rule name"
+    },
+    "rule_description": {
+      "type": "string",
+      "description": "Detailed explanation of the rule"
+    },
+    "scanner_family": {
+      "type": "string",
+      "description": "Canonical family name of the scanner (e.g. semgrep, trivy, grype)"
+    },
+    "scanner_name": {
+      "type": "string",
+      "description": "Name of the scanner engine"
+    },
+    "scanner_version": {
+      "type": "string",
+      "description": "Version string of the scanner"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "sast",
+        "sca",
+        "secret",
+        "iac",
+        "dast",
+        "container",
+        "cloud"
+      ],
+      "description": "Canonical finding category"
+    },
+    "tool_record_id": {
+      "type": "string",
+      "description": "Original record identifier assigned by the tool"
+    },
+    "tool_severity": {
+      "type": "string",
+      "description": "Severity as reported directly by the scanner"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info",
+        "unknown"
+      ],
+      "description": "Normalized Rampart severity band"
+    },
+    "title": {
+      "type": "string",
+      "description": "Short headline describing the finding"
+    },
+    "description": {
+      "type": "string",
+      "description": "Markdown or plain-text description"
+    },
+    "location": {
+      "type": "object",
+      "description": "Location of the finding in code, package, container, or cloud asset",
+      "properties": {
+        "code": {
+          "type": "object",
+          "properties": {
+            "file": { "type": "string" },
+            "start_line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1 },
+            "start_column": { "type": "integer", "minimum": 1 },
+            "end_column": { "type": "integer", "minimum": 1 },
+            "snippet": { "type": "string" }
+          }
+        },
+        "package": {
+          "type": "object",
+          "properties": {
+            "purl": { "type": "string" },
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "ecosystem": { "type": "string" },
+            "fixed_version": { "type": "string" },
+            "manifest_path": { "type": "string" }
+          }
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "registry": { "type": "string" },
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "digest": { "type": "string" }
+          }
+        },
+        "kubernetes": {
+          "type": "object",
+          "properties": {
+            "cluster": { "type": "string" },
+            "namespace": { "type": "string" },
+            "kind": { "type": "string" },
+            "name": { "type": "string" },
+            "container": { "type": "string" }
+          }
+        },
+        "cloud": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string" },
+            "account_id": { "type": "string" },
+            "region": { "type": "string" },
+            "resource_id": { "type": "string" },
+            "resource_type": { "type": "string" }
+          }
+        },
+        "http": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "format": "uri" },
+            "method": { "type": "string" },
+            "parameter": { "type": "string" }
+          }
+        }
+      }
+    },
+    "cwes": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Common Weakness Enumeration numeric IDs"
+    },
+    "vuln_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Vulnerability IDs: CVE, GHSA, OSV identifiers"
+    },
+    "cvss_vector": {
+      "type": "string",
+      "description": "CVSS v3.1 or v4.0 vector string"
+    },
+    "secret_value": {
+      "type": "string",
+      "description": "Unmasked secret snippet used strictly for local hash calculation"
+    },
+    "secret_verified": {
+      "type": "boolean",
+      "description": "Whether the scanner verified the secret against its provider"
+    },
+    "vex": {
+      "type": "object",
+      "properties": {
+        "statement_id": { "type": "string", "format": "uuid" },
+        "vuln_id": { "type": "string" },
+        "state": {
+          "type": "string",
+          "enum": ["affected", "not_affected", "under_investigation", "fixed"]
+        },
+        "justification": { "type": "string" },
+        "impact": { "type": "string" },
+        "remediation": { "type": "string" },
+        "action": { "type": "string" }
+      },
+      "required": ["vuln_id", "state"]
+    },
+    "raw_payload": {
+      "type": "object",
+      "description": "Original raw scanner JSON block"
+    }
+  },
+  "additionalProperties": false
+}
+

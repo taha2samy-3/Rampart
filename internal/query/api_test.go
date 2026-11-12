@@ -361,3 +361,37 @@ func TestQueryAPIPatchAndVEX(t *testing.T) {
 		t.Errorf("expected justification 'vulnerable_code_not_present', got %s", vexDoc.Statements[0].Justification)
 	}
 }
+
+func TestQueryAPI_OpenAPISpec(t *testing.T) {
+	api := query.NewAPI(ingest.NewMemoryStore(), enrich.NewFeedStore())
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	for _, p := range []string{"/openapi.json", "/api/v1/openapi.json"} {
+		req := httptest.NewRequest("GET", p, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200 OK, got %d", p, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("%s: expected application/json, got %s", p, ct)
+		}
+
+		var doc map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("%s: response is not valid JSON: %v", p, err)
+		}
+		if doc["openapi"] != "3.0.3" {
+			t.Errorf("%s: expected openapi 3.0.3, got %v", p, doc["openapi"])
+		}
+		paths, ok := doc["paths"].(map[string]any)
+		if !ok || len(paths) == 0 {
+			t.Fatalf("%s: expected non-empty paths map", p)
+		}
+		if _, ok := paths["/api/v1/findings"]; !ok {
+			t.Errorf("%s: expected /api/v1/findings in paths", p)
+		}
+	}
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +6,7 @@ import { getRun, listRuns, qk, toProblem } from '@/api';
 import type { RunRow } from '@/api/types';
 import { Button, CommandLine, EmptyState, ProblemMessage, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
 import { RunInspector } from '@/features/run-inspector/RunInspector';
+import { UploadDialog } from './UploadDialog';
 import { cn } from '@/lib/cn';
 import { absoluteDate, shortAge, shortId } from '@/lib/format';
 
@@ -31,6 +32,7 @@ function foundText(r: RunRow): string {
 export function IngestionRoute({ search }: { search: IngestionSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [uploadOpen, setUploadOpen] = useState(false);
   useEffect(() => {
     document.title = `${t('ingestion.title')} - Rampart`;
   }, [t]);
@@ -77,7 +79,17 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
     );
   } else if (rows.length === 0) {
     list = (
-      <EmptyState title={t('ingestion.emptyTitle')} action={<CommandLine command={t('ingestion.emptyCommand')} />}>
+      <EmptyState
+        title={t('ingestion.emptyTitle')}
+        action={
+          <div className="flex flex-col items-center gap-2">
+            <Button variant="secondary" onClick={() => setUploadOpen(true)}>
+              {t('ingestion.uploadButton')}
+            </Button>
+            <CommandLine command={t('ingestion.emptyCommand')} />
+          </div>
+        }
+      >
         {t('ingestion.emptyBody')}
       </EmptyState>
     );
@@ -158,7 +170,12 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
   return (
     <div className="flex h-full min-h-0 flex-col tablet:flex-row">
       <section aria-label={t('ingestion.title')} className="@container/list flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
-        <h1 className="display border-b border-rule px-3 py-2 text-16">{t('ingestion.title')}</h1>
+        <div className="flex items-center justify-between border-b border-rule px-3 py-2">
+          <h1 className="display text-16">{t('ingestion.title')}</h1>
+          <Button variant="secondary" onClick={() => setUploadOpen(true)}>
+            {t('ingestion.uploadButton')}
+          </Button>
+        </div>
         {list}
       </section>
       <div className="relative min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
@@ -166,6 +183,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
           <RunInspector run={selected} selectedId={selectedId} />
         </aside>
       </div>
+      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </div>
   );
 }

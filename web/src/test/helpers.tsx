@@ -228,6 +228,9 @@ export function mockFetch(sc: Scenario): Calls {
       const items = pages[idx] ?? [];
       return json({ items: items.length ? items : null, next_cursor: idx + 1 < pages.length ? String(idx + 1) : '' });
     }
+    if (path === '/api/v1/uploads/direct' && init?.method === 'POST') {
+      return json({ ingestRunId: '00000001-aaaa-bbbb-cccc-000000000001', status: 'completed' }, 201);
+    }
     if (path.startsWith('/api/v1/runs/')) {
       const id = decodeURIComponent(path.split('/').pop() ?? '');
       const found = (Array.isArray(sc.runs) ? sc.runs.flat() : []).find((r) => r.id === id);

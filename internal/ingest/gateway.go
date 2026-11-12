@@ -166,6 +166,21 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ingest/v1/runs/{id}", g.handleGetRun)
 }
 
+// HandleCreateUpload is exported for query-api (manual uploads from the Web UI, docs/13 §1).
+func (g *Gateway) HandleCreateUpload(w http.ResponseWriter, r *http.Request) {
+	g.handleCreateUpload(w, r)
+}
+
+// HandleCompleteUpload is exported for query-api.
+func (g *Gateway) HandleCompleteUpload(w http.ResponseWriter, r *http.Request) {
+	g.handleCompleteUpload(w, r)
+}
+
+// HandleUploadReport is exported for query-api.
+func (g *Gateway) HandleUploadReport(w http.ResponseWriter, r *http.Request) {
+	g.handleUploadReport(w, r)
+}
+
 func (g *Gateway) resolveTenant(r *http.Request) (uuid.UUID, error) {
 	if tid, err := auth.TenantFromContext(r.Context()); err == nil && tid != domain.NilID {
 		return tid, nil

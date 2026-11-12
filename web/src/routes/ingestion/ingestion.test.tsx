@@ -112,4 +112,15 @@ describe('ingest runs', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it('opens manual upload dialog, selects file, and uploads report', async () => {
+    mockFetch({ loggedIn: true, runs: [] });
+    const { container } = renderApp('/ingestion');
+    const uploadBtn = await screen.findAllByRole('button', { name: 'Upload report' });
+    await userEvent.click(uploadBtn[0]!);
+
+    expect(screen.getByRole('dialog', { name: 'Upload security report' })).toBeInTheDocument();
+    expect(screen.getByText('Drop a scanner report here, or click to browse')).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

@@ -76,6 +76,16 @@ export async function listRuns(args: { cursor?: string; limit?: number; signal?:
 
 export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1/runs/${encodeURIComponent(id)}`, { signal });
 
+/** Upload a security report directly from the UI (docs/13 §1, Phase 2 MVP). */
+export function uploadReport(file: File, options?: { source?: string; application?: string; track?: string }) {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  if (options?.source) fd.append('source', options.source);
+  if (options?.application) fd.append('application', options.application);
+  if (options?.track) fd.append('track', options.track);
+  return post<{ ingestRunId: string; status: string }>('/api/v1/uploads/direct', fd);
+}
+
 /** Change a finding's state. `version` is the one the analyst saw; a stale one is a 409 (docs/16 D38). */
 export const triageFinding = (id: string, body: TriageBody, version: number | undefined) =>
   patch<FindingRow>(`/api/v1/findings/${encodeURIComponent(id)}`, body, version === undefined ? undefined : { headers: { 'If-Match': `"${version}"` } });

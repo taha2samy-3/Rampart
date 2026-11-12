@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rampart.aspm.dev/schemas/issuedraft.v1.json",
+  "title": "IssueDraft",
+  "description": "Canonical ticket draft document for Tracker integrations in Rampart ASPM (docs/19 §3, §6)",
+  "type": "object",
+  "required": [
+    "title"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Issue summary or title"
+    },
+    "body": {
+      "type": "string",
+      "description": "Markdown or plain-text issue description"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ],
+      "description": "Normalized priority level"
+    },
+    "comment": {
+      "type": "string",
+      "description": "Comment or triage note added when updating the issue"
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Labels or tags for the issue"
+    },
+    "assignee": {
+      "type": "string",
+      "description": "Target assignee identifier or email"
+    },
+    "component": {
+      "type": "string",
+      "description": "Tracker project component name"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Tracker project or repository identifier"
+    },
+    "tracker_id": {
+      "type": "string",
+      "description": "Issue tracker or issue type ID"
+    },
+    "custom_fields": {
+      "type": "object",
+      "description": "Custom key-value fields expected by the tracker"
+    },
+    "finding_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Rampart finding UUIDs represented by this ticket"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "severity": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "scanner": { "type": "string" },
+          "url": { "type": "string", "format": "uri" }
+        },
+        "required": ["id", "title"]
+      },
+      "description": "Summaries of findings attached to this ticket"
+    }
+  },
+  "additionalProperties": false
+}
+

@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rampart.aspm.dev/schemas/upstreamproject.v1.json",
+  "title": "UpstreamProject",
+  "description": "Canonical discovered project or repository document for Source integrations in Rampart ASPM (docs/19 §3, §5)",
+  "type": "object",
+  "required": [
+    "id",
+    "name"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier of the project in the upstream system"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name of the project or repository"
+    },
+    "key": {
+      "type": "string",
+      "description": "Upstream project key (e.g. SonarQube component key, repository slug)"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Web URL of the project in the upstream tool"
+    },
+    "default_branch": {
+      "type": "string",
+      "description": "Default branch name (e.g. main, master)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description of the project"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional tool-specific metadata key-values"
+    }
+  },
+  "additionalProperties": false
+}
+

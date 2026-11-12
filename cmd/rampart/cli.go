@@ -13,7 +13,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"rampart/internal/auth"
@@ -63,6 +65,9 @@ func handleCLI(args []string) (bool, error) {
 
 	case "gate":
 		return true, runGate(args[1:])
+
+	case "findings":
+		return true, runFindings(args[1:], os.Stdout)
 
 	case "vex":
 		return true, runVEX(args[1:], os.Stdout)
@@ -815,6 +820,231 @@ func resolveToken(explicit string) string {
 		}
 	}
 	return ""
+}
+
+func resolveServer(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("RAMPART_SERVER"); env != "" {
+		return env
+	}
+	homeDir, _ := os.UserHomeDir()
+	cfgPath := filepath.Join(homeDir, ".rampart", "credentials.json")
+	if data, err := os.ReadFile(cfgPath); err == nil {
+		var creds map[string]string
+		if json.Unmarshal(data, &creds) == nil && creds["server"] != "" {
+			return creds["server"]
+		}
+	}
+	return "http://localhost:8080"
+}
+
+func runFindings(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: rampart findings <list|set-state> [flags]")
+	}
+	sub := args[0]
+	switch sub {
+	case "list":
+		return runFindingsList(args[1:], out)
+	case "set-state":
+		return runFindingsSetState(args[1:], out)
+	default:
+		return fmt.Errorf("unknown findings subcommand %q, expected 'list' or 'set-state'", sub)
+	}
+}
+
+func runFindingsList(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("findings list", flag.ContinueOnError)
+	server := fs.String("server", "", "Rampart server URL")
+	token := fs.String("token", "", "API token")
+	q := fs.String("q", "", "Query filter (e.g. 'severity:critical state:open app:payments-api')")
+	limit := fs.Int("limit", 50, "Limit number of findings")
+	output := fs.String("o", "table", "Output format: table or json")
+
+	if _, err := parseFlexibleFlags(fs, args); err != nil {
+		return err
+	}
+
+	targetServer := resolveServer(*server)
+	tok := resolveToken(*token)
+
+	apiURL := strings.TrimRight(targetServer, "/") + "/api/v1/findings"
+	params := url.Values{}
+	if *q != "" {
+		params.Set("q", *q)
+	}
+	if *limit > 0 {
+		params.Set("limit", strconv.Itoa(*limit))
+	}
+	if len(params) > 0 {
+		apiURL += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("findings list request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(b))
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response: %w", err)
+	}
+
+	if *output == "json" {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, bodyBytes, "", "  "); err == nil {
+			_, _ = out.Write(pretty.Bytes())
+			_, _ = out.Write([]byte("\n"))
+		} else {
+			_, _ = out.Write(bodyBytes)
+			_, _ = out.Write([]byte("\n"))
+		}
+		return nil
+	}
+
+	var listResp struct {
+		Items []struct {
+			Finding struct {
+				ID              string `json:"id"`
+				RuleID          string `json:"rule_id"`
+				Severity        string `json:"severity"`
+				State           string `json:"state"`
+				Title           string `json:"title"`
+				ApplicationName string `json:"application_name"`
+			} `json:"finding"`
+			Risk struct {
+				Score int    `json:"score"`
+				Band  string `json:"band"`
+			} `json:"risk"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+
+	if err := json.Unmarshal(bodyBytes, &listResp); err != nil {
+		return fmt.Errorf("decoding findings list: %w", err)
+	}
+
+	if len(listResp.Items) == 0 {
+		_, _ = fmt.Fprintln(out, "No findings found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "ID\tSEVERITY\tBAND\tSTATE\tTITLE\tAPPLICATION")
+	for _, it := range listResp.Items {
+		f := it.Finding
+		id := f.ID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		band := it.Risk.Band
+		if band == "" {
+			band = f.Severity
+		}
+		title := f.Title
+		if len(title) > 40 {
+			title = title[:37] + "..."
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			id,
+			strings.ToUpper(f.Severity),
+			strings.ToUpper(band),
+			f.State,
+			title,
+			f.ApplicationName,
+		)
+	}
+	_ = w.Flush()
+	return nil
+}
+
+func runFindingsSetState(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("findings set-state", flag.ContinueOnError)
+	server := fs.String("server", "", "Rampart server URL")
+	token := fs.String("token", "", "API token")
+	justification := fs.String("justification", "", "Triage justification (e.g. vulnerable_code_not_in_execute_path)")
+	impact := fs.String("impact", "", "Impact statement")
+	note := fs.String("note", "", "Triage note")
+	owner := fs.String("owner", "", "Assignee email")
+	severity := fs.String("severity", "", "Override severity")
+
+	positional, err := parseFlexibleFlags(fs, args)
+	if err != nil {
+		return err
+	}
+
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: rampart findings set-state <id> <state> [--justification <text>] [--impact <text>] [--note <text>]")
+	}
+
+	id := positional[0]
+	state := positional[1]
+
+	targetServer := resolveServer(*server)
+	tok := resolveToken(*token)
+
+	patchBody := map[string]any{
+		"state": state,
+	}
+	if *justification != "" {
+		patchBody["justification"] = *justification
+	}
+	if *impact != "" {
+		patchBody["impactStatement"] = *impact
+	}
+	if *note != "" {
+		patchBody["note"] = *note
+	}
+	if *owner != "" {
+		patchBody["owner"] = *owner
+	}
+	if *severity != "" {
+		patchBody["severity"] = *severity
+	}
+
+	data, _ := json.Marshal(patchBody)
+	apiURL := fmt.Sprintf("%s/api/v1/findings/%s", strings.TrimRight(targetServer, "/"), id)
+
+	req, err := http.NewRequest("PATCH", apiURL, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("set-state request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(b))
+	}
+
+	_, _ = fmt.Fprintf(out, "Finding %s state updated to %q\n", id, state)
+	return nil
 }
 
 // runAdmin implements `rampart admin set-password`: recovery for the break-glass local administrator

@@ -1,0 +1,969 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Rampart ASPM API",
+    "version": "1.0.0",
+    "description": "Rampart Application Security Posture Management Platform API (docs/11, docs/16)"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/v1/findings": {
+      "get": {
+        "summary": "List findings with filter grammar, sorting, and pagination",
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" }, "description": "Filter expression" },
+          { "name": "sort", "in": "query", "schema": { "type": "string", "default": "-score" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Findings page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingsPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/findings/{id}": {
+      "get": {
+        "summary": "Get finding by ID",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Finding details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingResponse"
+                }
+              }
+            }
+          },
+          "404": { "description": "Finding not found" }
+        }
+      },
+      "patch": {
+        "summary": "Triage finding (state, justification, severity, note, owner)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchFindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated finding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingResponse"
+                }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "404": { "description": "Finding not found" },
+          "409": { "description": "Version conflict" }
+        }
+      }
+    },
+    "/api/v1/findings/bulk": {
+      "post": {
+        "summary": "Bulk triage findings by IDs or filter query",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bulk triage result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/findings/{id}/events": {
+      "get": {
+        "summary": "Finding audit and state transition timeline",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Timeline events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/FindingEvent" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gate": {
+      "post": {
+        "summary": "CI gate evaluation against uploaded scanner runs",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gate evaluation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk-acceptances": {
+      "get": {
+        "summary": "List risk acceptances",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk acceptances list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/RiskAcceptance" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Request or create risk acceptance",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAcceptanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Risk acceptance outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptanceOutcome"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk-acceptances/{id}": {
+      "get": {
+        "summary": "Get risk acceptance details",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk acceptance details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskAcceptance"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/risk-acceptances/{id}/approve": {
+      "post": {
+        "summary": "Approve pending risk acceptance",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Approved" } }
+      }
+    },
+    "/api/v1/risk-acceptances/{id}/reject": {
+      "post": {
+        "summary": "Reject pending risk acceptance",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Rejected" } }
+      }
+    },
+    "/api/v1/risk-acceptances/{id}/revoke": {
+      "post": {
+        "summary": "Revoke approved risk acceptance early",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Revoked" } }
+      }
+    },
+    "/api/v1/risk-acceptances/{id}/proofs": {
+      "get": {
+        "summary": "List proof attachments for risk acceptance",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proof files list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/Proof" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Upload proof attachment",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "201": { "description": "Uploaded" } }
+      }
+    },
+    "/api/v1/applications": {
+      "get": {
+        "summary": "List applications with aggregate statistics",
+        "responses": {
+          "200": {
+            "description": "Applications list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/ApplicationSummary" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/applications/{id}/summary": {
+      "get": {
+        "summary": "Application detail summary, posture, and risk breakdown",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hierarchy": {
+      "get": {
+        "summary": "Hierarchy tree nodes and roll-up scores",
+        "responses": {
+          "200": {
+            "description": "Hierarchy tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/HierarchyNode" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dashboards/overview": {
+      "get": {
+        "summary": "Tenant overview dashboard metrics and posture score",
+        "responses": {
+          "200": {
+            "description": "Overview metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "summary": "List in-app notifications and unread count",
+        "responses": {
+          "200": {
+            "description": "Notifications list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/read": {
+      "post": {
+        "summary": "Mark all in-app notifications as read",
+        "responses": { "200": { "description": "Marked read" } }
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "summary": "Audit log entries with actor and action filters",
+        "parameters": [
+          { "name": "actor", "in": "query", "schema": { "type": "string" } },
+          { "name": "action", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/taxonomies": {
+      "get": {
+        "summary": "List compliance frameworks and taxonomies (OWASP, CWE, PCI, ISO, NIST)",
+        "responses": {
+          "200": {
+            "description": "Taxonomies list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/Taxonomy" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/taxonomies/{id}/status": {
+      "get": {
+        "summary": "Status and compliance coverage for a specific taxonomy",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "application", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Taxonomy status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxonomyStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "summary": "List scanner ingest runs",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ingest runs page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}": {
+      "get": {
+        "summary": "Get ingest run details",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ingest run details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRow"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{id}/report": {
+      "get": {
+        "summary": "Download raw scanner report",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Raw report stream" },
+          "404": { "description": "Report not found or purged" }
+        }
+      }
+    },
+    "/api/v1/access-bindings": {
+      "get": {
+        "summary": "List RBAC access bindings",
+        "responses": {
+          "200": {
+            "description": "Access bindings list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/AccessBinding" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create access binding (tenant, hierarchy, or application scope)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessBinding"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access-bindings/{id}": {
+      "delete": {
+        "summary": "Delete access binding",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    },
+    "/api/v1/me/access": {
+      "get": {
+        "summary": "Current authenticated user role and scoped application permissions",
+        "responses": {
+          "200": {
+            "description": "User access permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyAccess"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads": {
+      "post": {
+        "summary": "Create presigned upload URL for security scanner reports",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUploadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Presigned PUT URL and headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUploadResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads/{id}/complete": {
+      "post": {
+        "summary": "Complete presigned upload with SHA-256 validation",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteUploadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Upload completed, ingest run enqueued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteUploadResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads/direct": {
+      "post": {
+        "summary": "Direct multipart file upload of security report from Web UI",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "source": { "type": "string" },
+                  "application": { "type": "string" },
+                  "track": { "type": "string" }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Report uploaded and run created" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "OpenAPI specification document",
+        "responses": {
+          "200": { "description": "OpenAPI specification" }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "summary": "OpenAPI specification document",
+        "responses": {
+          "200": { "description": "OpenAPI specification" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Finding": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "tenant_id": { "type": "string", "format": "uuid" },
+          "application_id": { "type": "string", "format": "uuid" },
+          "application_name": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "rule_name": { "type": "string" },
+          "category": { "type": "string" },
+          "severity": { "type": "string" },
+          "state": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "first_seen": { "type": "string", "format": "date-time" },
+          "last_seen": { "type": "string", "format": "date-time" },
+          "sla_due": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "title", "severity", "state"]
+      },
+      "FindingResponse": {
+        "type": "object",
+        "properties": {
+          "finding": { "$ref": "#/components/schemas/Finding" },
+          "risk": {
+            "type": "object",
+            "properties": {
+              "score": { "type": "integer" },
+              "band": { "type": "string" }
+            }
+          },
+          "sla_due_date": { "type": "string", "format": "date-time" }
+        },
+        "required": ["finding", "risk"]
+      },
+      "FindingsPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/FindingResponse" } },
+          "total": { "type": "integer" },
+          "next_cursor": { "type": "string" }
+        }
+      },
+      "PatchFindingRequest": {
+        "type": "object",
+        "properties": {
+          "state": { "type": "string" },
+          "justification": { "type": "string" },
+          "impactStatement": { "type": "string" },
+          "severity": { "type": "string" },
+          "note": { "type": "string" },
+          "owner": { "type": "string" },
+          "version": { "type": "integer" }
+        }
+      },
+      "BulkRequest": {
+        "type": "object",
+        "properties": {
+          "ids": { "type": "array", "items": { "type": "string" } },
+          "q": { "type": "string" },
+          "patch": { "$ref": "#/components/schemas/PatchFindingRequest" }
+        },
+        "required": ["patch"]
+      },
+      "BulkResponse": {
+        "type": "object",
+        "properties": {
+          "matched": { "type": "integer" },
+          "updated": { "type": "integer" },
+          "unchanged": { "type": "integer" }
+        }
+      },
+      "GateRequest": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string" },
+          "expect": { "type": "array", "items": { "type": "string" } },
+          "context": { "type": "object" },
+          "failOn": { "type": "string" },
+          "wait": { "type": "boolean" },
+          "timeoutSeconds": { "type": "integer" }
+        },
+        "required": ["expect"]
+      },
+      "GateResponse": {
+        "type": "object",
+        "properties": {
+          "pass": { "type": "boolean" },
+          "reasons": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "object" }
+        },
+        "required": ["pass"]
+      },
+      "RiskAcceptance": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "status": { "type": "string" },
+          "justification": { "type": "string" },
+          "owner": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "status", "justification"]
+      },
+      "CreateAcceptanceRequest": {
+        "type": "object",
+        "properties": {
+          "findingIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+          "justification": { "type": "string" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["findingIds", "justification", "expiresAt"]
+      },
+      "AcceptanceOutcome": {
+        "type": "object",
+        "properties": {
+          "acceptance": { "$ref": "#/components/schemas/RiskAcceptance" }
+        }
+      },
+      "Proof": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "filename": { "type": "string" },
+          "size": { "type": "integer" }
+        }
+      },
+      "ApplicationSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "critical": { "type": "integer" },
+          "high": { "type": "integer" },
+          "posture_score": { "type": "integer" }
+        },
+        "required": ["id", "name"]
+      },
+      "ApplicationPage": {
+        "type": "object",
+        "properties": {
+          "application": { "$ref": "#/components/schemas/ApplicationSummary" }
+        }
+      },
+      "HierarchyNode": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "name": { "type": "string" },
+          "posture_score": { "type": "integer" }
+        },
+        "required": ["path", "name"]
+      },
+      "Overview": {
+        "type": "object",
+        "properties": {
+          "posture_score": { "type": "integer" },
+          "open_findings": { "type": "integer" }
+        }
+      },
+      "NotificationList": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "unread": { "type": "integer" }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "actor": { "type": "string" },
+          "action": { "type": "string" },
+          "time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEntry" } },
+          "next_cursor": { "type": "string" }
+        }
+      },
+      "Taxonomy": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      },
+      "TaxonomyStatus": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "RunRow": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "status": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "status"]
+      },
+      "RunsPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/RunRow" } },
+          "next_cursor": { "type": "string" }
+        }
+      },
+      "AccessBinding": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "subject": { "type": "string" },
+          "role": { "type": "string" }
+        },
+        "required": ["id", "subject", "role"]
+      },
+      "CreateBindingRequest": {
+        "type": "object",
+        "properties": {
+          "subject": { "type": "string" },
+          "role": { "type": "string" },
+          "applicationId": { "type": "string", "format": "uuid" },
+          "hierarchyPath": { "type": "string" },
+          "tenantScope": { "type": "boolean" }
+        },
+        "required": ["subject", "role"]
+      },
+      "MyAccess": {
+        "type": "object",
+        "properties": {
+          "role": { "type": "string" },
+          "applications": { "type": "object" }
+        },
+        "required": ["role"]
+      },
+      "CreateUploadRequest": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string" },
+          "format": { "type": "string" },
+          "filename": { "type": "string" },
+          "sizeBytes": { "type": "integer" },
+          "context": { "type": "object" }
+        },
+        "required": ["sizeBytes"]
+      },
+      "CreateUploadResponse": {
+        "type": "object",
+        "properties": {
+          "uploadId": { "type": "string" },
+          "putUrl": { "type": "string" },
+          "putHeaders": { "type": "object" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["uploadId", "putUrl"]
+      },
+      "CompleteUploadRequest": {
+        "type": "object",
+        "properties": {
+          "sha256": { "type": "string" }
+        },
+        "required": ["sha256"]
+      },
+      "CompleteUploadResponse": {
+        "type": "object",
+        "properties": {
+          "ingestRunId": { "type": "string" },
+          "statusUrl": { "type": "string" }
+        },
+        "required": ["ingestRunId"]
+      },
+      "FindingEvent": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "action": { "type": "string" },
+          "time": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
+

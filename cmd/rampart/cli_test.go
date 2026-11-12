@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -257,5 +258,100 @@ func TestDetectCI(t *testing.T) {
 	t.Setenv("CI_COMMIT_REF_NAME", "topic")
 	if ci := detectCI(); ci.Commit != "def456" || ci.Ref != "merge-requests/7" {
 		t.Fatalf("gitlab: %+v", ci)
+	}
+}
+
+func TestCLIFindingsListAndSetState(t *testing.T) {
+	findingID := "01931f6a-0000-7000-8000-000000000001"
+	var patchedState string
+	var patchedJustification string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-cli-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		if r.Method == "GET" && r.URL.Path == "/api/v1/findings" {
+			resp := map[string]any{
+				"items": []map[string]any{
+					{
+						"finding": map[string]any{
+							"id":               findingID,
+							"rule_id":          "sql-injection",
+							"severity":         "critical",
+							"state":            "open",
+							"title":            "SQL injection in user login",
+							"application_name": "payments-api",
+						},
+						"risk": map[string]any{
+							"score": 950,
+							"band":  "critical",
+						},
+					},
+				},
+				"total": 1,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		if r.Method == "PATCH" && r.URL.Path == "/api/v1/findings/"+findingID {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			patchedState, _ = body["state"].(string)
+			patchedJustification, _ = body["justification"].(string)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"finding": map[string]any{
+					"id":    findingID,
+					"state": patchedState,
+				},
+			})
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	// 1. Test findings list (table)
+	var outTable bytes.Buffer
+	if err := runFindings([]string{"list", "--server", ts.URL, "--token", "test-cli-token", "-q", "severity:critical"}, &outTable); err != nil {
+		t.Fatalf("findings list table failed: %v", err)
+	}
+	if !strings.Contains(outTable.String(), "SQL injection") || !strings.Contains(outTable.String(), "CRITICAL") {
+		t.Errorf("expected table output to contain finding details, got:\n%s", outTable.String())
+	}
+
+	// 2. Test findings list (json)
+	var outJSON bytes.Buffer
+	if err := runFindings([]string{"list", "--server", ts.URL, "--token", "test-cli-token", "-o", "json"}, &outJSON); err != nil {
+		t.Fatalf("findings list json failed: %v", err)
+	}
+	if !strings.Contains(outJSON.String(), "sql-injection") {
+		t.Errorf("expected json output to contain rule id, got:\n%s", outJSON.String())
+	}
+
+	// 3. Test findings set-state
+	var outSet bytes.Buffer
+	if err := runFindings([]string{"set-state", findingID, "not_affected", "--justification", "vulnerable_code_not_in_execute_path", "--server", ts.URL, "--token", "test-cli-token"}, &outSet); err != nil {
+		t.Fatalf("findings set-state failed: %v", err)
+	}
+	if patchedState != "not_affected" || patchedJustification != "vulnerable_code_not_in_execute_path" {
+		t.Errorf("unexpected patched state: %s, just: %s", patchedState, patchedJustification)
+	}
+	if !strings.Contains(outSet.String(), "updated to \"not_affected\"") {
+		t.Errorf("expected confirmation message, got:\n%s", outSet.String())
+	}
+
+	// 4. Test findings CLI routing via handleCLI
+	handled, err := handleCLI([]string{"findings", "list", "--server", ts.URL, "--token", "test-cli-token"})
+	if !handled || err != nil {
+		t.Errorf("handleCLI failed for findings list: handled=%v, err=%v", handled, err)
 	}
 }
