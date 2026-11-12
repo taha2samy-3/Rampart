@@ -1660,6 +1660,7 @@ func (s *PostgresStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.U
 				justification = $9, impact_statement = $10, duplicate_of_id = $11,
 				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15, risk_acceptance_id = $16,
 				risk_score = $17, risk_band = $18, sla_due_date = $19, sla_paused_at = $20, sla_breached_at = $21, sla_start = $22,
+				sla_warned_at = CASE WHEN sla_due_date IS DISTINCT FROM $19 THEN NULL ELSE sla_warned_at END,
 				version = version + 1, updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2 AND version = $3`,
 			tenantID, f.ID, expectedVersion,
@@ -1990,7 +1991,8 @@ func (s *PostgresStore) UpdateFindingRisk(ctx context.Context, tenantID uuid.UUI
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		batch := &pgx.Batch{}
 		for _, f := range fs {
-			batch.Queue(`UPDATE finding SET risk_score = $3, risk_band = $4, kev = $5, epss_bucket = $6, sla_start = $7, sla_due_date = $8
+			batch.Queue(`UPDATE finding SET risk_score = $3, risk_band = $4, kev = $5, epss_bucket = $6, sla_start = $7,
+				sla_warned_at = CASE WHEN sla_due_date IS DISTINCT FROM $8 THEN NULL ELSE sla_warned_at END, sla_due_date = $8
 				WHERE tenant_id = $1 AND id = $2`, tenantID, f.ID, f.RiskScore, riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue)
 		}
 		return sendBatch(ctx, tx, batch, "update finding risk")

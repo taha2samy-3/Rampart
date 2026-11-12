@@ -1,5 +1,5 @@
 import { get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, CorrelatedRef, FindingEvent, FindingSources, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AppNotification, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -109,3 +109,24 @@ export async function getTrend(metric: 'open' | 'new' | 'closed', days: number, 
   const raw = await get<{ points?: TrendPoint[] | null }>('/api/v1/metrics/trend', { query: { metric, days }, signal });
   return raw.points ?? [];
 }
+
+export async function getNotifications(signal?: AbortSignal): Promise<NotificationList> {
+  const raw = await get<{ items?: AppNotification[] | null; unread?: number }>('/api/v1/notifications', { signal });
+  return { items: raw.items ?? [], unread: raw.unread ?? 0 };
+}
+export const markNotificationsRead = () => post<null>('/api/v1/notifications/read', undefined);
+
+export async function listAudit(args: AuditFilter & { cursor?: string; signal?: AbortSignal }): Promise<Page<AuditEntry>> {
+  const raw = await get<{ items?: AuditEntry[] | null; next_cursor?: string }>('/api/v1/audit', {
+    query: { actor: args.actor || undefined, action: args.action || undefined, cursor: args.cursor, limit: 50 },
+    signal: args.signal,
+  });
+  return { items: raw.items ?? [], nextCursor: raw.next_cursor ?? '' };
+}
+/** The export is a plain link: the browser downloads it with the session cookie. */
+export const auditExportUrl = (format: 'csv' | 'ndjson', f: AuditFilter) => {
+  const p = new URLSearchParams({ format });
+  if (f.actor) p.set('actor', f.actor);
+  if (f.action) p.set('action', f.action);
+  return `/api/v1/audit?${p.toString()}`;
+};

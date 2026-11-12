@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getTenants, logout, qk, switchTenant, toProblem } from '@/api';
+import { getNotifications, getTenants, logout, markNotificationsRead, qk, switchTenant, toProblem } from '@/api';
 import {
-  IconChevronDown, Logo, Menu, MenuContent, MenuItem, MenuLabel, MenuRadioGroup, MenuRadioItem,
+  IconBell, IconChevronDown, Logo, Menu, MenuContent, MenuItem, MenuLabel, MenuRadioGroup, MenuRadioItem,
   MenuSeparator, MenuTrigger, SearchField, useToast,
 } from '@/components';
+import { shortAge } from '@/lib/format';
 import { useTheme, type ThemePreference } from '@/lib/theme';
 import { useSession } from './session';
 
@@ -52,6 +53,47 @@ function TenantSwitcher() {
             ))}
           </MenuRadioGroup>
         )}
+      </MenuContent>
+    </Menu>
+  );
+}
+
+/**
+ * What the sweeps found: deadlines passed or near, risk acceptances ending. The count is in the label, not on a
+ * badge. Closing the list marks everything read for this user; while it is open the unread ones are in bold.
+ */
+function Notifications() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const q = useQuery({ queryKey: qk.notifications(), queryFn: ({ signal }) => getNotifications(signal), refetchInterval: 60_000, retry: false });
+  const read = useMutation({ mutationFn: markNotificationsRead, onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifications() }) });
+  const unread = q.data?.unread ?? 0;
+  const items = q.data?.items ?? [];
+  return (
+    <Menu onOpenChange={(open) => { if (!open && unread > 0) read.mutate(); }}>
+      <MenuTrigger
+        aria-label={unread > 0 ? t('shell.notificationsUnread', { count: unread }) : t('shell.notifications')}
+        className="relative inline-flex h-8 items-center gap-1 rounded-ctl px-2 text-13 hover:bg-chrome"
+      >
+        <IconBell width={16} height={16} />
+        {unread > 0 && <span aria-hidden="true" className="font-semibold">{unread > 99 ? '99+' : unread}</span>}
+      </MenuTrigger>
+      <MenuContent className="w-[360px] max-w-[calc(100vw-16px)]">
+        <MenuLabel>{t('shell.notifications')}</MenuLabel>
+        {q.isError && <div className="px-3 py-2 text-12 text-ink-2">{t('shell.notificationsFailed')}</div>}
+        {q.data && items.length === 0 && <div className="px-3 py-2 text-12 text-ink-2">{t('shell.noNotifications')}</div>}
+        {items.map((n) => (
+          <MenuItem
+            key={n.id}
+            className="h-auto! flex-col items-start! gap-0 py-1.5"
+            onSelect={() => { if (n.link) void navigate({ to: n.link.split('?')[0] as '/findings', search: Object.fromEntries(new URLSearchParams(n.link.split('?')[1] ?? '')) as never }); }}
+          >
+            <span className={n.unread ? 'font-semibold' : ''}>{n.title}</span>
+            {n.body && <span className="line-clamp-2 text-12 text-ink-2">{n.body}</span>}
+            <span className="text-12 text-ink-2"><time dateTime={n.created_at}>{shortAge(n.created_at)}</time></span>
+          </MenuItem>
+        ))}
       </MenuContent>
     </Menu>
   );
@@ -158,6 +200,7 @@ export function TopBar() {
       <div className="flex min-w-0 flex-1 justify-center" aria-label={t('shell.search')}>
         <GlobalSearch />
       </div>
+      <Notifications />
       <UserMenu />
     </header>
   );

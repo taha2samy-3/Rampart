@@ -37,14 +37,16 @@ export function Inspector({ row, selectedId, onTriage, onAccept }: { row: Findin
       <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">{f.title}</h2>
       <p className="mt-1 text-13 text-ink-2">{status}</p>
       {onTriage && (
-        <div className="mt-3 flex items-center gap-2">
-          <Button onClick={onTriage}>{t('triage.action')}</Button>
-          <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>s</Kbd></span>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button onClick={onTriage}>
+            {t('triage.action')}
+            <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>s</Kbd></span>
+          </Button>
           {onAccept && ['open', 'under_investigation', 'affected'].includes(f.state) && (
-            <>
-              <Button onClick={onAccept}>{t('acceptance.action')}</Button>
+            <Button onClick={onAccept}>
+              {t('acceptance.action')}
               <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>e</Kbd></span>
-            </>
+            </Button>
           )}
         </div>
       )}

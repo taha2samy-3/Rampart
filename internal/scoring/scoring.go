@@ -302,7 +302,11 @@ func (s *Scorer) MarkBreaches(ctx context.Context, tenantID uuid.UUID, now time.
 	for _, id := range ids {
 		events = append(events, &domain.FindingEvent{ID: domain.NewID(), FindingID: id, At: now, Actor: "system:sla", Type: "sla_breached"})
 	}
-	return len(ids), s.store.RecordFindingEvents(ctx, tenantID, events)
+	if err := s.store.RecordFindingEvents(ctx, tenantID, events); err != nil {
+		return len(ids), err
+	}
+	s.notifyBreaches(ctx, tenantID, len(ids), now)
+	return len(ids), nil
 }
 
 // RunSweeper marks breaches for every tenant every interval. One replica sweeps at a time (an advisory lock).
@@ -347,6 +351,12 @@ func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.
 				log.Warn("sla sweep failed", "tenant", t, "error", err)
 			} else if n > 0 {
 				log.Info("sla breaches marked", "tenant", t, "count", n)
+			}
+			if _, err := sc.WarnDueSoon(ctx, t, now); err != nil {
+				log.Warn("sla warning failed", "tenant", t, "error", err)
+			}
+			if _, err := sc.WarnExpiringAcceptances(ctx, t, now); err != nil {
+				log.Warn("acceptance expiry warning failed", "tenant", t, "error", err)
 			}
 		}
 	}

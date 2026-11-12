@@ -44,6 +44,10 @@ export interface Scenario {
   patch?: 200 | 400 | 409;
   /** What GET /api/v1/findings/{id} answers for the Reported by section. */
   sources?: { reported_by?: Reporter[]; also_reported_by?: CorrelatedRef[] } | 'error';
+  /** Pages of GET /api/v1/audit; each call returns the next page. 'error' answers 500. */
+  audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
+  /** GET /api/v1/notifications; POSTs to /read are recorded in the calls. */
+  notifications?: { items: { id: string; kind: string; title: string; body?: string; link?: string; created_at: string; unread: boolean }[]; unread: number } | 'error';
   /** The timeline GET /api/v1/findings/{id}/events returns. */
   /** GET /api/v1/applications, and the page of each (by id). */
   apps?: ReturnType<typeof app>[] | 'error';
@@ -106,6 +110,7 @@ export type Calls = { method: string; url: string; headers: Record<string, strin
 
 export function mockFetch(sc: Scenario): Calls {
   const calls: Calls = [];
+  let auditCalls = 0;
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json' } });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -132,6 +137,17 @@ export function mockFetch(sc: Scenario): Calls {
       if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
       return json(finding(1));
     }
+    if (path === '/api/v1/audit') {
+      if (sc.audit === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      const pages = sc.audit ?? [{ items: [] }];
+      const i = Math.min(auditCalls++, pages.length - 1);
+      return json(pages[i]);
+    }
+    if (path === '/api/v1/notifications') {
+      if (sc.notifications === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      return json(sc.notifications ?? { items: null, unread: 0 });
+    }
+    if (path === '/api/v1/notifications/read') return json(null, 204);
     if (path === '/api/v1/applications') {
       if (sc.apps === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list applications', status: 500, request_id: 'req_apps' }, 500);
       return json({ items: sc.apps?.length ? sc.apps : null });

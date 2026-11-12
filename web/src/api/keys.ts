@@ -10,6 +10,8 @@ export const qk = {
     one: (id: string) => ['acceptances', 'one', id] as const,
   },
   settings: () => ['settings'] as const,
+  audit: (f: { actor?: string; action?: string }) => ['audit', f.actor ?? '', f.action ?? ''] as const,
+  notifications: () => ['notifications'] as const,
   applications: {
     list: () => ['applications', 'list'] as const,
     one: (id: string) => ['applications', 'one', id] as const,

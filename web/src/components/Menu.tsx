@@ -25,8 +25,8 @@ export function MenuContent({ children, align = 'end', className }: { children: 
     </DM.Portal>
   );
 }
-export function MenuItem({ children, ...p }: DM.DropdownMenuItemProps) {
-  return <DM.Item className={item} {...p}>{children}</DM.Item>;
+export function MenuItem({ children, className, ...p }: DM.DropdownMenuItemProps) {
+  return <DM.Item className={cn(item, className)} {...p}>{children}</DM.Item>;
 }
 export function MenuRadioItem({ children, ...p }: DM.DropdownMenuRadioItemProps) {
   return (

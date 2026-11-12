@@ -210,8 +210,22 @@ func (s *Service) ExpireDue(ctx context.Context, tenantID uuid.UUID, now time.Ti
 			return n, err
 		}
 		n++
+		s.notifyEnded(ctx, tenantID, ra, now)
 	}
 	return n, nil
+}
+
+// notifyEnded tells the tenant that an acceptance ended and what happened to its findings.
+func (s *Service) notifyEnded(ctx context.Context, tenantID uuid.UUID, ra *domain.RiskAcceptance, now time.Time) {
+	nt, ok := s.store.(store.Notifications)
+	if !ok {
+		return
+	}
+	body := "Its findings stay accepted; look at them again."
+	if ra.OnExpiry == domain.OnExpiryReactivate {
+		body = "Its findings are back in the queue."
+	}
+	_ = nt.CreateNotification(ctx, tenantID, &domain.Notification{Kind: domain.NotifyAcceptanceEnded, Title: "A risk acceptance ended", Body: ra.Justification + ". " + body, Link: "/workflow", CreatedAt: now})
 }
 
 // apply puts the findings of an approved acceptance into risk_accepted. A finding that stopped being active since

@@ -288,3 +288,14 @@ export interface Reporter {
 /** The same issue as found by another tool: a separate finding in the same correlation group (D24). */
 export interface CorrelatedRef { id: string; scanner: string; rule_id: string; state: string }
 export interface FindingSources { reported_by: Reporter[]; also_reported_by: CorrelatedRef[] }
+
+/** An in-app message: what a deadline or expiry sweep found (docs/16 D45). */
+export interface AppNotification { id: string; kind: string; title: string; body?: string; link?: string; created_at: string; unread: boolean }
+export interface NotificationList { items: AppNotification[]; unread: number }
+
+/** One row of the audit log (GET /api/v1/audit, docs/16 D46). */
+export interface AuditEntry {
+  id: string; at: string; actor: string; action: string; resource_type: string; resource_id?: string;
+  detail?: { method?: string; path?: string; status?: number }; ip?: string; request_id?: string;
+}
+export interface AuditFilter { actor?: string; action?: string }

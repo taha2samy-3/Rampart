@@ -662,3 +662,21 @@ Built as D2 and D9 specify. What was decided while building it:
 - **A tool that stopped.** `present = false` is shown as "no longer reports it". It is the signal that a tool was removed from the pipeline or that the issue was fixed in the code that tool scans.
 - **Filter.** `scanner:grype` now matches a finding the tool reported through any occurrence, not only the family of the finding's rule.
 - **Not built.** A column in the findings table; counting unique issues across a group; merging (still after v1.0, D24).
+
+## D45. In-app notifications (Phase 2)
+
+- **What and why.** The MVP exit says "deadlines breach and notify in-app". The sweeps already knew; now they tell. Slack, email and webhooks are Phase 3 and will read the same rows.
+- **Schema** (migration `00011_notifications.sql`, schema version 11): `notification` (tenant-wide, RLS) and `notification_marker` (one `read_at` per user and tenant). What a user has read is one timestamp, so "mark all read" is one write and an unread count is one query. `finding.sla_warned_at` and `risk_acceptance.expiry_warned_days` make each warning go out once.
+- **Events.** (1) Findings that passed their deadline, from the breach sweep: one message per sweep, with the count, so a sweep after an outage is not a flood. (2) Findings due within 24 hours (docs/06 `beforeBreach`), once each; a changed due date clears the mark. (3) A risk acceptance ending in 14 days, then in 1 day (docs/06). (4) An acceptance that ended, with what happened to its findings. Each message links to a filtered list (`sla:breached`, `sla:due:1d`) or to the Workflow page; a test follows the link and checks it finds the finding.
+- **API.** `GET /api/v1/notifications?limit=` (newest first, `unread` per item and in total) and `POST /api/v1/notifications/read`. Any role may read its own. The in-memory store answers 501.
+- **UI.** A bell in the top bar. The unread count is in the accessible name and shown as a bare number, not a badge; the list opens as a menu, unread items in bold, and closing it marks everything read.
+- **Not built.** Per-user or per-event routing, digests by email, Slack, Teams and webhooks (Phase 3), notification retention, a page of all notifications, SLA warnings configurable per policy (`beforeBreach` is a fixed 24 hours).
+
+## D46. The audit log (Phase 2)
+
+- **What was there.** `audit_event` existed and recorded sign-in events only. docs/07 says every mutating API call, and "append-only, no UPDATE/DELETE grants"; the application and system roles had both grants. Both are fixed.
+- **Recording.** `API.Audited` wraps the HTTP handler: every POST, PUT, PATCH and DELETE on `/api/v1` and `/ingest/v1` by an authenticated caller is recorded with the actor, the route pattern (`PATCH /api/v1/findings/{id}`), the resource type and id, the status the server answered, the address, the user agent and the request id. A refused call (403) is recorded; an unauthenticated one has no tenant and is not. Reads are not. Query strings and bodies are never stored. A failed audit write is logged and does not fail the request.
+- **Append-only** (migration `00012_audit_append_only.sql`, schema version 12): `UPDATE`, `DELETE` and `TRUNCATE` are revoked from the application, system and read-only roles, on the parent and on every existing partition. A test runs each statement as both roles and expects "permission denied". Old months leave by dropping a whole partition as the owner (the retention job, not built).
+- **API.** `GET /api/v1/audit` for administrators: `actor`, `action` (a route or a method prefix), `resourceType`, `from`, `to`, an opaque cursor (a position only; the tenant comes from the session), and `format=csv|ndjson` for export (up to 50,000 rows, the next cursor in `X-Next-Cursor`). Cells that start with `=`, `+`, `-` or `@` are defused for spreadsheets.
+- **UI.** Administration shows the audit log with two filters, paging and the two downloads; other roles are told it is for administrators and no request is sent.
+- **Not built.** Before and after values of a change (the table has the columns; handlers do not fill them), policy actions and connector pushes as audit events (no such actions yet), audit retention, streaming to an external log store, users, teams and access bindings on the Administration page.

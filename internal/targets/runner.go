@@ -304,7 +304,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	httpServer := &http.Server{
 		Addr:              r.cfg.Server.HTTPAddr,
-		Handler:           telemetry.RequestIDMiddleware(telemetry.HTTPMiddleware(mux)),
+		Handler:           telemetry.RequestIDMiddleware(telemetry.HTTPMiddleware(queryAPI.Audited(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

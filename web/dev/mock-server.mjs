@@ -281,7 +281,28 @@ const server = http.createServer((req, res) => {
     if (!loggedIn) return problem(res, 401, 'Authentication required', 'No active session.');
     if (p === '/api/v1/me') return json(res, { user: { id: 'u-1', email: 'sara.ahmed@acme.example', name: 'Sara Ahmed' }, tenant });
     if (p === '/api/v1/me/tenants') return json(res, TENANTS);
-    if (p === '/api/v1/me/permissions') return json(res, { role: 'triager', scopes: ['tenant'] });
+    if (p === '/api/v1/me/permissions') return json(res, { role: 'admin', scopes: ['tenant'] });
+    if (p === '/api/v1/audit' && req.method === 'GET') {
+      const w = (n) => new Date(Date.now() - n * 3600000).toISOString();
+      const row = (n, actor, action, rt, rid, status) => ({ id: `au${n}`, at: w(n), actor, action, resource_type: rt, resource_id: rid, detail: { method: action.split(' ')[0], status }, request_id: `req_${n}` });
+      return json(res, { items: dataMode === 'empty' ? [] : [
+        row(1, 'user:sara@acme.example', 'PATCH /api/v1/findings/{id}', 'findings', 'f-18c2', 200),
+        row(2, 'user:omar@acme.example', 'PATCH /api/v1/findings/{id}', 'findings', 'f-77aa', 403),
+        row(3, 'user:boss@acme.example', 'POST /api/v1/risk-acceptances/{id}/approve', 'risk-acceptances', 'ra-31', 200),
+        row(5, 'user:sara@acme.example', 'POST /api/v1/risk-acceptances', 'risk-acceptances', '', 201),
+        row(9, 'ci:github/acme/checkout', 'POST /ingest/v1/uploads', 'uploads', '', 201),
+      ], next_cursor: '' });
+    }
+    if (p === '/api/v1/notifications' && req.method === 'GET') {
+      const h = (n) => new Date(Date.now() - n * 3600000).toISOString();
+      const items = dataMode === 'empty' ? [] : [
+        { id: 'n1', kind: 'sla_breached', title: '3 findings passed their deadline', link: '/findings?q=sla%3Abreached', created_at: h(2), unread: true },
+        { id: 'n2', kind: 'sla_due_soon', title: 'A finding is due within a day', body: 'Hard-coded JWT signing secret', link: '/findings?q=sla%3Adue%3A1d', created_at: h(7), unread: true },
+        { id: 'n3', kind: 'acceptance_expiring', title: 'A risk acceptance ends in 14 days', body: 'Behind the VPN. Owner: sara@acme.example. 2 findings will return to the queue.', link: '/workflow', created_at: h(60), unread: false },
+      ];
+      return json(res, { items, unread: items.filter((i) => i.unread).length });
+    }
+    if (p === '/api/v1/notifications/read' && req.method === 'POST') { res.writeHead(204); return res.end(); }
     if (p === '/api/v1/applications') return json(res, { items: APP_ROWS });
     const am = /^\/api\/v1\/applications\/([^/]+)\/summary$/.exec(p);
     if (am) {
