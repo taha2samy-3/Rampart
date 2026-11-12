@@ -41,12 +41,14 @@ type Application struct {
 	InternetFacing      bool       `json:"internet_facing"`
 	DataClassification  []string   `json:"data_classification,omitempty"` // pii, pci, phi, secret, public
 	// CompensatingControls: waf, api_gateway, mtls, private_network (docs/03). See ControlCovers.
-	CompensatingControls []string  `json:"compensating_controls,omitempty"`
-	Lifecycle            string    `json:"lifecycle"` // planning | development | production | deprecated
-	Owners               []string  `json:"owners,omitempty"`
-	Tags                 []string  `json:"tags,omitempty"`
-	Version              int       `json:"version"`
-	CreatedAt            time.Time `json:"created_at"`
+	CompensatingControls []string `json:"compensating_controls,omitempty"`
+	// Selectors attach repositories and images to the application (D56).
+	Selectors Selectors `json:"selectors"`
+	Lifecycle string    `json:"lifecycle"` // planning | development | production | deprecated
+	Owners    []string  `json:"owners,omitempty"`
+	Tags      []string  `json:"tags,omitempty"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Validate checks Application domain invariants.

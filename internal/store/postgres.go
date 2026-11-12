@@ -16,6 +16,7 @@ import (
 	"rampart/internal/auth"
 	"rampart/internal/config/apply"
 	"rampart/internal/domain"
+	"rampart/internal/normalize"
 )
 
 var (
@@ -999,16 +1000,19 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 
 // applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
 const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
-	data_classification, compensating_controls, owners, lifecycle, version, created_at`
+	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at`
 
 func scanApplication(row pgx.Row, app *domain.Application) error {
-	var owners []byte
+	var owners, selectors []byte
 	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
-		&app.DataClassification, &app.CompensatingControls, &owners, &app.Lifecycle, &app.Version, &app.CreatedAt); err != nil {
+		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt); err != nil {
 		return err
 	}
 	if len(owners) > 0 {
 		_ = json.Unmarshal(owners, &app.Owners)
+	}
+	if len(selectors) > 0 {
+		_ = json.Unmarshal(selectors, &app.Selectors)
 	}
 	return nil
 }
@@ -1461,7 +1465,9 @@ func (s *PostgresStore) GetTenantByNamespace(ctx context.Context, namespace stri
 // the tenant is flagged and the SLA sweep re-scores its findings (D40, D55).
 func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Application) error {
 	owners, _ := json.Marshal(nonNil(app.Owners))
-	return s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
+	selectors, _ := json.Marshal(app.Selectors)
+	saved := false
+	err := s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
 		var prev domain.Application
 		var managedBy string
 		var existed bool
@@ -1479,29 +1485,38 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if existed && managedBy == "ui" {
 			return nil
 		}
+		saved = true
 		createdAt := app.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
-			                         data_classification, compensating_controls, owners, lifecycle, version, created_at, managed_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, 'crd')
+			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd')
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET
 				name = EXCLUDED.name, description = EXCLUDED.description,
 				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
 				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
-				owners = EXCLUDED.owners, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
+				owners = EXCLUDED.owners, selectors = EXCLUDED.selectors, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
 				version = application.version + 1`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
-			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, app.Lifecycle, createdAt); err != nil {
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt); err != nil {
 			return err
 		}
 		if !existed || !scoreContextChanged(prev, app) {
 			return nil
 		}
-		return flagRecompute(ctx, tx, app.TenantID)
+		_, err = tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE WHERE tenant_id = $1 AND slug = $2`, app.TenantID, app.Slug)
+		return err
 	})
+	if err != nil || !saved || app.Selectors.Empty() {
+		return err
+	}
+	// Assets waiting in Unassigned that the selectors now claim move here, with their findings (D56). It runs after
+	// the save committed; it is repeatable, so a failure is repaired by the next reconcile.
+	_, err = s.ReassignUnassignedAssets(ctx, app.TenantID)
+	return err
 }
 
 // scoreContextChanged says whether a change to an application moves the score or the due date of its findings.
@@ -1526,15 +1541,6 @@ func scoreContextChanged(a, b domain.Application) bool {
 	}
 	return a.BusinessCriticality != b.BusinessCriticality || a.InternetFacing != b.InternetFacing ||
 		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls)
-}
-
-// flagRecompute asks the SLA sweep to re-score every active finding of the tenant. The flag lives on policy rows
-// (D41); a marker row that is never a policy in force (no applied spec) carries it, as for a deleted SLAPolicy.
-func flagRecompute(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) error {
-	_, err := tx.Exec(ctx, `INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, generation, recompute_needed)
-		VALUES ($1, $2, 'sla', '_recompute', 'application-context', '{}', NULL, TRUE, 0, TRUE)
-		ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET recompute_needed = TRUE, updated_at = NOW()`, domain.NewID(), tenantID)
-	return err
 }
 
 // GetApplicationBySlug implements apply.ConfigStore.
@@ -2213,9 +2219,11 @@ func (s *PostgresStore) GetSLAPolicySpec(ctx context.Context, tenantID uuid.UUID
 	return spec, err == nil, err
 }
 
-// TenantsNeedingSLARecompute lists the tenants whose SLA policy changed. It reads across tenants: rampart_system.
+// TenantsNeedingSLARecompute lists the tenants whose SLA policy changed (D41) or one of whose applications changed
+// the context the score uses or received assets (D55, D56). It reads across tenants: rampart_system.
 func (s *PostgresStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT tenant_id FROM policy_object WHERE kind = 'sla' AND recompute_needed`)
+	rows, err := s.pool.Query(ctx, `SELECT tenant_id FROM policy_object WHERE kind = 'sla' AND recompute_needed
+		UNION SELECT tenant_id FROM application WHERE rescore_needed`)
 	if err != nil {
 		return nil, err
 	}
@@ -2234,7 +2242,10 @@ func (s *PostgresStore) TenantsNeedingSLARecompute(ctx context.Context) ([]uuid.
 // ClearSLARecompute says that the due dates of a tenant now follow its current policy.
 func (s *PostgresStore) ClearSLARecompute(ctx context.Context, tenantID uuid.UUID) error {
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE policy_object SET recompute_needed = FALSE WHERE tenant_id = $1 AND kind = 'sla'`, tenantID)
+		if _, err := tx.Exec(ctx, `UPDATE policy_object SET recompute_needed = FALSE WHERE tenant_id = $1 AND kind = 'sla'`, tenantID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE application SET rescore_needed = FALSE WHERE tenant_id = $1 AND rescore_needed`, tenantID)
 		return err
 	})
 }
@@ -2259,4 +2270,107 @@ func (s *PostgresStore) ListActiveFindings(ctx context.Context, tenantID, after 
 		return rows.Err()
 	})
 	return out, err
+}
+
+// ListApplicationSelectors returns the applications of a tenant that declare selectors (D56).
+func (s *PostgresStore) ListApplicationSelectors(ctx context.Context, tenantID uuid.UUID) ([]normalize.AppSelectors, error) {
+	var out []normalize.AppSelectors
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, slug, selectors FROM application WHERE tenant_id = $1 AND selectors <> '{}'::jsonb`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a normalize.AppSelectors
+			var raw []byte
+			if err := rows.Scan(&a.ID, &a.Slug, &raw); err != nil {
+				return err
+			}
+			if json.Unmarshal(raw, &a.Selectors) == nil && !a.Selectors.Empty() {
+				out = append(out, a)
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// MoveAssetToApplication attaches an asset to an application and, in the same transaction, moves the asset's
+// findings with it, so no finding points at an application its asset left (D36 invariant). The application is
+// flagged so the SLA sweep re-scores the findings in their new context (D55). It returns false when the asset
+// was already there.
+func (s *PostgresStore) MoveAssetToApplication(ctx context.Context, tenantID, assetID, appID uuid.UUID) (bool, error) {
+	moved := false
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE asset SET application_id = $3 WHERE tenant_id = $1 AND id = $2 AND application_id IS DISTINCT FROM $3`,
+			tenantID, assetID, appID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		moved = true
+		tag, err = tx.Exec(ctx, `UPDATE finding SET application_id = $3, updated_at = NOW() WHERE tenant_id = $1 AND asset_id = $2 AND application_id <> $3`,
+			tenantID, assetID, appID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE WHERE tenant_id = $1 AND id = $2`, tenantID, appID)
+		return err
+	})
+	return moved, err
+}
+
+// ReassignUnassignedAssets moves every repository and image asset that has no application, or sits in the
+// tenant's Unassigned application, to the application whose selectors claim it (D56). Assets a person, an upload
+// or a selector already placed elsewhere stay where they are. It returns how many moved.
+func (s *PostgresStore) ReassignUnassignedAssets(ctx context.Context, tenantID uuid.UUID) (int, error) {
+	apps, err := s.ListApplicationSelectors(ctx, tenantID)
+	if err != nil || len(apps) == 0 {
+		return 0, err
+	}
+	type cand struct {
+		id  uuid.UUID
+		typ domain.AssetType
+		key string
+	}
+	var cands []cand
+	err = s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT a.id, a.type, a.key FROM asset a
+			LEFT JOIN application u ON u.id = a.application_id
+			WHERE a.tenant_id = $1 AND a.type IN ('repository', 'image')
+			  AND (a.application_id IS NULL OR u.slug = 'unassigned')`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c cand
+			var typ string
+			if err := rows.Scan(&c.id, &typ, &c.key); err != nil {
+				return err
+			}
+			c.typ = domain.AssetType(typ)
+			cands = append(cands, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, c := range cands {
+		appID, ok := normalize.MatchApplication(apps, c.typ, c.key)
+		if !ok {
+			continue
+		}
+		moved, err := s.MoveAssetToApplication(ctx, tenantID, c.id, appID)
+		if err != nil {
+			return n, err
+		}
+		if moved {
+			n++
+		}
+	}
+	return n, nil
 }

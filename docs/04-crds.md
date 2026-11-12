@@ -52,8 +52,8 @@ spec:
     repositories:
       - url: https://github.com/example/payments-api
     images:
-      - repository: ghcr.io/example/payments-api
-    workloads:                        # evaluated in connected clusters
+      - repository: ghcr.io/example/payments-api   # exact key, or a prefix ending in * (D56)
+    workloads:                        # not built: needs a connected cluster (collector, after v1.0); refused today (D56)
       - cluster: prod-eu
         namespaceSelector: {matchLabels: {app.kubernetes.io/part-of: payments}}
         labelSelector: {matchLabels: {app.kubernetes.io/name: payments-api}}

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -55,6 +56,24 @@ func TestControlCovers(t *testing.T) {
 	for _, c := range cases {
 		if got := ControlCovers(c.controls, c.category); got != c.want {
 			t.Fatalf("%v on %s: %v, want %v", c.controls, c.category, got, c.want)
+		}
+	}
+}
+
+func TestApplicationSpec_Selectors(t *testing.T) {
+	id, tenant := uuid.New(), uuid.New()
+	for name, raw := range map[string]string{
+		"workloads are not built": `{"selectors":{"workloads":[{"cluster":"prod"}]}}`,
+		"empty pattern":           `{"selectors":{"repositories":[{"url":""}]}}`,
+		"match everything":        `{"selectors":{"images":[{"repository":"*"}]}}`,
+		"star in the middle":      `{"selectors":{"repositories":[{"url":"https://github.com/*/shop"}]}}`,
+	} {
+		var s ApplicationSpec
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ToApplication(id, tenant, "x"); err == nil {
+			t.Fatalf("%s: accepted", name)
 		}
 	}
 }

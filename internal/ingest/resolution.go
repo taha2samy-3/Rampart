@@ -3,8 +3,6 @@ package ingest
 import (
 	"context"
 	"errors"
-	"net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -84,68 +82,12 @@ func DeriveAssetKey(assetType domain.AssetType, uctx domain.UploadContext) strin
 	}
 }
 
-// NormalizeRepositoryURL normalizes a Git repository URL (stripping credentials, trailing .git, and lowercasing host).
-func NormalizeRepositoryURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimSuffix(raw, "/")
-	// Handle scp-like syntax: git@github.com:org/repo.git
-	if strings.HasPrefix(raw, "git@") {
-		parts := strings.SplitN(raw[4:], ":", 2)
-		if len(parts) == 2 {
-			host := strings.ToLower(parts[0])
-			repoPath := strings.TrimSuffix(strings.TrimSuffix(parts[1], "/"), ".git")
-			repoPath = strings.TrimPrefix(repoPath, "/")
-			return "https://" + host + "/" + strings.ToLower(repoPath)
-		}
-	}
+// NormalizeRepositoryURL and NormalizeImageRef live in internal/normalize so the store can match application
+// selectors with the same rules (D56).
+func NormalizeRepositoryURL(raw string) string { return normalize.RepositoryURL(raw) }
 
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		// Treat as plain path or slug
-		clean := strings.TrimSuffix(strings.TrimPrefix(raw, "/"), ".git")
-		return strings.ToLower(clean)
-	}
-
-	host := strings.ToLower(u.Host)
-	cleanPath := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
-	cleanPath = path.Clean(cleanPath)
-	if cleanPath == "." || cleanPath == "/" {
-		cleanPath = ""
-	} else if !strings.HasPrefix(cleanPath, "/") {
-		cleanPath = "/" + cleanPath
-	}
-
-	scheme := strings.ToLower(u.Scheme)
-	if scheme == "" {
-		scheme = "https"
-	}
-
-	return scheme + "://" + host + strings.ToLower(cleanPath)
-}
-
-// NormalizeImageRef strips tags and digests from container image references per D10 (registry/repository).
-func NormalizeImageRef(ref string) string {
-	ref = strings.TrimSpace(ref)
-	// Strip digest (@sha256:...)
-	if idx := strings.Index(ref, "@"); idx != -1 {
-		ref = ref[:idx]
-	}
-
-	// Strip tag (:latest, :v1.0), accounting for registry port (e.g. localhost:5000/repo:tag)
-	lastSlash := strings.LastIndex(ref, "/")
-	if lastSlash != -1 {
-		repoPart := ref[lastSlash+1:]
-		if colonIdx := strings.Index(repoPart, ":"); colonIdx != -1 {
-			ref = ref[:lastSlash+1] + repoPart[:colonIdx]
-		}
-	} else {
-		if colonIdx := strings.Index(ref, ":"); colonIdx != -1 {
-			ref = ref[:colonIdx]
-		}
-	}
-
-	return strings.ToLower(ref)
-}
+// NormalizeImageRef strips tags and digests from an image reference (D10).
+func NormalizeImageRef(ref string) string { return normalize.ImageRef(ref) }
 
 // ResolveAsset resolves or creates the long-lived asset matching (tenant_id, type, key) (D10).
 func ResolveAsset(ctx context.Context, st Store, tenantID uuid.UUID, assetType domain.AssetType, key string) (*domain.Asset, error) {
@@ -188,64 +130,89 @@ func ResolveAsset(ctx context.Context, st Store, tenantID uuid.UUID, assetType d
 	return newAsset, nil
 }
 
-// ResolveApplication resolves the target application for an asset per D10 priority:
-// 1. Asset's existing application_id
-// 2. Declared application slug (created if missing)
-// 3. Tenant's built-in "unassigned" application (D10 line 154)
+// selectorStore is what selector resolution needs from the store (PostgreSQL; the in-memory store has no
+// selectors and keeps the old order).
+type selectorStore interface {
+	ListApplicationSelectors(ctx context.Context, tenantID uuid.UUID) ([]normalize.AppSelectors, error)
+	MoveAssetToApplication(ctx context.Context, tenantID, assetID, appID uuid.UUID) (bool, error)
+}
+
+// ResolveApplication resolves the application of an asset in the order of D10, and records it on the asset:
+//  1. the application the asset already belongs to, unless that is the tenant's Unassigned application;
+//  2. the application whose selectors match the asset key (D56);
+//  3. the application the upload names (created if missing);
+//  4. the tenant's built-in Unassigned application.
+//
+// An asset in Unassigned is resolved again on every run, so a selector declared after the first scan still
+// claims it. Moving an asset moves its findings in the same transaction.
 func ResolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset *domain.Asset, declaredSlug string) (uuid.UUID, error) {
+	sel, hasSelectors := st.(selectorStore)
 	if asset != nil && asset.ApplicationID != nil && *asset.ApplicationID != domain.NilID {
-		return *asset.ApplicationID, nil
+		if !hasSelectors {
+			return *asset.ApplicationID, nil
+		}
+		if cur, err := st.GetApplication(ctx, tenantID, *asset.ApplicationID); err != nil || cur == nil || cur.Slug != "unassigned" {
+			return *asset.ApplicationID, nil
+		}
 	}
 
-	targetSlug := strings.TrimSpace(declaredSlug)
+	bind := func(appID uuid.UUID) (uuid.UUID, error) {
+		if asset == nil {
+			return appID, nil
+		}
+		if hasSelectors {
+			if _, err := sel.MoveAssetToApplication(ctx, tenantID, asset.ID, appID); err != nil {
+				return domain.NilID, err
+			}
+		} else if asset.ApplicationID == nil || *asset.ApplicationID == domain.NilID {
+			_ = st.CreateAsset(ctx, asset)
+		}
+		asset.ApplicationID = &appID
+		return appID, nil
+	}
+
+	if hasSelectors && asset != nil {
+		apps, err := sel.ListApplicationSelectors(ctx, tenantID)
+		if err != nil {
+			return domain.NilID, err
+		}
+		if appID, ok := normalize.MatchApplication(apps, asset.Type, asset.Key); ok {
+			return bind(appID)
+		}
+	}
+
+	targetSlug := strings.ToLower(strings.TrimSpace(declaredSlug))
 	if targetSlug == "" {
 		targetSlug = "unassigned"
 	}
-	targetSlug = strings.ToLower(targetSlug)
+	if asset != nil && asset.ApplicationID != nil && *asset.ApplicationID != domain.NilID && targetSlug == "unassigned" {
+		return *asset.ApplicationID, nil // already in Unassigned, and nothing claims it
+	}
 
 	app, err := st.LookupApplication(ctx, tenantID, targetSlug)
 	if err == nil && app != nil {
-		// Update asset binding if unassigned
-		if asset != nil && (asset.ApplicationID == nil || *asset.ApplicationID == domain.NilID) {
-			asset.ApplicationID = &app.ID
-			_ = st.CreateAsset(ctx, asset)
-		}
-		return app.ID, nil
+		return bind(app.ID)
 	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return domain.NilID, err
 	}
 
-	// Create application
-	now := time.Now().UTC()
 	name := "Unassigned"
 	if targetSlug != "unassigned" {
 		name = targetSlug
 	}
 	newApp := &domain.Application{
-		ID:                  domain.NewID(),
-		TenantID:            tenantID,
-		Slug:                targetSlug,
-		Name:                name,
-		BusinessCriticality: "medium",
-		Lifecycle:           "production",
-		Version:             1,
-		CreatedAt:           now,
+		ID: domain.NewID(), TenantID: tenantID, Slug: targetSlug, Name: name,
+		BusinessCriticality: "medium", Lifecycle: "production", Version: 1, CreatedAt: time.Now().UTC(),
 	}
-
 	if err := st.CreateApplication(ctx, newApp); err != nil {
-		if existing, retryErr := st.LookupApplication(ctx, tenantID, targetSlug); retryErr == nil && existing != nil {
-			return existing.ID, nil
+		existing, retryErr := st.LookupApplication(ctx, tenantID, targetSlug)
+		if retryErr != nil || existing == nil {
+			return domain.NilID, err
 		}
-		return domain.NilID, err
+		return bind(existing.ID)
 	}
-
-	if asset != nil {
-		asset.ApplicationID = &newApp.ID
-		_ = st.CreateAsset(ctx, asset)
-	}
-
-	return newApp.ID, nil
+	return bind(newApp.ID)
 }
 
 // ResolveTrack derives the track name from context per D10 line 135:

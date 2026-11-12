@@ -55,6 +55,34 @@ spec:
                   items:
                     type: string
                     enum: [waf, apiGateway, mtls, privateNetwork]
+                selectors:
+                  description: Attach repositories and images to this application automatically. A pattern is an exact key or a prefix ending in * (docs/16 D56).
+                  type: object
+                  properties:
+                    repositories:
+                      type: array
+                      items:
+                        type: object
+                        required: [url]
+                        properties:
+                          url:
+                            type: string
+                            minLength: 1
+                    images:
+                      type: array
+                      items:
+                        type: object
+                        required: [repository]
+                        properties:
+                          repository:
+                            type: string
+                            minLength: 1
+                    workloads:
+                      description: Not built yet (needs a connected cluster); a resource that sets it is refused with the reason.
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
               required:
                 - displayName
             status:

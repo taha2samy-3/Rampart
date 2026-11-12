@@ -42,6 +42,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 1: `RekeyJob`: a GHSA-keyed finding moves to its CVE's key after the alias arrives, merging with an existing one; the old key still finds it (D50) | built; tested on PostgreSQL. Not built: alias expiry, other categories |
 | Phase 2: retention: stale occurrences, old resolved findings, run results, old finding keys, raw reports (7 days when they name secrets), abandoned uploads, and the event and audit months, with minimums from PCI DSS 10.5.1 and an audit entry per tenant; partitions created ahead by `rampart maintenance` (Helm CronJob) (D53) | built; tested on PostgreSQL, the chart rendered in CI, Vitest. Not built: the `RetentionPolicy` resource, per-tenant periods, notification retention, GDPR purge by asset |
 | Phase 2: the Application resource reaches the score: criticality, exposure, data classification and compensating controls are stored and read, a change re-scores existing findings, ingest never overwrites them, `rampart apply` and the operator share one mapping (D55) | built; tested on PostgreSQL and in unit tests |
+| Phase 2: `Application.selectors` for repositories and images; an asset is attached to its application for real (the link was never stored); assets waiting in Unassigned move with their findings when a selector claims them (D56) | built; tested on PostgreSQL and in unit tests. Not built: workload selectors (need the collector), a condition for overlapping selectors |
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 
 ## Left for the MVP
@@ -50,7 +51,6 @@ Every P0 row of [01](01-features.md) and every Phase 2 item below, checked again
 
 | # | What | From | Notes |
 |---|---|---|---|
-| 2 | `Application.selectors` attach repositories and images to an application (resolution step (b) of D10) | B3 | |
 | 3 | Decisions carry across tracks of one asset, for new findings only | C6 | D54 |
 | 4 | Hierarchy: a tree of nodes, `application.hierarchy_node_id`, a filter, roll-ups; the CRD is P2 | B1, H3, D8 | D54 |
 | 5 | Posture score and hierarchy roll-ups (06 section 2) | D8, G2 | needs 4 |
