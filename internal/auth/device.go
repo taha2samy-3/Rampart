@@ -219,4 +219,3 @@ func (m *DeviceAuthManager) PollToken(deviceCode, clientID string) (*DeviceToken
 		ExpiresIn:   30 * 86400,
 	}, nil
 }
-

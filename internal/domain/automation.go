@@ -10,4 +10,3 @@ var (
 	// ActionCreateTicket is the action ledger entry for ticket creation.
 	ActionCreateTicket = "create_ticket"
 )
-
