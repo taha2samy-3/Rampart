@@ -4,6 +4,8 @@
 
 ![Dependency-Track flows](images/dependency-track-flows.svg)
 
+**How to read the picture.** An SBOM is the *input* of Dependency-Track: DT matches its components against NVD, GHSA, OSV and the others, and the vulnerabilities come *back* to Rampart in flow C, where they become findings. A ready-made vulnerability report (Trivy, Grype, Semgrep, SARIF, CycloneDX VDR) is not part of this picture: it goes through the ordinary ingest path. **In v1.0 flow A is not shipped** (D23): the pipeline sends the SBOM to Dependency-Track directly, with DT's own CI/CD integration, and Rampart learns about it through flows B and C. The arrow "CI → Rampart → DT" is the shape after v1.0.
+
 Dependency-Track (DT) is a first-class integration, not a generic connector. This document defines who owns what, the four data flows, the mapping rules, and the failure handling.
 
 Sources checked on 2026-11-11: https://docs.dependencytrack.org/usage/cicd/ , https://docs.dependencytrack.org/integrations/notifications/ , https://docs.dependencytrack.org/integrations/file-formats/ , https://docs.dependencytrack.org/integrations/defectdojo/ , https://docs.dependencytrack.org/integrations/rest-api/ . Items marked **(confirm)** come from the DT OpenAPI definition as we remember it and must be verified against the target instance's `/api/openapi.json` before coding.

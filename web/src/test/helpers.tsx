@@ -42,7 +42,20 @@ export interface Scenario {
   /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
   patch?: 200 | 400 | 409;
   /** The timeline GET /api/v1/findings/{id}/events returns. */
+  /** Risk acceptances GET /api/v1/risk-acceptances returns (filtered by ?status=). */
+  acceptances?: ReturnType<typeof acceptance>[];
+  /** What POST /api/v1/risk-acceptances answers: approved at once (default), pending, or a 400. */
+  accept?: 'approved' | 'pending' | 400;
+  /** What POST .../approve|reject|revoke answers: 200 (default) or 400. */
+  decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
+}
+
+export function acceptance(i: number, over: Record<string, unknown> = {}) {
+  return {
+    id: `acc-${i}`, status: 'pending', justification: `The service ${i} is internal and behind the VPN`, owner: 'user:sara@acme.example', requester: 'user:sara@acme.example',
+    expires_at: '2027-01-15T23:59:59Z', on_expiry: 'reactivate', created_at: '2026-11-10T10:00:00Z', finding_ids: ['f-1'], ...over,
+  };
 }
 
 export function run(i: number, over: Record<string, unknown> = {}) {
@@ -77,6 +90,26 @@ export function mockFetch(sc: Scenario): Calls {
       if (st === 409) return json({ type: 'https://rampart.aspm.dev/problems/conflict-version', title: 'The finding was changed by someone else.', status: 409, request_id: 'req_409' }, 409);
       if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
       return json(finding(1));
+    }
+    if (path === '/api/v1/settings') return json({ riskAcceptanceApproval: false, riskAcceptanceMaxDays: 90 });
+    if (path === '/api/v1/risk-acceptances' && (init?.method ?? 'GET') === 'POST') {
+      if (sc.accept === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'this tenant allows an acceptance of at most 90 days', status: 400 }, 400);
+      return json({ acceptance: acceptance(9, { status: sc.accept === 'pending' ? 'pending' : 'approved' }), applied: sc.accept === 'pending' ? 0 : 1, skipped: [] }, 201);
+    }
+    if (path === '/api/v1/risk-acceptances') {
+      const status = new URL(url, 'http://x').searchParams.get('status');
+      const all = sc.acceptances ?? [];
+      const items = status ? all.filter((a) => a.status === status) : all;
+      return json({ items: items.length ? items : null });
+    }
+    if (path.startsWith('/api/v1/risk-acceptances/')) {
+      const parts = path.split('/');
+      if ((init?.method ?? 'GET') === 'POST') {
+        if (sc.decide === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'the person who asked cannot approve their own risk acceptance', status: 400 }, 400);
+        return json({ acceptance: acceptance(1), applied: 1, skipped: [] });
+      }
+      const found = (sc.acceptances ?? []).find((a) => a.id === parts[4]);
+      return found ? json(found) : json({ title: 'Not found', status: 404 }, 404);
     }
     if (path === '/api/v1/runs') {
       if (sc.runs === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list runs', status: 500, request_id: 'req_runs' }, 500);

@@ -8,6 +8,7 @@ import { Facets } from '@/features/facets/Facets';
 import { FilterBar } from '@/features/filter-bar/FilterBar';
 import { Inspector } from '@/features/finding-inspector/Inspector';
 import { FindingsTable } from '@/features/findings-table/FindingsTable';
+import { AcceptanceDialog } from '@/features/acceptance/AcceptanceDialog';
 import { TriageDialog } from '@/features/triage/TriageDialog';
 import { useApp } from '@/app/session';
 import { cn } from '@/lib/cn';
@@ -71,6 +72,7 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const { permissions } = useApp();
   const canTriage = permissions?.role === 'triager' || permissions?.role === 'admin';
   const [triageOpen, setTriageOpen] = useState(false);
+  const [acceptOpen, setAcceptOpen] = useState(false);
 
   const setSearch = useCallback(
     (patch: Partial<FindingsSearch>) =>
@@ -94,11 +96,12 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   useEffect(() => {
     if (!canTriage || !selectedRow) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 's' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if ((e.key !== 's' && e.key !== 'e') || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
       e.preventDefault();
-      setTriageOpen(true);
+      if (e.key === 's') setTriageOpen(true);
+      else if (['open', 'under_investigation', 'affected'].includes(selectedRow.finding.state)) setAcceptOpen(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -195,10 +198,11 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
           />
         )}
         <aside aria-label={t('findings.inspector')} className="h-full overflow-y-auto">
-          <Inspector row={selectedRow} selectedId={selectedId} onTriage={canTriage && selectedRow ? () => setTriageOpen(true) : undefined} />
+          <Inspector row={selectedRow} selectedId={selectedId} onTriage={canTriage && selectedRow ? () => setTriageOpen(true) : undefined} onAccept={canTriage && selectedRow ? () => setAcceptOpen(true) : undefined} />
         </aside>
       </div>
       {selectedRow && <TriageDialog row={selectedRow} open={triageOpen && canTriage} onOpenChange={setTriageOpen} />}
+      {selectedRow && <AcceptanceDialog row={selectedRow} open={acceptOpen && canTriage} onOpenChange={setAcceptOpen} />}
       <Dialog open={sheetOpen && tablet} onOpenChange={setSheetOpen}>
         <DialogContent sheet title={t('findings.facetsTitle')}>
           <Facets q={q} onQueryChange={setQ} />

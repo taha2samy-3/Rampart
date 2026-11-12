@@ -1,5 +1,5 @@
 import { get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { FindingEvent, FindingRow, Page, Permissions, RunRow, Session, TenantRef, TriageBody, UiConfig } from './types';
+import type { AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, FindingEvent, FindingRow, Page, Permissions, RunRow, RiskAcceptance, Session, TenantRef, TenantSettings, TriageBody, UiConfig } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -84,3 +84,13 @@ export async function getFindingEvents(id: string, signal?: AbortSignal): Promis
   const raw = await get<{ items?: FindingEvent[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}/events`, { signal });
   return raw.items ?? [];
 }
+
+export const requestAcceptance = (body: AcceptanceBody) => post<AcceptanceOutcome>('/api/v1/risk-acceptances', body);
+export async function listAcceptances(status: AcceptanceStatus | '', signal?: AbortSignal): Promise<RiskAcceptance[]> {
+  const raw = await get<{ items?: RiskAcceptance[] | null }>('/api/v1/risk-acceptances', { query: { status }, signal });
+  return raw.items ?? [];
+}
+export const getAcceptance = (id: string, signal?: AbortSignal) => get<RiskAcceptance>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}`, { signal });
+export const decideAcceptance = (id: string, action: 'approve' | 'reject' | 'revoke', note?: string) =>
+  post<unknown>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}/${action}`, note ? { note } : {});
+export const getSettings = (signal?: AbortSignal) => get<TenantSettings>('/api/v1/settings', { signal });

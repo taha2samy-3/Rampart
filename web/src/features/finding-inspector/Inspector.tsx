@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { getFindingEvents, qk, toProblem } from '@/api';
+import { getAcceptance, getFindingEvents, qk, toProblem } from '@/api';
 import type { FindingEvent, FindingRow } from '@/api/types';
 import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
@@ -16,7 +16,7 @@ const SWATCH: Record<SegmentKind, string> = {
 };
 
 /** Docked inspector: the same score bar at full width, then the ledger of factors. */
-export function Inspector({ row, selectedId, onTriage }: { row: FindingRow | undefined; selectedId?: string; onTriage?: () => void }) {
+export function Inspector({ row, selectedId, onTriage, onAccept }: { row: FindingRow | undefined; selectedId?: string; onTriage?: () => void; onAccept?: () => void }) {
   const { t } = useTranslation();
   if (!row && selectedId) return <EmptyState title={t('findings.selectTitle')}>{t('findings.inspectorMissing')}</EmptyState>;
   if (!row) return <EmptyState title={t('findings.selectTitle')}>{t('findings.selectBody')}</EmptyState>;
@@ -39,8 +39,15 @@ export function Inspector({ row, selectedId, onTriage }: { row: FindingRow | und
         <div className="mt-3 flex items-center gap-2">
           <Button onClick={onTriage}>{t('triage.action')}</Button>
           <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>s</Kbd></span>
+          {onAccept && ['open', 'under_investigation', 'affected'].includes(f.state) && (
+            <>
+              <Button onClick={onAccept}>{t('acceptance.action')}</Button>
+              <span className="text-12 text-ink-2" aria-hidden="true"><Kbd>e</Kbd></span>
+            </>
+          )}
         </div>
       )}
+      {f.risk_acceptance_id && <AcceptedLine id={f.risk_acceptance_id} />}
       {(f.justification || f.impact_statement || f.state_reason) && (
         <dl className="m-0 mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
           {f.justification && <Fact label={t('triage.justifiedAs')} value={t(`triage.justifications.${f.justification}`, { defaultValue: f.justification })} />}
@@ -97,6 +104,19 @@ export function Inspector({ row, selectedId, onTriage }: { row: FindingRow | und
   );
 }
 
+/** While a finding is risk_accepted: until when, and who owns the decision. */
+function AcceptedLine({ id }: { id: string }) {
+  const { t } = useTranslation();
+  const q = useQuery({ queryKey: qk.acceptances.one(id), queryFn: ({ signal }) => getAcceptance(id, signal), retry: false });
+  if (!q.data) return null;
+  return (
+    <p className="m-0 mt-3 text-13">
+      <span className="font-semibold">{t('acceptance.accepted', { date: absoluteDate(q.data.expires_at) })}.</span>{' '}
+      {t('acceptance.acceptedBy', { owner: q.data.owner.replace(/^user:/, ''), why: q.data.justification })}
+    </p>
+  );
+}
+
 /** Who did what to this finding, oldest first. Reloads when the finding's version changes. */
 function Timeline({ findingId, version }: { findingId: string; version?: number }) {
   const { t } = useTranslation();
@@ -131,7 +151,8 @@ function Timeline({ findingId, version }: { findingId: string; version?: number 
 function describe(e: FindingEvent, t: TFunction): string {
   const actor = e.actor.startsWith('user:') ? e.actor.slice(5) : e.actor.startsWith('system') ? t('triage.scanActor') : e.actor;
   const str = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : '');
-  const known = ['created', 'reactivated', 'closed_by_rescan', 'updated', 'recheck_needed', 'state_changed', 'severity_changed', 'tags_changed', 'note_added'];
+  const known = ['created', 'reactivated', 'closed_by_rescan', 'updated', 'recheck_needed', 'state_changed', 'severity_changed', 'tags_changed', 'note_added',
+    'risk_acceptance_requested', 'risk_acceptance_approved', 'risk_acceptance_rejected', 'risk_acceptance_revoked', 'risk_acceptance_expired', 'no_longer_detected'];
   const key = known.includes(e.type) ? e.type : 'default';
   const from = e.type === 'state_changed' ? t(`state.${str(e.from)}`, { defaultValue: str(e.from) }) : str(e.from);
   const to = e.type === 'state_changed' ? t(`state.${str(e.to)}`, { defaultValue: str(e.to) }) : str(e.to);

@@ -449,6 +449,33 @@ func (e *Engine) closeScope(
 	}
 	closedCount := len(fixedFindings)
 
+	// D18: a finding a person decided on is not closed when no scanner reports it any more, but it is no longer
+	// detected. Its disposition stays (an acceptance is resolved when it expires, not before).
+	decided, err := st.GetDispositionedScopeFindings(ctx, scope.TenantID, scope.AssetID, scope.Track)
+	if err != nil {
+		return res, fmt.Errorf("ingest: querying decided findings failed: %w", err)
+	}
+	decidedIDs := make([]uuid.UUID, 0, len(decided))
+	for _, f := range decided {
+		decidedIDs = append(decidedIDs, f.ID)
+	}
+	decidedCounts, err := st.CountPresentOccurrencesBatch(ctx, scope.TenantID, decidedIDs)
+	if err != nil {
+		return res, fmt.Errorf("ingest: counting occurrences failed: %w", err)
+	}
+	var undetected []*domain.Finding
+	for _, f := range decided {
+		if decidedCounts[f.ID]-absentByFinding[f.ID] > 0 {
+			continue
+		}
+		f.Detection = domain.DetectionAbsent
+		undetected = append(undetected, f)
+		events = append(events, &domain.FindingEvent{
+			ID: domain.NewID(), FindingID: f.ID, At: now, Actor: "system:parser", Type: "no_longer_detected",
+			Note: "ingest_run " + currentRunID.String(),
+		})
+	}
+
 	// Mass-close guard (D22): hold the close when it would close more than
 	// maxClosePercent (default 50%) of the scope's open findings AND more than 20.
 	if enableMassCloseGuard && closedCount > massCloseMinFindings && closedCount*100 > len(activeFindings)*massClosePercent {
@@ -458,8 +485,8 @@ func (e *Engine) closeScope(
 	if err := st.UpdateOccurrencesPresence(ctx, scope.TenantID, absentIDs, false); err != nil {
 		return res, fmt.Errorf("ingest: updating occurrences presence failed: %w", err)
 	}
-	if len(fixedFindings) > 0 {
-		if err := st.UpsertFindings(ctx, scope.TenantID, fixedFindings); err != nil {
+	if len(fixedFindings) > 0 || len(undetected) > 0 {
+		if err := st.UpsertFindings(ctx, scope.TenantID, append(fixedFindings, undetected...)); err != nil {
 			return res, fmt.Errorf("ingest: closing findings failed: %w", err)
 		}
 		if err := st.RecordFindingEvents(ctx, scope.TenantID, events); err != nil {
@@ -492,6 +519,8 @@ type MemoryStore struct {
 	ingestRuns            map[string]*domain.IngestRun
 	ingestRunScopes       map[string]*domain.IngestRunScope
 	ingestRunResults      map[string][]*domain.IngestRunResult
+	acceptances           map[uuid.UUID]*domain.RiskAcceptance
+	tenantSettings        map[uuid.UUID]domain.TenantSettings
 	tokens                map[string]*auth.TokenRecord
 	tenants               map[uuid.UUID]*domain.Tenant
 	scanSources           map[string]uuid.UUID
@@ -519,6 +548,8 @@ func NewMemoryStore() *MemoryStore {
 		ingestRuns:            make(map[string]*domain.IngestRun),
 		ingestRunScopes:       make(map[string]*domain.IngestRunScope),
 		ingestRunResults:      make(map[string][]*domain.IngestRunResult),
+		acceptances:           make(map[uuid.UUID]*domain.RiskAcceptance),
+		tenantSettings:        make(map[uuid.UUID]domain.TenantSettings),
 		tokens:                make(map[string]*auth.TokenRecord),
 		tenants:               make(map[uuid.UUID]*domain.Tenant),
 		users:                 make(map[uuid.UUID]auth.User),
@@ -882,6 +913,139 @@ func (m *MemoryStore) RecordRunScope(ctx context.Context, scope *domain.IngestRu
 	return nil
 }
 
+func copyAcceptance(ra *domain.RiskAcceptance) *domain.RiskAcceptance {
+	cp := *ra
+	cp.FindingIDs = append([]uuid.UUID{}, ra.FindingIDs...)
+	return &cp
+}
+
+// CreateRiskAcceptance stores an acceptance.
+func (m *MemoryStore) CreateRiskAcceptance(ctx context.Context, tenantID uuid.UUID, ra *domain.RiskAcceptance) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := copyAcceptance(ra)
+	cp.TenantID = tenantID
+	m.acceptances[ra.ID] = cp
+	return nil
+}
+
+// GetRiskAcceptance returns one acceptance.
+func (m *MemoryStore) GetRiskAcceptance(ctx context.Context, tenantID, id uuid.UUID) (*domain.RiskAcceptance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ra, ok := m.acceptances[id]
+	if !ok || ra.TenantID != tenantID {
+		return nil, store.ErrNotFound
+	}
+	return copyAcceptance(ra), nil
+}
+
+// ListRiskAcceptances returns acceptances newest first.
+func (m *MemoryStore) ListRiskAcceptances(ctx context.Context, tenantID uuid.UUID, status domain.RiskAcceptanceStatus, limit int) ([]*domain.RiskAcceptance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.RiskAcceptance
+	for _, ra := range m.acceptances {
+		if ra.TenantID == tenantID && (status == "" || ra.Status == status) {
+			out = append(out, copyAcceptance(ra))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// SetRiskAcceptanceStatus moves an acceptance between statuses, only from the expected one.
+func (m *MemoryStore) SetRiskAcceptanceStatus(ctx context.Context, tenantID, id uuid.UUID, from, to domain.RiskAcceptanceStatus, by, note string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ra, ok := m.acceptances[id]
+	if !ok || ra.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	if ra.Status != from {
+		return store.ErrVersionConflict
+	}
+	ra.Status, ra.DecidedAt = to, &at
+	if by != "" {
+		ra.Approver = by
+	}
+	if note != "" {
+		ra.DecisionNote = note
+	}
+	return nil
+}
+
+// FindingsUnderAcceptance maps findings to the pending or approved acceptance that covers them.
+func (m *MemoryStore) FindingsUnderAcceptance(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	want := map[uuid.UUID]bool{}
+	for _, id := range findingIDs {
+		want[id] = true
+	}
+	out := map[uuid.UUID]uuid.UUID{}
+	for _, ra := range m.acceptances {
+		if ra.TenantID != tenantID || (ra.Status != domain.AcceptancePending && ra.Status != domain.AcceptanceApproved) {
+			continue
+		}
+		for _, fid := range ra.FindingIDs {
+			if want[fid] {
+				out[fid] = ra.ID
+			}
+		}
+	}
+	return out, nil
+}
+
+// ListDueAcceptances returns approved acceptances past their expiry.
+func (m *MemoryStore) ListDueAcceptances(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]*domain.RiskAcceptance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.RiskAcceptance
+	for _, ra := range m.acceptances {
+		if ra.TenantID == tenantID && ra.Status == domain.AcceptanceApproved && !ra.ExpiresAt.After(now) {
+			out = append(out, copyAcceptance(ra))
+		}
+	}
+	return out, nil
+}
+
+// TenantsWithDueAcceptances lists tenants that have an approved acceptance past its expiry.
+func (m *MemoryStore) TenantsWithDueAcceptances(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[uuid.UUID]bool{}
+	var out []uuid.UUID
+	for _, ra := range m.acceptances {
+		if ra.Status == domain.AcceptanceApproved && !ra.ExpiresAt.After(now) && !seen[ra.TenantID] {
+			seen[ra.TenantID] = true
+			out = append(out, ra.TenantID)
+		}
+	}
+	return out, nil
+}
+
+// GetTenantSettings returns the tenant's settings, with defaults.
+func (m *MemoryStore) GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (domain.TenantSettings, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if s, ok := m.tenantSettings[tenantID]; ok {
+		return s, nil
+	}
+	return domain.ParseTenantSettings(nil), nil
+}
+
+// SaveTenantSettings stores the tenant's settings.
+func (m *MemoryStore) SaveTenantSettings(ctx context.Context, tenantID uuid.UUID, settings domain.TenantSettings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenantSettings[tenantID] = settings
+	return nil
+}
+
 // UpdateFindingTriage applies a human decision if the finding is still at expectedVersion.
 func (m *MemoryStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error {
 	m.mu.Lock()
@@ -989,6 +1153,24 @@ func (m *MemoryStore) ListRunsForGate(ctx context.Context, tenantID, scanSourceI
 		}
 		if (commit != "" && r.Context.Commit == commit) || (imageDigest != "" && r.Context.ImageDigest == imageDigest) {
 			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// GetDispositionedScopeFindings returns decided findings that are still detected.
+func (m *MemoryStore) GetDispositionedScopeFindings(ctx context.Context, tenantID, assetID uuid.UUID, track string) ([]*domain.Finding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID != tenantID || f.AssetID != assetID || f.Track != track || f.Detection != domain.DetectionPresent {
+			continue
+		}
+		switch f.State {
+		case domain.StateRiskAccepted, domain.StateNotAffected, domain.StateOutOfScope, domain.StateDuplicate:
+			cp := *f
 			out = append(out, &cp)
 		}
 	}

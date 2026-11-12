@@ -39,6 +39,7 @@ type uploadHarness struct {
 	timeout time.Duration
 	pool    *pgxpool.Pool
 	store   *store.PostgresStore
+	sys     *store.PostgresStore
 	app     interface {
 		ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)
 	}
@@ -55,7 +56,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 		t.Fatal(err)
 	}
 
-	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore, pool: sysStore.Pool(), store: appStore} // the system role bypasses RLS: the check sees every row
+	h := &uploadHarness{t: t, tenant: tenant.ID, app: appStore, pool: sysStore.Pool(), store: appStore, sys: sysStore} // the system role bypasses RLS: the check sees every row
 	if ep := os.Getenv("RAMPART_TEST_S3_ENDPOINT"); ep != "" {
 		s3, err := objectstore.NewS3(ctx, objectstore.S3Config{
 			Endpoint: ep, Bucket: "rampart-upload-tests", // one shared bucket: every bucket costs the object store volumes

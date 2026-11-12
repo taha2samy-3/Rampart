@@ -133,7 +133,7 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	risk_score, state, coalesce(previous_state, ''), coalesce(state_reason, ''),
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
 	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
-	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags`
+	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
 	var (
@@ -149,7 +149,7 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		&overr, &f.CVSSVector, &f.RiskScore, &state, &prevState, &f.StateReason,
 		&detection, &f.ContentHash, &f.WeakFingerprint, &f.FirstSeen, &f.LastSeen,
 		&f.ResolvedAt, &resolution, &f.ReopenedCount, &f.OccurrenceCount, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags,
+		&f.Justification, &f.ImpactStatement, &f.DuplicateOfID, &f.Tags, &f.RiskAcceptanceID,
 	)
 	if err != nil {
 		return nil, err
@@ -535,7 +535,7 @@ func (s *PostgresStore) GetActiveScopeFindings(ctx context.Context, tenantID, as
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding
 			WHERE tenant_id = $1 AND asset_id = $2 AND track = $3
-			  AND state IN ('open', 'under_investigation', 'affected')`, tenantID, assetID, track)
+			  AND state IN ('open', 'under_investigation', 'affected') FOR UPDATE`, tenantID, assetID, track)
 		if err != nil {
 			return err
 		}
@@ -1598,6 +1598,29 @@ func (s *PostgresStore) ListIngestRuns(ctx context.Context, tenantID uuid.UUID, 
 	return out, nil
 }
 
+// GetDispositionedScopeFindings returns findings a person decided on that are still detected (D18).
+func (s *PostgresStore) GetDispositionedScopeFindings(ctx context.Context, tenantID, assetID uuid.UUID, track string) ([]*domain.Finding, error) {
+	var findings []*domain.Finding
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding
+			WHERE tenant_id = $1 AND asset_id = $2 AND track = $3 AND detection = 'present'
+			  AND state IN ('risk_accepted', 'not_affected', 'out_of_scope', 'duplicate') FOR UPDATE`, tenantID, assetID, track)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+			findings = append(findings, f)
+		}
+		return rows.Err()
+	})
+	return findings, err
+}
+
 // UpdateFindingTriage writes a human decision (D18) and its timeline events in one transaction. It sets only
 // the triage columns, so it cannot undo what an ingest wrote to the others, and it applies only if the finding is
 // still at expectedVersion (ErrVersionConflict otherwise).
@@ -1618,13 +1641,13 @@ func (s *PostgresStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.U
 			UPDATE finding SET
 				state = $4, previous_state = $5, state_reason = $6, resolution = $7, resolved_at = $8,
 				justification = $9, impact_statement = $10, duplicate_of_id = $11,
-				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15,
+				severity = $12, severity_override_reason = $13, tags = $14, reopened_count = $15, risk_acceptance_id = $16,
 				version = version + 1, updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2 AND version = $3`,
 			tenantID, f.ID, expectedVersion,
 			string(f.State), prev, reason, resolution, f.ResolvedAt,
 			just, impact, f.DuplicateOfID,
-			string(f.Severity), override, tags, f.ReopenedCount)
+			string(f.Severity), override, tags, f.ReopenedCount, f.RiskAcceptanceID)
 		if err != nil {
 			return err
 		}
@@ -1658,4 +1681,216 @@ func nonEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+const acceptanceCols = `id, tenant_id, decision, justification, coalesce(impact_statement, ''), owner, requester, coalesce(approver, ''),
+	status, expires_at, on_expiry, restart_sla_on_expiry, coalesce(decision_note, ''), created_at, decided_at`
+
+func scanAcceptance(row pgx.Row) (*domain.RiskAcceptance, error) {
+	var ra domain.RiskAcceptance
+	var status string
+	if err := row.Scan(&ra.ID, &ra.TenantID, &ra.Decision, &ra.Justification, &ra.ImpactStatement, &ra.Owner, &ra.Requester, &ra.Approver,
+		&status, &ra.ExpiresAt, &ra.OnExpiry, &ra.RestartSLAOnExpiry, &ra.DecisionNote, &ra.CreatedAt, &ra.DecidedAt); err != nil {
+		return nil, err
+	}
+	ra.Status = domain.RiskAcceptanceStatus(status)
+	return &ra, nil
+}
+
+// CreateRiskAcceptance stores an acceptance and the findings it covers in one transaction.
+func (s *PostgresStore) CreateRiskAcceptance(ctx context.Context, tenantID uuid.UUID, ra *domain.RiskAcceptance) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO risk_acceptance (id, tenant_id, decision, justification, impact_statement, owner, requester, approver, status,
+				expires_at, on_expiry, restart_sla_on_expiry, decision_note, created_at, decided_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+			ra.ID, tenantID, ra.Decision, ra.Justification, nonEmpty(ra.ImpactStatement), ra.Owner, ra.Requester, nonEmpty(ra.Approver),
+			string(ra.Status), ra.ExpiresAt, ra.OnExpiry, ra.RestartSLAOnExpiry, nonEmpty(ra.DecisionNote), ra.CreatedAt, ra.DecidedAt); err != nil {
+			return err
+		}
+		batch := &pgx.Batch{}
+		for _, fid := range ra.FindingIDs {
+			batch.Queue(`INSERT INTO risk_acceptance_finding (tenant_id, risk_acceptance_id, finding_id) VALUES ($1, $2, $3)`, tenantID, ra.ID, fid)
+		}
+		return sendBatch(ctx, tx, batch, "link findings to the risk acceptance")
+	})
+}
+
+func (s *PostgresStore) loadAcceptanceFindings(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ras ...*domain.RiskAcceptance) error {
+	for _, ra := range ras {
+		rows, err := tx.Query(ctx, `SELECT finding_id FROM risk_acceptance_finding WHERE tenant_id = $1 AND risk_acceptance_id = $2 ORDER BY finding_id`, tenantID, ra.ID)
+		if err != nil {
+			return err
+		}
+		ra.FindingIDs = []uuid.UUID{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ra.FindingIDs = append(ra.FindingIDs, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetRiskAcceptance returns one acceptance with its findings.
+func (s *PostgresStore) GetRiskAcceptance(ctx context.Context, tenantID, id uuid.UUID) (*domain.RiskAcceptance, error) {
+	var ra *domain.RiskAcceptance
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		ra, err = scanAcceptance(tx.QueryRow(ctx, `SELECT `+acceptanceCols+` FROM risk_acceptance WHERE tenant_id = $1 AND id = $2`, tenantID, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return s.loadAcceptanceFindings(ctx, tx, tenantID, ra)
+	})
+	return ra, err
+}
+
+// ListRiskAcceptances returns acceptances newest first, optionally of one status.
+func (s *PostgresStore) ListRiskAcceptances(ctx context.Context, tenantID uuid.UUID, status domain.RiskAcceptanceStatus, limit int) ([]*domain.RiskAcceptance, error) {
+	var out []*domain.RiskAcceptance
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+acceptanceCols+` FROM risk_acceptance
+			WHERE tenant_id = $1 AND ($2 = '' OR status = $2) ORDER BY created_at DESC, id DESC LIMIT $3`, tenantID, string(status), limit)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			ra, err := scanAcceptance(rows)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			out = append(out, ra)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return s.loadAcceptanceFindings(ctx, tx, tenantID, out...)
+	})
+	return out, err
+}
+
+// SetRiskAcceptanceStatus moves an acceptance between statuses, only from the expected one.
+func (s *PostgresStore) SetRiskAcceptanceStatus(ctx context.Context, tenantID, id uuid.UUID, from, to domain.RiskAcceptanceStatus, by, note string, at time.Time) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE risk_acceptance SET status = $4, approver = COALESCE($5, approver), decision_note = COALESCE($6, decision_note), decided_at = $7
+			WHERE tenant_id = $1 AND id = $2 AND status = $3`, tenantID, id, string(from), string(to), nonEmpty(by), nonEmpty(note), at)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM risk_acceptance WHERE tenant_id = $1 AND id = $2)`, tenantID, id).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+			return ErrVersionConflict
+		}
+		return nil
+	})
+}
+
+// FindingsUnderAcceptance maps each finding to the pending or approved acceptance that covers it.
+func (s *PostgresStore) FindingsUnderAcceptance(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := map[uuid.UUID]uuid.UUID{}
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT f.finding_id, f.risk_acceptance_id FROM risk_acceptance_finding f
+			JOIN risk_acceptance r ON r.id = f.risk_acceptance_id AND r.tenant_id = f.tenant_id
+			WHERE f.tenant_id = $1 AND f.finding_id = ANY($2) AND r.status IN ('pending', 'approved')`, tenantID, findingIDs)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var fid, rid uuid.UUID
+			if err := rows.Scan(&fid, &rid); err != nil {
+				return err
+			}
+			out[fid] = rid
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// ListDueAcceptances returns the approved acceptances whose expiry has passed.
+func (s *PostgresStore) ListDueAcceptances(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]*domain.RiskAcceptance, error) {
+	var out []*domain.RiskAcceptance
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+acceptanceCols+` FROM risk_acceptance
+			WHERE tenant_id = $1 AND status = 'approved' AND expires_at <= $2 ORDER BY expires_at LIMIT 500`, tenantID, now)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			ra, err := scanAcceptance(rows)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			out = append(out, ra)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return s.loadAcceptanceFindings(ctx, tx, tenantID, out...)
+	})
+	return out, err
+}
+
+// TenantsWithDueAcceptances lists tenants that have an approved acceptance past its expiry. It reads across
+// tenants, so it only works through a role that bypasses row-level security (rampart_system).
+func (s *PostgresStore) TenantsWithDueAcceptances(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT tenant_id FROM risk_acceptance WHERE status = 'approved' AND expires_at <= $1`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// GetTenantSettings reads tenant.settings with the defaults filled in.
+func (s *PostgresStore) GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (domain.TenantSettings, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT settings FROM tenant WHERE id = $1`, tenantID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.TenantSettings{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.TenantSettings{}, err
+	}
+	return domain.ParseTenantSettings(raw), nil
+}
+
+// SaveTenantSettings writes the settings of the caller's tenant through set_tenant_settings: the application role
+// may not write `tenant` (D4), and this function writes that one column of that one row.
+func (s *PostgresStore) SaveTenantSettings(ctx context.Context, tenantID uuid.UUID, settings domain.TenantSettings) error {
+	raw, _ := json.Marshal(settings)
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `SELECT set_tenant_settings($1::jsonb)`, raw)
+		return err
+	})
 }

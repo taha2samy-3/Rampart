@@ -38,6 +38,10 @@ type Store interface {
 	GetActiveScopeOccurrences(ctx context.Context, scope CloseScope) ([]*domain.Occurrence, error)
 	UpdateOccurrencesPresence(ctx context.Context, tenantID uuid.UUID, occurrenceIDs []uuid.UUID, present bool) error
 	GetActiveScopeFindings(ctx context.Context, tenantID uuid.UUID, assetID uuid.UUID, track string) ([]*domain.Finding, error)
+	// GetDispositionedScopeFindings returns the findings of a scope that a person decided on (risk_accepted,
+	// not_affected, out_of_scope, duplicate) and that are still detected. When no scanner reports them any more
+	// their detection becomes absent, and their disposition stays (docs/16 D18).
+	GetDispositionedScopeFindings(ctx context.Context, tenantID, assetID uuid.UUID, track string) ([]*domain.Finding, error)
 	CountPresentOccurrences(ctx context.Context, tenantID uuid.UUID, findingID uuid.UUID) (int, error)
 	CountPresentOccurrencesBatch(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) (map[uuid.UUID]int, error)
 	CheckScopeOrdering(scope CloseScope, scanFinished time.Time) (bool, error)
@@ -54,6 +58,23 @@ type Store interface {
 	// UpdateFindingTriage writes a human decision and its events together, only if the finding is still at
 	// expectedVersion (ErrVersionConflict otherwise).
 	UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error
+
+	// Risk acceptance and tenant settings (docs/06 section 6, D39)
+	CreateRiskAcceptance(ctx context.Context, tenantID uuid.UUID, ra *domain.RiskAcceptance) error
+	GetRiskAcceptance(ctx context.Context, tenantID, id uuid.UUID) (*domain.RiskAcceptance, error)
+	ListRiskAcceptances(ctx context.Context, tenantID uuid.UUID, status domain.RiskAcceptanceStatus, limit int) ([]*domain.RiskAcceptance, error)
+	// SetRiskAcceptanceStatus moves an acceptance from `from` to `to`, only if it is still in `from`
+	// (ErrVersionConflict otherwise), so two approvers cannot both decide.
+	SetRiskAcceptanceStatus(ctx context.Context, tenantID, id uuid.UUID, from, to domain.RiskAcceptanceStatus, by, note string, at time.Time) error
+	// FindingsUnderAcceptance returns, for the given findings, the pending or approved acceptance that covers each.
+	FindingsUnderAcceptance(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// ListDueAcceptances returns the approved acceptances whose expiry has passed.
+	ListDueAcceptances(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]*domain.RiskAcceptance, error)
+	// TenantsWithDueAcceptances lists, across tenants, those that have an approved acceptance past its expiry.
+	// It needs a role that sees every tenant (rampart_system).
+	TenantsWithDueAcceptances(ctx context.Context, now time.Time) ([]uuid.UUID, error)
+	GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (domain.TenantSettings, error)
+	SaveTenantSettings(ctx context.Context, tenantID uuid.UUID, settings domain.TenantSettings) error
 
 	// Query / Explorer API (D14, D16)
 	ListFindings(ctx context.Context, tenantID uuid.UUID) ([]*domain.Finding, error)

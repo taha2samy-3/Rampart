@@ -259,22 +259,24 @@ type Finding struct {
 	PreviousState          FindingState    `json:"previous_state,omitempty"`
 	StateReason            string          `json:"state_reason,omitempty"`
 	// Justification and ImpactStatement belong to a not_affected decision (OpenVEX); DuplicateOfID to a duplicate.
-	Justification   string          `json:"justification,omitempty"`
-	ImpactStatement string          `json:"impact_statement,omitempty"`
-	DuplicateOfID   *uuid.UUID      `json:"duplicate_of_id,omitempty"`
-	Tags            []string        `json:"tags,omitempty"`
-	Detection       DetectionStatus `json:"detection"` // present | absent (D18)
-	ContentHash     string          `json:"content_hash"`
-	WeakFingerprint bool            `json:"weak_fingerprint"`
-	FirstSeen       time.Time       `json:"first_seen"`
-	LastSeen        time.Time       `json:"last_seen"`
-	ResolvedAt      *time.Time      `json:"resolved_at,omitempty"`
-	Resolution      *Resolution     `json:"resolution,omitempty"`
-	ReopenedCount   int             `json:"reopened_count"`
-	OccurrenceCount int             `json:"occurrence_count"`
-	Version         int             `json:"version"` // Optimistic locking
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	Justification   string     `json:"justification,omitempty"`
+	ImpactStatement string     `json:"impact_statement,omitempty"`
+	DuplicateOfID   *uuid.UUID `json:"duplicate_of_id,omitempty"`
+	Tags            []string   `json:"tags,omitempty"`
+	// RiskAcceptanceID is set while the finding is risk_accepted through a risk acceptance (D39).
+	RiskAcceptanceID *uuid.UUID      `json:"risk_acceptance_id,omitempty"`
+	Detection        DetectionStatus `json:"detection"` // present | absent (D18)
+	ContentHash      string          `json:"content_hash"`
+	WeakFingerprint  bool            `json:"weak_fingerprint"`
+	FirstSeen        time.Time       `json:"first_seen"`
+	LastSeen         time.Time       `json:"last_seen"`
+	ResolvedAt       *time.Time      `json:"resolved_at,omitempty"`
+	Resolution       *Resolution     `json:"resolution,omitempty"`
+	ReopenedCount    int             `json:"reopened_count"`
+	OccurrenceCount  int             `json:"occurrence_count"`
+	Version          int             `json:"version"` // Optimistic locking
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 // Validate checks Finding domain invariants.

@@ -129,7 +129,7 @@ func (s FindingState) CanTransitionTo(next FindingState) error {
 		valid = (next == StateOpen || next == StateUnderInvestigation)
 	case StateRiskAccepted:
 		// Risk accepted can expire back to open/previous_state, or be marked fixed if code changes
-		valid = (next == StateOpen || next == StateFixed || next == StateUnderInvestigation)
+		valid = (next == StateOpen || next == StateFixed || next == StateUnderInvestigation || next == StateAffected)
 	case StateOutOfScope:
 		valid = (next == StateUnderInvestigation || next == StateOpen)
 	case StateDuplicate:

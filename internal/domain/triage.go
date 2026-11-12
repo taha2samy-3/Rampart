@@ -49,6 +49,8 @@ type TriageRequest struct {
 	// ViaRiskAcceptance is set only by the risk-acceptance flow (owner, expiry, approval; docs/01 C5). It is not
 	// part of any API body: a plain decision cannot accept a risk, because that would be an acceptance that never expires.
 	ViaRiskAcceptance bool
+	// RiskAcceptanceID links the finding to the acceptance that put it in risk_accepted (with ViaRiskAcceptance).
+	RiskAcceptanceID *uuid.UUID
 }
 
 // ApplyTriage applies a decision to f in place and returns the timeline events it produced. It enforces the
@@ -174,6 +176,11 @@ func ApplyTriage(f *Finding, req TriageRequest, actor string, now time.Time) ([]
 		}
 		if next != StateDuplicate {
 			f.DuplicateOfID = nil
+		}
+		if next == StateRiskAccepted {
+			f.RiskAcceptanceID = req.RiskAcceptanceID
+		} else {
+			f.RiskAcceptanceID = nil
 		}
 		if next == StateOpen && old == StateFixed {
 			f.ReopenedCount++

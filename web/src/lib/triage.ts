@@ -11,7 +11,7 @@ const NEXT: Record<FindingState, FindingState[]> = {
   affected: ['under_investigation', 'not_affected', 'fixed'],
   not_affected: ['under_investigation', 'affected'],
   fixed: ['open', 'under_investigation'],
-  risk_accepted: ['open', 'under_investigation', 'fixed'],
+  risk_accepted: ['open', 'under_investigation', 'affected', 'fixed'],
   out_of_scope: ['open', 'under_investigation'],
   duplicate: ['open', 'under_investigation'],
 };

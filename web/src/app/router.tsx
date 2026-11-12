@@ -8,6 +8,8 @@ import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
 import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/IngestionRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
+import { WorkflowRoute, type WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
+import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
 import { Bootstrap } from './Bootstrap';
 import { ErrorView } from './ErrorBoundary';
@@ -118,7 +120,19 @@ const ingestionRoute = createRoute({
   },
 });
 
-const placeholderRoutes = NAV_ITEMS.filter((n) => n.id !== 'findings' && n.id !== 'ingestion').map((item) =>
+const workflowRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/workflow',
+  validateSearch: (s: Record<string, unknown>): WorkflowSearch => ({
+    sel: str(s.sel),
+    status: ['pending', 'approved', 'rejected', 'expired', 'revoked'].includes(s.status as string) ? (s.status as AcceptanceStatus) : undefined,
+  }),
+  component: function Workflow() {
+    return <WorkflowRoute search={workflowRoute.useSearch()} />;
+  },
+});
+
+const placeholderRoutes = NAV_ITEMS.filter((n) => n.id !== 'findings' && n.id !== 'ingestion' && n.id !== 'workflow').map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
 
@@ -130,7 +144,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   ...(import.meta.env.DEV ? [styleguideRoute] : []),
   tenantLoginRoute,
-  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, ...placeholderRoutes]),
+  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, ...placeholderRoutes]),
 ]);
 
 export function makeRouter(history?: RouterHistory) {

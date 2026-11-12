@@ -17,7 +17,7 @@ import (
 const RiverSchema = "river"
 
 // CurrentExpectedSchemaVersion defines the baseline schema version expected by this binary.
-const CurrentExpectedSchemaVersion int64 = 6
+const CurrentExpectedSchemaVersion int64 = 7
 
 // MigrateUp executes Goose migrations, River migrations, and initial range partitions (normative D4).
 func MigrateUp(ctx context.Context, directURL string) error {

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"rampart/internal/objectstore"
 	"rampart/internal/operator"
 	"rampart/internal/secrets"
+	"rampart/internal/workflow"
 	"strings"
 	"time"
 
@@ -222,6 +224,16 @@ func (r *Runner) Run(ctx context.Context) error {
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
 		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))
+	}
+	// Risk acceptances that run out are ended as their onExpiry says (docs/16 D39). Every 15 minutes is plenty:
+	// an acceptance is measured in days.
+	{
+		sys := store.Store(storeBackend)
+		var sysPool *pgxpool.Pool
+		if sysStore != nil {
+			sys, sysPool = sysStore, sysStore.Pool()
+		}
+		go workflow.RunExpirySweeper(ctx, workflow.New(storeBackend), sys, sysPool, 15*time.Minute, r.logger)
 	}
 	if r.cfg.Feeds.Enabled {
 		if sysStore == nil {

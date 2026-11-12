@@ -94,6 +94,7 @@ export interface Finding {
   impact_statement?: string;
   duplicate_of_id?: string;
   tags?: string[];
+  risk_acceptance_id?: string;
 }
 export interface RiskFactor {
   name: string;
@@ -169,4 +170,40 @@ export interface TriageBody {
   impactStatement?: string;
   duplicateOf?: string;
   note?: string;
+}
+
+export type AcceptanceStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'revoked';
+
+/** internal/domain RiskAcceptance (docs/16 D39). */
+export interface RiskAcceptance {
+  id: string;
+  status: AcceptanceStatus;
+  justification: string;
+  impact_statement?: string;
+  owner: string;
+  requester: string;
+  approver?: string;
+  expires_at: string;
+  on_expiry: 'reactivate' | 'notify_only';
+  decision_note?: string;
+  created_at: string;
+  decided_at?: string;
+  finding_ids: string[];
+}
+export interface AcceptanceOutcome {
+  acceptance: RiskAcceptance;
+  applied: number;
+  skipped: { finding_id: string; reason: string }[];
+}
+export interface TenantSettings {
+  riskAcceptanceApproval: boolean;
+  riskAcceptanceMaxDays: number;
+}
+export interface AcceptanceBody {
+  findingIds: string[];
+  justification: string;
+  impactStatement?: string;
+  owner?: string;
+  expiresAt: string;
+  onExpiry?: 'reactivate' | 'notify_only';
 }
