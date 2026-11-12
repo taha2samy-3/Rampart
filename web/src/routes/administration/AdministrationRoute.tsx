@@ -5,6 +5,8 @@ import { auditExportUrl, listAudit, qk, toProblem } from '@/api';
 import type { AuditEntry } from '@/api/types';
 import { Button, EmptyState, Input, ProblemMessage, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
 import { useSession } from '@/app/session';
+import { useAccess } from '@/app/useAccess';
+import { AccessSection } from './AccessSection';
 import { cn } from '@/lib/cn';
 
 /** "PATCH /api/v1/findings/{id}" -> "PATCH findings/{id}": the route without the prefix every row repeats. */
@@ -18,6 +20,7 @@ export function AdministrationRoute() {
     document.title = `${t('admin.title')} - Rampart`;
   }, [t]);
   const isAdmin = permissions.role === 'admin';
+  const { canAnywhere } = useAccess();
   const [draft, setDraft] = useState({ actor: '', action: '' });
   const [applied, setApplied] = useState({ actor: '', action: '' });
   const q = useInfiniteQuery({
@@ -101,6 +104,7 @@ export function AdministrationRoute() {
           </>
         )}
       </section>
+      {canAnywhere('owner') && <AccessSection />}
     </div>
   );
 }

@@ -154,7 +154,7 @@ func TestOIDCNeedsSessionKeyAndPublicURL(t *testing.T) {
 	if _, err := config.Load(nil); err != nil {
 		t.Fatalf("complete OIDC settings must load: %v", err)
 	}
-	t.Setenv("RAMPART_AUTH_OIDC_DEFAULT_ROLE", "owner")
+	t.Setenv("RAMPART_AUTH_OIDC_DEFAULT_ROLE", "superuser")
 	if _, err := config.Load(nil); err == nil {
 		t.Fatal("an unknown default role must be refused")
 	}

@@ -537,12 +537,12 @@ func parseBindings(v string) []BindingSetting {
 
 func (a AuthConfig) validate(publicURL string) error {
 	switch a.OIDC.DefaultRole {
-	case "", "viewer", "triager", "admin":
+	case "", "viewer", "triager", "maintainer", "owner", "admin":
 	default:
-		return fmt.Errorf("config: auth.oidc.defaultRole must be viewer, triager, admin or empty, got %q", a.OIDC.DefaultRole)
+		return fmt.Errorf("config: auth.oidc.defaultRole must be viewer, triager, maintainer, owner, admin or empty, got %q", a.OIDC.DefaultRole)
 	}
 	for _, b := range a.OIDC.Bindings {
-		if (b.Kind != "user" && b.Kind != "group") || b.Name == "" || (b.Role != "viewer" && b.Role != "triager" && b.Role != "admin") {
+		if (b.Kind != "user" && b.Kind != "group") || b.Name == "" || (b.Role != "viewer" && b.Role != "triager" && b.Role != "maintainer" && b.Role != "owner" && b.Role != "admin") {
 			return fmt.Errorf("config: invalid auth.oidc binding %+v", b)
 		}
 	}

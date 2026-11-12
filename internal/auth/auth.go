@@ -28,13 +28,30 @@ type Role string
 const (
 	RoleViewer  Role = "viewer"
 	RoleTriager Role = "triager"
-	RoleAdmin   Role = "admin"
+	// RoleMaintainer approves risk acceptances and manages what belongs to an application (docs/07).
+	RoleMaintainer Role = "maintainer"
+	// RoleOwner also manages access bindings in its scope (docs/07).
+	RoleOwner Role = "owner"
+	RoleAdmin Role = "admin"
 )
+
+// ParseRole returns a known role, or false.
+func ParseRole(s string) (Role, bool) {
+	switch r := Role(s); r {
+	case RoleViewer, RoleTriager, RoleMaintainer, RoleOwner, RoleAdmin:
+		return r, true
+	}
+	return "", false
+}
 
 func (r Role) Rank() int {
 	switch r {
 	case RoleAdmin:
+		return 40
+	case RoleOwner:
 		return 30
+	case RoleMaintainer:
+		return 25
 	case RoleTriager:
 		return 20
 	case RoleViewer:

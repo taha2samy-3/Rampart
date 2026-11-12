@@ -282,6 +282,17 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/me') return json(res, { user: { id: 'u-1', email: 'sara.ahmed@acme.example', name: 'Sara Ahmed' }, tenant });
     if (p === '/api/v1/me/tenants') return json(res, TENANTS);
     if (p === '/api/v1/me/permissions') return json(res, { role: 'admin', scopes: ['tenant'] });
+    if (p === '/api/v1/me/access') return json(res, { role: 'admin', applications: {} });
+    if (p === '/api/v1/access-bindings' && req.method === 'GET') {
+      const w = (n) => new Date(Date.now() - n * 86400000).toISOString();
+      return json(res, { items: dataMode === 'empty' ? [] : [
+        { id: 'bn1', subject: 'sara@acme.example', role: 'owner', application_id: APP_ROWS[0].id, application_name: APP_ROWS[0].name, managed_by: 'api', created_by: 'user:boss@acme.example', created_at: w(30) },
+        { id: 'bn2', subject: 'omar@acme.example', role: 'triager', application_id: APP_ROWS[0].id, application_name: APP_ROWS[0].name, managed_by: 'api', created_by: 'user:sara@acme.example', created_at: w(9) },
+        { id: 'bn3', subject: 'omar@acme.example', role: 'maintainer', application_id: APP_ROWS[1].id, application_name: APP_ROWS[1].name, managed_by: 'api', created_by: 'user:boss@acme.example', created_at: w(2) },
+      ] });
+    }
+    if (p === '/api/v1/access-bindings' && req.method === 'POST') { res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end('{"id":"bn-new"}'); }
+    if (p.startsWith('/api/v1/access-bindings/') && req.method === 'DELETE') { res.writeHead(204); return res.end(); }
     if (p === '/api/v1/audit' && req.method === 'GET') {
       const w = (n) => new Date(Date.now() - n * 3600000).toISOString();
       const row = (n, actor, action, rt, rid, status) => ({ id: `au${n}`, at: w(n), actor, action, resource_type: rt, resource_id: rid, detail: { method: action.split(' ')[0], status }, request_id: `req_${n}` });

@@ -6,6 +6,7 @@ import { decideAcceptance, listAcceptances, qk, toProblem } from '@/api';
 import type { AcceptanceStatus, RiskAcceptance } from '@/api/types';
 import { Button, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
 import { useSession } from '@/app/session';
+import { useAccess } from '@/app/useAccess';
 import { cn } from '@/lib/cn';
 import { absoluteDate } from '@/lib/format';
 
@@ -19,7 +20,6 @@ const STATUSES: (AcceptanceStatus | '')[] = ['', 'pending', 'approved', 'rejecte
 export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { permissions } = useSession();
   useEffect(() => {
     document.title = `${t('acceptance.workflow')} - Rampart`;
   }, [t]);
@@ -105,14 +105,14 @@ export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
       </section>
       <div className="min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
         <aside aria-label={t('acceptance.detail')} className="h-full overflow-y-auto">
-          {selected ? <Detail key={selected.id} ra={selected} role={permissions.role} /> : <EmptyState title={t('acceptance.selectTitle')}>{t('acceptance.selectBody')}</EmptyState>}
+          {selected ? <Detail key={selected.id} ra={selected} /> : <EmptyState title={t('acceptance.selectTitle')}>{t('acceptance.selectBody')}</EmptyState>}
         </aside>
       </div>
     </div>
   );
 }
 
-function Detail({ ra, role }: { ra: RiskAcceptance; role: string }) {
+function Detail({ ra }: { ra: RiskAcceptance }) {
   const { t } = useTranslation();
   const { session } = useSession();
   const toast = useToast();
@@ -121,7 +121,9 @@ function Detail({ ra, role }: { ra: RiskAcceptance; role: string }) {
   const [note, setNote] = useState('');
   const noteId = useId();
   const me = session.user.email;
-  const isAdmin = role === 'admin';
+  const { canAnywhere } = useAccess();
+  // The server checks the application of every finding; the screen offers it to someone who can decide somewhere.
+  const isAdmin = canAnywhere('maintainer');
   const mine = ra.requester === `user:${me}` || ra.owner === `user:${me}` || ra.requester === me || ra.owner === me;
   const own = ra.requester === `user:${me}` || ra.requester === me;
 

@@ -44,7 +44,7 @@ export interface Session {
   csrfToken: string;
   expiresAt: string;
 }
-export type Role = 'viewer' | 'triager' | 'admin';
+export type Role = 'viewer' | 'triager' | 'maintainer' | 'owner' | 'admin';
 export interface Permissions {
   role: Role;
   scopes: string[];
@@ -299,3 +299,8 @@ export interface AuditEntry {
   detail?: { method?: string; path?: string; status?: number }; ip?: string; request_id?: string;
 }
 export interface AuditFilter { actor?: string; action?: string }
+
+/** The caller's tenant role and the roles they hold on single applications (docs/16 D48). */
+export interface MyAccess { role: Role; applications: Record<string, Role> }
+/** A role on one application for one person or token. */
+export interface AccessBinding { id: string; subject: string; role: Role; application_id: string; application_name?: string; managed_by: string; created_by: string; created_at: string }

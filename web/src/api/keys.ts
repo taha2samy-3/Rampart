@@ -11,6 +11,8 @@ export const qk = {
   },
   settings: () => ['settings'] as const,
   audit: (f: { actor?: string; action?: string }) => ['audit', f.actor ?? '', f.action ?? ''] as const,
+  access: () => ['access'] as const,
+  bindings: () => ['bindings'] as const,
   notifications: () => ['notifications'] as const,
   applications: {
     list: () => ['applications', 'list'] as const,

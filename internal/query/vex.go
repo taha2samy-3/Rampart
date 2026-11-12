@@ -128,7 +128,7 @@ func (a *API) humanDecisionAfter(r *http.Request, tenantID, id uuid.UUID, t time
 // handleImportVEX is POST /api/v1/vex?application=&dryRun=: OpenVEX or CycloneDX VEX decides findings. A
 // statement that matches nothing creates nothing; it is reported.
 func (a *API) handleImportVEX(w http.ResponseWriter, r *http.Request) {
-	tenantID, user, ok := a.requireRole(w, r, auth.RoleTriager)
+	tenantID, user, scope, ok := a.requireAny(w, r, auth.RoleTriager)
 	if !ok {
 		return
 	}
@@ -217,6 +217,10 @@ func (a *API) handleImportVEX(w http.ResponseWriter, r *http.Request) {
 				note += ". Action: " + st.Action
 			}
 			patch := PatchFindingRequest{State: string(st.State), Justification: st.Justification, ImpactStatement: st.Impact, Note: note}
+			if !scope.allows(f.ApplicationID, auth.RoleTriager) {
+				rep.Failed = append(rep.Failed, BulkFailure{ID: f.ID.String(), Error: errForbiddenApp.Error()})
+				continue
+			}
 			if dry { // the same rules, on a copy
 				req, _ := patch.toTriage()
 				cp := *f
@@ -227,12 +231,12 @@ func (a *API) handleImportVEX(w http.ResponseWriter, r *http.Request) {
 				rep.Applied++
 				continue
 			}
-			_, _, terr := a.triageOne(r.Context(), tenantID, f.ID, patch, nil, actor)
+			_, _, terr := a.triageOne(r.Context(), tenantID, f.ID, patch, nil, actor, scope.allowFor(auth.RoleTriager))
 			var te *domain.TriageError
 			switch {
 			case terr == nil:
 				rep.Applied++
-			case errors.As(terr, &te), errors.Is(terr, store.ErrVersionConflict):
+			case errors.As(terr, &te), errors.Is(terr, store.ErrVersionConflict), errors.Is(terr, errForbiddenApp):
 				rep.Failed = append(rep.Failed, BulkFailure{ID: f.ID.String(), Error: terr.Error()})
 			default:
 				problem(w, http.StatusInternalServerError, "internal", "Failed to save a decision")

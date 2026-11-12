@@ -1,6 +1,7 @@
 package query
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -35,7 +36,7 @@ func acceptanceProblem(w http.ResponseWriter, err error) {
 }
 
 func (a *API) handleRequestAcceptance(w http.ResponseWriter, r *http.Request) {
-	tenantID, user, ok := a.requireRole(w, r, auth.RoleTriager)
+	tenantID, user, scope, ok := a.requireAny(w, r, auth.RoleTriager)
 	if !ok {
 		return
 	}
@@ -55,6 +56,10 @@ func (a *API) handleRequestAcceptance(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.FindingIDs = append(req.FindingIDs, id)
+	}
+	if !a.allowedOnFindings(r.Context(), tenantID, scope, auth.RoleTriager, req.FindingIDs) {
+		problem(w, http.StatusForbidden, "forbidden", "Your role does not allow this on the application of at least one of these findings")
+		return
 	}
 	out, err := a.workflow().Request(r.Context(), tenantID, actorOf(user), req)
 	if err != nil {
@@ -113,15 +118,15 @@ type decisionBody struct {
 	Note string `json:"note,omitempty"`
 }
 
-// decide runs approve, reject or revoke. Approving and rejecting need an admin (docs/06 says maintainer, a role
-// that arrives with scoped access bindings); a requester may withdraw their own request.
+// decide runs approve, reject or revoke. Approving and rejecting need a maintainer on the application of every
+// finding the acceptance covers (docs/06, D48); a requester or owner may withdraw their own request.
 func (a *API) decide(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		need := auth.RoleAdmin
+		need := auth.RoleMaintainer
 		if action == "revoke" {
 			need = auth.RoleTriager
 		}
-		tenantID, user, ok := a.requireRole(w, r, need)
+		tenantID, user, scope, ok := a.requireAny(w, r, need)
 		if !ok {
 			return
 		}
@@ -134,6 +139,17 @@ func (a *API) decide(action string) http.HandlerFunc {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
 		svc := a.workflow()
 		actor := actorOf(user)
+		if action != "revoke" {
+			ra, gerr := a.store.GetRiskAcceptance(r.Context(), tenantID, id)
+			if gerr != nil {
+				acceptanceProblem(w, gerr)
+				return
+			}
+			if !a.allowedOnFindings(r.Context(), tenantID, scope, auth.RoleMaintainer, ra.FindingIDs) {
+				problem(w, http.StatusForbidden, "forbidden", "Deciding this needs the maintainer role on the application of every finding it covers")
+				return
+			}
+		}
 		switch action {
 		case "approve":
 			out, err := svc.Approve(r.Context(), tenantID, id, actor)
@@ -156,8 +172,8 @@ func (a *API) decide(action string) http.HandlerFunc {
 				acceptanceProblem(w, err)
 				return
 			}
-			if user.Role.Rank() < auth.RoleAdmin.Rank() && ra.Requester != actor && ra.Owner != actor {
-				problem(w, http.StatusForbidden, "forbidden", "Only an admin, or the person who asked for it or owns it, can revoke a risk acceptance")
+			if ra.Requester != actor && ra.Owner != actor && !a.allowedOnFindings(r.Context(), tenantID, scope, auth.RoleMaintainer, ra.FindingIDs) {
+				problem(w, http.StatusForbidden, "forbidden", "Only a maintainer of its applications, or the person who asked for it or owns it, can revoke a risk acceptance")
 				return
 			}
 			out, err := svc.Revoke(r.Context(), tenantID, id, actor, body.Note)
@@ -232,4 +248,19 @@ func (a *API) workflow() *workflow.Service {
 	svc := workflow.New(a.store)
 	svc.SetScorer(a.scorer)
 	return svc
+}
+
+// allowedOnFindings says whether the caller holds min on the application of every one of the findings. A finding
+// that cannot be read is not allowed: the decision would be about something the caller cannot see.
+func (a *API) allowedOnFindings(ctx context.Context, tenantID uuid.UUID, scope roleScope, min auth.Role, ids []uuid.UUID) bool {
+	if scope.tenant.Rank() >= min.Rank() {
+		return true
+	}
+	for _, id := range ids {
+		f, _, err := a.store.GetFinding(ctx, tenantID, id)
+		if err != nil || f == nil || !scope.allows(f.ApplicationID, min) {
+			return false
+		}
+	}
+	return true
 }

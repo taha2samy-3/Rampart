@@ -46,6 +46,10 @@ export interface Scenario {
   sources?: { reported_by?: Reporter[]; also_reported_by?: CorrelatedRef[] } | 'error';
   /** Pages of GET /api/v1/audit; each call returns the next page. 'error' answers 500. */
   audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
+  /** GET /api/v1/me/access: roles on single applications (default none). */
+  access?: Record<string, string>;
+  /** The access bindings GET /api/v1/access-bindings returns; POST and DELETE are recorded in the calls. */
+  bindings?: Record<string, unknown>[] | 'error';
   /** GET /api/v1/notifications; POSTs to /read are recorded in the calls. */
   notifications?: { items: { id: string; kind: string; title: string; body?: string; link?: string; created_at: string; unread: boolean }[]; unread: number } | 'error';
   /** The timeline GET /api/v1/findings/{id}/events returns. */
@@ -137,6 +141,13 @@ export function mockFetch(sc: Scenario): Calls {
       if (st === 400) return json({ type: 'https://rampart.aspm.dev/problems/validation', title: 'a duplicate needs the id of the finding it duplicates, and it cannot be itself', status: 400 }, 400);
       return json(finding(1));
     }
+    if (path === '/api/v1/me/access') return json({ role: sc.role ?? 'triager', applications: sc.access ?? {} });
+    if (path === '/api/v1/access-bindings') {
+      if (sc.bindings === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if ((init?.method ?? 'GET') === 'POST') return json({ id: 'bn-new' }, 201);
+      return json({ items: sc.bindings ?? null });
+    }
+    if (path.startsWith('/api/v1/access-bindings/')) return json(null, 204);
     if (path === '/api/v1/audit') {
       if (sc.audit === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
       const pages = sc.audit ?? [{ items: [] }];

@@ -10,7 +10,7 @@ import { Inspector } from '@/features/finding-inspector/Inspector';
 import { FindingsTable } from '@/features/findings-table/FindingsTable';
 import { AcceptanceDialog } from '@/features/acceptance/AcceptanceDialog';
 import { TriageDialog } from '@/features/triage/TriageDialog';
-import { useApp } from '@/app/session';
+import { useAccess } from '@/app/useAccess';
 import { cn } from '@/lib/cn';
 import { parseQuery, removeTerm } from '@/lib/grammar';
 import { useMedia } from '@/lib/useMedia';
@@ -69,8 +69,7 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const tablet = useMedia('(max-width: 899px)');
   const [sheetOpen, setSheetOpen] = useState(false);
   const insp = useInspectorWidth();
-  const { permissions } = useApp();
-  const canTriage = permissions?.role === 'triager' || permissions?.role === 'admin';
+  const { can } = useAccess();
   const [triageOpen, setTriageOpen] = useState(false);
   const [acceptOpen, setAcceptOpen] = useState(false);
 
@@ -92,6 +91,8 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total;
   const selectedRow = rows.find((r) => r.finding.id === selectedId);
+  // A decision is offered where the caller's role on the finding's application reaches it (D48).
+  const canTriage = can(selectedRow?.finding.application_id, 'triager');
   // "s" sets the state of the selected finding (docs/13), unless the keystroke is for a field.
   useEffect(() => {
     if (!canTriage || !selectedRow) return;

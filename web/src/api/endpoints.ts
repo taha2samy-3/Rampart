@@ -1,5 +1,5 @@
-import { get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AppNotification, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
+import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -130,3 +130,14 @@ export const auditExportUrl = (format: 'csv' | 'ndjson', f: AuditFilter) => {
   if (f.action) p.set('action', f.action);
   return `/api/v1/audit?${p.toString()}`;
 };
+
+export async function getMyAccess(signal?: AbortSignal): Promise<MyAccess> {
+  const raw = await get<{ role: Role; applications?: Record<string, Role> | null }>('/api/v1/me/access', { signal });
+  return { role: raw.role, applications: raw.applications ?? {} };
+}
+export async function listBindings(signal?: AbortSignal): Promise<AccessBinding[]> {
+  const raw = await get<{ items?: AccessBinding[] | null }>('/api/v1/access-bindings', { signal });
+  return raw.items ?? [];
+}
+export const createBinding = (b: { subject: string; role: Role; applicationId: string }) => post<AccessBinding>('/api/v1/access-bindings', b);
+export const deleteBinding = (id: string) => del<null>(`/api/v1/access-bindings/${encodeURIComponent(id)}`);

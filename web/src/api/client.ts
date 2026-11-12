@@ -107,3 +107,4 @@ export const post = <T>(path: string, body?: unknown, opts?: RequestOptions) =>
   request<T>('POST', path, { ...opts, body });
 export const patch = <T>(path: string, body?: unknown, opts?: RequestOptions) =>
   request<T>('PATCH', path, { ...opts, body });
+export const del = <T>(path: string, opts?: RequestOptions) => request<T>('DELETE', path, opts);

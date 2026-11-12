@@ -43,3 +43,15 @@ type ExpiringAcceptance struct {
 	Findings      int
 	DaysLeft      int
 }
+
+// AccessBinding is a role on one application for one person or token (docs/16 D48).
+type AccessBinding struct {
+	ID              uuid.UUID `json:"id"`
+	Subject         string    `json:"subject"` // an e-mail, or the subject of a token
+	Role            string    `json:"role"`    // viewer | triager | maintainer | owner
+	ApplicationID   uuid.UUID `json:"application_id"`
+	ApplicationName string    `json:"application_name,omitempty"`
+	ManagedBy       string    `json:"managed_by"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+}

@@ -94,10 +94,13 @@ func ifMatch(r *http.Request) (int, bool) {
 }
 
 // triageOne applies a decision to one finding and stores it. The error is one the API maps to a status.
-func (a *API) triageOne(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, p PatchFindingRequest, expected *int, actor string) (*domain.Finding, []*domain.Occurrence, error) {
+func (a *API) triageOne(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, p PatchFindingRequest, expected *int, actor string, allow func(app uuid.UUID) bool) (*domain.Finding, []*domain.Occurrence, error) {
 	finding, occs, err := a.store.GetFinding(ctx, tenantID, id)
 	if err != nil || finding == nil {
 		return nil, nil, store.ErrNotFound
+	}
+	if allow != nil && !allow(finding.ApplicationID) {
+		return nil, nil, errForbiddenApp
 	}
 	req, err := p.toTriage()
 	if err != nil {
@@ -136,6 +139,8 @@ func triageProblem(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &te):
 		problem(w, http.StatusBadRequest, "validation", te.Msg)
+	case errors.Is(err, errForbiddenApp):
+		problem(w, http.StatusForbidden, "forbidden", "Your role does not allow this on the application of that finding")
 	case errors.Is(err, store.ErrNotFound):
 		problem(w, http.StatusNotFound, "not-found", "Finding not found")
 	case errors.Is(err, store.ErrVersionConflict):
@@ -146,7 +151,7 @@ func triageProblem(w http.ResponseWriter, err error) {
 }
 
 func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
-	tenantID, user, ok := a.requireRole(w, r, auth.RoleTriager)
+	tenantID, user, scope, ok := a.requireAny(w, r, auth.RoleTriager)
 	if !ok {
 		return
 	}
@@ -164,7 +169,7 @@ func (a *API) handlePatchFinding(w http.ResponseWriter, r *http.Request) {
 	if v, ok := ifMatch(r); ok {
 		expected = &v
 	}
-	finding, occs, err := a.triageOne(r.Context(), tenantID, id, p, expected, actorOf(user))
+	finding, occs, err := a.triageOne(r.Context(), tenantID, id, p, expected, actorOf(user), scope.allowFor(auth.RoleTriager))
 	if err != nil {
 		triageProblem(w, err)
 		return
@@ -201,7 +206,7 @@ type BulkResponse struct {
 }
 
 func (a *API) handleBulkTriage(w http.ResponseWriter, r *http.Request) {
-	tenantID, user, ok := a.requireRole(w, r, auth.RoleTriager)
+	tenantID, user, scope, ok := a.requireAny(w, r, auth.RoleTriager)
 	if !ok {
 		return
 	}
@@ -254,7 +259,7 @@ func (a *API) handleBulkTriage(w http.ResponseWriter, r *http.Request) {
 	resp := BulkResponse{Matched: len(ids), Failed: []BulkFailure{}}
 	actor := actorOf(user)
 	for _, id := range ids {
-		_, _, err := a.triageOne(r.Context(), tenantID, id, req.Patch, nil, actor)
+		_, _, err := a.triageOne(r.Context(), tenantID, id, req.Patch, nil, actor, scope.allowFor(auth.RoleTriager))
 		switch {
 		case err == nil:
 			resp.Updated++
@@ -273,6 +278,8 @@ func failureText(err error) string {
 	switch {
 	case errors.As(err, &te):
 		return te.Msg
+	case errors.Is(err, errForbiddenApp):
+		return "your role does not allow this on its application"
 	case errors.Is(err, store.ErrNotFound):
 		return "finding not found"
 	case errors.Is(err, store.ErrVersionConflict):
