@@ -163,6 +163,18 @@ export const en = {
     legendContext: 'Exposure and context',
     legendReduction: 'Removed by controls',
   },
+  reportedBy: {
+    title: 'Reported by',
+    failed: 'The tools that reported this could not be loaded.',
+    none: 'No scan has reported this finding.',
+    stillReports: 'still reports it',
+    stopped: 'no longer reports it',
+    span_one: 'First reported {{first}}, last {{last}}, in {{count}} scan.',
+    span_other: 'First reported {{first}}, last {{last}}, in {{count}} scans.',
+    toolSaid: 'It rated it {{severity}}.',
+    alsoFound: 'also found this, as another finding ({{state}}).',
+    open: 'Open it',
+  },
   triage: {
     action: 'Change state',
     actionHint: 'Press s',

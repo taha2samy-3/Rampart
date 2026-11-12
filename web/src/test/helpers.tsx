@@ -2,6 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
+import type { CorrelatedRef, Reporter } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -41,6 +42,8 @@ export interface Scenario {
   role?: 'viewer' | 'triager' | 'admin';
   /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
   patch?: 200 | 400 | 409;
+  /** What GET /api/v1/findings/{id} answers for the Reported by section. */
+  sources?: { reported_by?: Reporter[]; also_reported_by?: CorrelatedRef[] } | 'error';
   /** The timeline GET /api/v1/findings/{id}/events returns. */
   /** GET /api/v1/applications, and the page of each (by id). */
   apps?: ReturnType<typeof app>[] | 'error';
@@ -118,6 +121,10 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/auth/tenant' || path === '/auth/logout') return json(null, 204);
     if (path === '/api/v1/me/permissions') return json({ role: sc.role ?? 'triager', scopes: ['tenant'] });
     if (path === '/api/v1/me/tenants') return json([{ id: 't1', slug: 'acme', name: 'Acme' }, { id: 't2', slug: 'globex', name: 'Globex' }]);
+    if (/^\/api\/v1\/findings\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET') {
+      if (sc.sources === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      return json({ finding: {}, reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
+    }
     if (path.startsWith('/api/v1/findings/') && path.endsWith('/events')) return json({ items: sc.events?.length ? sc.events : null });
     if (path.startsWith('/api/v1/findings/') && (init?.method ?? 'GET') === 'PATCH') {
       const st = sc.patch ?? 200;

@@ -651,5 +651,14 @@ Built as D2 and D9 specify. What was decided while building it:
 - **SLA adherence** is `within / (within + late + breached)` over the last 90 days of resolved findings, where still-open findings past their deadline count as breached. MTTR is the mean of `resolved_at - first_seen` per band over the same window.
 - **Coverage** is the last completed run of each asset and scanner, from `ingest_run_scope`. "Not scanned lately" lists applications with no completed scan in 14 days, or never.
 - **Trend limits.** History is rebuilt from `first_seen` and `resolved_at`, so a finding that was reopened shows as open for its whole life, and accepted findings count as closed. A daily snapshot table would remove both; not built.
-- **Not built.** "Newly exploited" in the Overview (needs KEV/EPSS change history); a per-finding list of every tool that reported it (a finding shows the family of its rule only).
+- **Not built.** "Newly exploited" in the Overview (needs KEV/EPSS change history); see D44 for which tools reported a finding.
 - **UI** follows docs/13 §6: sentences and ruled lists, no tiles or pills, colour only for risk; the trend is a plain line with a text alternative and a table behind "Show the numbers".
+
+## D44. "Reported by" on a finding (Phase 2)
+
+- **The question.** "Which tool, or which two or three, reported this, and since when?" ArmorCode, DefectDojo and similar platforms answer it by listing the source tools on the finding. Their model merges the same issue from several tools into one record with several sources. Ours does not merge (D24): each tool keeps its own finding, and findings that share a `correlation_key` form a group. So the answer has two parts.
+- **This finding's own tools.** `GET /findings/{id}` returns `reported_by`: its `occurrence` rows folded by tool family (`Reporter`): name, version of the latest scan, first and last time it reported, number of scans, whether the latest scan of that tool still reports it (`present`), what the tool itself rated it, and the latest run. One tool with many scan sources is one line. The oldest report comes first.
+- **The same issue in other tools.** `also_reported_by` (D37), shown in the same section with the tool, the state of that finding, and a link to it. Together they read "Trivy 0.58 still reports it; Grype also found this, as another finding (open)".
+- **A tool that stopped.** `present = false` is shown as "no longer reports it". It is the signal that a tool was removed from the pipeline or that the issue was fixed in the code that tool scans.
+- **Filter.** `scanner:grype` now matches a finding the tool reported through any occurrence, not only the family of the finding's rule.
+- **Not built.** A column in the findings table; counting unique issues across a group; merging (still after v1.0, D24).

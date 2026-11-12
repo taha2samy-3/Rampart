@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { getAcceptance, getFindingEvents, qk, toProblem } from '@/api';
+import { Link } from '@tanstack/react-router';
+import { getAcceptance, getFindingEvents, getFindingSources, qk, toProblem } from '@/api';
 import type { FindingEvent, FindingRow } from '@/api/types';
 import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
@@ -99,6 +100,8 @@ export function Inspector({ row, selectedId, onTriage, onAccept }: { row: Findin
         </dl>
       </section>
 
+      <ReportedBy findingId={f.id} version={f.version} />
+
       <Timeline findingId={f.id} version={f.version} />
     </article>
   );
@@ -166,5 +169,57 @@ function Fact({ label, value, mono }: { label: string; value: string | undefined
       <dt className="text-ink-2">{label}</dt>
       <dd className={`m-0 min-w-0 [overflow-wrap:anywhere] ${mono ? 'font-mono text-12' : ''}`}>{value}</dd>
     </>
+  );
+}
+
+const TOOL_NAME: Record<string, string> = { trivy: 'Trivy', grype: 'Grype', semgrep: 'Semgrep', gitleaks: 'Gitleaks', trufflehog: 'TruffleHog' };
+const toolName = (family: string) => TOOL_NAME[family] ?? family;
+
+/**
+ * Which tools reported this finding, when each first and last did, and whether each still does; then the same
+ * issue as found by other tools. Written as sentences, oldest report first: "found by Trivy, later by Grype".
+ */
+function ReportedBy({ findingId, version }: { findingId: string; version?: number }) {
+  const { t } = useTranslation();
+  const q = useQuery({
+    queryKey: [...qk.findings.sources(findingId), version],
+    queryFn: ({ signal }) => getFindingSources(findingId, signal),
+    retry: false,
+  });
+  const own = q.data?.reported_by ?? [];
+  const others = q.data?.also_reported_by ?? [];
+  return (
+    <section className="mt-5" aria-labelledby="reported-by">
+      <h3 id="reported-by" className="mb-1 text-13 font-semibold">{t('reportedBy.title')}</h3>
+      {q.isPending && <p className="m-0 text-12 text-ink-2">{t('common.loading')}</p>}
+      {q.isError && <ProblemMessage problem={toProblem(q.error)} title={t('reportedBy.failed')} onRetry={() => void q.refetch()} />}
+      {q.data && own.length === 0 && others.length === 0 && <p className="m-0 text-12 text-ink-2">{t('reportedBy.none')}</p>}
+      {(own.length > 0 || others.length > 0) && (
+        <ul className="m-0 list-none p-0 text-13">
+          {own.map((r) => (
+            <li key={r.scanner} className="border-b border-rule py-1.5">
+              <p className="m-0">
+                <span className="font-semibold">{toolName(r.scanner)}</span>
+                {r.version ? <span className="text-ink-2"> {r.version}</span> : null}
+                {' '}{r.present ? t('reportedBy.stillReports') : t('reportedBy.stopped')}
+              </p>
+              <p className="m-0 text-12 text-ink-2">
+                {t('reportedBy.span', { first: absoluteDate(r.first_seen), last: absoluteDate(r.last_seen), count: r.reports })}
+                {r.tool_severity ? ` ${t('reportedBy.toolSaid', { severity: r.tool_severity })}` : ''}
+              </p>
+            </li>
+          ))}
+          {others.map((o) => (
+            <li key={o.id} className="border-b border-rule py-1.5">
+              <p className="m-0">
+                <span className="font-semibold">{toolName(o.scanner)}</span>{' '}
+                {t('reportedBy.alsoFound', { state: t(`state.${o.state}`, { defaultValue: o.state }).toLowerCase() })}{' '}
+                <Link to="/findings" search={{ sel: o.id }} className="text-13">{t('reportedBy.open')}</Link>
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

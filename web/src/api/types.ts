@@ -270,3 +270,21 @@ export interface TrendPoint {
   day: string;
   value: number;
 }
+
+/** One tool's view of a finding (internal/query Reporter). */
+export interface Reporter {
+  scanner: string;
+  name: string;
+  version?: string;
+  first_seen: string;
+  last_seen: string;
+  reports: number;
+  /** The latest scan of this tool still reports it. */
+  present: boolean;
+  tool_severity: string;
+  latest_run_id: string;
+  locations: number;
+}
+/** The same issue as found by another tool: a separate finding in the same correlation group (D24). */
+export interface CorrelatedRef { id: string; scanner: string; rule_id: string; state: string }
+export interface FindingSources { reported_by: Reporter[]; also_reported_by: CorrelatedRef[] }

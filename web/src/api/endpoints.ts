@@ -1,5 +1,5 @@
 import { get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, FindingEvent, FindingRow, Page, Permissions, RunRow, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, CorrelatedRef, FindingEvent, FindingSources, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -80,6 +80,10 @@ export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1
 export const triageFinding = (id: string, body: TriageBody, version: number | undefined) =>
   patch<FindingRow>(`/api/v1/findings/${encodeURIComponent(id)}`, body, version === undefined ? undefined : { headers: { 'If-Match': `"${version}"` } });
 
+export async function getFindingSources(id: string, signal?: AbortSignal): Promise<FindingSources> {
+  const raw = await get<{ reported_by?: Reporter[] | null; also_reported_by?: CorrelatedRef[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
+  return { reported_by: raw.reported_by ?? [], also_reported_by: raw.also_reported_by ?? [] };
+}
 export async function getFindingEvents(id: string, signal?: AbortSignal): Promise<FindingEvent[]> {
   const raw = await get<{ items?: FindingEvent[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}/events`, { signal });
   return raw.items ?? [];

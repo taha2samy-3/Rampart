@@ -84,6 +84,7 @@ func TestCorrelationGroup_AcrossScannersAndAliases(t *testing.T) {
 	api.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
+	var lastResp query.FindingResponse
 	get := func(id uuid.UUID) []query.CorrelatedRef {
 		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/findings/"+id.String(), nil)
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -94,10 +95,14 @@ func TestCorrelationGroup_AcrossScannersAndAliases(t *testing.T) {
 		defer func() { _ = res.Body.Close() }()
 		var out query.FindingResponse
 		_ = json.NewDecoder(res.Body).Decode(&out)
+		lastResp = out
 		return out.AlsoReportedBy
 	}
 	if g := get(trivy.ID); len(g) != 1 || g[0].ID != grype.ID || g[0].Scanner != "grype" {
 		t.Fatalf("trivy finding: also_reported_by = %+v, want the grype finding", g)
+	}
+	if rb := lastResp.ReportedBy; len(rb) != 1 || rb[0].Scanner != "trivy" || !rb[0].Present || rb[0].Reports < 1 || rb[0].FirstSeen.IsZero() {
+		t.Fatalf("trivy finding: reported_by = %+v, want one present trivy entry", rb)
 	}
 	if g := get(grype.ID); len(g) != 1 || g[0].ID != trivy.ID {
 		t.Fatalf("grype finding (GHSA id): also_reported_by = %+v, want the trivy finding", g)

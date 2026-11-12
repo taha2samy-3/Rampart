@@ -313,6 +313,13 @@ const server = http.createServer((req, res) => {
       const row = ALL.find((r) => r.finding.id === fm[1]);
       if (!row) return problem(res, 404, 'Finding not found');
       if (fm[2] && req.method === 'GET') return json(res, { items: eventsOf(row.finding.id) });
+      if (!fm[2] && req.method === 'GET') {
+        const sca = row.finding.category === 'sca';
+        const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
+        const reported_by = [{ scanner: sca ? 'trivy' : row.finding.rule_scanner_family, name: sca ? 'trivy' : row.finding.rule_scanner_family, version: '0.58.1', first_seen: d(12), last_seen: d(1), reports: 9, present: true, tool_severity: row.finding.severity, latest_run_id: 'r1', locations: 1 }];
+        const also_reported_by = sca ? [{ id: ALL.find((r) => r.finding.id !== row.finding.id)?.finding.id ?? row.finding.id, scanner: 'grype', rule_id: row.finding.rule_id, state: 'open' }] : [];
+        return json(res, { ...row, reported_by, also_reported_by });
+      }
       if (!fm[2] && req.method === 'PATCH') {
         let body = '';
         req.on('data', (c) => (body += c));

@@ -214,7 +214,7 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 		}
 	case "scanner":
 		for _, v := range term.Values {
-			orClauses = append(orClauses, fmt.Sprintf("rule_scanner_family = $%d", curIdx))
+			orClauses = append(orClauses, fmt.Sprintf("(rule_scanner_family = $%[1]d OR EXISTS (SELECT 1 FROM occurrence o WHERE o.finding_id = finding.id AND o.scanner_family = $%[1]d))", curIdx))
 			args = append(args, v.Raw)
 			curIdx++
 		}

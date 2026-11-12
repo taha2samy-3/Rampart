@@ -167,6 +167,8 @@ type FindingResponse struct {
 	Risk        risk.ScoreBreakdown  `json:"risk"`
 	SLADueDate  *time.Time           `json:"sla_due_date,omitempty"`
 	Occurrences []*domain.Occurrence `json:"occurrences,omitempty"`
+	// ReportedBy folds the occurrences by tool: who reported this finding, since when, and whether each still does.
+	ReportedBy []Reporter `json:"reported_by"`
 	// AlsoReportedBy lists findings of other tools that share this finding's correlation key (D24).
 	AlsoReportedBy []CorrelatedRef `json:"also_reported_by,omitempty"`
 }
@@ -400,6 +402,7 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		Risk:        riskBreakdown,
 		SLADueDate:  slaDue(finding, riskBreakdown.Band),
 		Occurrences: occs,
+		ReportedBy:  reportersOf(occs),
 	}
 	if group, gerr := a.store.ListCorrelated(r.Context(), tenantID, finding.ID); gerr == nil {
 		for _, g := range group {
