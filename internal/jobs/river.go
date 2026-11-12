@@ -283,3 +283,9 @@ func (w *NotifyWorker) Work(ctx context.Context, job *river.Job[NotifyJobArgs]) 
 	}
 	return ErrNoHandler
 }
+
+// TxParseEnqueuer enqueues a parse job inside an open transaction, so the job and the ingest run it
+// belongs to commit together or not at all (D2). RiverQueue implements it.
+type TxParseEnqueuer interface {
+	EnqueueParseTx(ctx context.Context, tx pgx.Tx, args ParseJobArgs) error
+}
