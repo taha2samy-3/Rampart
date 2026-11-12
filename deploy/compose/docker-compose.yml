@@ -58,7 +58,7 @@ services:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
     container_name: rampart-all
-    command: ["/app/rampart", "-target=all"]
+    command: ["-target=all"]
     environment:
       # D4: the app runs as rampart_app (RLS enforced); migrations as rampart_owner; tenant bootstrap as rampart_system.
       RAMPART_DATABASE_URL: "postgres://rampart_app:${RAMPART_APP_PASSWORD}@postgres:5432/rampart?sslmode=disable"
