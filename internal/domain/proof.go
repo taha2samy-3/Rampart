@@ -98,7 +98,14 @@ func cleanProofName(name string) string {
 	}
 	if len(out) > MaxProofNameLen {
 		ext := path.Ext(out)
-		out = out[:MaxProofNameLen-len(ext)] + ext
+		if len(ext) > 16 { // no allowed extension is this long; refuse instead of cutting (found by FuzzCheckProof)
+			return ""
+		}
+		base := out[:MaxProofNameLen-len(ext)]
+		for !utf8.ValidString(base) { // never cut a character in half
+			base = base[:len(base)-1]
+		}
+		out = base + ext
 	}
 	return out
 }

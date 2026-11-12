@@ -27,7 +27,10 @@ export function ScoreBar({
   size?: 'row' | 'full';
   className?: string;
 }) {
-  const segments = scoreSegments(breakdown);
+  // Without a breakdown (an application's score is the highest of its findings, D43) the bar still shows the
+  // score's length on the 1000 scale, as one segment, instead of an empty track (D61).
+  const parts = scoreSegments(breakdown);
+  const segments = parts.length > 0 || score <= 0 ? parts : [{ kind: 'severity' as SegmentKind, fraction: Math.min(1, score / 1000) }];
   return (
     <span
       role="img"

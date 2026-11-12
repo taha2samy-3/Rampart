@@ -1,6 +1,7 @@
 package grammar_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,12 +94,12 @@ func FuzzParse(f *testing.F) {
 	f.Add(`owner:me ownr:none`)
 	f.Add(`"unterminated`)
 	f.Fuzz(func(t *testing.T, q string) {
-		parsed, err := Parse(q)
+		parsed, err := grammar.Parse(q)
 		if err != nil {
 			return
 		}
 		for _, term := range parsed.Terms {
-			if term.Field != "" && !isKnownField(term.Field) {
+			if term.Field != "" && !slices.Contains(grammar.KnownFields, term.Field) {
 				t.Fatalf("parsed an unknown field %q from %q", term.Field, q)
 			}
 		}

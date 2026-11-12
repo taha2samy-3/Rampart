@@ -36,6 +36,14 @@ describe('ScoreBar', () => {
     expect([...seg].map((s) => s.dataset.segment)).toEqual(['severity', 'threat']);
     expect(seg[0]!.style.inlineSize).toBe('40.00%');
   });
+  it('without a breakdown (an application) still shows the score as one bar, and nothing for zero (D61)', () => {
+    const { container, rerender } = render(<ScoreBar breakdown={null} score={650} />);
+    const seg = container.querySelectorAll<HTMLElement>('[data-segment]');
+    expect(seg).toHaveLength(1);
+    expect(seg[0]!.style.inlineSize).toBe('65.00%');
+    rerender(<ScoreBar breakdown={null} score={0} />);
+    expect(container.querySelectorAll('[data-segment]')).toHaveLength(0);
+  });
 });
 
 describe('base components pass axe', () => {
