@@ -103,11 +103,10 @@ func BuildFindingQuery(
 
 	// 3. Keyset cursor clause
 	if cursor != nil && cursor.SortKey == sortKey && cursor.ID != "" {
-		curClause, curArgs, nextIdx := buildCursorClause(cursor, paramIdx)
+		curClause, curArgs, _ := buildCursorClause(cursor, paramIdx)
 		if curClause != "" {
 			whereClauses = append(whereClauses, curClause)
 			args = append(args, curArgs...)
-			paramIdx = nextIdx
 		}
 	}
 
@@ -354,14 +353,7 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 			}
 			if dur, err := parseDurationStr(rawVal); err == nil {
 				// age > 30d means first_seen < NOW() - 30d
-				sqlOp := "<"
-				if op == "<" {
-					sqlOp = ">"
-				} else if op == "<=" {
-					sqlOp = ">="
-				} else if op == ">=" {
-					sqlOp = "<="
-				}
+				sqlOp := flipAgeOp(op)
 				orClauses = append(orClauses, fmt.Sprintf("first_seen %s NOW() - $%d::interval", sqlOp, curIdx))
 				args = append(args, fmt.Sprintf("%d seconds", int(dur.Seconds())))
 				curIdx++
@@ -376,14 +368,7 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 				rawVal = v.RangeVal
 			}
 			if dur, err := parseDurationStr(rawVal); err == nil {
-				sqlOp := "<"
-				if op == "<" {
-					sqlOp = ">"
-				} else if op == "<=" {
-					sqlOp = ">="
-				} else if op == ">=" {
-					sqlOp = "<="
-				}
+				sqlOp := flipAgeOp(op)
 				orClauses = append(orClauses, fmt.Sprintf("last_seen %s NOW() - $%d::interval", sqlOp, curIdx))
 				args = append(args, fmt.Sprintf("%d seconds", int(dur.Seconds())))
 				curIdx++
@@ -505,4 +490,18 @@ func parseDurationStr(s string) (time.Duration, error) {
 		return time.Duration(num*24) * time.Hour, nil
 	}
 	return time.ParseDuration(s)
+}
+
+// flipAgeOp turns an age comparison into the comparison on the timestamp: "older than 30d" is
+// first_seen < NOW() - 30d, so the direction flips.
+func flipAgeOp(op string) string {
+	switch op {
+	case "<":
+		return ">"
+	case "<=":
+		return ">="
+	case ">=":
+		return "<="
+	}
+	return "<"
 }

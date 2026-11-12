@@ -648,23 +648,6 @@ func firstNonEmptyCLI(vals ...string) string {
 	return ""
 }
 
-func severityRank(s string) int {
-	switch strings.ToLower(s) {
-	case "critical":
-		return 50
-	case "high":
-		return 40
-	case "medium":
-		return 30
-	case "low":
-		return 20
-	case "info":
-		return 10
-	default:
-		return 0
-	}
-}
-
 // parseFlexibleFlags separates positional arguments from flags so flags can be passed anywhere.
 func parseFlexibleFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	var flagArgs []string

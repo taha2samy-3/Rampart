@@ -43,7 +43,8 @@ func TestCorrelationKey(t *testing.T) {
 		return ingest.CorrelationKey(ingest.StagedRecord{Category: domain.CategorySAST, CWEs: []int{cwe},
 			Location: domain.Location{Code: &domain.CodeLocation{FilePath: file, LogicalLocation: fn}}}, "", asset, "main")
 	}
-	if sast(89, "a.go", "Run") == sast(89, "a.go", "Other") || sast(89, "a.go", "Run") != sast(89, "a.go", "Run") {
+	run, again, differs := sast(89, "a.go", "Run"), sast(89, "a.go", "Run"), sast(89, "a.go", "Other")
+	if run == "" || run != again || run == differs {
 		t.Fatal("SAST correlates on CWE + file + function")
 	}
 	if sast(0, "a.go", "Run") != "" {
