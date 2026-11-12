@@ -44,27 +44,24 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 2: the Application resource reaches the score: criticality, exposure, data classification and compensating controls are stored and read, a change re-scores existing findings, ingest never overwrites them, `rampart apply` and the operator share one mapping (D55) | built; tested on PostgreSQL and in unit tests |
 | Phase 2: `Application.selectors` for repositories and images; an asset is attached to its application for real (the link was never stored); assets waiting in Unassigned move with their findings when a selector claims them (D56) | built; tested on PostgreSQL and in unit tests. Not built: workload selectors (need the collector), a condition for overlapping selectors |
 | Phase 2: a not_affected or out_of_scope decision follows the issue to the asset's other tracks, for new findings with the same evidence; the gate does not count them as new (D57) | built; tested on PostgreSQL and in unit tests |
+| Phase 2: OWASP Top 10 2025 as a sixth framework, from OWASP's category pages, with the A03 correction; the newer version listed first (D58) | built; tested in unit tests and on PostgreSQL |
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 
 ## Left for the MVP
 
-Every P0 row of [01](01-features.md) and every Phase 2 item below, checked against the code on 2026-11-12 (D54). The MVP is done when this list is empty.
+Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the code on 2026-11-12 (D54), grouped under the Phase 2 bullet it belongs to and worked through **in the order of those bullets**: a bullet is finished before the next starts (D58). The MVP is done when this list is empty.
 
-| # | What | From | Notes |
-|---|---|---|---|
-| 4 | Hierarchy: a tree of nodes, `application.hierarchy_node_id`, a filter, roll-ups; the CRD is P2 | B1, H3, D8 | D54 |
-| 5 | Posture score and hierarchy roll-ups (06 section 2) | D8, G2 | needs 4 |
-| 6 | `RiskPolicy` with CEL factors and `ClusterRiskPolicy`, `ClusterSLAPolicy` (with the compliance presets of 06 section 4) | D5, E1, Phase 2 | |
-| 7 | Owner assignment on findings (single and bulk) | C9 | the `owner:` filter exists, nothing sets an owner |
-| 8 | Proof files on a risk acceptance | C5 | |
-| 9 | OWASP Top 10 2025 | Phase 2, D52 | the CWE mapping is published (D54) |
-| 10 | `AccessBinding` and `IdentityProvider` resources | Phase 2, H3 | |
-| 11 | CLI device login (RFC 8628) | Phase 2, D8 | |
-| 12 | `rampart findings` (list, set state) in the CLI | G7 | |
-| 13 | Ticket-on-critical placeholder (no connector yet) | Phase 2 | |
-| 14 | In the UI: row selection and the bulk bar, severity and tag editing, a manual upload screen | MVP exit, C9, open decision 4 | |
-| 15 | Canonical JSON Schemas (`schemas/*.json`) for the integration contracts | Phase 0, doc 19 | listed in Phase 0, never delivered |
-| 16 | An OpenAPI document and the generated client | G6 | the SPA types are written by hand (13 section 10) |
+| Phase 2 bullet | Left | From |
+|---|---|---|
+| 1. Detection and disposition, triage, bulk, notes, timeline | Owner assignment on findings, single and bulk; in the UI: row selection and the bulk bar, severity and tag editing | C9, MVP exit ("an analyst triages end to end in the UI") |
+| 2. Risk acceptance; VEX | Proof files on a risk acceptance | C5 |
+| 3. `RiskPolicy` and `SLAPolicy` with cluster defaults; scoring; deadlines; aggregate read models | `RiskPolicy` with CEL factors, `ClusterRiskPolicy`, `ClusterSLAPolicy` with the presets of 06 section 4; hierarchy (tree, `application.hierarchy_node_id`, filter) and its roll-ups; posture score | D5, E1, B1, D8, G2 |
+| 4. Built-in automation | Ticket-on-critical placeholder (no connector yet) | Phase 2 |
+| 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | `AccessBinding` and `IdentityProvider` resources; hierarchy scopes on bindings (needs bullet 3's hierarchy); CLI device login (RFC 8628) | H3, D8 |
+| 6. Taxonomies and compliance views | — (OWASP Top 10 2025 built, D58) | |
+| 7. Native parsers; retention | — (D42, D53) | |
+| 8. Overview, application, risk acceptance and administration screens | A manual upload screen (open decision 4) | |
+| P0 rows outside the bullets | `rampart findings` (list, set state) in the CLI (G7); an OpenAPI document and the generated client (G6); the canonical JSON Schemas promised in Phase 0 (doc 19) | G6, G7, Phase 0 |
 
 Moved out of the MVP by D54: CVSS vector parsing (D4, P1), CSAF VEX (A8, P1), the `HierarchyNode` resource (P2).
 

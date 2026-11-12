@@ -67,7 +67,14 @@ func load() {
 		}
 		all = append(all, f)
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	// By name, and the newest version of a framework first (OWASP Top 10 2025 before 2021), so the order and the
+	// default the UI shows never depend on the order files are read in.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Name != all[j].Name {
+			return all[i].Name < all[j].Name
+		}
+		return all[i].Version > all[j].Version
+	})
 }
 
 func (f Framework) validate() error {

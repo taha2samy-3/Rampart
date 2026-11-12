@@ -7,7 +7,7 @@ func TestFrameworksLoadAndAreWellFormed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"owasp-top10-2021": 10, "cwe-top25": 25}
+	want := map[string]int{"owasp-top10-2021": 10, "owasp-top10-2025": 10, "cwe-top25": 25}
 	got := map[string]bool{}
 	for _, f := range fs {
 		got[f.ID] = true
@@ -18,7 +18,7 @@ func TestFrameworksLoadAndAreWellFormed(t *testing.T) {
 			t.Errorf("%s: a framework says where it comes from and which version", f.ID)
 		}
 	}
-	for _, id := range []string{"owasp-top10-2021", "cwe-top25", "pci-dss-4.0.1-req6", "iso27001-2022-a8", "nist-ssdf-1.1"} {
+	for _, id := range []string{"owasp-top10-2021", "owasp-top10-2025", "cwe-top25", "pci-dss-4.0.1-req6", "iso27001-2022-a8", "nist-ssdf-1.1"} {
 		if !got[id] {
 			t.Errorf("framework %s is missing", id)
 		}
@@ -56,5 +56,45 @@ func TestStatusRule(t *testing.T) {
 	}
 	if q := sast.Query(); q != "category:sast state:open,under_investigation,affected" {
 		t.Fatalf("query: %q", q)
+	}
+}
+
+// The 2025 list as OWASP's category pages print it (D58): the counts each page states, weaknesses where 2025 moved
+// them (SSRF into broken access control, XXE into misconfiguration, a new category for exceptional conditions),
+// the A03 correction, and the newer version listed first.
+func TestOWASP2025(t *testing.T) {
+	o, ok := Get("owasp-top10-2025")
+	if !ok {
+		t.Fatal("owasp-top10-2025 is missing")
+	}
+	want := map[string]int{"A01:2025": 40, "A02:2025": 16, "A03:2025": 6, "A04:2025": 32, "A05:2025": 37,
+		"A06:2025": 39, "A07:2025": 36, "A08:2025": 14, "A09:2025": 5, "A10:2025": 24}
+	has := map[string]map[int]bool{}
+	for _, c := range o.Controls {
+		if len(c.CWEs) != want[c.ID] {
+			t.Errorf("%s maps %d weaknesses, the OWASP page says %d", c.ID, len(c.CWEs), want[c.ID])
+		}
+		has[c.ID] = map[int]bool{}
+		for _, n := range c.CWEs {
+			has[c.ID][n] = true
+		}
+	}
+	for ctl, cwe := range map[string]int{"A01:2025": 918, "A02:2025": 611, "A05:2025": 89, "A10:2025": 703, "A03:2025": 477} {
+		if !has[ctl][cwe] {
+			t.Errorf("CWE-%d should be under %s", cwe, ctl)
+		}
+	}
+	if has["A03:2025"][447] {
+		t.Error("CWE-447 is the page's typo for CWE-477")
+	}
+	fs, _ := All()
+	var order []string
+	for _, f := range fs {
+		if f.Name == "OWASP Top 10" {
+			order = append(order, f.Version)
+		}
+	}
+	if len(order) != 2 || order[0] != "2025" {
+		t.Errorf("the newer OWASP list should come first: %v", order)
 	}
 }

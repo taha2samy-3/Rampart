@@ -855,3 +855,15 @@ Item 3 of the MVP list, built as D54 decided. The finding key includes the track
 - **Tested on PostgreSQL**: a decision with justification and impact carries to a new finding on `release/1.x` with its timeline entry; different evidence does not carry; a risk acceptance does not carry; a finding that already existed on the other track is not changed; the gate on the release commit blocks only the two undecided new findings. Unit: the lineage key is shared across tracks of one asset, differs across assets, and is empty for a weak fingerprint.
 
 Source: DefectDojo, False Positive History (https://docs.defectdojo.com/triage_findings/finding_deduplication/false_positive_history/).
+
+## D58. OWASP Top 10 2025, and working Phase 2 in its order (Phase 2)
+
+**OWASP Top 10 2025** (Phase 2 bullet 6; D54 found that D52's reason for leaving it out was wrong).
+- **Source.** Each category page on top10.owasp.org/2025 lists its weaknesses under "List of Mapped CWEs" and states the count in its score table: A01 40, A02 16, A03 6, A04 32, A05 37, A06 39, A07 36, A08 14, A09 5, A10 24 (249 in all, none repeated). The data file `internal/compliance/data/owasp-top10-2025.json` holds exactly those lists, and a test checks every count against the page. MITRE's view 1450 was not used as the source: it is titled "Weaknesses in OWASP Top Ten **RC1** (2025)", the release candidate, and differs from the final pages (A03 in the view has CWE-447 and CWE-477 and lacks CWE-1357).
+- **One correction.** A03's page lists "CWE-447 Use of Obsolete Function". CWE-447 is "Unimplemented or Unsupported Feature in UI"; "Use of Obsolete Function" is CWE-477, which the same page's background text names and MITRE's grouping CWE-1438 contains. CWE-477 is used, and the framework's note says so. (A07's page repeats the title of CWE-297 for CWE-298 and CWE-299; only numbers are stored, so nothing changes.) The 2021 lists were kept exactly as printed (D52); this is the only departure, because here the page contradicts itself.
+- **Order.** Frameworks were sorted by name only; two versions of "OWASP Top 10" would come back in random order and the UI's default could change between requests. They are sorted by name, then the newest version first.
+- **Tested.** The counts, weaknesses where 2025 moved them (SSRF into A01, XXE into A02, injection in A05, CWE-703 in the new A10), the A03 correction, and the order; on PostgreSQL the taxonomy endpoint lists six frameworks and the existing per-control status test runs unchanged.
+
+**Working Phase 2 in its order.** Items 1 to 3 of the MVP list (D55 to D57) and this one were picked by size. The roadmap gives Phase 2 as eight bullets in an order, and that order is the plan we keep: the MVP list in 09 is now grouped by bullet, and the remaining work goes bullet 1, 2, 3, 4, 5, 8, then the P0 rows outside the bullets, each bullet finished before the next.
+
+Sources: OWASP Top 10:2025 category pages (https://top10.owasp.org/2025/); CWE-1438 (https://cwe.mitre.org/data/definitions/1438.html); CWE view 1450 (https://cwe.mitre.org/data/definitions/1450.html).

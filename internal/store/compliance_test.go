@@ -17,7 +17,7 @@ func TestCompliance_StatusPerControl(t *testing.T) {
 	seedFindings(t, ctx, h.store, h.tenant, 8) // SAST findings with CWE-89, some open, none from a real run
 
 	code, list := getJSON[struct{ Items []query.TaxonomyInfo }](t, h, viewer, "/api/v1/taxonomies")
-	if code != http.StatusOK || len(list.Items) != 5 {
+	if code != http.StatusOK || len(list.Items) != 6 { // five frameworks of D52 and OWASP Top 10 2025 (D58)
 		t.Fatalf("frameworks: %d %+v", code, list.Items)
 	}
 	if code, _ := h.callAs("", "GET", "/api/v1/taxonomies", nil, nil); code != http.StatusUnauthorized {
