@@ -31,6 +31,11 @@ func TestCLILogin(t *testing.T) {
 }
 
 func TestCLIE2EUploadAndSBOM(t *testing.T) {
+	// The CLI reads the commit, branch and repository from the CI environment; the test must not depend on
+	// whether it runs inside GitHub Actions or GitLab CI.
+	for _, v := range []string{"GITHUB_ACTIONS", "GITLAB_CI", "GITHUB_SHA", "CI_COMMIT_SHA"} {
+		t.Setenv(v, "")
+	}
 	queue := jobs.NewInMemJobQueue()
 	gw := ingest.NewGateway(queue)
 
@@ -180,4 +185,34 @@ func runCLI(args ...string) error {
 		return fmt.Errorf("command %q not handled", args[0])
 	}
 	return err
+}
+
+// In CI the commit comes from the environment, so a pipeline step needs no flag for it.
+func TestDetectCI(t *testing.T) {
+	t.Setenv("GITLAB_CI", "")
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "abc123")
+	t.Setenv("GITHUB_REPOSITORY", "acme/shop")
+	t.Setenv("GITHUB_REF_NAME", "feature/x")
+	t.Setenv("GITHUB_REF", "refs/pull/12/merge")
+	ci := detectCI()
+	if ci.Commit != "abc123" || ci.Repository != "github.com/acme/shop" {
+		t.Fatalf("github: %+v", ci)
+	}
+	if ci.Ref != "refs/pull/12/merge" { // a pull request ref is passed whole: it makes the run ephemeral (D10)
+		t.Fatalf("a pull request must keep its ref, got %q", ci.Ref)
+	}
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	t.Setenv("GITHUB_REF_NAME", "main")
+	if ci := detectCI(); ci.Ref != "main" {
+		t.Fatalf("a branch uses its name, got %q", ci.Ref)
+	}
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("GITLAB_CI", "true")
+	t.Setenv("CI_COMMIT_SHA", "def456")
+	t.Setenv("CI_MERGE_REQUEST_IID", "7")
+	t.Setenv("CI_COMMIT_REF_NAME", "topic")
+	if ci := detectCI(); ci.Commit != "def456" || ci.Ref != "merge-requests/7" {
+		t.Fatalf("gitlab: %+v", ci)
+	}
 }

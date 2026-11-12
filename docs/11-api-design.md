@@ -34,6 +34,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `POST /uploads/{id}/complete` | Body `{sha256}`. Enqueues parsing. Returns `{ingestRunId, statusUrl}` |
 | `POST /reports` | One-shot multipart upload for files up to 32 MB. Same fields as above plus `file` |
 | `GET /runs/{id}` | Status and stats of an ingest run |
+| `GET /runs`, `GET /runs/{id}` (on `/api/v1`, query API) | For the UI: runs newest first with a signed cursor (`limit`, `cursor`; answers `{items, next_cursor}`), and one run. Each is the run plus `scanners` (the tools in its report) and `ephemeral` (from an untracked ref, D10) |
 | `POST /sbom` | Convenience alias of `/reports` that forces SBOM handling and DT forwarding rules |
 | `POST /vex` | Upload OpenVEX, CycloneDX VEX or CSAF VEX |
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -879,6 +880,36 @@ func (m *MemoryStore) RecordRunScope(ctx context.Context, scope *domain.IngestRu
 	cp := *scope
 	m.ingestRunScopes[composite] = &cp
 	return nil
+}
+
+// ListIngestRuns returns runs newest first, after the given position.
+func (m *MemoryStore) ListIngestRuns(ctx context.Context, tenantID uuid.UUID, limit int, after *store.RunPosition) ([]*domain.IngestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var all []*domain.IngestRun
+	for _, r := range m.ingestRuns {
+		if r.TenantID != tenantID {
+			continue
+		}
+		if after != nil {
+			older := r.CreatedAt.Before(after.CreatedAt) || (r.CreatedAt.Equal(after.CreatedAt) && r.ID.String() < after.ID.String())
+			if !older {
+				continue
+			}
+		}
+		cp := *r
+		all = append(all, &cp)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
+		}
+		return all[i].ID.String() > all[j].ID.String()
+	})
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
 }
 
 // ListRunScopes returns the scanner families a run reported on.

@@ -4,6 +4,11 @@ export const qk = {
   session: () => ['session'] as const,
   permissions: () => ['me', 'permissions'] as const,
   tenants: () => ['me', 'tenants'] as const,
+  runs: {
+    all: () => ['runs'] as const,
+    list: () => ['runs', 'list'] as const,
+    one: (id: string) => ['runs', 'one', id] as const,
+  },
   findings: {
     all: () => ['findings'] as const,
     list: (q: string, sort: string) => ['findings', 'list', { q, sort }] as const,

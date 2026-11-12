@@ -108,6 +108,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/findings/{id}", a.handleGetFinding)
 	mux.HandleFunc("PATCH /api/v1/findings/{id}", a.handlePatchFinding)
 	mux.HandleFunc("POST /api/v1/gate", a.handleGate) // D26
+	mux.HandleFunc("GET /api/v1/runs", a.handleListRuns)
+	mux.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
 	mux.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
 	mux.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleGetAssetSBOM) // alias per doc 11
 	mux.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)

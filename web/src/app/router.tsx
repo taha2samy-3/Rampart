@@ -6,6 +6,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
+import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/IngestionRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
 import { NotBuilt } from '@/routes/NotBuilt';
 import { Bootstrap } from './Bootstrap';
@@ -108,7 +109,16 @@ const deepFindingRoute = createRoute({
   },
 });
 
-const placeholderRoutes = NAV_ITEMS.filter((n) => n.id !== 'findings').map((item) =>
+const ingestionRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/ingestion',
+  validateSearch: (s: Record<string, unknown>): IngestionSearch => ({ sel: str(s.sel) }),
+  component: function Ingestion() {
+    return <IngestionRoute search={ingestionRoute.useSearch()} />;
+  },
+});
+
+const placeholderRoutes = NAV_ITEMS.filter((n) => n.id !== 'findings' && n.id !== 'ingestion').map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
 
@@ -120,7 +130,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   ...(import.meta.env.DEV ? [styleguideRoute] : []),
   tenantLoginRoute,
-  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ...placeholderRoutes]),
+  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, ...placeholderRoutes]),
 ]);
 
 export function makeRouter(history?: RouterHistory) {

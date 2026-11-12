@@ -1,5 +1,5 @@
 import { get, post, ProblemError, setCsrfToken } from './client';
-import type { FindingRow, Page, Permissions, Session, TenantRef, UiConfig } from './types';
+import type { FindingRow, Page, Permissions, RunRow, Session, TenantRef, UiConfig } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -64,3 +64,14 @@ export async function listFindings(args: {
     total: raw.total,
   };
 }
+
+/** Newest first; the cursor is signed by the server and opaque here (docs/16 D16). */
+export async function listRuns(args: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<Page<RunRow>> {
+  const raw = await get<{ items?: RunRow[] | null; next_cursor?: string }>('/api/v1/runs', {
+    query: { cursor: args.cursor, limit: args.limit ?? 50 },
+    signal: args.signal,
+  });
+  return { items: raw.items ?? [], nextCursor: raw.next_cursor ?? '' };
+}
+
+export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1/runs/${encodeURIComponent(id)}`, { signal });

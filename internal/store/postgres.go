@@ -1552,3 +1552,42 @@ func (s *PostgresStore) ListRunScopes(ctx context.Context, tenantID, runID uuid.
 	})
 	return out, err
 }
+
+// ListIngestRuns returns runs newest first with keyset pagination on (created_at, id).
+func (s *PostgresStore) ListIngestRuns(ctx context.Context, tenantID uuid.UUID, limit int, after *RunPosition) ([]*domain.IngestRun, error) {
+	var ids []uuid.UUID
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := `SELECT id FROM ingest_run WHERE tenant_id = $1`
+		args := []any{tenantID}
+		if after != nil {
+			q += ` AND (created_at, id) < ($2, $3)`
+			args = append(args, after.CreatedAt, after.ID)
+		}
+		q += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT %d`, limit)
+		rows, err := tx.Query(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.IngestRun, 0, len(ids))
+	for _, id := range ids {
+		r, err := s.GetIngestRun(ctx, tenantID, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}

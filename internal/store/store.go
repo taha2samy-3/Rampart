@@ -13,6 +13,12 @@ import (
 type CloseScope = domain.CloseScope
 
 // Store defines the comprehensive persistence contract for Rampart Phase 0 and Phase 1.
+// RunPosition is where a page of runs ends: the creation time and id of its last run.
+type RunPosition struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
 type Store interface {
 	// People, memberships and browser sessions (D8, doc 14)
 	auth.IdentityStore
@@ -68,6 +74,9 @@ type Store interface {
 	// Ingest Run & Ephemeral Results (D2, D10, D13)
 	CreateIngestRun(ctx context.Context, run *domain.IngestRun) error
 	GetIngestRun(ctx context.Context, tenantID, runID uuid.UUID) (*domain.IngestRun, error)
+	// ListIngestRuns returns up to limit runs, newest first, starting after the (createdAt, id) position when
+	// after is set. Callers ask for one more than they show to learn whether another page exists.
+	ListIngestRuns(ctx context.Context, tenantID uuid.UUID, limit int, after *RunPosition) ([]*domain.IngestRun, error)
 	UpdateIngestRun(ctx context.Context, run *domain.IngestRun) error
 	RecordRunScope(ctx context.Context, scope *domain.IngestRunScope) error
 	RecordRunResult(ctx context.Context, result *domain.IngestRunResult) error

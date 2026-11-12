@@ -35,6 +35,16 @@ export interface Scenario {
   /** What POST /auth/local/login answers: 204 on success, or a problem status. */
   local?: 204 | 401 | 403 | 429;
   findings?: ReturnType<typeof finding>[] | 'error';
+  /** Pages of runs for GET /api/v1/runs; each call returns the next page. 'error' answers 500. */
+  runs?: ReturnType<typeof run>[][] | 'error';
+}
+
+export function run(i: number, over: Record<string, unknown> = {}) {
+  return {
+    id: `0000000${i}-aaaa-bbbb-cccc-000000000000`, status: 'completed', created_at: '2026-11-10T10:00:00Z', scanner_family: 'sarif', format: 'sarif', track: 'main',
+    stats: { parsed: 10, created: 4, updated: 1, untouched: 5, reactivated: 0, closed: 2, record_errors: 0, weak_fingerprints: 0 },
+    context: { repository: 'github.com/acme/shop', branch: 'main', commit: 'abcdef1234567' }, scanners: ['semgrep'], ephemeral: false, ...over,
+  };
 }
 export type Calls = { method: string; url: string; headers: Record<string, string>; body?: string }[];
 
@@ -55,6 +65,19 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/auth/tenant' || path === '/auth/logout') return json(null, 204);
     if (path === '/api/v1/me/permissions') return json({ role: 'triager', scopes: ['tenant'] });
     if (path === '/api/v1/me/tenants') return json([{ id: 't1', slug: 'acme', name: 'Acme' }, { id: 't2', slug: 'globex', name: 'Globex' }]);
+    if (path === '/api/v1/runs') {
+      if (sc.runs === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list runs', status: 500, request_id: 'req_runs' }, 500);
+      const pages = sc.runs ?? [];
+      const cursor = new URL(url, 'http://x').searchParams.get('cursor');
+      const idx = cursor ? Number(cursor) : 0;
+      const items = pages[idx] ?? [];
+      return json({ items: items.length ? items : null, next_cursor: idx + 1 < pages.length ? String(idx + 1) : '' });
+    }
+    if (path.startsWith('/api/v1/runs/')) {
+      const id = decodeURIComponent(path.split('/').pop() ?? '');
+      const found = (Array.isArray(sc.runs) ? sc.runs.flat() : []).find((r) => r.id === id);
+      return found ? json(found) : json({ title: 'Run not found', status: 404 }, 404);
+    }
     if (path === '/api/v1/findings') {
       if (sc.findings === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list findings', status: 500, request_id: 'req_1' }, 500);
       const items = sc.findings ?? [];

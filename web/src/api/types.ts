@@ -114,3 +114,32 @@ export interface Page<T> {
   nextCursor: string;
   total?: number;
 }
+
+export type RunStatus =
+  | 'queued' | 'parsing' | 'merging' | 'enriching' | 'scoring'
+  | 'completed' | 'completed_with_errors' | 'failed' | 'stale';
+
+/** One ingest run (internal/query/runs.go RunView, internal/domain IngestRun). */
+export interface RunRow {
+  id: string;
+  status: RunStatus;
+  created_at: string;
+  finished_at?: string;
+  scanner_family: string;
+  format: string;
+  track: string;
+  /** A stable code when the run failed, for example sha256_mismatch. */
+  error?: string;
+  stats: {
+    parsed: number; created: number; updated: number; untouched: number;
+    reactivated: number; closed: number; record_errors: number; weak_fingerprints: number;
+  };
+  context: {
+    repository?: string; branch?: string; commit?: string; image_ref?: string; image_digest?: string;
+    environment?: string; build_id?: string; pipeline_url?: string;
+  };
+  /** The tools in the report. */
+  scanners: string[];
+  /** From an untracked ref: it never changed the inventory (docs/16 D10). */
+  ephemeral: boolean;
+}

@@ -16,6 +16,16 @@ const TENANTS = [
 ];
 const LOGIN_METHODS = JSON.parse(process.env.MOCK_METHODS ?? '[{"id":"default","name":"Default SSO","type":"oidc"}]');
 
+// Ingest runs (internal/query/runs.go RunView), newest first.
+const RUN_STATS = (parsed, created, updated, untouched, reactivated, closed, record_errors = 0) => ({ parsed, created, updated, untouched, reactivated, closed, record_errors, weak_fingerprints: 0 });
+const RUNS = [
+  { id: '01a1ceb5-a47c-7484-8fee-7915eba6176d', status: 'merging', created_at: new Date(Date.now() - 40_000).toISOString(), scanner_family: 'sarif', format: 'sarif', track: 'main', stats: RUN_STATS(0, 0, 0, 0, 0, 0), context: { repository: 'github.com/acme/shop', branch: 'main', commit: '9f2c1a8d3e', build_id: '4821' }, scanners: ['semgrep'], ephemeral: false },
+  { id: '01a1ceb4-1c02-7a11-9d3b-2a8e5f0c7e44', status: 'completed', created_at: new Date(Date.now() - 3_600_000).toISOString(), scanner_family: 'sarif', format: 'sarif', track: 'pr/412', stats: RUN_STATS(31, 2, 0, 29, 0, 0), context: { repository: 'github.com/acme/shop', branch: 'refs/pull/412/merge', commit: '5be07c1a99' }, scanners: ['trivy'], ephemeral: true },
+  { id: '01a1ceb3-77aa-7b90-8e41-0c3d9a6b2f10', status: 'failed', error: 'sha256_mismatch', created_at: new Date(Date.now() - 7_200_000).toISOString(), scanner_family: 'sarif', format: 'sarif', track: 'main', stats: RUN_STATS(0, 0, 0, 0, 0, 0), context: { repository: 'github.com/acme/billing', branch: 'main', commit: 'c0ffee1234' }, scanners: ['gitleaks'], ephemeral: false },
+  { id: '01a1ceb2-0d19-7c55-a2f6-6b14e7d3a001', status: 'completed_with_errors', created_at: new Date(Date.now() - 86_400_000).toISOString(), scanner_family: 'cyclonedx', format: 'cyclonedx', track: 'main', stats: RUN_STATS(214, 9, 3, 198, 1, 4, 2), context: { image_ref: 'registry.acme.example/shop/api:2.14.0', environment: 'production' }, scanners: ['syft'], ephemeral: false },
+  { id: '01a1ceb1-5e3b-7d02-b7c8-91f0a2e48c33', status: 'completed', created_at: new Date(Date.now() - 3 * 86_400_000).toISOString(), scanner_family: 'sarif', format: 'sarif', track: 'main', stats: RUN_STATS(48, 4, 1, 43, 0, 2), context: { repository: 'github.com/acme/shop', branch: 'main', commit: '3a77d90b12' }, scanners: ['semgrep'], ephemeral: false },
+];
+
 const BAND_BASE = { critical: 600, high: 400, medium: 200, low: 80, info: 10 };
 const F = {
   KEV: [300, 'Vulnerability listed in CISA Known Exploited Vulnerabilities catalog'],
@@ -219,6 +229,14 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/me') return json(res, { user: { id: 'u-1', email: 'sara.ahmed@acme.example', name: 'Sara Ahmed' }, tenant });
     if (p === '/api/v1/me/tenants') return json(res, TENANTS);
     if (p === '/api/v1/me/permissions') return json(res, { role: 'triager', scopes: ['tenant'] });
+    if (p === '/api/v1/runs') {
+      if (scenario === 'error') return problem(res, 500, 'Failed to list runs', 'The database did not answer within 5 s.');
+      return json(res, { items: dataMode === 'empty' ? null : RUNS, next_cursor: '' });
+    }
+    if (p.startsWith('/api/v1/runs/')) {
+      const r = RUNS.find((x) => x.id === p.split('/').pop());
+      return r ? json(res, r) : problem(res, 404, 'Run not found', 'No such run.');
+    }
     if (p === '/api/v1/findings') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list findings', 'The database did not answer within 5 s.');
       if (dataMode === 'empty') return json(res, { items: null, total: 0 });

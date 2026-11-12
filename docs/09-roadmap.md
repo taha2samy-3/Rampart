@@ -26,7 +26,8 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 1: ingest throughput goal | **withdrawn** (D35): measured at about 130 s for 100k results, not reached; benchmark removed |
 | Phase 1: `correlation_key` and correlation groups; ephemeral runs with baseline comparison; parser fuzz tests (D37) | built; tested on PostgreSQL |
 | Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
-| Phase 1: `RekeyJob` (D11), ingest run page in the UI | not built |
+| Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
+| Phase 1: `RekeyJob` (D11) | not built |
 
 ## Phase −1 — Decisions and spikes (week 1)
 
