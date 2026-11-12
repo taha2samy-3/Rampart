@@ -121,3 +121,28 @@ generates for the initdb owner; otherwise database.existingSecret supplies the U
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+Retention settings (docs/16 D53), shared by the server and the maintenance CronJob so both read the same days.
+*/}}
+{{- define "rampart.retentionEnv" -}}
+{{- $r := .Values.retention -}}
+- name: RAMPART_RETENTION_ENABLED
+  value: {{ $r.enabled | quote }}
+- name: RAMPART_RETENTION_INTERVAL
+  value: {{ $r.interval | quote }}
+- name: RAMPART_RETENTION_OCCURRENCES_DAYS
+  value: {{ $r.occurrencesDays | quote }}
+- name: RAMPART_RETENTION_RAW_REPORTS_DAYS
+  value: {{ $r.rawReportsDays | quote }}
+- name: RAMPART_RETENTION_SECRET_REPORTS_DAYS
+  value: {{ $r.secretReportsDays | quote }}
+- name: RAMPART_RETENTION_RESOLVED_FINDINGS_DAYS
+  value: {{ $r.resolvedFindingsDays | quote }}
+- name: RAMPART_RETENTION_EVENTS_DAYS
+  value: {{ $r.eventsDays | quote }}
+- name: RAMPART_RETENTION_AUDIT_DAYS
+  value: {{ $r.auditDays | quote }}
+- name: RAMPART_RETENTION_RUN_RESULTS_DAYS
+  value: {{ $r.runResultsDays | quote }}
+{{- end -}}

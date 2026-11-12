@@ -29,6 +29,7 @@ import (
 	"rampart/internal/integrations"
 	"rampart/internal/jobs"
 	"rampart/internal/query"
+	"rampart/internal/retention"
 	"rampart/internal/store"
 	"rampart/internal/telemetry"
 	"rampart/internal/ui"
@@ -255,6 +256,30 @@ func (r *Runner) Run(ctx context.Context) error {
 		expiry := workflow.New(storeBackend)
 		expiry.SetScorer(scorer)
 		go workflow.RunExpirySweeper(ctx, expiry, sys, sysPool, 15*time.Minute, r.logger)
+	}
+	// Retention (docs/16 D53): expired tenant data every interval, and, when this process holds the owner URL
+	// (the all-in-one target), the monthly event and audit partitions too. Without it, the Helm CronJob
+	// `rampart maintenance` does the partitions.
+	// With retention off, the same loop still creates partitions and deletes nothing.
+	if pgStore != nil {
+		if sysStore == nil {
+			r.logger.Warn("retention needs database.systemUrl to list tenants; retention is off")
+		} else {
+			policy, objectsToPurge, interval := r.cfg.Retention.RetentionPolicy, objects, r.cfg.Retention.Interval
+			if !r.cfg.Retention.Enabled {
+				policy, objectsToPurge, interval = domain.RetentionPolicy{}, nil, 6*time.Hour
+			}
+			var owner *pgxpool.Pool
+			if r.cfg.Database.MigrateURL != "" {
+				if owner, err = pgxpool.New(ctx, r.cfg.Database.MigrateURL); err != nil {
+					return fmt.Errorf("connecting to postgres as rampart_owner for retention: %w", err)
+				}
+				defer owner.Close()
+			}
+			sweeper := retention.New(pgStore, sysStore.ListTenantIDs, objectsToPurge, owner, policy, r.logger)
+			go retention.Run(ctx, sweeper, sysStore.Pool(), interval)
+			r.logger.Info("retention started", "enabled", r.cfg.Retention.Enabled, "interval", interval, "policy", policy, "partitions", owner != nil)
+		}
 	}
 	if r.cfg.Feeds.Enabled {
 		if sysStore == nil {

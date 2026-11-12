@@ -54,7 +54,7 @@ Consequences:
 - Credentials come from the CNPG-generated application Secret (or external DSNs): `database.url` (pooled, PgBouncer transaction mode) and `database.directUrl` (direct to the primary).
 - **`LISTEN/NOTIFY` needs the direct URL.** River's notifier and the config-change listener use `database.directUrl`; request handlers use the pooled URL. With no direct URL, River runs in poll-only mode and config is re-read every 15 s.
 - Migrations: `rampart migrate up` runs goose migrations and River's own migrations. In Helm it is a plain Job on install (not a hook, so it can wait for the bundled CNPG cluster) and a `pre-upgrade` hook on upgrade. Every target has an init container `rampart migrate wait` that blocks until the schema version is at least the one the binary expects. `-target=all` auto-migrates by default (`database.autoMigrate`).
-- Partitions (`finding_event`, `audit_event`, `trend_daily`) are created three months ahead by the scheduler's `maintenance` job; the first set is created by the migration.
+- Partitions (`finding_event`, `audit_event`, `trend_daily`) are created three months ahead by the scheduler's `maintenance` job; the first set is created by the migration. Built as `rampart maintenance` and the retention loop of the all-in-one target (D53); `trend_daily` does not exist (D43).
 
 ## D5. Identifiers (closes B5)
 
@@ -89,6 +89,8 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `cache.valkeyUrl` | — | optional |
 | `telemetry.otlpEndpoint`, `log.level`, `log.format` | —, `info`, `json` | |
 | `operator.mode` | `auto` | `auto`, `on`, `off` |
+| `retention.enabled`, `.interval` | `true`, `6h` | the retention sweep (D53) |
+| `retention.occurrencesDays`, `.rawReportsDays`, `.secretReportsDays`, `.resolvedFindingsDays`, `.eventsDays`, `.auditDays`, `.runResultsDays` | 180, 90, 7, 730, 730, 2555, 30 | days; 0 keeps for ever; minimums in D53 |
 
 Helm values skeleton: `mode`, `image`, `config` (the tree above), `bundled.postgres.enabled`, `bundled.seaweedfs.enabled`, `bundled.valkey.enabled`, `bundled.nats.enabled`, `ingress|gateway`, `targets.<name>.{replicas,resources,autoscaling}`, `keda.enabled`, `networkPolicy.enabled`, `serviceMonitor.enabled`.
 
@@ -336,7 +338,7 @@ Phase 1 fields and their columns: `state`, `severity`, `risk` (band), `score` (r
 - River retry policy: 25 attempts with exponential backoff for transient errors (network, 5xx, lock timeout); permanent errors (unparseable report, hash mismatch, unknown format) fail immediately with a typed code on `ingest_run.error`.
 - Problem type catalogue (prefix `https://rampart.aspm.dev/problems/`): `validation`, `unauthorized`, `forbidden`, `not-found`, `conflict-version`, `idempotency-key-reused`, `rate-limited`, `quota-exceeded`, `payload-too-large`, `unsupported-format`, `upstream-unavailable`, `internal`.
 - Fixtures live in `internal/parsers/<name>/testdata/<tool-version>/`. `hack/fixtures` holds only large load-test inputs.
-- Test requirements: a cross-tenant leak test runs every list and get endpoint as tenant A against tenant B data; a seed generator (`hack/seed`) builds the 5M-finding benchmark database; the ingestion benchmark is "100 000 SARIF results, 2 vCPU / 2 GiB parser, CNPG single instance 4 vCPU / 16 GiB, SSD, target under 60 s, measured from `complete` to run `completed`". This target is unproven and is the subject of a Phase 0 spike.
+- Test requirements: a cross-tenant leak test runs every list and get endpoint as tenant A against tenant B data; a seed generator (`hack/seed`) builds the 5M-finding benchmark database; the ingestion benchmark and its 60 s target were withdrawn after measurement (D35).
 - Report generation moves to `POST /api/v1/report-jobs` so it no longer collides with `POST /ingest/v1/reports`.
 - Event names are `rampart.<entity>.<verb>` everywhere, for example `rampart.finding.sla_breaching`.
 - Enum spelling: CRD fields use camelCase (`apiPull`, `azureBoards`); database and API values use snake_case (`api_pull`, `azure_boards`); the mapping is mechanical.
@@ -485,7 +487,7 @@ Adopted cuts for the MVP and v1.0; the roadmap in [09-roadmap.md](09-roadmap.md)
 These were found by running the code against PostgreSQL and the HTTP API. Each closes a gap between an earlier section and what can actually work.
 
 - **Roles carry no secrets in SQL (D4).** The migration only creates the four roles as `NOLOGIN` when missing. Passwords and `LOGIN` come from the platform (CNPG managed roles, Helm, `deploy/compose/initdb`). `rampart_app` and `rampart_ro` cannot write `tenant`, `vulnerability`, `vulnerability_alias` or `rule` (D19); tenants are written by `rampart_system`.
-- **Migrations use their own connection.** `database.migrateUrl` (`rampart_owner`) is used only for `AutoMigrate`; `database.directUrl` remains the application's direct connection for `LISTEN/NOTIFY`. A configured database that cannot be reached is a startup error, never a silent fall back to the in-memory store.
+- **Migrations use their own connection.** `database.migrateUrl` (`rampart_owner`) is used only for `AutoMigrate` and, since D53, for partition maintenance in the same process; `database.directUrl` remains the application's direct connection for `LISTEN/NOTIFY`. A configured database that cannot be reached is a startup error, never a silent fall back to the in-memory store.
 - **The token names its tenant (D8, D4).** Wire format `rpt_<tenant-uuid-hex>_<secret>`. The lookup runs under that tenant's RLS context, so `api_token` keeps the strict policy (an unset tenant sees zero rows). The record must carry the same tenant. The hash is SHA-256; the secret is never stored.
 - **No secret in logs.** With a database, the bootstrap admin token goes to `auth.bootstrapAdminTokenFile` once. It is logged only on the in-memory store.
 - **One transaction per merge batch (D13).** `Store.InTenantTx` runs the batch under `pg_advisory_xact_lock(hashtextextended(scope))`; the finding upsert, occurrence upsert, counter recompute and `finding_event` rows commit or roll back together. The close step is decided before any write; a held close (D22) changes nothing.
@@ -558,7 +560,7 @@ Built as D2 and D9 specify. What was decided while building it:
 - **Object store client** (`internal/objectstore`): S3 API over aws-sdk-go-v2 with two clients, one for the server (`endpoint`) and one used only to sign URLs (`externalEndpoint`), because the signature covers the host. The checksum calculation is "when required" so that S3-compatible stores that lack the newer checksum headers still accept the upload. `Memory` is the in-process implementation for unit tests.
 - **Configuration**: `RAMPART_OBJECT_STORAGE_{ENDPOINT,EXTERNAL_ENDPOINT,REGION,BUCKET_RAW,ACCESS_KEY_FILE,SECRET_KEY_FILE,USE_PATH_STYLE}`. Keys are files. Helm mounts them from the bundled store's Secret, or from `objectStorage.existingSecret` (keys `accessKey`, `secretKey`) when `seaweedfs.enabled=false`; `objectStorage.externalEndpoint` is the address clients use. Compose passes them as Docker secrets and signs for `http://localhost:8333`.
 - **Tests**: `internal/store/presigned_upload_test.go` runs the whole path against real PostgreSQL (as `rampart_app`, RLS on), River and, when `RAMPART_TEST_S3_ENDPOINT` is set (always in CI), SeaweedFS: create, PUT to the presigned URL, complete, the worker finishes, findings exist; repeated complete returns one run; a wrong SHA-256 fails the run and merges nothing; idempotency (same body 200, other body 409); oversize declaration 413; a body of the wrong size is refused by the object store; completing before the upload is 422. CI starts SeaweedFS with `-volume.max=100` because every bucket costs the store volumes, so the tests share one bucket.
-- **Not done in this slice**: ephemeral run results for the CI gate, tracked refs from the scan source, the abandoned-upload sweeper (objects of uploads never completed are removed by the bucket lifecycle rule, doc 15).
+- **Not done in this slice**: ephemeral run results for the CI gate, tracked refs from the scan source, the abandoned-upload sweeper. (This said a bucket lifecycle rule would remove them; no such rule was ever configured. D53 removes them.)
 
 ## D35. Query over SQL, threat-intelligence sync, aliases, and the first ingest measurements (Phase 1)
 
@@ -676,7 +678,7 @@ Built as D2 and D9 specify. What was decided while building it:
 
 - **What was there.** `audit_event` existed and recorded sign-in events only. docs/07 says every mutating API call, and "append-only, no UPDATE/DELETE grants"; the application and system roles had both grants. Both are fixed.
 - **Recording.** `API.Audited` wraps the HTTP handler: every POST, PUT, PATCH and DELETE on `/api/v1` and `/ingest/v1` by an authenticated caller is recorded with the actor, the route pattern (`PATCH /api/v1/findings/{id}`), the resource type and id, the status the server answered, the address, the user agent and the request id. A refused call (403) is recorded; an unauthenticated one has no tenant and is not. Reads are not. Query strings and bodies are never stored. A failed audit write is logged and does not fail the request.
-- **Append-only** (migration `00012_audit_append_only.sql`, schema version 12): `UPDATE`, `DELETE` and `TRUNCATE` are revoked from the application, system and read-only roles, on the parent and on every existing partition. A test runs each statement as both roles and expects "permission denied". Old months leave by dropping a whole partition as the owner (the retention job, not built).
+- **Append-only** (migration `00012_audit_append_only.sql`, schema version 12): `UPDATE`, `DELETE` and `TRUNCATE` are revoked from the application, system and read-only roles, on the parent and on every existing partition. A test runs each statement as both roles and expects "permission denied". Old months leave by dropping a whole partition as the owner (the retention job, built in D53).
 - **API.** `GET /api/v1/audit` for administrators: `actor`, `action` (a route or a method prefix), `resourceType`, `from`, `to`, an opaque cursor (a position only; the tenant comes from the session), and `format=csv|ndjson` for export (up to 50,000 rows, the next cursor in `X-Next-Cursor`). Cells that start with `=`, `+`, `-` or `@` are defused for spreadsheets.
 - **UI.** Administration shows the audit log with two filters, paging and the two downloads; other roles are told it is for administrators and no request is sent.
 - **Not built.** Before and after values of a change (the table has the columns; handlers do not fill them), policy actions and connector pushes as audit events (no such actions yet), audit retention, streaming to an external log store, users, teams and access bindings on the Administration page.
@@ -723,7 +725,7 @@ Built as D2 and D9 specify. What was decided while building it:
   - **`finding_key_alias(old key → finding)`** records the old key.
 - **The old key still finds the finding.** `GetFindingsByKeys` falls back to the alias table, so a tool that goes on reporting the GHSA id updates the same finding instead of creating a second one, and its decisions stand (triage memory, VEX). The pull-request comparison of the CI gate does the same, so a re-keyed baseline finding is not "fixed" in a PR that reports the old id.
 - **Tested on PostgreSQL:** rename keeps the finding's identity and decision; the merge keeps the decided one; the aliases exist; a second pass changes nothing; a rescan under the old and under the new id leaves two findings, not four.
-- **Not built.** Re-keying other categories (only identifiers have aliases); expiring `finding_key_alias` rows after a retention period (with the retention job); re-keying on demand through the API.
+- **Not built.** Re-keying other categories (only identifiers have aliases); re-keying on demand through the API.
 
 ## D51. Unreadable records and the raw report (Phase 1)
 
@@ -731,7 +733,7 @@ Built as D2 and D9 specify. What was decided while building it:
 - **Consequence.** A run with unreadable records ends `completed_with_errors`, reason `record_errors`, and **skips the close step**: a report that may be missing findings must not close the ones it does not mention. A pull-request run counts them and ends the same way.
 - **Raw report.** `GET /api/v1/runs/{id}/report` streams the report as the scanner wrote it (`attachment`, `no-store`). It needs the **maintainer** role on the run's application, because a secret scanner's report names the secrets; the bytes pass through the API and are never behind a public link; and every download is written to the audit log with who and how many bytes. A report removed by retention answers 404.
 - **UI.** The run page lists the unreadable records with where they are, and links the raw report to those who may download it. `GET /api/v1/runs/{id}` carries the list; the list endpoint does not.
-- **Not built.** Line numbers: a JSON array has positions, not lines (the position is what is given); recoverable records in the SARIF, CycloneDX, SPDX and Syft parsers; retention of raw reports.
+- **Not built.** Line numbers: a JSON array has positions, not lines (the position is what is given); recoverable records in the SARIF, CycloneDX, SPDX and Syft parsers. (Retention of raw reports: built, D53.)
 
 ## D52. Frameworks and the Compliance screen (Phase 2)
 
@@ -740,3 +742,39 @@ Built as D2 and D9 specify. What was decided while building it:
 - **API.** `GET /api/v1/taxonomies`; `GET /api/v1/taxonomies/{id}/status?application=&format=csv`: per control the open findings by risk band, the status, the scanners that are its evidence, and `query`, the findings filter that lists exactly what was counted (a test runs the filter and compares the count). One SQL statement per framework. `format=csv` is the evidence export (framework, version, application, control, status, counts, evidence, time).
 - **UI.** The Compliance page: choose a framework and an application, a table of controls with the status in words, the open findings by band with the worst band's shape, the evidence and a link to the findings, and the CSV download.
 - **Not built.** The per-application Compliance tab, ASVS, CIS, SLSA and the OWASP API Top 10, `control_status` as a stored table with history (the screen evaluates live), mapping by scanner rule id (the key exists in docs/03), `passed_checks` from policy-report style scanners, editing or adding frameworks without a release (a tenant-owned framework would be the next step), and the OWASP Top 10 2025 (the 2021 list is the one with a published CWE mapping the data came from).
+
+## D53. Retention (Phase 2)
+
+docs/01 H7 makes a retention job for occurrences and events part of the MVP; docs/04 gives `RetentionPolicy` its fields and example values. Two gaps came up while building it: no bucket lifecycle rule existed, so **every raw report was kept for ever**, including secret-scanner reports that name the secrets (D42 keeps secrets out of the database, not out of the stored report). And the monthly partitions of D4 were created only by `migrate up`, so a server running more than three months without an upgrade would write every event into the default partition.
+
+**What the defaults rest on.** Retention periods are each organisation's to define (NIST SP 800-53 AU-11 and SI-12), so every value is configurable. Some values have a floor because a standard or a promise made elsewhere depends on them:
+
+| Kind | Default | Minimum | Why |
+|---|---|---|---|
+| `auditDays` | 2555 (7 years) | 365 | PCI DSS 4.0.1 requirement 10.5.1: audit history for at least twelve months, three immediately available. The default is docs/04's |
+| `eventsDays` (finding timelines) | 730 | 365 | the timeline is the record of who decided what about a finding (accepted, not affected); it is the same kind of trail |
+| `resolvedFindingsDays` | 730 | 180 | SLA adherence and MTTR look back 90 days, trends 180 (D43). Deleting resolved findings sooner would change those numbers. ServiceNow's default for closed findings is 365 days; ours is docs/04's |
+| `occurrencesDays` (evidence no scanner reports any more) | 180 | 1 | docs/04, docs/12 |
+| `rawReportsDays` | 90 | 1 | docs/04 |
+| `secretReportsDays` | 7 | 1 | docs/07: raw reports of secret scanners default to 7 days. GDPR Art. 5(1)(e) (storage limitation) and ISO/IEC 27001:2022 A.8.10 (delete what is no longer required) point the same way |
+| `runResultsDays` | 30 | 1 | D10 |
+
+Zero keeps that kind of data for ever and is always allowed. A value under its minimum is refused at startup, by `rampart maintenance` and by the CronJob with the same message, instead of being quietly raised: a policy that silently does something other than what it says is worse than one that refuses.
+
+**Decisions.**
+- **One policy for every tenant, from configuration** (`retention.*`, env `RAMPART_RETENTION_*`, Helm `retention`). The `RetentionPolicy` resource is P2 (docs/01 H7, D29). On by default, with docs/04's values, because H7 is a P0 and an install that keeps everything for ever only fails later, at the worst time. With `retention.enabled=false` nothing is deleted and partitions are still created.
+- **What is removed, per tenant, as `rampart_app` under row-level security** (D4: the system role never mutates tenant rows), in transactions of 5 000 rows so a backlog never holds long locks:
+  - occurrences with `present = false` last seen before the cutoff. A finding's count and detection depend only on present ones (D12), so neither changes;
+  - findings `fixed` before the cutoff that no scanner reports, with their occurrences and timeline (the foreign keys cascade). **A finding another finding names in `duplicate_of_id` is kept**, so that link never points nowhere. The rows are locked with `SKIP LOCKED`: a merge reporting one again either waits or is skipped, and if the finding was deleted the next scan creates it anew;
+  - `ingest_run_result` rows (D10, D37: what was new for the CI gate);
+  - `finding_key_alias` rows older than the occurrence period. D11 keeps an old key "for one retention period" so a tool still reporting a GHSA id updates the same finding; after it, none is expected to. This closes D50's "not built";
+  - raw reports: a run that **found a secret** (`ingest_run.holds_secrets`, set when any record of the report is in the `secret` category, not by the scanner's name, because Trivy and Semgrep also find secrets and a Trivy report without one should keep the longer period) or that **failed** (what it held is unknown) after `secretReportsDays`; any other finished run after `rawReportsDays`; an upload created and **never completed** after one day (its presigned URL lives 15 minutes, D9). A run still in progress keeps its report.
+- **Raw reports are deleted by the application, not by a bucket lifecycle rule.** A lifecycle rule cannot tell a secret report from another, differs between S3 implementations, and would leave the run page offering a download that 404s. The object is deleted first and the row marked after (`upload.status = purged`, `ingest_run.report_purged_at`), so a failure in between is repaired by the next sweep and a report is never marked gone while still stored. The run page says when the report was removed; `GET /runs/{id}/report` answers 404 with that date; completing a purged upload answers 410.
+- **Evidence of deletion.** Each tenant that lost anything gets one audit entry (`retention.purge`, actor `system:retention`) with the counts by kind and the policy in force. ISO/IEC 27001:2022 A.8.10 asks for a record of what was deleted and when. The entries go to the audit log, which is itself kept 365 days or more.
+- **The logs leave a month at a time, as the owner.** `finding_event` and `audit_event` partitions are dropped when the whole month is older than the cutoff (a month still partly inside the period stays), and old rows that fell into the default partition are deleted. Only the owner may drop a table, and the audit log is append-only for every other role (D46), so this never runs as the application. Partition drops are cluster-wide, which is one more reason the policy is not per tenant yet.
+- **Who holds the owner's credentials.** In Helm the server never does (least privilege, D4): a CronJob, `rampart maintenance` (`retention.maintenance.schedule`, default daily at 03:17), runs with the migration Job's credentials and the server's retention settings. The all-in-one target, which already has `database.migrateUrl` for auto-migration, also does it in-process. Either one creating the coming months closes the D4 gap above.
+- **One replica sweeps at a time** (a session advisory lock), every `retention.interval` (default 6 h). Each step only removes what is already expired, so a sweep stopped halfway is finished by the next one.
+- **Not built.** The `RetentionPolicy` and `ClusterRetentionPolicy` resources and per-tenant periods; retention of notifications (D45) and of SBOM documents; a "purge this asset" endpoint for GDPR requests (docs/07); the 90-day "immediately available" tier of PCI 10.5.1 is met by keeping everything online, there is no archive tier.
+- **Tested on PostgreSQL** (`internal/store/retention_test.go`): each kind removed at its own cutoff and nothing inside it; the duplicate target kept; the secret report gone after 7 days while a normal one of the same age stays; the abandoned upload gone and refused at completion; the run page and the download say so; no other tenant touched; a second pass removes nothing; the audit entry; the minimums refused; partitions dropped only when wholly past the cutoff and the coming months created. Migration `00016_retention.sql`, schema version 16.
+
+Sources: PCI DSS v4.0.1 requirement 10.5.1; ISO/IEC 27001:2022 Annex A 8.10; NIST SP 800-53 Rev. 5 AU-11, SI-12; GDPR Article 5(1)(e); ServiceNow Vulnerability Response auto-delete rules (closed findings, 365 days by default).

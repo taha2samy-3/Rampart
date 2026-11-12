@@ -1073,7 +1073,8 @@ func (s *PostgresStore) GetIngestRun(ctx context.Context, tenantID, runID uuid.U
 		query := `
 			SELECT id, tenant_id, upload_id, scan_source_id, application_id, asset_id, track,
 			       scanner_family, coalesce(scanner_version, ''), format, status,
-			       scan_started, scan_finished, stats, coalesce(error, ''), created_at, finished_at, context
+			       scan_started, scan_finished, stats, coalesce(error, ''), created_at, finished_at, context,
+			       holds_secrets, report_purged_at
 			FROM ingest_run
 			WHERE tenant_id = $1 AND id = $2`
 
@@ -1090,6 +1091,7 @@ func (s *PostgresStore) GetIngestRun(ctx context.Context, tenantID, runID uuid.U
 			&run.ID, &run.TenantID, &run.UploadID, &scanSourceID, &run.ApplicationID, &run.AssetID, &run.Track,
 			&run.ScannerFamily, &run.ScannerVersion, &run.Format, &statusStr,
 			&scanStarted, &scanFinished, &statsJSON, &run.Error, &run.CreatedAt, &finishedAt, &ctxJSON,
+			&run.HoldsSecrets, &run.ReportPurgedAt,
 		)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1127,11 +1129,11 @@ func (s *PostgresStore) UpdateIngestRun(ctx context.Context, run *domain.IngestR
 	return s.withTenantTx(ctx, run.TenantID, func(tx pgx.Tx) error {
 		query := `
 			UPDATE ingest_run
-			SET status = $1, stats = $2, finished_at = $3, error = $4
+			SET status = $1, stats = $2, finished_at = $3, error = $4, holds_secrets = holds_secrets OR $7
 			WHERE tenant_id = $5 AND id = $6`
 
 		statsJSON, _ := json.Marshal(run.Stats)
-		_, err := tx.Exec(ctx, query, string(run.Status), statsJSON, run.FinishedAt, run.Error, run.TenantID, run.ID)
+		_, err := tx.Exec(ctx, query, string(run.Status), statsJSON, run.FinishedAt, run.Error, run.TenantID, run.ID, run.HoldsSecrets)
 		return err
 	})
 }

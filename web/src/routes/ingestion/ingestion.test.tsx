@@ -72,6 +72,14 @@ describe('ingest runs', () => {
     expect(within(insp).queryByRole('link', { name: 'Download the raw report' })).toBeNull();
   });
 
+  it('says when retention removed the raw report, and offers no download', async () => {
+    mockFetch({ loggedIn: true, role: 'admin', runs: [[run(1, { report_purged_at: '2026-10-02T03:17:00Z' })]] });
+    renderApp('/ingestion?sel=00000001-aaaa-bbbb-cccc-000000000000');
+    const insp = await screen.findByRole('complementary', { name: 'Run details' });
+    expect(await within(insp).findByText(/raw report was removed on/)).toBeInTheDocument();
+    expect(within(insp).queryByRole('link', { name: 'Download the raw report' })).toBeNull();
+  });
+
   it('a pull-request run says it changed no finding', async () => {
     mockFetch({ loggedIn: true, runs: [[run(1, { ephemeral: true, context: { repository: 'github.com/acme/shop', branch: 'pr/12', commit: 'f00dbabe' } })]] });
     renderApp('/ingestion?sel=00000001-aaaa-bbbb-cccc-000000000000');

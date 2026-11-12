@@ -40,6 +40,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 2: CI gate (`POST /api/v1/gate`, `rampart gate`) with the built-in new-critical rule (D37) | built; tested on PostgreSQL |
 | Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
 | Phase 1: `RekeyJob`: a GHSA-keyed finding moves to its CVE's key after the alias arrives, merging with an existing one; the old key still finds it (D50) | built; tested on PostgreSQL. Not built: alias expiry, other categories |
+| Phase 2: retention: stale occurrences, old resolved findings, run results, old finding keys, raw reports (7 days when they name secrets), abandoned uploads, and the event and audit months, with minimums from PCI DSS 10.5.1 and an audit entry per tenant; partitions created ahead by `rampart maintenance` (Helm CronJob) (D53) | built; tested on PostgreSQL, the chart rendered in CI, Vitest. Not built: the `RetentionPolicy` resource, per-tenant periods, notification retention, GDPR purge by asset |
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 
 ## Phase −1 — Decisions and spikes (week 1)
@@ -128,7 +129,7 @@ What is built and tested, against the phases below. Everything marked built has 
 - **Decisions before code.** A phase starts with the ADRs it needs, then an OpenAPI diff, then implementation. [16](16-implementation-decisions.md) is the current normative baseline.
 - **Vertical slices from Phase 1 on.** A change ships parser, merge, API and UI for one narrow thing, with fixtures and a golden test. Phase 0 is the one infrastructure-only phase, and it still ends with a login screen.
 - **Fixtures are the specification.** `internal/parsers/<name>/testdata/<tool-version>/` holds real, sanitized scanner outputs. A parser is fixtures, a golden canonical output and a fingerprint-stability test.
-- **Budgets are tests.** Ingest and query benchmarks run nightly against a seeded 5M-finding database.
+- **Budgets are tests.** The query benchmark runs nightly against a seeded 5M-finding database. Ingest has no throughput budget (D35).
 - **Kubernetes-first loop**: `kind` plus Tilt or Skaffold; `-target=all` for fast iteration.
 - **Untrusted input everywhere**: fuzz tests for parsers, size, depth and time limits, no XML entity expansion, security review for every connector.
 - Conventional commits, semantic versioning, generated changelog; CRDs and API keep one minor version of deprecation overlap.

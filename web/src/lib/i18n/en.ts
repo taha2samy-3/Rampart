@@ -426,6 +426,7 @@ export const en = {
     unreadRecords: 'Records that could not be read',
     unreadMore: 'The first {{count}} are shown.',
     rawReport: 'Download the raw report',
+    rawReportPurged: 'The raw report was removed on {{date}}, when its retention period ended.',
     rawReportHelp: 'The report as the scanner wrote it. It can contain the secrets a scanner found, so only maintainers can download it, and each download is recorded.',
     title: 'Ingest runs',
     tableLabel: 'Ingest runs',

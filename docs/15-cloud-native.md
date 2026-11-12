@@ -95,7 +95,7 @@ Indicative sizing (starting points, tuned by load tests):
 ## 6. Data services
 
 - **PostgreSQL** through **CloudNativePG**: `Cluster` with 3 instances across zones, synchronous replica optional, `-rw` and `-ro` Services, `Pooler` (PgBouncer, transaction mode), Barman backups to object storage, point-in-time recovery, `ScheduledBackup`, monitored by its PodMonitor. An external managed Postgres (RDS, Cloud SQL, AlloyDB, Azure Flexible Server) is supported by URL; required extensions: `ltree`, `pg_trgm`, `btree_gin`.
-- **Object storage**: any S3 API. Buckets: `raw` (reports), `exports`, `backups`. Lifecycle rules match `RetentionPolicy`. Access by **workload identity** (IRSA on EKS, Workload Identity on GKE, Azure Workload Identity) so no static keys; static keys from a Secret remain possible for SeaweedFS and other self-hosted stores.
+- **Object storage**: any S3 API. Buckets: `raw` (reports), `exports`, `backups`. Raw reports are removed by the retention sweep, not by lifecycle rules (D53). Access by **workload identity** (IRSA on EKS, Workload Identity on GKE, Azure Workload Identity) so no static keys; static keys from a Secret remain possible for SeaweedFS and other self-hosted stores.
 - **Valkey** (optional): rate limits, session cache, bloom filters. Absent → in-process and Postgres fallbacks.
 - **NATS JetStream** (optional): outbound event fan-out.
 

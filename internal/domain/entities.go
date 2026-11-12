@@ -193,6 +193,10 @@ type IngestRun struct {
 	ScanFinished   time.Time       `json:"scan_finished"`
 	CreatedAt      time.Time       `json:"created_at"`
 	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
+	// HoldsSecrets is true when the report named at least one secret: its raw report is kept for a shorter time.
+	HoldsSecrets bool `json:"holds_secrets"`
+	// ReportPurgedAt is when retention removed the raw report (D53).
+	ReportPurgedAt *time.Time `json:"report_purged_at,omitempty"`
 }
 
 // IngestRunScope tracks an asset/track scope touched by a run (D10, D13).

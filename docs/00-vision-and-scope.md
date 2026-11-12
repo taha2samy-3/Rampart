@@ -79,7 +79,7 @@ From [research/02-aspm-market.md](research/02-aspm-market.md):
 
 ## 6. Success criteria for v1.0
 
-- Ingest 100k new findings from a SARIF file, merged, enriched and scored, in under 60 s on the reference hardware; rescan of 100k unchanged in under 20 s. These are goals to be proven by a Phase 0 spike (see [16-implementation-decisions.md](16-implementation-decisions.md) D28).
+- Ingest streams reports of any size in bounded memory and never loses or double-counts a finding under retries or concurrent runs. No throughput figure is promised: the earlier goal (100k results in under 60 s) was measured at about 130 s and withdrawn ([16-implementation-decisions.md](16-implementation-decisions.md) D28, D35).
 - Filter and page 5M findings in under 500 ms p95 at the API for supported filter and sort combinations.
 - Zero-downtime upgrade with CNPG; HA for every target.
 - Install with `helm install` in under 5 minutes with bundled Postgres; `-target=all` with Docker Compose for evaluation.

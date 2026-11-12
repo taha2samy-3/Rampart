@@ -140,6 +140,10 @@ export interface RunRow {
   error?: string;
   /** The raw report can be downloaded by a maintainer. */
   has_report?: boolean;
+  /** When retention removed the raw report (docs/16 D53). */
+  report_purged_at?: string;
+  /** The report named at least one secret, so its raw report is kept for a shorter time. */
+  holds_secrets?: boolean;
   /** The first records the run could not read, and where they are (the single-run GET only). */
   record_error_list?: { where: string; message: string }[];
   stats: {

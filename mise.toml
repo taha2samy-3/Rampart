@@ -1,4 +1,5 @@
 [tools]
+bun = "1.4.4"
 go = "1.26.4"
 golangci-lint = "latest"
 task = "latest"

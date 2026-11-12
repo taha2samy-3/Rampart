@@ -44,7 +44,7 @@ func (a *API) runView(r *http.Request, tenantID uuid.UUID, run *domain.IngestRun
 		v.Scanners = fams
 	}
 	v.Ephemeral = ingest.IsEphemeral(run.Context.Branch, nil)
-	v.HasReport = a.objects != nil && run.UploadID != nil
+	v.HasReport = a.objects != nil && run.UploadID != nil && run.ReportPurgedAt == nil
 	return v
 }
 
@@ -148,6 +148,10 @@ func (a *API) handleRunReport(w http.ResponseWriter, r *http.Request) {
 	getter, gok := a.store.(interface {
 		GetUpload(ctx context.Context, tenantID, id uuid.UUID) (*domain.Upload, error)
 	})
+	if run.ReportPurgedAt != nil {
+		problem(w, http.StatusNotFound, "not-found", "The report was removed on "+run.ReportPurgedAt.UTC().Format("2006-01-02")+" by the retention policy")
+		return
+	}
 	if a.objects == nil || !gok || run.UploadID == nil {
 		problem(w, http.StatusNotFound, "not-found", "This run has no stored report")
 		return

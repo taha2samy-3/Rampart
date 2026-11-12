@@ -69,6 +69,7 @@ spec:
               value: /etc/rampart/secrets/s3-secret-key
             - name: RAMPART_OBJECT_STORAGE_BUCKET_RAW
               value: {{ .Values.objectStorage.bucketRaw | quote }}
+            {{- include "rampart.retentionEnv" . | nindent 12 }}
             # Threat intelligence (KEV, EPSS, optionally OSV). Needs egress, or a mirror set in the URLs below.
             - name: RAMPART_FEEDS_ENABLED
               value: {{ .Values.feeds.enabled | quote }}

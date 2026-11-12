@@ -179,6 +179,9 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			break
 		}
 		stats.Parsed++
+		if raw.Category == domain.CategorySecret {
+			run.HoldsSecrets = true // its raw report names the secret, so it is kept for less time (D53)
+		}
 		family := firstNonEmpty(pp.ScannerOverride, raw.ScannerFamily, parserID) // D11: the tool, not the parser
 		fp := normalize.ComputeFingerprint(normalize.FingerprintParams{
 			TenantID: run.TenantID, AssetID: run.AssetID, ApplicationID: run.ApplicationID, Track: run.Track,
@@ -549,6 +552,9 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 			break
 		}
 		stats.Parsed++
+		if raw.Category == domain.CategorySecret {
+			run.HoldsSecrets = true
+		}
 		family := firstNonEmpty(pp.ScannerOverride, raw.ScannerFamily, parserID)
 		fp := normalize.ComputeFingerprint(normalize.FingerprintParams{
 			TenantID: run.TenantID, AssetID: run.AssetID, ApplicationID: run.ApplicationID, Track: baseline,

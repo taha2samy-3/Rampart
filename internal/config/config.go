@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"rampart/internal/domain"
 )
 
 // Config represents the complete runtime configuration tree (normative D6).
@@ -22,6 +23,15 @@ type Config struct {
 	Operator      OperatorConfig      `json:"operator" yaml:"operator"`
 	Auth          AuthConfig          `json:"auth" yaml:"auth"`
 	Feeds         FeedsConfig         `json:"feeds" yaml:"feeds"`
+	Retention     RetentionConfig     `json:"retention" yaml:"retention"`
+}
+
+// RetentionConfig is how long data is kept and how often the sweep runs (docs/16 D53). The days apply to every
+// tenant until the RetentionPolicy resource exists. Zero days keeps that kind of data for ever.
+type RetentionConfig struct {
+	Enabled                bool          `json:"enabled" yaml:"enabled"`
+	Interval               time.Duration `json:"interval" yaml:"interval"`
+	domain.RetentionPolicy `yaml:",inline"`
 }
 
 // AuthConfig holds authentication settings (D6, D3, D8).
@@ -186,7 +196,8 @@ func DefaultConfig() *Config {
 			Region:        "us-east-1",
 			UsePathStyle:  true,
 		},
-		Feeds: FeedsConfig{Interval: 6 * time.Hour},
+		Feeds:     FeedsConfig{Interval: 6 * time.Hour},
+		Retention: RetentionConfig{Enabled: true, Interval: 6 * time.Hour, RetentionPolicy: domain.DefaultRetentionPolicy()},
 		Ingest: IngestConfig{
 			MaxReportBytes: 536870912, // 512 MiB per D6
 			BatchRows:      5000,      // 5 000 rows per transaction per D2
@@ -320,6 +331,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Ingest.MaxReportBytes <= 0 {
 		return fmt.Errorf("config: ingest.max_report_bytes must be greater than zero")
+	}
+	if c.Retention.Enabled {
+		if c.Retention.Interval < time.Minute {
+			return fmt.Errorf("config: retention.interval must be at least one minute")
+		}
+		if err := c.Retention.Validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	return nil
 }
@@ -466,6 +485,31 @@ func applyEnv(cfg *Config) {
 		for _, e := range strings.Split(v, ",") {
 			if e = strings.TrimSpace(e); e != "" {
 				cfg.Feeds.OSVEcosystems = append(cfg.Feeds.OSVEcosystems, e)
+			}
+		}
+	}
+	if v := get("RETENTION_ENABLED"); v != "" {
+		cfg.Retention.Enabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := get("RETENTION_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Retention.Interval = d
+		}
+	}
+	for key, dst := range map[string]*int{
+		"RETENTION_OCCURRENCES_DAYS":       &cfg.Retention.OccurrencesDays,
+		"RETENTION_RAW_REPORTS_DAYS":       &cfg.Retention.RawReportsDays,
+		"RETENTION_SECRET_REPORTS_DAYS":    &cfg.Retention.SecretReportsDays,
+		"RETENTION_RESOLVED_FINDINGS_DAYS": &cfg.Retention.ResolvedFindingsDays,
+		"RETENTION_EVENTS_DAYS":            &cfg.Retention.EventsDays,
+		"RETENTION_AUDIT_DAYS":             &cfg.Retention.AuditDays,
+		"RETENTION_RUN_RESULTS_DAYS":       &cfg.Retention.RunResultsDays,
+	} {
+		if v := get(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				*dst = n
+			} else {
+				*dst = -1 // refused by Validate with the key's name, rather than silently kept at the default
 			}
 		}
 	}

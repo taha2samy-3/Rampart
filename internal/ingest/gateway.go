@@ -329,6 +329,10 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if upload.Status == "purged" { // never completed, and removed by retention a day later (D53)
+		problemJSON(w, http.StatusGone, "not-found", "The upload expired", "It was not completed within a day and its object was removed. Create a new upload.")
+		return
+	}
 	if size, serr := g.objects.Stat(r.Context(), upload.ObjectRef); serr != nil || size != upload.SizeBytes {
 		detail := "The report was not uploaded yet. PUT it to the upload URL first."
 		if serr == nil {

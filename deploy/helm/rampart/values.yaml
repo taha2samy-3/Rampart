@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 15
+  minSchemaVersion: 16
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -99,6 +99,23 @@ feeds:
   epssUrl: ""
   osvBaseUrl: ""
   osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
+
+# Retention (docs/16 D53): how long each kind of data is kept, in days; 0 keeps it for ever. The server removes
+# tenant data every interval as the application role. The partitioned event and audit logs are maintained by the
+# CronJob below as the owner role (it also creates the coming months' partitions, so keep it on even with
+# retention off). Minimums are enforced: auditDays and eventsDays 365 (PCI DSS 10.5.1), resolvedFindingsDays 180.
+retention:
+  enabled: true
+  interval: 6h
+  occurrencesDays: 180
+  rawReportsDays: 90
+  secretReportsDays: 7
+  resolvedFindingsDays: 730
+  eventsDays: 730
+  auditDays: 2555
+  runResultsDays: 30
+  maintenance:
+    schedule: "17 3 * * *"
 
 seaweedfs:
   enabled: true

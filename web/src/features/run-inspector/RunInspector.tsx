@@ -128,6 +128,9 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <span className="mt-0.5 block text-12 text-ink-2">{t('ingestion.rawReportHelp')}</span>
         </p>
       )}
+      {run.report_purged_at && canAnywhere('maintainer') && (
+        <p className="m-0 mt-5 text-13 text-ink-2">{t('ingestion.rawReportPurged', { date: absoluteDate(run.report_purged_at) })}</p>
+      )}
     </article>
   );
 }

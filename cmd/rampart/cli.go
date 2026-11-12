@@ -72,6 +72,9 @@ func handleCLI(args []string) (bool, error) {
 	case "migrate":
 		return true, runMigrate(args[1:])
 
+	case "maintenance":
+		return true, runMaintenance(args[1:])
+
 	case "admin":
 		return true, runAdmin(args[1:], os.Stdin)
 
