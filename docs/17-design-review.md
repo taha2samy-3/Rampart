@@ -65,13 +65,13 @@ These were not resolved by writing; they need a test, a live system, or a decisi
 
 | Item | Why it is open | When |
 |---|---|---|
-| 100k findings in 60 s; 5M-finding query SLO | No measurement exists | Phase −1 spikes, then nightly benchmarks |
-| `COPY` plus RLS behaviour, River behind PgBouncer, bundled CNPG install order | Stated from documentation, not run | Phase −1 spikes |
+| ~~100k findings in 60 s~~; 5M-finding query SLO | Ingest goal measured (about 130 s) and withdrawn (D35). The query SLO is still unmeasured | Query: Phase 4 performance validation |
+| `COPY` plus RLS behaviour, River behind PgBouncer, bundled CNPG install order | PgBouncer mode and the CNPG install order were settled while building (D30, D33); `COPY` was never built (D35) | Closed except `COPY` |
 | Dependency-Track endpoints marked "confirm" in doc 10 | Verified only where the public docs describe them; the rest is from the OpenAPI definition as remembered | Before Phase 3, against a live instance |
-| `go-sarif` and `cyclonedx-go` version coverage; controller-runtime against the minimum Kubernetes version | Not checked against current releases | Phase 0 |
+| ~~`go-sarif` and `cyclonedx-go` version coverage~~; controller-runtime against the minimum Kubernetes version | The libraries were not used; parsers are our own (D54). controller-runtime runs against envtest | The Kubernetes minimum: CI kind job |
 | Name, API group, license | Team decision; baked into code | Phase −1 |
 | `Application` kind name next to Argo CD | Kept with a short name; renaming is still cheap before the scaffold | Phase −1 |
-| Schema document 12 | Sketch plus deltas, not final DDL | Phase 0 |
+| Schema document 12 | The migrations in `internal/store/migrations` are the DDL; 12 is the design sketch | Closed |
 | Field lists in 03 versus 12 | Descriptive only; 12 plus deltas is authoritative | Phase 0 |
 | Risk weights and bands | Reasonable defaults, not calibrated on real data | After MVP, with pilot data |
 | Team size | Assumed four to five; the calendar depends on it | Phase −1 |

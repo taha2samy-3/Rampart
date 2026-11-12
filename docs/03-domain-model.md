@@ -131,7 +131,7 @@ There is no separate `verified` flag: "confirmed" is the `affected` state. Wheth
 
 **Policy** (automation rule): `trigger` (finding.created | finding.updated | ingest.completed | schedule), `match` (CEL over finding + asset + application), `actions[]` (set_severity, set_state, set_owner, add_tag, create_ticket{connector, project}, notify{channel}, fail_gate), `mode` (enforce | simulate).
 
-**RetentionPolicy**: `occurrences_days`, `raw_reports_days`, `resolved_findings_days`, `audit_days`, `events_days`.
+**RetentionPolicy**: `occurrences_days`, `raw_reports_days`, `secret_reports_days`, `resolved_findings_days`, `audit_days`, `events_days`, `run_results_days` (defaults and minimums in [16](16-implementation-decisions.md) D53).
 
 ## 6. Identity, access, audit
 

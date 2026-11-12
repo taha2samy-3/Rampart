@@ -35,7 +35,7 @@ spec:
   internetFacing: true
   dataClassification: [pci, pii]
   complianceScope: [pci-dss, soc2]
-  compensatingControls: [waf, api-gateway]
+  compensatingControls: [waf, apiGateway]   # waf | apiGateway | mtls | privateNetwork (D55)
   lifecycle: production
   services:
     - name: api
@@ -111,9 +111,9 @@ spec:
     doNotReactivate: false
     fieldMerge: scanner          # scanner | keep (which side wins for text and severity on update)
     maxClosePercent: 50          # hold the close step above this share of a scope
-  trackedRefs: [main, "release/*"]   # other branches produce ephemeral runs for the CI gate only
     maxReportBytes: 536870912
     acceptedFormats: [sarif, cyclonedx, spdx, openvex, generic, native]
+  trackedRefs: [main, "release/*"]   # other branches produce ephemeral runs for the CI gate only
   tokenSecretRef:                # the operator mints an ingest token into this Secret if absent
     name: github-actions-rampart-token
 status:
@@ -161,7 +161,7 @@ spec:
   format: auto                        # auto | sarif | cyclonedx | spdx | openvex | trivy | grype | ...
   object:
     bucket: rampart-raw
-    key: tenants/team-payments/2026/11/10/0193...-trivy.json
+    key: tenants/0193a1c2-.../reports/payments-api-trivy.json   # must lie under tenants/<tenant id>/ (D20)
     sha256: 9f2c...
   context:
     repository: https://github.com/example/payments-api
@@ -309,8 +309,9 @@ status: {evaluations24h: 1032, matched24h: 12, lastError: ""}
 
 ### `RetentionPolicy` / `ClusterRetentionPolicy`
 ```yaml
-spec: {occurrencesDays: 180, rawReportsDays: 90, resolvedFindingsDays: 730, eventsDays: 730, auditDays: 2555}
+spec: {occurrencesDays: 180, rawReportsDays: 90, secretReportsDays: 7, resolvedFindingsDays: 730, eventsDays: 730, auditDays: 2555, runResultsDays: 30}
 ```
+Minimums and the reasons for them are in [16](16-implementation-decisions.md) D53. Until this resource exists the same values come from the configuration (`retention.*`).
 
 ### `Exception`
 Selector-based waiver that applies at ingest time.
@@ -426,11 +427,11 @@ Allowed in `status`: conditions, ids, timestamps, counters by severity/band (fix
 
 | CRD | Reconcile does | Status writes | Finalizer |
 |---|---|---|---|
-| Tenant | ensure namespace + labels, upsert tenant row, apply quotas | counts, tenantId | yes (archive tenant data per retention) |
-| Application / HierarchyNode | upsert rows, evaluate selectors against known assets, link workloads from connected clusters | counts, risk | no |
-| ScanSource | upsert row, mint ingest token Secret, start/stop watchers (kubernetes type), schedule pulls (apiPull) | last ingest, counters, Connected | yes (stop watchers) |
+| Tenant | ensure namespace + labels, upsert tenant row, apply quotas | counts, tenantId | yes: refused while it has data unless `deletionPolicy: Purge` (D49) |
+| Application / HierarchyNode | upsert rows, evaluate selectors against known assets, link workloads from connected clusters | counts, risk | yes: the row is kept and orphaned (D49) |
+| ScanSource | upsert row, mint ingest token Secret, start/stop watchers (kubernetes type), schedule pulls (apiPull) | last ingest, counters, Connected | yes: disabled, tokens revoked, secret material removed (D49) |
 | ReportIngest | enqueue parse job once per uid, mirror job state, GC on TTL | phase, stats | no |
-| DedupPolicy / RiskPolicy / SLAPolicy / RetentionPolicy / Exception | upsert policy row; enqueue recompute job when changed | evaluation counters | no |
+| DedupPolicy / RiskPolicy / SLAPolicy / RetentionPolicy / Exception | upsert policy row; enqueue recompute job when changed | evaluation counters | SLAPolicy yes: removed and due dates recomputed (D49); others no |
 | Policy | compile CEL (report compile errors as `Ready=False`), upsert | match counters | no |
 | Connector | validate credentials (test call), register webhooks, upsert | Connected, webhook URL | yes (deregister webhook) |
 | ClusterFeedMirror | upsert feed config, schedule sync jobs | per-feed last sync | no |

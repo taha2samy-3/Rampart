@@ -41,7 +41,32 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 1: ingest run page in the UI (D37) | built; Vitest with axe, checked in a browser against the dev mock |
 | Phase 1: `RekeyJob`: a GHSA-keyed finding moves to its CVE's key after the alias arrives, merging with an existing one; the old key still finds it (D50) | built; tested on PostgreSQL. Not built: alias expiry, other categories |
 | Phase 2: retention: stale occurrences, old resolved findings, run results, old finding keys, raw reports (7 days when they name secrets), abandoned uploads, and the event and audit months, with minimums from PCI DSS 10.5.1 and an audit entry per tenant; partitions created ahead by `rampart maintenance` (Helm CronJob) (D53) | built; tested on PostgreSQL, the chart rendered in CI, Vitest. Not built: the `RetentionPolicy` resource, per-tenant periods, notification retention, GDPR purge by asset |
+| Phase 2: the Application resource reaches the score: criticality, exposure, data classification and compensating controls are stored and read, a change re-scores existing findings, ingest never overwrites them, `rampart apply` and the operator share one mapping (D55) | built; tested on PostgreSQL and in unit tests |
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
+
+## Left for the MVP
+
+Every P0 row of [01](01-features.md) and every Phase 2 item below, checked against the code on 2026-11-12 (D54). The MVP is done when this list is empty.
+
+| # | What | From | Notes |
+|---|---|---|---|
+| 2 | `Application.selectors` attach repositories and images to an application (resolution step (b) of D10) | B3 | |
+| 3 | Decisions carry across tracks of one asset, for new findings only | C6 | D54 |
+| 4 | Hierarchy: a tree of nodes, `application.hierarchy_node_id`, a filter, roll-ups; the CRD is P2 | B1, H3, D8 | D54 |
+| 5 | Posture score and hierarchy roll-ups (06 section 2) | D8, G2 | needs 4 |
+| 6 | `RiskPolicy` with CEL factors and `ClusterRiskPolicy`, `ClusterSLAPolicy` (with the compliance presets of 06 section 4) | D5, E1, Phase 2 | |
+| 7 | Owner assignment on findings (single and bulk) | C9 | the `owner:` filter exists, nothing sets an owner |
+| 8 | Proof files on a risk acceptance | C5 | |
+| 9 | OWASP Top 10 2025 | Phase 2, D52 | the CWE mapping is published (D54) |
+| 10 | `AccessBinding` and `IdentityProvider` resources | Phase 2, H3 | |
+| 11 | CLI device login (RFC 8628) | Phase 2, D8 | |
+| 12 | `rampart findings` (list, set state) in the CLI | G7 | |
+| 13 | Ticket-on-critical placeholder (no connector yet) | Phase 2 | |
+| 14 | In the UI: row selection and the bulk bar, severity and tag editing, a manual upload screen | MVP exit, C9, open decision 4 | |
+| 15 | Canonical JSON Schemas (`schemas/*.json`) for the integration contracts | Phase 0, doc 19 | listed in Phase 0, never delivered |
+| 16 | An OpenAPI document and the generated client | G6 | the SPA types are written by hand (13 section 10) |
+
+Moved out of the MVP by D54: CVSS vector parsing (D4, P1), CSAF VEX (A8, P1), the `HierarchyNode` resource (P2).
 
 ## Phase −1 — Decisions and spikes (week 1)
 

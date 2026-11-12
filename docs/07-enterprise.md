@@ -27,7 +27,7 @@
 | admin (tenant) | everything in the tenant, tokens, retention, audit export |
 | platform-admin | tenants, feed mirrors, cluster policies |
 
-  Scope = tenant, hierarchy node (inherits down), or application. Bindings come from `AccessBinding` CRs and/or SCIM groups. Evaluated with casbin (RBAC with domains); policy cached per request. Attribute checks ("owner of the finding may…") are explicit in handlers.
+  Scope = tenant, hierarchy node (inherits down), or application. Bindings come from `AccessBinding` CRs and/or SCIM groups. Evaluated in code: the rules are a handful of role comparisons, tested, so no policy engine was added (D48; casbin was the earlier plan). Attribute checks ("owner of the finding may…") are explicit in handlers.
 - **SCIM 2.0** (P2): `/scim/v2/Users` and `/Groups`; groups map to teams; deprovisioning disables users and revokes tokens.
 - **Audit**: append-only `audit_event` table (partitioned by month, no UPDATE/DELETE grants), covering auth events, every mutating API call, policy actions, connector pushes, admin changes. Export API (`GET /api/v1/audit?since=`) with cursor; optional streaming to a webhook / NATS subject for SIEM.
 
@@ -60,4 +60,4 @@
 
 ## 6. Compliance mappings shipped
 
-Data-driven taxonomies (versioned JSON in `internal/taxonomy/data/`): OWASP Top 10 2021 and 2025 (CWE lists), CWE Top 25 (2023–2025), OWASP ASVS 5.0 via OpenCRE, OWASP API Top 10 2023, PCI DSS 4.0.1 req 6/11, ISO/IEC 27001:2022 Annex A.8, NIST SSDF 1.1, SOC 2 CC6–CC8, CIS Benchmarks (ids pass through from scanners), SLSA levels, OpenSSF Scorecard checks. Reports: "controls with open findings", "coverage per control", evidence bundle (findings + acceptance history + scan runs) as ZIP/JSON.
+Data-driven taxonomies (versioned JSON in `internal/compliance/data/`; built so far: OWASP Top 10 2021, CWE Top 25 2025, PCI DSS 4.0.1 req. 6, ISO/IEC 27001:2022 A.8, NIST SSDF 1.1, D52). Planned: OWASP Top 10 2025 (CWE lists), OWASP ASVS 5.0 via OpenCRE, OWASP API Top 10 2023, PCI DSS 4.0.1 req 6/11, ISO/IEC 27001:2022 Annex A.8, NIST SSDF 1.1, SOC 2 CC6–CC8, CIS Benchmarks (ids pass through from scanners), SLSA levels, OpenSSF Scorecard checks. Reports: "controls with open findings", "coverage per control", evidence bundle (findings + acceptance history + scan runs) as ZIP/JSON.

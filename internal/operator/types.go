@@ -2,6 +2,8 @@ package operator
 
 import (
 	"time"
+
+	"rampart/internal/domain"
 )
 
 // Condition represents the state of a resource at a point in time (metav1.Condition).
@@ -91,14 +93,8 @@ type ApplicationCR struct {
 	Status     ApplicationStatus `json:"status,omitempty"`
 }
 
-type ApplicationSpec struct {
-	DisplayName         string   `json:"displayName"`
-	BusinessCriticality string   `json:"businessCriticality,omitempty"`
-	InternetFacing      bool     `json:"internetFacing,omitempty"`
-	Owners              []string `json:"owners,omitempty"`
-	DataClassification  []string `json:"dataClassification,omitempty"`
-	Lifecycle           string   `json:"lifecycle,omitempty"`
-}
+// ApplicationSpec is the shared spec (D3, D55): the operator and `rampart apply` map it the same way.
+type ApplicationSpec = domain.ApplicationSpec
 
 type ApplicationStatus struct {
 	CommonStatus  `json:",inline"`

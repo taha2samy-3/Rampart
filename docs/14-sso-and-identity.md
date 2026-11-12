@@ -11,7 +11,7 @@
 | Human login | **OpenID Connect** (Authorization Code + PKCE) | P0 | primary path |
 | Human login | **SAML 2.0** (SP-initiated; IdP-initiated optional, off by default) | P1 | for IdPs or organisations without OIDC |
 | Provisioning | **SCIM 2.0** (Users, Groups) | P2 | create, update, deactivate, group membership |
-| CLI login | OAuth 2.0 Device Authorization Grant (RFC 8628), fallback loopback redirect with PKCE | P1 | `rampart login` |
+| CLI login | OAuth 2.0 Device Authorization Grant (RFC 8628), fallback loopback redirect with PKCE | P0 (Phase 2, D8, D54) | `rampart login` |
 | CI pipelines | **OIDC workload federation** (GitHub Actions, GitLab CI, Azure DevOps, CircleCI, Buildkite) | P1 | no stored secret in CI |
 | In-cluster callers | Kubernetes ServiceAccount projected tokens, verified against the issuing cluster's OIDC JWKS | P1 | for `ScheduledScan` jobs and sidecars |
 | Automation | API tokens (scoped, expiring, hashed) | P0 | |

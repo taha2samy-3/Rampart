@@ -303,8 +303,8 @@ Rules:
 
 ## D15. Parsing libraries and streaming (closes M6)
 
-- SARIF, Trivy, Grype, Semgrep and generic JSON use a hand-written `encoding/json` token walk over the results array; the libraries (`go-sarif`) supply struct types for single elements only.
-- CycloneDX and SPDX documents are decoded whole with `cyclonedx-go` / `tools-golang`, under a size cap (`ingest.maxSbomBytes`, default 256 MiB) and a parser memory limit. SBOMs are bounded by component count, so this is acceptable.
+- SARIF, Trivy, Grype, Semgrep and generic JSON use a hand-written `encoding/json` token walk over the results array, with our own struct types for single elements. (This said `go-sarif` supplies them; it was never used, D54.)
+- CycloneDX and SPDX documents are decoded whole with our own structs over `encoding/json` and `encoding/xml` (not `cyclonedx-go` / `tools-golang`, D54), under a size cap and a parser memory limit. SBOMs are bounded by component count, so this is acceptable.
 - Every parser has a decompression and nesting-depth limit and a fuzz test.
 
 ## D16. Query grammar, cursors, sorting (closes B13)
@@ -741,7 +741,7 @@ Built as D2 and D9 specify. What was decided while building it:
 - **What a control's status means.** `open`: findings that bear on it are open (open, under investigation, affected). `clear`: none are open **and** a scan that could evidence it completed in the last 30 days (by the scanner families in `compliance.FamilyCategories`: Semgrep is SAST and secrets, Trivy is components, containers, IaC and secrets, and so on). `not_assessed`: no such scan ran, so an empty list proves nothing. A control matched by weakness needs any code or component scan. The screen says it is evidence, not a certification. This is the honest reading of "no findings": a framework page that shows green for a scanner that never ran would mislead an auditor.
 - **API.** `GET /api/v1/taxonomies`; `GET /api/v1/taxonomies/{id}/status?application=&format=csv`: per control the open findings by risk band, the status, the scanners that are its evidence, and `query`, the findings filter that lists exactly what was counted (a test runs the filter and compares the count). One SQL statement per framework. `format=csv` is the evidence export (framework, version, application, control, status, counts, evidence, time).
 - **UI.** The Compliance page: choose a framework and an application, a table of controls with the status in words, the open findings by band with the worst band's shape, the evidence and a link to the findings, and the CSV download.
-- **Not built.** The per-application Compliance tab, ASVS, CIS, SLSA and the OWASP API Top 10, `control_status` as a stored table with history (the screen evaluates live), mapping by scanner rule id (the key exists in docs/03), `passed_checks` from policy-report style scanners, editing or adding frameworks without a release (a tenant-owned framework would be the next step), and the OWASP Top 10 2025 (the 2021 list is the one with a published CWE mapping the data came from).
+- **Not built.** The per-application Compliance tab, ASVS, CIS, SLSA and the OWASP API Top 10, `control_status` as a stored table with history (the screen evaluates live), mapping by scanner rule id (the key exists in docs/03), `passed_checks` from policy-report style scanners, editing or adding frameworks without a release (a tenant-owned framework would be the next step), and the OWASP Top 10 2025. (This said 2025 has no published CWE mapping; it has one, see D54.)
 
 ## D53. Retention (Phase 2)
 
@@ -778,3 +778,49 @@ Zero keeps that kind of data for ever and is always allowed. A value under its m
 - **Tested on PostgreSQL** (`internal/store/retention_test.go`): each kind removed at its own cutoff and nothing inside it; the duplicate target kept; the secret report gone after 7 days while a normal one of the same age stays; the abandoned upload gone and refused at completion; the run page and the download say so; no other tenant touched; a second pass removes nothing; the audit entry; the minimums refused; partitions dropped only when wholly past the cutoff and the coming months created. Migration `00016_retention.sql`, schema version 16.
 
 Sources: PCI DSS v4.0.1 requirement 10.5.1; ISO/IEC 27001:2022 Annex A 8.10; NIST SP 800-53 Rev. 5 AU-11, SI-12; GDPR Article 5(1)(e); ServiceNow Vulnerability Response auto-delete rules (closed findings, 365 days by default).
+
+## D54. Documents checked against the code, and four priority decisions (2026-11-12)
+
+Every document (00–19, research, ADRs) was read against the code after D53. What follows corrects statements the code contradicts and settles four priority conflicts between [01](01-features.md) and [09](09-roadmap.md). Work that belongs to a later phase is not a defect and is not listed here; the MVP list in 09 holds what is due.
+
+**Corrections (the code is right, the document was not).**
+- **Libraries.** D15 and doc 08 named `go-sarif`, `cyclonedx-go`, `tools-golang`, `go-vex`, chi, huma, sqlc, cobra, koanf, casbin, testify and testcontainers. None is in `go.mod`. The parsers are our own token walks and structs over `encoding/json` and `encoding/xml` (fuzzed, D37, D42), routing is the standard `ServeMux`, SQL is hand-written with the D16 builder, configuration and flags are the standard library, and authorization is role comparisons in code (D48). D15 and doc 08 now say so; doc 08 marks each row built or planned with its phase.
+- **OWASP Top 10 2025 has a CWE mapping.** D52 said only the 2021 list had one. MITRE publishes one CWE grouping per 2025 category (for example CWE-1438 for A03:2025, in view 1450) and the OWASP pages list the mapped CWEs. The reason D52 gave for leaving 2025 out does not hold; it is on the MVP list.
+- **Doc 04:** the finalizer column now matches D49; the `ScanSource` example had `maxReportBytes` and `acceptedFormats` indented under `trackedRefs`; the `ReportIngest` object key now lies under `tenants/<tenant id>/` (D20); `RetentionPolicy` has the D53 fields. Doc 03 likewise.
+- **Doc 07:** compliance data is in `internal/compliance/data/` and lists what ships (D52); authorization is not casbin (D48).
+- **Doc 13 section 10** described Phase 0 only; it now names what Phases 1 and 2 built and what the UI still lacks.
+- **Doc 17 "Still open"** listed the withdrawn ingest goal and libraries that were never used.
+- **Phase 0 promised canonical JSON Schemas** for the integration contracts (09, 19). They were not delivered; they are on the MVP list.
+
+**Priority decisions.**
+
+| Item | Conflict | Decision | Source |
+|---|---|---|---|
+| Hierarchy (B1, H3, D8) | 01 makes it P0; 09 had only the `HierarchyNode` resource, in Phase 5 | A tree of nodes, the link from an application, a filter on every list and roll-ups are in the MVP. The resource that declares nodes in Git stays P2 | ArmorCode's hierarchies filter every view and report SLA adherence by organisational unit, and the market research lists business-unit hierarchy as a common enterprise requirement (research/02 sections 2 and 4). An ASPM that cannot answer "how is this business unit doing" misses a core use |
+| CVSS parsing (D4) | P0 in 01, in no phase of 09 | P1. Vectors are stored as given; the MVP scores from severity, KEV and EPSS (D40) | Nothing in the MVP exit depends on computing a vector. Scanners already send a severity and usually a score |
+| CSAF VEX (A8) | P0 in 01; Phase 2 of 09 names OpenVEX and CycloneDX only | P1 | CISA's *Minimum Requirements for VEX* (April 2023) is format-neutral and names CSAF, CycloneDX and OpenVEX; OpenVEX is the one designed to meet them directly. Two of the three cover the MVP |
+| CLI device login | P1 in 14; Phase 2 in 09 and D8 | MVP (Phase 2); 14 corrected | D8 is normative |
+
+**C6: a decision follows the finding across tracks, for new findings only.** The fingerprint includes the track (D11), so a `not_affected` decided on `main` did not reach the same issue on `release/1.x`, although 01 C6 promises "across branches". The decision: when a scan creates a finding on one track of an asset, and the same issue (the same key with the track left out) has a decision on another track of that asset, the new finding starts with that decision, with a timeline entry naming where it came from. Only `not_affected` and `out_of_scope` carry over (decisions about the code); `risk_accepted` does not, because an acceptance has its own owner, expiry and scope (D39). Existing findings are never changed retroactively. D18's re-check on changed code still applies. Source: DefectDojo's *False Positive History* marks new findings that match an earlier false positive within the product; its retroactive option changes every match with no preview and its documentation recommends care, so ours is not retroactive.
+
+Sources: CWE-1438 (https://cwe.mitre.org/data/definitions/1438.html); OWASP A03:2025 (https://owasp.org/Top10/2025/A03_2025-Software_Supply_Chain_Failures/); CISA, Minimum Requirements for VEX (https://www.cisa.gov/sites/default/files/2023-04/minimum-requirements-for-vex-508c.pdf); DefectDojo, False Positive History (https://docs.defectdojo.com/triage_findings/finding_deduplication/false_positive_history/); ArmorCode, Hierarchies (https://www.armorcode.com/blog/armorcode-hierarchies).
+
+## D55. The Application resource reaches the score (Phase 2)
+
+Found while closing item 1 of the MVP list (B5, compensating controls). The score explained its context factors, but on PostgreSQL most of them could not apply:
+
+- **Data classification was never stored.** `CreateApplication` did not write `data_classification`, and no read selected it, so the +80 "sensitive data" factor (docs/06) never applied to a stored score.
+- **A change to an application was lost.** On a second apply the upsert updated only the name and description, so raising `businessCriticality` or setting `internetFacing` after the first apply changed neither the score nor the due date.
+- **`rampart apply` and the operator mapped the resource differently.** The CLI ignored `dataClassification` entirely. D3 says the reconcile logic is one library.
+- **Compensating controls had no field.** The −80 factor existed in `internal/risk` and nothing set it.
+- **Ingest could rename an application** (on a slug collision its upsert set the name to the slug), and **every application ingest created was marked `ui`**, the column default, so a resource of the same name could never adopt it (D49). Nothing in the UI or the API creates applications yet, so every `ui` row was ingest's.
+- **`rampart apply` wrote as `rampart_app`**, which may not write policy rows (D41); config is written as `rampart_system` (D4), as the operator and the server's file mode already did.
+
+Decisions:
+- **One mapping.** `domain.ApplicationSpec.ToApplication` validates the spec and builds the row; the operator and `rampart apply` both call it. Unknown values (criticality, classification, control) are refused with the reason (`Ready=False`, reason `InvalidSpec`; `rampart apply` exits with the error) instead of dropped, because a dropped value is a silently lower score. The CRD schema carries the same enums.
+- **Compensating controls** are `waf`, `apiGateway`, `mtls`, `privateNetwork` in the resource and snake_case in the row (D17), stored in `application.compensating_controls` (migration `00017_application_context.sql`, schema version 17). **Which findings a control lowers**: docs/06 says "relevant to category" and docs/04's example is a WAF on a DAST finding. A WAF or an API gateway inspects HTTP requests, so it counts (−80) against findings a dynamic scan made over HTTP and nothing else; PCI DSS 4.0.1 requirement 6.4.2 describes a WAF as a solution that detects and prevents web-based attacks in front of public-facing web applications. It does not lower a SAST, SCA or secret finding: the flaw is still in the code or the package whatever sits in front. `mtls` and `privateNetwork` change who can reach the application, which the internet-exposure factor already carries; they are recorded and not counted twice. A `RiskPolicy` (MVP list) can weigh them differently.
+- **Who may change the row.** Ingest only creates (`ON CONFLICT DO NOTHING`, then reads the existing row) and marks its rows `none`; the migration moves existing `ui` rows to `none` and makes `none` the default. A resource creates, adopts `none` rows and updates `crd` rows; it never touches a `ui` row (D49).
+- **A changed context re-scores.** When criticality, exposure, data classification or compensating controls change, the save flags the tenant with the recompute flag D41 already uses (a marker policy row with no applied spec, so it is never a policy in force), and the 15-minute SLA sweep re-scores and re-dates every active finding of the tenant. Saving the same values flags nothing.
+- **Tested.** Unit: the spec's validation and spelling, which control counts on which category, sensitive data +80 and a WAF −80 on DAST only. On PostgreSQL: an ingest-made application is unmanaged and adopted by a resource; the stored score of an existing finding rises by exactly 180 after criticality goes medium → critical and personal data is declared (the WAF does not count on a SAST finding); a rescan does not undo it; the same values again flag nothing; a UI row is not touched.
+
+Source: PCI DSS v4.0.1 requirement 6.4.2 (automated technical solution for public-facing web applications that detects and prevents web-based attacks).

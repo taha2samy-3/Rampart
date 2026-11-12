@@ -978,14 +978,11 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 	var app domain.Application
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		query := `
-			SELECT id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing, lifecycle, version, created_at
+			SELECT ` + applicationCols + `
 			FROM application
 			WHERE tenant_id = $1 AND slug = $2`
 
-		err := tx.QueryRow(ctx, query, tenantID, slug).Scan(
-			&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description,
-			&app.BusinessCriticality, &app.InternetFacing, &app.Lifecycle, &app.Version, &app.CreatedAt,
-		)
+		err := scanApplication(tx.QueryRow(ctx, query, tenantID, slug), &app)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
@@ -1000,32 +997,54 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 	return &app, nil
 }
 
-// CreateApplication inserts or updates an application (D10).
+// applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
+const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
+	data_classification, compensating_controls, owners, lifecycle, version, created_at`
+
+func scanApplication(row pgx.Row, app *domain.Application) error {
+	var owners []byte
+	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
+		&app.DataClassification, &app.CompensatingControls, &owners, &app.Lifecycle, &app.Version, &app.CreatedAt); err != nil {
+		return err
+	}
+	if len(owners) > 0 {
+		_ = json.Unmarshal(owners, &app.Owners)
+	}
+	return nil
+}
+
+// ErrApplicationExists is returned by CreateApplication when the slug is taken, usually by a concurrent ingest.
+var ErrApplicationExists = errors.New("store: an application with this slug exists")
+
+// CreateApplication creates an application for ingest (D10): the Unassigned application, or one named by the
+// upload context. It never changes an existing row, so a scan cannot overwrite what a resource or a person set
+// (D55); on a taken slug it returns ErrApplicationExists and the caller reads the existing row. The row is
+// unmanaged ('none'), so a resource of the same name can adopt it (D49).
 func (s *PostgresStore) CreateApplication(ctx context.Context, app *domain.Application) error {
 	return s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
-		query := `
-			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing, lifecycle, version, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			ON CONFLICT (tenant_id, slug) DO UPDATE SET
-				name = EXCLUDED.name,
-				description = EXCLUDED.description,
-				version = application.version + 1`
-
 		createdAt := app.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		version := app.Version
-		if version <= 0 {
-			version = 1
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
+			                         data_classification, compensating_controls, lifecycle, version, created_at, managed_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, 'none')
+			ON CONFLICT (tenant_id, slug) DO NOTHING`,
+			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), app.Lifecycle, createdAt)
+		if err == nil && tag.RowsAffected() == 0 {
+			return ErrApplicationExists
 		}
-
-		_, err := tx.Exec(ctx, query,
-			app.ID, app.TenantID, app.Slug, app.Name, app.Description,
-			app.BusinessCriticality, app.InternetFacing, app.Lifecycle, version, createdAt,
-		)
 		return err
 	})
+}
+
+func nonNil(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }
 
 // CreateIngestRun records an ingestion run (D2).
@@ -1435,32 +1454,87 @@ func (s *PostgresStore) GetTenantByNamespace(ctx context.Context, namespace stri
 	return &t, nil
 }
 
-// SaveApplication implements apply.ConfigStore.
+// SaveApplication implements apply.ConfigStore: the Application resource is the truth for the row it manages.
+// Who owns the row decides what a resource may do to it (docs/16 D21, D49): a new row is made by the resource; an
+// unmanaged one ('none', made by ingest or let go by a resource) is adopted; one made in the UI is not touched.
+// When the context the score uses changed (criticality, exposure, data classification, compensating controls),
+// the tenant is flagged and the SLA sweep re-scores its findings (D40, D55).
 func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Application) error {
-	// Who owns the row decides what a resource may do to it (docs/16 D21, D49): a new row is made by the
-	// resource; one the resource let go (none) is taken back when it returns; one made in the UI stays the UI's.
-	var existing string
-	var existed bool
-	if err := s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT managed_by FROM application WHERE tenant_id = $1 AND slug = $2`, app.TenantID, app.Slug).Scan(&existing)
-		existed = err == nil
-		if errors.Is(err, pgx.ErrNoRows) {
+	owners, _ := json.Marshal(nonNil(app.Owners))
+	return s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
+		var prev domain.Application
+		var managedBy string
+		var existed bool
+		var prevOwners []byte
+		err := tx.QueryRow(ctx, `SELECT managed_by, business_criticality, internet_facing, data_classification, compensating_controls, owners
+			FROM application WHERE tenant_id = $1 AND slug = $2 FOR UPDATE`, app.TenantID, app.Slug).
+			Scan(&managedBy, &prev.BusinessCriticality, &prev.InternetFacing, &prev.DataClassification, &prev.CompensatingControls, &prevOwners)
+		switch {
+		case err == nil:
+			existed = true
+		case errors.Is(err, pgx.ErrNoRows):
+		default:
+			return err
+		}
+		if existed && managedBy == "ui" {
 			return nil
 		}
-		return err
-	}); err != nil {
-		return err
-	}
-	if err := s.CreateApplication(ctx, &app); err != nil {
-		return err
-	}
-	if existed && existing == "ui" {
-		return nil
-	}
-	return s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE application SET managed_by = 'crd' WHERE tenant_id = $1 AND slug = $2`, app.TenantID, app.Slug)
-		return err
+		createdAt := app.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
+			                         data_classification, compensating_controls, owners, lifecycle, version, created_at, managed_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, 'crd')
+			ON CONFLICT (tenant_id, slug) DO UPDATE SET
+				name = EXCLUDED.name, description = EXCLUDED.description,
+				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
+				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
+				owners = EXCLUDED.owners, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
+				version = application.version + 1`,
+			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, app.Lifecycle, createdAt); err != nil {
+			return err
+		}
+		if !existed || !scoreContextChanged(prev, app) {
+			return nil
+		}
+		return flagRecompute(ctx, tx, app.TenantID)
 	})
+}
+
+// scoreContextChanged says whether a change to an application moves the score or the due date of its findings.
+func scoreContextChanged(a, b domain.Application) bool {
+	same := func(x, y []string) bool {
+		if len(x) != len(y) {
+			return false
+		}
+		seen := map[string]int{}
+		for _, v := range x {
+			seen[v]++
+		}
+		for _, v := range y {
+			seen[v]--
+		}
+		for _, n := range seen {
+			if n != 0 {
+				return false
+			}
+		}
+		return true
+	}
+	return a.BusinessCriticality != b.BusinessCriticality || a.InternetFacing != b.InternetFacing ||
+		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls)
+}
+
+// flagRecompute asks the SLA sweep to re-score every active finding of the tenant. The flag lives on policy rows
+// (D41); a marker row that is never a policy in force (no applied spec) carries it, as for a deleted SLAPolicy.
+func flagRecompute(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, generation, recompute_needed)
+		VALUES ($1, $2, 'sla', '_recompute', 'application-context', '{}', NULL, TRUE, 0, TRUE)
+		ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET recompute_needed = TRUE, updated_at = NOW()`, domain.NewID(), tenantID)
+	return err
 }
 
 // GetApplicationBySlug implements apply.ConfigStore.
@@ -2003,9 +2077,8 @@ func riskBand(f *domain.Finding) string {
 func (s *PostgresStore) GetApplication(ctx context.Context, tenantID, id uuid.UUID) (*domain.Application, error) {
 	var app domain.Application
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing, lifecycle, version, created_at
-			FROM application WHERE tenant_id = $1 AND id = $2`, tenantID, id).Scan(
-			&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing, &app.Lifecycle, &app.Version, &app.CreatedAt)
+		err := scanApplication(tx.QueryRow(ctx, `SELECT `+applicationCols+`
+			FROM application WHERE tenant_id = $1 AND id = $2`, tenantID, id), &app)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}

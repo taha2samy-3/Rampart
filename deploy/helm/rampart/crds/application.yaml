@@ -48,6 +48,13 @@ spec:
                   type: array
                   items:
                     type: string
+                    enum: [pii, pci, phi, secret, public]
+                compensatingControls:
+                  description: Controls in front of the application. waf and apiGateway lower the score of findings from dynamic scans (docs/16 D55).
+                  type: array
+                  items:
+                    type: string
+                    enum: [waf, apiGateway, mtls, privateNetwork]
               required:
                 - displayName
             status:

@@ -197,7 +197,7 @@ func EvaluateRisk(finding domain.RawFinding, vulnIDs []string, ctx Context, feed
 		breakdown.Factors = append(breakdown.Factors, Factor{
 			Name:   "COMPENSATING_CONTROL",
 			Points: -80,
-			Reason: "Compensating security control is active for this category",
+			Reason: "The application is behind a web application firewall or an API gateway, which inspects the HTTP requests this finding needs",
 		})
 		total -= 80
 	}

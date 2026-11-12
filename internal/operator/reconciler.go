@@ -130,32 +130,15 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, cr *ApplicationCR
 		appID = existing.ID
 	}
 
-	crit := cr.Spec.BusinessCriticality
-	if crit == "" {
-		crit = "medium"
+	if cr.Spec.DisplayName == "" {
+		cr.Spec.DisplayName = cr.Metadata.Name
 	}
-	lifecycle := cr.Spec.Lifecycle
-	if lifecycle == "" {
-		lifecycle = "production"
+	app, err := cr.Spec.ToApplication(appID, tenant.ID, cr.Metadata.Name)
+	if err != nil {
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
 	}
-
-	displayName := cr.Spec.DisplayName
-	if displayName == "" {
-		displayName = cr.Metadata.Name
-	}
-
-	app := domain.Application{
-		ID:                  appID,
-		TenantID:            tenant.ID,
-		Slug:                cr.Metadata.Name,
-		Name:                displayName,
-		BusinessCriticality: crit,
-		InternetFacing:      cr.Spec.InternetFacing,
-		Owners:              cr.Spec.Owners,
-		DataClassification:  cr.Spec.DataClassification,
-		Lifecycle:           lifecycle,
-		CreatedAt:           time.Now().UTC(),
-	}
+	app.CreatedAt = time.Now().UTC()
 
 	if err := r.store.SaveApplication(ctx, app); err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())

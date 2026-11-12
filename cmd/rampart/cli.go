@@ -412,7 +412,7 @@ func parseLocalSBOM(filePath string) (*domain.SBOM, []domain.SBOMComponent, *gra
 func runApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	file := fs.String("f", "", "Path to YAML resource manifest")
-	dbURL := fs.String("db-url", "", "PostgreSQL URL to apply resources directly into")
+	dbURL := fs.String("db-url", "", "PostgreSQL URL of rampart_system to apply resources directly into (default: RAMPART_DATABASE_SYSTEM_URL)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -428,7 +428,12 @@ func runApply(args []string) error {
 	}
 
 	var configStore apply.ConfigStore
+	// Configuration is written as rampart_system, as the operator writes it (D4): the application role may not
+	// write policy rows (D41) or the recompute flag a changed application sets (D55).
 	targetDB := *dbURL
+	if targetDB == "" {
+		targetDB = os.Getenv("RAMPART_DATABASE_SYSTEM_URL")
+	}
 	if targetDB == "" {
 		targetDB = os.Getenv("RAMPART_DATABASE_URL")
 	}

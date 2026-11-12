@@ -233,7 +233,7 @@ Budgets are checked in CI with Lighthouse CI and a bundle-size check.
 
 ## 10. Status
 
-Built and verified (Phase 0, in `web/`): the shell, the login screen, and the findings workbench structure.
+Built and verified in `web/` through Phase 2 (checked again on 2026-11-12, D54): the shell and login (Phase 0); the findings workbench and the ingest run page (Phase 1); the triage dialog, timeline and "Reported by" in the inspector, risk acceptance request and the Workflow page, Overview, Applications and the application page, Compliance, the notifications bell, and Administration with the audit log and access bindings (Phase 2). The per-feature detail is in the status table of [09](09-roadmap.md); the rows below describe the Phase 0 foundations.
 
 | Area | State |
 |---|---|
@@ -242,10 +242,10 @@ Built and verified (Phase 0, in `web/`): the shell, the login screen, and the fi
 | Login | One IdP shows "Continue with <name>"; several show a chooser. When the first administrator is usable, a username and password form sits below the single sign-on button as a secondary action (it is the primary one only when it is the sole method); a wrong password, a lock and a disabled account each have plain copy, the field is cleared on failure, and the password is never echoed. The six backend error codes (`invalid_state`, `idp_error`, `email_unverified`, `tenant_not_found`, `no_access`, `internal`) map to plain copy. `return_to` is validated as a same-origin path |
 | Workbench | Three docked panes (nav 170 px collapsing to 48, facets 156, inspector 330 and resizable), 44 px top bar, rows 46 or 32 px, the query bar writes `q` and shows term chips, the table fetches `/api/v1/findings` with infinite scroll, empty and no-match states |
 | Design | Tokens, band shapes and the segmented score bar as in section 6. No cards, shadows, pills or uppercase labels. Light and dark from the same tokens. Fonts are self-hosted |
-| Quality | 51 tests, axe clean on every screen, ESLint and `tsc` clean. Initial JS 211 kB gzipped against the 250 kB budget, checked in CI. CSP-clean: no inline script, no `style=` attribute, no violation in Chromium |
+| Quality | 51 tests at the end of Phase 0 (121 at the end of D53), axe clean on every screen, ESLint and `tsc` clean. Initial JS 211 kB gzipped against the 250 kB budget, checked in CI. CSP-clean: no inline script, no `style=` attribute, no violation in Chromium |
 | Verified against the real backend | With Dex (two users with passwords) and PostgreSQL: both sign-in methods are offered; the first administrator signs in; ada (bound to admin) and grace (viewer) sign in through Dex with the right roles; five wrong passwords lock the administrator and refuse even the right one. Original check: open `/`, sign in through Dex, land on the empty workbench with the upload command, session cookie HttpOnly and invisible to JavaScript, `localStorage` empty, reload keeps the session, sign out returns to login |
 
-Not built yet (later phases, per section 9): row selection with `x` and the bulk bar, filter-bar autocomplete, Ctrl+K as a real command palette, the Detected by, Due and Signals facets (they need facet counts from the API), the hierarchy scope picker, notifications, Storybook, Playwright end-to-end tests in CI, Lighthouse CI, the generated OpenAPI client, `count=true`, and `GET /findings/{id}` for the inspector (it reads the loaded list; a deep link to an unloaded finding says so).
+Not built yet (per section 9 and the MVP list in 09): row selection with `x` and the bulk bar (the API has bulk, D38), severity and tag editing, a manual upload screen, filter-bar autocomplete, Ctrl+K as a real command palette (it jumps to search), the Detected by, Due and Signals facets (they need facet counts from the API), the hierarchy scope picker (no hierarchy yet), Storybook, Playwright end-to-end tests in CI, Lighthouse CI, the generated OpenAPI client and `count=true`.
 
 Deviations from this document, with reasons:
 

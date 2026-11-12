@@ -170,6 +170,7 @@ func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedSto
 				ctx.HasSensitiveData = true
 			}
 		}
+		ctx.CompensatingControl = domain.ControlCovers(app.CompensatingControls, f.Category)
 	}
 	return risk.EvaluateRisk(domain.RawFinding{Severity: f.Severity, RuleID: f.RuleID, Title: f.Title}, vulnIDs, ctx, feeds), criticality
 }

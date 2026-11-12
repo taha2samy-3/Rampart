@@ -165,13 +165,10 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		return fmt.Sprintf("slapolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
 	case "application":
-		var spec struct {
-			DisplayName         string   `json:"displayName"`
-			BusinessCriticality string   `json:"businessCriticality"`
-			InternetFacing      bool     `json:"internetFacing"`
-			Owners              []string `json:"owners"`
+		var spec domain.ApplicationSpec
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: application %q: %w", header.Metadata.Name, err)
 		}
-		_ = json.Unmarshal(header.Spec, &spec)
 
 		namespace := defaultNamespace(header.Metadata.Namespace)
 		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
@@ -185,25 +182,11 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			appID = existing.ID
 		}
 
-		crit := spec.BusinessCriticality
-		if crit == "" {
-			crit = "medium"
+		app, err := spec.ToApplication(appID, tenant.ID, header.Metadata.Name)
+		if err != nil {
+			return "", fmt.Errorf("apply: application %q: %w", header.Metadata.Name, err)
 		}
-
-		app := domain.Application{
-			ID:                  appID,
-			TenantID:            tenant.ID,
-			Slug:                header.Metadata.Name,
-			Name:                spec.DisplayName,
-			BusinessCriticality: crit,
-			InternetFacing:      spec.InternetFacing,
-			Owners:              spec.Owners,
-			Lifecycle:           "production",
-			CreatedAt:           time.Now().UTC(),
-		}
-		if app.Name == "" {
-			app.Name = header.Metadata.Name
-		}
+		app.CreatedAt = time.Now().UTC()
 
 		if err := a.store.SaveApplication(ctx, app); err != nil {
 			return "", err

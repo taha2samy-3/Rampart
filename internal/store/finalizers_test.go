@@ -57,6 +57,11 @@ func TestFinalizers_OnPostgreSQL(t *testing.T) {
 	if err := appStore.CreateApplication(ctx, &ui); err != nil {
 		t.Fatal(err)
 	}
+	// CreateApplication is the ingest path and makes an unmanaged row (D55); nothing creates applications in the UI
+	// yet, so the row is marked as the UI's by hand.
+	if _, err := sys.Pool().Exec(ctx, `UPDATE application SET managed_by = 'ui' WHERE tenant_id = $1 AND slug = 'ui-app'`, tn.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err := sys.SaveApplication(ctx, ui); err != nil {
 		t.Fatal(err)
 	}

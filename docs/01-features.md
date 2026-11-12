@@ -13,7 +13,7 @@ Priority legend, tied to the roadmap in [09-roadmap.md](09-roadmap.md): **P0** =
 | A5 | CycloneDX 1.4–1.7 SBOM + VDR + VEX parser | P0 | |
 | A6 | Native parsers: Trivy, Grype, Semgrep, Gitleaks, Checkov, Nuclei, ZAP, Bandit, Dependency-Check, kube-bench, Prowler (OCSF), Snyk, SonarQube (API), GitLab report schemas, Syft | P0 (Trivy, Grype, Semgrep, Gitleaks) / P1 (rest) | Order by usage; each parser is a Go package with a conformance test fixture |
 | A7 | Kubernetes `PolicyReport` / OpenReports / Trivy Operator CRD watcher as a scan source | P2 | Separate `collector` target |
-| A8 | OpenVEX / CSAF VEX ingestion that updates triage state | P0 | |
+| A8 | OpenVEX / CSAF VEX ingestion that updates triage state | P0 (OpenVEX, CycloneDX VEX) / P1 (CSAF) | CISA's minimum VEX requirements accept any of the three formats; D54 |
 | A9 | SPDX 2.3 SBOM parser | P1 | SPDX 3.0 later |
 | A10 | Generic JSON findings format (DefectDojo-compatible superset) | P1 | Easy migration path |
 | A11 | Declarative parser mappings (`IntegrationPackage`, `runtime: mapping`): record path plus CEL field expressions for JSON, JSONL, CSV, XML | P1 | Tenant admins can add them; see [19-integration-sdk.md](19-integration-sdk.md) |
@@ -30,7 +30,7 @@ Priority legend, tied to the roadmap in [09-roadmap.md](09-roadmap.md): **P0** =
 
 | # | Feature | Pri | Notes |
 |---|---|---|---|
-| B1 | Tenant → Hierarchy node (N-level, tag-driven) → Application → Service/Component → Environment | P0 | |
+| B1 | Tenant → Hierarchy node (N-level, tag-driven) → Application → Service/Component → Environment | P0 (tree, filter, roll-up) / P2 (`HierarchyNode` CRD) | D54 |
 | B2 | Asset types: repository, branch, container image (digest), Kubernetes workload, host, URL/endpoint, package (purl), cloud resource | P0 | Stable keys per type |
 | B3 | `Application` CRD with selectors mapping k8s workloads/namespaces/labels to applications | P0 | |
 | B4 | Ownership: teams, owners, on-call; from CODEOWNERS, Backstage, labels | P1 | |
@@ -49,7 +49,7 @@ Priority legend, tied to the roadmap in [09-roadmap.md](09-roadmap.md): **P0** =
 | C3 | Cross-tool correlation (same CVE+purl, same CWE+file+function) producing one finding with many occurrences | P1 (correlation groups, non-destructive) / P2 (merge) |  |
 | C4 | Triage state machine using OpenVEX vocabulary: `open`, `under_investigation`, `affected` (confirmed), `not_affected` (+5 justifications), `fixed`, plus `risk_accepted`, `duplicate`, `out_of_scope` | P0 | Exports losslessly to VEX |
 | C5 | Risk acceptance with owner, justification, proof, expiry, auto-reactivation, approval flow | P0 / approval P2 | |
-| C6 | False-positive memory: triage decisions persist across rescans and branches by fingerprint | P0 | |
+| C6 | False-positive memory: triage decisions persist across rescans and branches by fingerprint | P0 | Across tracks of one asset, for new findings only (D54) |
 | C7 | Finding groups (by component, rule, file) for bulk ticketing | P1 | |
 | C8 | Notes, attachments, mentions, history/timeline | P1 | |
 | C9 | Bulk operations API (update status/severity/tags/owner for N findings) | P0 | DefectDojo gap |
@@ -62,7 +62,7 @@ Priority legend, tied to the roadmap in [09-roadmap.md](09-roadmap.md): **P0** =
 | D1 | CVE/GHSA/OSV normalization with alias graph | P0 | |
 | D2 | EPSS daily sync; KEV sync (with due dates and ransomware flag) | P0 | |
 | D3 | NVD 2.0 and OSV.dev enrichment (CVSS, CWE, references, fixed versions) | P1 (NVD) ; OSV in P0 | Mirrorable (`FeedMirror` CRD) |
-| D4 | CVSS v2/v3.1/v4 parse, validate, compute | P0 | |
+| D4 | CVSS v2/v3.1/v4 parse, validate, compute | P1 | MVP scores from severity, KEV and EPSS and keeps vectors as given (D54) |
 | D5 | Explainable risk score (0–1000): base severity + factors (EPSS, KEV, exploit maturity, reachability, exposure, data sensitivity, criticality, compensating controls, age) with per-factor contribution shown | P0 | Default weights documented; `RiskPolicy` CRD overrides |
 | D6 | SSVC decision output (Track / Track* / Attend / Act) | P2 | |
 | D7 | Reachability inputs from external tools (consume, don't compute) | P2 | |

@@ -40,11 +40,13 @@ type Application struct {
 	BusinessCriticality string     `json:"business_criticality"` // critical | high | medium | low
 	InternetFacing      bool       `json:"internet_facing"`
 	DataClassification  []string   `json:"data_classification,omitempty"` // pii, pci, phi, secret, public
-	Lifecycle           string     `json:"lifecycle"`                     // planning | development | production | deprecated
-	Owners              []string   `json:"owners,omitempty"`
-	Tags                []string   `json:"tags,omitempty"`
-	Version             int        `json:"version"`
-	CreatedAt           time.Time  `json:"created_at"`
+	// CompensatingControls: waf, api_gateway, mtls, private_network (docs/03). See ControlCovers.
+	CompensatingControls []string  `json:"compensating_controls,omitempty"`
+	Lifecycle            string    `json:"lifecycle"` // planning | development | production | deprecated
+	Owners               []string  `json:"owners,omitempty"`
+	Tags                 []string  `json:"tags,omitempty"`
+	Version              int       `json:"version"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 // Validate checks Application domain invariants.
