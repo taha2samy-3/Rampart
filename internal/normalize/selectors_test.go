@@ -43,3 +43,29 @@ func TestMatchApplication(t *testing.T) {
 		}
 	}
 }
+
+// The lineage key is the finding key without the track (D57): the same issue on two tracks of one asset shares
+// it; another asset, or a weak fingerprint, does not.
+func TestLineageKey(t *testing.T) {
+	tenant, asset, other := uuid.New(), uuid.New(), uuid.New()
+	raw := domain.RawFinding{Location: domain.Location{Code: &domain.CodeLocation{FilePath: "a.go", StartLine: 3, LogicalLocation: "pkg.F"}}}
+	fp := func(a uuid.UUID, track string) FingerprintResult {
+		return ComputeFingerprint(FingerprintParams{TenantID: tenant, AssetID: a, Track: track, Scope: ScopeAsset, Family: "semgrep",
+			Category: domain.CategorySAST, RuleID: "rule.a", RawFinding: raw})
+	}
+	main, rel := fp(asset, "main"), fp(asset, "release/1.x")
+	if main.FindingKey == rel.FindingKey {
+		t.Fatal("the finding key must keep tracks apart (D10)")
+	}
+	if main.LineageKey == "" || main.LineageKey != rel.LineageKey {
+		t.Fatal("the same issue on two tracks must share a lineage key")
+	}
+	if fp(other, "main").LineageKey == main.LineageKey {
+		t.Fatal("another asset must not share it")
+	}
+	weak := ComputeFingerprint(FingerprintParams{TenantID: tenant, AssetID: asset, Track: "main", Scope: ScopeAsset, Family: "semgrep",
+		Category: domain.CategorySAST, RuleID: "rule.a", RawFinding: domain.RawFinding{Location: domain.Location{Code: &domain.CodeLocation{FilePath: "a.go", StartLine: 3}}}})
+	if !weak.WeakFingerprint || weak.LineageKey != "" {
+		t.Fatalf("a weak fingerprint carries no decision: %+v", weak)
+	}
+}

@@ -246,6 +246,7 @@ type Finding struct {
 	TenantID               uuid.UUID       `json:"tenant_id"`
 	FindingKey             string          `json:"finding_key"`               // SHA-256 deterministic fingerprint (D11)
 	CorrelationKey         string          `json:"correlation_key,omitempty"` // groups findings of different tools for display (D24)
+	LineageKey             string          `json:"-"`                         // the key without the track: the same issue on other tracks (D57)
 	DedupScope             string          `json:"dedup_scope"`               // asset | application | tenant
 	AssetID                uuid.UUID       `json:"asset_id"`
 	ApplicationID          uuid.UUID       `json:"application_id"`

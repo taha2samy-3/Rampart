@@ -193,7 +193,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			return Result{}, err
 		}
 		f.buf = append(f.buf, StagedRecord{
-			ScannerFamily: family, FindingKey: fp.FindingKey, Category: raw.Category, RuleID: raw.RuleID, Title: raw.Title,
+			ScannerFamily: family, FindingKey: fp.FindingKey, LineageKey: fp.LineageKey, Category: raw.Category, RuleID: raw.RuleID, Title: raw.Title,
 			Description: raw.Description, ToolSeverity: raw.ToolSeverity, Severity: raw.Severity, Location: raw.Location, CWEs: raw.CWEs,
 			VulnID: canonicalVulnID(raw), CVSSVector: raw.CVSSVector, SecretVerified: raw.SecretVerified,
 			ContentHash: normalize.ComputeContentHash(raw.Title, raw.Description, raw.ToolSeverity, raw.CVSSVector, "", raw.Location.PrimaryPath()),

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -24,6 +25,7 @@ type CloseScope = domain.CloseScope
 type StagedRecord struct {
 	ScannerFamily  string // the scanner (semgrep, trivy...), which defines the close scope (D11, D13)
 	FindingKey     string
+	LineageKey     string // the key without the track (D57)
 	Category       domain.FindingCategory
 	RuleID         string
 	Title          string
@@ -212,6 +214,7 @@ func (e *Engine) mergeBatch(
 				ID:                findingID,
 				TenantID:          scope.TenantID,
 				FindingKey:        rec.FindingKey,
+				LineageKey:        rec.LineageKey,
 				DedupScope:        "asset",
 				AssetID:           scope.AssetID,
 				ApplicationID:     applicationID,
@@ -249,6 +252,7 @@ func (e *Engine) mergeBatch(
 				targetFinding.LastSeen = rec.SeenAt
 			}
 			targetFinding.Detection = domain.DetectionPresent
+			targetFinding.LineageKey = rec.LineageKey // findings older than D57 learn it here
 			if targetFinding.VulnerabilityID == nil {
 				targetFinding.VulnerabilityID = vulnPtr(rec.VulnID)
 			}
@@ -347,6 +351,25 @@ func (e *Engine) mergeBatch(
 	// Ephemeral runs (e.g. untracked PR branches per D10, D13) do not mutate the long-lived inventory
 	if opts.IsEphemeral {
 		return outcome, nil
+	}
+
+	// D57 (01 C6): a finding this run creates starts with the decision a person made about the same issue on
+	// another track of the asset, when the evidence is the same.
+	carried, carriedKeys, err := carryDecisions(ctx, st, scope, findingsToUpsert, existingFindings)
+	if err != nil {
+		return outcome, err
+	}
+	events = append(events, carried...)
+	// A finding that arrives already decided is not "new" for the CI gate: the decision a person made about the
+	// same issue on another branch stands, as it does for a decided finding that was already on this track.
+	if len(carriedKeys) > 0 {
+		kept := outcome.Fresh[:0]
+		for _, r := range outcome.Fresh {
+			if !carriedKeys[r.FindingKey] {
+				kept = append(kept, r)
+			}
+		}
+		outcome.Fresh = kept
 	}
 
 	// Score what is new or changed before it is stored, so the explorer can filter and sort on it (D28).
@@ -1716,3 +1739,63 @@ func freshResult(tenant, run uuid.UUID, rec StagedRecord) *domain.IngestRunResul
 	return &domain.IngestRunResult{TenantID: tenant, IngestRunID: run, FindingKey: rec.FindingKey, IsNew: true,
 		Severity: rec.Severity, Category: rec.Category, Location: rec.Location, CreatedAt: rec.SeenAt}
 }
+
+// decisionStore finds decisions on other tracks (PostgreSQL; the in-memory store has none).
+type decisionStore interface {
+	DecisionsOnOtherTracks(ctx context.Context, tenantID, assetID uuid.UUID, track string, lineageKeys []string) (map[string]*domain.Finding, error)
+}
+
+// carryDecisions gives each newly created finding the not_affected or out_of_scope decision made about the same
+// issue (the same lineage key) on another track of the same asset (D57). Only those two states carry: they are
+// statements about the code or the component, which another branch of the same asset shares; a risk acceptance
+// has its own owner, expiry and scope (D39) and does not. The decision carries only when the content hash is
+// the same: the same evidence gets the same decision, and changed code is looked at again (the rule D18 applies
+// to a decided finding whose code changed). Existing findings are never changed: nothing is retroactive.
+func carryDecisions(ctx context.Context, st Store, scope CloseScope, findings []*domain.Finding, existing map[string]*domain.Finding) ([]*domain.FindingEvent, map[string]bool, error) {
+	ds, ok := st.(decisionStore)
+	if !ok {
+		return nil, nil, nil
+	}
+	var fresh []*domain.Finding
+	var keys []string
+	for _, f := range findings {
+		if _, old := existing[f.FindingKey]; old || f.LineageKey == "" {
+			continue
+		}
+		fresh = append(fresh, f)
+		keys = append(keys, f.LineageKey)
+	}
+	if len(keys) == 0 {
+		return nil, nil, nil
+	}
+	decided, err := ds.DecisionsOnOtherTracks(ctx, scope.TenantID, scope.AssetID, scope.Track, keys)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ingest: reading decisions on other tracks: %w", err)
+	}
+	var events []*domain.FindingEvent
+	carriedKeys := map[string]bool{}
+	for _, f := range fresh {
+		src, ok := decided[f.LineageKey]
+		if !ok || src.ContentHash != f.ContentHash {
+			continue
+		}
+		f.PreviousState = f.State
+		f.State = src.State
+		f.Justification = src.Justification
+		f.ImpactStatement = src.ImpactStatement
+		f.StateReason = "carried from track " + src.Track
+		note := fmt.Sprintf("decision carried from finding %s on track %s", src.ID, src.Track)
+		if src.Justification != "" {
+			note += " (" + src.Justification + ")"
+		}
+		events = append(events, &domain.FindingEvent{
+			ID: domain.NewID(), FindingID: f.ID, At: f.FirstSeen, Actor: "system:parser", Type: "decision_carried",
+			From: mustJSON(map[string]any{"state": string(f.PreviousState)}), To: mustJSON(map[string]any{"state": string(f.State), "from_finding": src.ID.String()}),
+			Note: note,
+		})
+		carriedKeys[f.FindingKey] = true
+	}
+	return events, carriedKeys, nil
+}
+
+func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }

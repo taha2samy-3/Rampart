@@ -27,6 +27,10 @@ const (
 type FingerprintResult struct {
 	FindingKey      string
 	WeakFingerprint bool
+	// LineageKey is the finding key with the track left out: the same issue on another branch or environment of
+	// the same asset has the same LineageKey (D57). Empty for a weak fingerprint, whose identity is too loose to
+	// carry a decision on.
+	LineageKey string
 }
 
 // FingerprintParams holds all inputs required to compute a finding key.
@@ -221,10 +225,24 @@ func ComputeFingerprint(params FingerprintParams) FingerprintResult {
 	}
 
 	digest := hex.EncodeToString(h.Sum(nil))
-	return FingerprintResult{
-		FindingKey:      digest,
-		WeakFingerprint: isWeak,
+	res := FingerprintResult{FindingKey: digest, WeakFingerprint: isWeak, LineageKey: digest}
+	if isWeak {
+		res.LineageKey = ""
+	} else if params.Scope != ScopeTenant && params.Scope != ScopeApplication {
+		// "v1-lineage" US family US tenant US asset US f1 … : D11's key with the track removed from the scope.
+		l := sha256.New()
+		l.Write([]byte("v1-lineage"))
+		l.Write([]byte{UnitSeparator})
+		l.Write([]byte(family))
+		l.Write([]byte{UnitSeparator})
+		_, _ = fmt.Fprintf(l, "%s%c%s", params.TenantID.String(), UnitSeparator, params.AssetID.String())
+		for _, f := range fields {
+			l.Write([]byte{UnitSeparator})
+			l.Write([]byte(f))
+		}
+		res.LineageKey = hex.EncodeToString(l.Sum(nil))
 	}
+	return res
 }
 
 func buildScopeKey(p FingerprintParams) string {

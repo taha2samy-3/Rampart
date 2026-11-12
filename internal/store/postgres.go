@@ -340,16 +340,20 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				cvss_vector, risk_score, state, previous_state, state_reason, detection,
 				content_hash, weak_fingerprint, first_seen, last_seen, reopened_count,
 				occurrence_count, version, created_at, updated_at, resolved_at, resolution, correlation_key,
-				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified
+				risk_band, kev, epss_bucket, sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified,
+				lineage_key, justification, impact_statement
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 				$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
 				$25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36,
-				$37, $38, $39, $40, $41, $42, $43, $44
+				$37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47
 			)
 			ON CONFLICT (tenant_id, finding_key) DO UPDATE SET
 				last_seen = EXCLUDED.last_seen,
 				correlation_key = COALESCE(EXCLUDED.correlation_key, finding.correlation_key),
+				-- Findings older than D57 learn their lineage key on their next scan. Justification and impact are
+				-- triage columns: only an insert (a decision carried to a new finding, D57) writes them here.
+				lineage_key = COALESCE(EXCLUDED.lineage_key, finding.lineage_key),
 				location = EXCLUDED.location,
 				tool_severity = EXCLUDED.tool_severity,
 				title = EXCLUDED.title,
@@ -446,6 +450,7 @@ func (s *PostgresStore) UpsertFindings(ctx context.Context, tenantID uuid.UUID, 
 				f.ContentHash, f.WeakFingerprint, f.FirstSeen, f.LastSeen, f.ReopenedCount,
 				f.OccurrenceCount, f.Version, createdAt, updatedAt, f.ResolvedAt, resolution, corr,
 				riskBand(f), f.KEV, nonEmpty(f.EPSSBucket), f.SLAStart, f.SLADue, f.SLABreachedAt, f.SLAPausedAt, f.SecretVerified,
+				nonEmpty(f.LineageKey), nonEmpty(f.Justification), nonEmpty(f.ImpactStatement),
 			)
 
 			// D19: Rule and vulnerability metadata unknown to official global feeds populate tenant-local stubs.
@@ -2374,3 +2379,42 @@ func (s *PostgresStore) ReassignUnassignedAssets(ctx context.Context, tenantID u
 	}
 	return n, nil
 }
+
+// DecisionsOnOtherTracks returns, for each lineage key, a finding of the same asset on another track that a
+// person decided is not_affected or out_of_scope (D57), the most recently changed one when there are several.
+func (s *PostgresStore) DecisionsOnOtherTracks(ctx context.Context, tenantID, assetID uuid.UUID, track string, lineageKeys []string) (map[string]*domain.Finding, error) {
+	out := map[string]*domain.Finding{}
+	if len(lineageKeys) == 0 {
+		return out, nil
+	}
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT DISTINCT ON (lineage_key) lineage_key, `+findingCols+`
+			FROM finding
+			WHERE tenant_id = $1 AND asset_id = $2 AND track <> $3 AND lineage_key = ANY($4)
+			  AND state IN ('not_affected', 'out_of_scope')
+			ORDER BY lineage_key, updated_at DESC`, tenantID, assetID, track, lineageKeys)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var key string
+			f, err := scanFinding(prefixed{rows, &key})
+			if err != nil {
+				return err
+			}
+			out[key] = f
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// prefixed lets scanFinding read a row that has one extra column in front.
+type prefixed struct {
+	row   pgx.Row
+	first any
+}
+
+func (p prefixed) Scan(dest ...any) error { return p.row.Scan(append([]any{p.first}, dest...)...) }
