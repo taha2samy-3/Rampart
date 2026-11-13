@@ -120,6 +120,7 @@ Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the
 
 The working plan, with milestones 3.0 to 3.6, the facts read from the vendors' documentation and the corrections to the first draft, is [20-phase-3-plan.md](20-phase-3-plan.md); the decision for the connector model is D69. Built-in connectors run inside the existing binary (the `notify` and `sync` targets); gRPC plugins are Phase 5.
 
+- **Milestone 3.0 (Spike 6 & D69)**: Measured and recorded streaming path selection with CEL (100,000 records in ~1.2s, ~1.8 MiB heap); recorded D69 connector model, verified vendor facts, SSRF guard rules, and retry/rate-limiting contracts.
 - Connectors: Jira (two-way, transitions create requests not states), GitHub Issues, Slack, Microsoft Teams, email, signed webhooks; `Connector` CRD; notification routing with digests.
 - **Dependency-Track**: FPF parser, REST client and connector with permission probe, portfolio and project sync with mapping rules and the unmapped-projects screen, webhook trigger with trailing debounce, triage import, gate linking (D23).
 - **Integration SDK, part 1** ([19-integration-sdk.md](19-integration-sdk.md)): mapping engine and `IntegrationPackage` (`runtime: mapping`); unified `Tracker`, `Notifier` and `Source` contracts with a registry; declarative notifiers and trackers; conformance kit for parsers; connector forms generated from config schemas.

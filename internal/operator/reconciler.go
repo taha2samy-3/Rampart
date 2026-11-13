@@ -553,8 +553,14 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		Spec:      cr.Spec,
 	}
 	if err := conn.Validate(); err != nil {
-		status.SetCondition("Connected", "False", "InvalidSpec", err.Error())
-		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		reason := "InvalidSpec"
+		if errors.Is(err, domain.ErrConnectorNotSupported) {
+			reason = "NotSupported"
+		} else if errors.Is(err, domain.ErrSSRFBlocked) {
+			reason = "SSRFBlocked"
+		}
+		status.SetCondition("Connected", "False", reason, err.Error())
+		status.SetCondition("Ready", "False", reason, err.Error())
 		return status, nil
 	}
 
@@ -618,5 +624,19 @@ func (r *ConnectorReconciler) Finalize(ctx context.Context, cr *ConnectorCR) (*C
 	if tenant == nil {
 		return nil, true, nil
 	}
+
+	// D49: Clean up secret material copied for this connector
+	if r.secretStore != nil {
+		secRef := extractConnectorSecretRef(&cr.Spec)
+		if secRef != nil {
+			secretKey := secRef.Key
+			if secretKey == "" {
+				secretKey = "token"
+			}
+			storageKey := fmt.Sprintf("connector:%s:%s", cr.Metadata.Name, secretKey)
+			_ = r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, nil)
+		}
+	}
+
 	return nil, true, r.store.DeleteConnector(ctx, tenant.ID, cr.Metadata.Name)
 }

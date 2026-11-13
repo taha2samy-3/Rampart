@@ -18,6 +18,9 @@ var (
 	forbiddenHeaders = map[string]bool{
 		"host":                    true,
 		"authorization":           true,
+		"proxy-authorization":     true,
+		"cookie":                  true,
+		"set-cookie":              true,
 		"x-rampart-signature-256": true,
 		"content-length":          true,
 		"content-type":            true,
@@ -260,8 +263,9 @@ func (c *Connector) Validate() error {
 			if !headerNameRegex.MatchString(k) {
 				return fmt.Errorf("%w: invalid header name %q", ErrConnectorInvalid, k)
 			}
-			if strings.Contains(strings.ToLower(v), "bearer ") {
-				return fmt.Errorf("%w: plaintext bearer tokens in headers are prohibited; use secretRef", ErrConnectorInvalid)
+			vLower := strings.ToLower(v)
+			if strings.Contains(vLower, "bearer ") || strings.Contains(vLower, "basic ") || strings.Contains(vLower, "token ") {
+				return fmt.Errorf("%w: plaintext credentials or tokens in headers are prohibited; use secretRef", ErrConnectorInvalid)
 			}
 		}
 	case ConnectorTypeDependencyTrack:

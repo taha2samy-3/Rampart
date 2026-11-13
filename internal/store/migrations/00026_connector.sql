@@ -39,3 +39,4 @@ END $$;
 -- +goose Down
 DROP POLICY IF EXISTS tenant_isolation ON connector;
 DROP TABLE IF EXISTS connector;
+

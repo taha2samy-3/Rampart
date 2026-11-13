@@ -334,7 +334,8 @@ status: {matchedFindings: 14, state: Active}
 kind: Connector
 metadata: {name: jira-sec}
 spec:
-  type: jira                               # jira | github | gitlab | azureBoards | serviceNow | slack | teams | email | webhook | sonarqube | dependencyTrack | ...
+  type: jira                               # jira | github | slack | teams | email | webhook | dependencyTrack
+  direction: outbound                      # outbound | inbound | bidirectional
   jira:
     url: https://example.atlassian.net
     credentialsSecretRef: {name: jira-sec-creds}     # keys: email, apiToken (or pat)
@@ -351,6 +352,43 @@ status:
   conditions: [{type: Connected, status: "True", reason: AuthOK}]
   webhookURL: https://rampart.example.com/hooks/jira/0193...
   lastSync: ...
+```
+
+Examples for Notifiers and Webhooks:
+```yaml
+# Slack Notifier (chat.postMessage with Block Kit)
+kind: Connector
+metadata: {name: slack-sec-alerts}
+spec:
+  type: slack
+  direction: outbound
+  slack:
+    tokenSecretRef: {name: slack-bot-token, key: token} # Bot token (xoxb-...)
+    defaultChannel: "#security-alerts"
+
+---
+# Microsoft Teams Notifier (Power Automate Workflows webhook with Adaptive Cards)
+kind: Connector
+metadata: {name: teams-sec-alerts}
+spec:
+  type: teams
+  direction: outbound
+  teams:
+    webhookSecretRef: {name: teams-workflow-url, key: url}
+
+---
+# Signed Outbound Webhook (CloudEvents v1.0 or raw format with HMAC-SHA256 signature)
+kind: Connector
+metadata: {name: audit-webhook}
+spec:
+  type: webhook
+  direction: outbound
+  webhook:
+    url: https://siem.example.com/webhook
+    secretRef: {name: webhook-hmac-key, key: secret} # Used for X-Rampart-Signature-256
+    format: cloudevents                              # cloudevents | raw
+    headers:
+      X-Environment: "production"
 ```
 
 ### Dependency-Track (`Connector` type `dependencyTrack` + `ScanSource` type `apiPull`)

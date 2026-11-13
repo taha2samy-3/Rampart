@@ -441,4 +441,46 @@ func TestPostgresStore_Integration_RLS(t *testing.T) {
 	if err == nil && gotSbomB != nil {
 		t.Fatalf("SECURITY VIOLATION: Tenant B retrieved Tenant A's SBOM!")
 	}
+
+	// 12. Verify Connector table isolation under RLS (00026_connector.sql, D69)
+	connA := domain.Connector{
+		Name: "slack-prod",
+		Type: domain.ConnectorTypeSlack,
+		Spec: domain.ConnectorSpec{
+			Type:      domain.ConnectorTypeSlack,
+			Direction: domain.DirectionOutbound,
+			Slack: &domain.SlackConnectorConfig{
+				TokenSecretRef: domain.SecretKeyRef{Name: "slack-sec", Key: "token"},
+				DefaultChannel: "#sec-ops",
+			},
+		},
+	}
+	if err := appStore.SaveConnector(ctx, tenantA.ID, connA); err != nil {
+		t.Fatalf("failed to save connector for tenant A: %v", err)
+	}
+
+	// Tenant A can see it
+	connsA, err := appStore.ListConnectors(ctx, tenantA.ID)
+	if err != nil || len(connsA) == 0 {
+		t.Fatalf("expected tenant A to list its connector, got %v (len %d)", err, len(connsA))
+	}
+
+	// Tenant B cannot see it under RLS
+	connsB, err := appStore.ListConnectors(ctx, tenantB.ID)
+	if err != nil {
+		t.Fatalf("list connectors for tenant B failed: %v", err)
+	}
+	if len(connsB) != 0 {
+		t.Fatalf("SECURITY VIOLATION: Tenant B saw %d connectors from Tenant A!", len(connsB))
+	}
+
+	// Direct query without app.tenant_id MUST see 0 rows
+	var connCountWithoutTenant int
+	err = pool.QueryRow(ctx, "SELECT count(*) FROM connector").Scan(&connCountWithoutTenant)
+	if err != nil {
+		t.Fatalf("querying connector without tenant context failed: %v", err)
+	}
+	if connCountWithoutTenant != 0 {
+		t.Fatalf("SECURITY VIOLATION: rampart_app role without app.tenant_id saw %d connectors! FORCE RLS failed.", connCountWithoutTenant)
+	}
 }

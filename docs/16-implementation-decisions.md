@@ -993,11 +993,28 @@ Sources: none beyond the code itself; this is a correctness/design finding, not 
 - **No loops.** Jira documents no flag for a change made by the caller. A change is ours when its actor is our own account and the state it leaves equals the hash of what we last pushed for that `(finding, ticket)` (D23). GitHub: compare `sender.login` with the app's own login.
 - **A ticket never decides (D27).** A resolution mapped to `risk_accepted` or `not_affected` creates a request in the approval workflow.
 - **Targets.** Slack uses `chat.postMessage` (a channel per call, returns `ts`) rather than incoming webhooks, which are bound to one channel and return no `ts`. Teams uses the Workflows webhook (Microsoft 365 connectors are being retired); digests are truncated with a link at about 28 KB. Jira's REST-registered webhooks expire after 30 days, so the connector's periodic `Check()` refreshes them and says so in status when it cannot.
-- **Verified and recorded for implementation:** Jira `POST /rest/api/3/issue` requires `description` formatted strictly in Atlassian Document Format (ADF) JSON (`type: doc, version: 1, content: [...]`), `priority` as an object (`{"name": "High"}`), and `labels` as an array of strings. Legacy Office 365 Teams connectors were permanently retired in May 2026, confirming the Power Automate Workflows webhook with Adaptive Cards payload. GitHub Actions OIDC token expiration is strictly 5 minutes (300 seconds), requiring immediate exchange for the 15-minute Rampart ingest token. Dependency-Track uses 1-based `pageNumber` and `pageSize` on `/api/v1/project` with `X-Total-Count` in headers, and its webhook publisher sends `Authorization: Bearer <secret>`. Settle detection (analysis completion) remains to be confirmed against a running instance in 3.4.
+- **Direction and connector types.** Every connector declares its direction (`direction: outbound | inbound | bidirectional`). Notifiers (Slack, Teams, Email, Webhook) and Trackers (Jira, GitHub Issues) are outbound, with inbound webhook endpoints for resolution updates and callbacks. Source connectors (`dependencytrack`, `sonarqube`) represent inbound ingestion integrations where Rampart pulls or receives external scans.
+- **Verified and recorded for implementation (with vendor sources, read 2026-11-13):**
+  - **Jira Cloud** (Atlassian Developer Docs, `POST /rest/api/3/issue`, read 2026-11-13): `description` formatted strictly in Atlassian Document Format (ADF) JSON (`type: doc, version: 1, content: [...]`), `priority` as an object (`{"name": "High"}`), and `labels` as an array of strings. This will be verified against the first live API call or fixture.
+  - **Microsoft Teams** (Microsoft Learn, `m365-custom-connectors`, rollout 18–22 May 2026, read 2026-11-13): Office 365 connectors retired; Teams notifier targets Power Automate Workflows webhooks with Adaptive Cards payload.
+  - **GitHub Actions OIDC** (GitHub Docs, `reference/security/oidc`, read 2026-11-13): Token lifetime is not documented as a fixed constant on GitHub's reference page; relying code must read `exp` directly from the token claims and exchange it for a Rampart token (15 minutes).
+  - **Dependency-Track** (Dependency-Track 4.x / docs, read 2026-11-13): Pagination offset/1-based indexing is not firmly guaranteed across all versions; the client loops until returning fewer items than `pageSize` and validates against `X-Total-Count`. Webhook publisher supports Basic, Bearer, or custom header authentication configured by administrator. Settle detection remains to be confirmed against a running instance in 3.4.
 
 Sources: docs/20-phase-3-plan.md names each vendor page read on 2026-11-13.
 
 ### Spike 6 measurement results and limitations (Phase −1 spike 6 / Milestone 3.0)
+
+Executed on 2026-11-13 (`internal/integrations/spike_test.go`): streaming path selection with CEL expression evaluation across 100,000 synthetic records:
+- **Observed throughput**: 100,000 records processed in ~1.15–1.3 seconds (~75,000–86,000 records/sec).
+- **Observed memory footprint**: HeapAlloc delta of ~0.2–1.8 MiB, total system memory ~18 MiB.
+- **Key architectural takeaway**: Computational cost of CEL evaluation and JSON streaming token walking is minimal and will not be the ingestion bottleneck (PostgreSQL writes, indexing, and deduplication are the primary throughput determinants).
+- **Explicit limitations of this spike (not a full benchmark)**:
+  1. **Expression simplicity**: Evaluated a single title derivation expression (`rec.id + " in " + dep.name`) rather than a full multi-field mapping AST with regexes and severity transforms.
+  2. **Record size**: Tested on small synthetic JSON payloads rather than a real-world 500 MiB report with deeply nested arrays.
+  3. **No WebAssembly runtime**: Tier 2 `wazero` sandbox execution was not evaluated here (deferred to Phase 4).
+  4. Real-world validation of streaming token walk on giant files remains an ongoing exit check during milestone 3.5.
+
+
 
 Executed on 2026-11-13 (`internal/integrations/spike_test.go`): streaming path selection with CEL expression evaluation across 100,000 synthetic records:
 - **Observed throughput**: 100,000 records processed in ~1.15–1.3 seconds (~75,000–86,000 records/sec).

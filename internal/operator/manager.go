@@ -41,6 +41,7 @@ var (
 	gvkApplication = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Application"}
 	gvkScanSource  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ScanSource"}
 	gvkSLAPolicy   = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "SLAPolicy"}
+	gvkConnector   = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Connector"}
 	// D62: risk policies and the cluster-wide defaults.
 	gvkRiskPolicy        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "RiskPolicy"}
 	gvkClusterRiskPolicy = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterRiskPolicy"}
@@ -131,6 +132,10 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		return op.ReconcileSLAPolicy(ctx, c)
 	}, status: func(c *SLAPolicyCR) *SLAPolicyStatus { return &c.Status }, finalize: op.FinalizeSLAPolicy}
 
+	connectors := &cr[ConnectorCR, ConnectorStatus]{k: k, gvk: gvkConnector, reconcile: func(ctx context.Context, c *ConnectorCR) (*ConnectorStatus, error) {
+		return op.ReconcileConnector(ctx, c)
+	}, status: func(c *ConnectorCR) *ConnectorStatus { return &c.Status }, finalize: op.FinalizeConnector}
+
 	policyCR := func(gvk schema.GroupVersionKind, r *PolicyReconciler) *cr[PolicyCR, PolicyStatus] {
 		return &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvk, reconcile: r.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: r.Finalize}
 	}
@@ -156,7 +161,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}} {
+	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

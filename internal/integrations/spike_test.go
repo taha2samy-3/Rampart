@@ -16,10 +16,10 @@ import (
 // of streaming path selection and CEL expression evaluation across records (Spike 6).
 // Limitations: Synthetic records and simple title expression; see docs/16 D69.
 func TestSpike6_StreamingPathSelectionWithCEL(t *testing.T) {
-	totalRecords := 100_000
 	if testing.Short() {
-		totalRecords = 1_000
+		t.Skip("skipping spike in short mode")
 	}
+	totalRecords := 100_000
 
 	// 1. Set up CEL environment with record variables and custom helpers
 	env, err := cel.NewEnv(
