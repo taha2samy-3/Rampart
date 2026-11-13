@@ -30,7 +30,12 @@ dump() {
   echo; echo "##### diagnostics #####"
   kubectl get all,jobs,pvc,clusters.postgresql.cnpg.io -A 2>&1 | tail -60 || true
   kubectl -n "$NS" describe pods 2>&1 | tail -120 || true
-  for r in "deploy/$REL" "job/$REL-migrate-1"; do echo "--- logs $r"; kubectl -n "$NS" logs "$r" --all-containers --tail=80 2>&1 || true; done
+  for r in "deploy/$REL" "job/$REL-migrate-1"; do
+    echo "--- logs $r"
+    kubectl -n "$NS" logs "$r" --all-containers --tail=80 2>&1 || true
+    echo "--- previous logs $r"
+    kubectl -n "$NS" logs "$r" --all-containers --previous --tail=80 2>&1 || true
+  done
   kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -40 || true
 }
 trap 'dump' ERR
@@ -55,7 +60,7 @@ log "helm install (plain Job for migrations on install, D4)"
 helm install "$REL" "$CHART" "${helm_args[@]}" --create-namespace --wait --wait-for-jobs --timeout 10m
 
 log "Installed objects"
-for crd in tenants applications scansources; do kubectl get crd "$crd.rampart.aspm.dev" >/dev/null || fail "CRD $crd missing"; done
+for crd in tenants applications scansources connectors; do kubectl get crd "$crd.rampart.aspm.dev" >/dev/null || fail "CRD $crd missing"; done
 kubectl -n "$NS" wait --for=condition=complete "job/$REL-migrate-1" --timeout=60s
 kubectl -n "$NS" rollout status "deploy/$REL" --timeout=120s
 kubectl -n "$NS" get secret "$REL-db-app" "$REL-db-system" "$REL-session" "$REL-objectstore" >/dev/null
@@ -124,8 +129,18 @@ apiVersion: rampart.aspm.dev/v1alpha1
 kind: ScanSource
 metadata: {name: github, namespace: $TEAM_NS}
 spec: {scannerFamily: semgrep, secretRef: {name: gh, key: token}}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Connector
+metadata: {name: e2e-webhook, namespace: $TEAM_NS}
+spec:
+  type: webhook
+  direction: outbound
+  webhook:
+    url: "https://example.com/webhook"
+    secretRef: {name: gh, key: token}
 YAML
-kubectl -n "$TEAM_NS" wait --for=condition=Ready application/checkout scansource/github --timeout=120s
+kubectl -n "$TEAM_NS" wait --for=condition=Ready application/checkout scansource/github connector/e2e-webhook --timeout=120s
 [ -n "$(kubectl -n "$TEAM_NS" get application checkout -o jsonpath='{.status.applicationId}')" ] || fail "status.applicationId is empty"
 
 log "An Application in a namespace no Tenant lists is not ready, and says why (D17, D20)"
@@ -156,6 +171,7 @@ assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles wher
 assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles where rolname='rampart_system'")" "truetrue" "rampart_system: login, bypass RLS"
 assert_eq "$(pg "select tenant_id is not null from tenant_namespace where namespace='$TEAM_NS'")" "t" "namespace ownership recorded (D20)"
 assert_eq "$(pg "select count(*) from application where slug='checkout'")" "1" "application stored"
+assert_eq "$(pg "select count(*) from connector where name='e2e-webhook'")" "1" "connector stored"
 assert_eq "$(pg "select count(*) from secret_material")" "1" "one secret synced"
 assert_eq "$(pg "select position('$SECRET_VALUE'::bytea in encrypted_value) from secret_material")" "0" "the Secret is not stored in plaintext"
 assert_eq "$(pg "select count(*) from information_schema.tables where table_schema='river' and table_name='river_job'")" "1" "river schema"
