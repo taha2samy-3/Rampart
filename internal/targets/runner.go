@@ -222,9 +222,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	processor.SetNotificationRouter(notifRouter)
 	scorer.SetNotificationRouter(notifRouter)
 
-	// Issue tracking automation for critical findings (D66, Milestone 3.2)
+	// Issue tracking for critical findings (D66, D70): the merge reserves the ticket, the sweeper below opens it.
 	trackerResolver := connectors.NewDefaultTrackerResolver(storeBackend, secretResolver, safeClient, r.cfg.Server.PublicURL)
-	processor.SetTrackerResolver(trackerResolver)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	if pgStore != nil {
@@ -267,8 +266,20 @@ func (r *Runner) Run(ctx context.Context) error {
 	// Inbound signed webhooks for ticket updates & resolution requests (D27, Milestone 3.2)
 	wfService := workflow.New(storeBackend)
 	wfService.SetScorer(scorer)
-	inboundHandler := connectors.NewInboundWebhookHandler(storeBackend, wfService, secretResolver)
+	inboundHandler := connectors.NewInboundWebhookHandler(storeBackend, wfService, secretResolver).
+		WithSettings(storeBackend).WithLogger(r.logger)
+	if pgStore != nil { // a ticket is tied to its finding by the outbox, which only PostgreSQL has
+		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
+	}
 	queryAPI.SetInboundWebhookHandler(inboundHandler)
+	if pgStore != nil {
+		ticketStore := connectors.TicketStore(pgStore)
+		var ticketPool *pgxpool.Pool
+		if sysStore != nil { // the pending tickets are read across tenants
+			ticketStore, ticketPool = sysStore, sysStore.Pool()
+		}
+		go connectors.RunTicketSweeper(ctx, ticketStore, trackerResolver, ticketPool, time.Minute, r.logger)
+	}
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
 		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))

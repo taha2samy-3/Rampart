@@ -79,9 +79,6 @@ func (p *Processor) SetScorer(s Scorer) { p.engine.SetScorer(s) }
 // SetNotificationRouter configures the router to dispatch findings notifications upon run completion (D25, Milestone 3.1).
 func (p *Processor) SetNotificationRouter(r IngestNotificationRouter) { p.router = r }
 
-// SetTrackerResolver configures tracker resolution for ticket-on-critical automation (D66, Milestone 3.2).
-func (p *Processor) SetTrackerResolver(r TrackerResolver) { p.engine.SetTrackerResolver(r) }
-
 // SetLimits overrides the batch size and the size caps (ingest.batchRows, ingest.maxReportBytes).
 func (p *Processor) SetLimits(batchRows int, maxReport int64) {
 	if batchRows > 0 {

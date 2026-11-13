@@ -79,15 +79,21 @@ type JiraStatusMapping struct {
 
 // JiraConnectorConfig holds Jira Cloud integration settings.
 type JiraConnectorConfig struct {
-	URL                  string            `json:"url"`
-	CredentialsSecretRef SecretKeyRef      `json:"credentialsSecretRef"` // Keys: email, apiToken (or pat)
-	DefaultProject       string            `json:"defaultProject"`
-	IssueType            string            `json:"issueType"`
-	SeverityToPriority   map[string]string `json:"severityToPriority,omitempty"`
-	StatusMapping        JiraStatusMapping `json:"statusMapping,omitempty"`
-	TwoWaySync           bool              `json:"twoWaySync,omitempty"`
-	SyncInterval         string            `json:"syncInterval,omitempty"`
-	CustomFields         map[string]string `json:"customFields,omitempty"`
+	URL                  string       `json:"url"`
+	CredentialsSecretRef SecretKeyRef `json:"credentialsSecretRef"` // Keys: email, apiToken (or pat)
+	DefaultProject       string       `json:"defaultProject"`
+	// AccountID is the Jira account Rampart calls the API as. A change made by it is Rampart's own and is never read
+	// as a decision (D69).
+	AccountID          string            `json:"accountId,omitempty"`
+	IssueType          string            `json:"issueType"`
+	SeverityToPriority map[string]string `json:"severityToPriority,omitempty"`
+	StatusMapping      JiraStatusMapping `json:"statusMapping,omitempty"`
+	TwoWaySync         bool              `json:"twoWaySync,omitempty"`
+	// WebhookSecretRef is the secret Jira signs its webhooks with. It is NOT the API credential: a token that
+	// can call Jira must not also be the thing written into Jira's webhook settings (D69).
+	WebhookSecretRef SecretKeyRef      `json:"webhookSecretRef,omitempty"`
+	SyncInterval     string            `json:"syncInterval,omitempty"`
+	CustomFields     map[string]string `json:"customFields,omitempty"`
 }
 
 // GitHubConnectorConfig holds GitHub Issues integration settings.
@@ -98,6 +104,8 @@ type GitHubConnectorConfig struct {
 	SeverityToLabels     map[string]string `json:"severityToLabels,omitempty"`
 	DefaultLabels        []string          `json:"defaultLabels,omitempty"`
 	TwoWaySync           bool              `json:"twoWaySync,omitempty"`
+	// WebhookSecretRef is the secret of the repository webhook (X-Hub-Signature-256), separate from the token.
+	WebhookSecretRef SecretKeyRef `json:"webhookSecretRef,omitempty"`
 }
 
 // SlackConnectorConfig holds Slack bot integration settings (chat.postMessage per D69).
@@ -285,12 +293,21 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		if strings.TrimSpace(c.Spec.Jira.CredentialsSecretRef.Name) == "" {
 			return fmt.Errorf("%w: jira credentialsSecretRef is required", ErrConnectorInvalid)
 		}
+		if strings.TrimSpace(c.Spec.Jira.DefaultProject) == "" {
+			return fmt.Errorf("%w: jira defaultProject is required (Rampart does not guess a project)", ErrConnectorInvalid)
+		}
+		if (c.Spec.Jira.TwoWaySync || c.Direction() == DirectionBidirectional) && strings.TrimSpace(c.Spec.Jira.WebhookSecretRef.Name) == "" {
+			return fmt.Errorf("%w: jira webhookSecretRef is required when twoWaySync is on: an unsigned webhook is never accepted", ErrConnectorInvalid)
+		}
 	case ConnectorTypeGitHub:
 		if c.Spec.GitHub == nil {
 			return fmt.Errorf("%w: github config is required for github connector", ErrConnectorInvalid)
 		}
 		if strings.TrimSpace(c.Spec.GitHub.Owner) == "" || strings.TrimSpace(c.Spec.GitHub.Repo) == "" {
 			return fmt.Errorf("%w: github owner and repo are required", ErrConnectorInvalid)
+		}
+		if (c.Spec.GitHub.TwoWaySync || c.Direction() == DirectionBidirectional) && strings.TrimSpace(c.Spec.GitHub.WebhookSecretRef.Name) == "" {
+			return fmt.Errorf("%w: github webhookSecretRef is required when twoWaySync is on: an unsigned webhook is never accepted", ErrConnectorInvalid)
 		}
 	case ConnectorTypeSlack:
 		if c.Spec.Slack == nil {
@@ -404,4 +421,47 @@ func ConnectorSecretStorageKey(connectorName, key string) string {
 		k = "token"
 	}
 	return fmt.Sprintf("connector:%s:%s", connectorName, k)
+}
+
+// ConnectorWebhookSecretStorageKey is where the secret an inbound webhook is verified with is kept in
+// secret_material. It is distinct from the connector's API credential (docs/16 D69, D70).
+func ConnectorWebhookSecretStorageKey(connectorName, key string) string {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		k = "secret"
+	}
+	return fmt.Sprintf("connector:%s:webhook:%s", connectorName, k)
+}
+
+// WebhookSecret returns the reference to the secret that verifies this connector's inbound webhooks, or nil.
+func (c *Connector) WebhookSecret() *SecretKeyRef {
+	switch c.Type {
+	case ConnectorTypeJira:
+		if c.Spec.Jira != nil && c.Spec.Jira.WebhookSecretRef.Name != "" {
+			return &c.Spec.Jira.WebhookSecretRef
+		}
+	case ConnectorTypeGitHub:
+		if c.Spec.GitHub != nil && c.Spec.GitHub.WebhookSecretRef.Name != "" {
+			return &c.Spec.GitHub.WebhookSecretRef
+		}
+	case ConnectorTypeWebhook:
+		if c.Spec.Webhook != nil && c.Spec.Webhook.SecretRef.Name != "" {
+			return &c.Spec.Webhook.SecretRef
+		}
+	}
+	return nil
+}
+
+// WebhookSecretStorageKey is the secret_material key of the secret that verifies this connector's inbound
+// webhooks, or "" when none is configured. A generic webhook connector verifies with the same secret it signs
+// with; Jira and GitHub have a separate one.
+func (c *Connector) WebhookSecretStorageKey() string {
+	ref := c.WebhookSecret()
+	if ref == nil {
+		return ""
+	}
+	if c.Type == ConnectorTypeWebhook {
+		return ConnectorSecretStorageKey(c.Name, ref.Key)
+	}
+	return ConnectorWebhookSecretStorageKey(c.Name, ref.Key)
 }

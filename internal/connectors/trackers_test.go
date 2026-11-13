@@ -150,6 +150,9 @@ func TestGitHubTracker_CreateIssueAndCheck(t *testing.T) {
 	}
 
 	tracker, err := connectors.NewGitHubTracker(cfg, client, []byte("ghp_valid_token"), "https://rampart.example.com")
+	if err == nil {
+		tracker.SetTenantSlug("acme")
+	}
 	if err != nil {
 		t.Fatalf("failed to create GitHubTracker: %v", err)
 	}
@@ -236,5 +239,180 @@ func TestDefaultTrackerResolver(t *testing.T) {
 
 	if _, ok := tr.(*connectors.JiraTracker); !ok {
 		t.Errorf("expected *JiraTracker, got %T", tr)
+	}
+}
+
+// A fake tracker server that records what it receives and answers with the status it is told to.
+type trackerServer struct {
+	srv      *httptest.Server
+	calls    int
+	payloads []map[string]any
+	status   int
+}
+
+func newTrackerServer(status int) *trackerServer {
+	ts := &trackerServer{status: status}
+	ts.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts.calls++
+		var p map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		ts.payloads = append(ts.payloads, p)
+		w.WriteHeader(ts.status)
+		_, _ = w.Write([]byte(`{"id":"1","key":"SEC-1","number":7,"html_url":"https://x/7","error":"echo: SECRET-IN-FINDING"}`))
+	}))
+	return ts
+}
+
+func loopbackClient() *connectors.SafeClient {
+	return connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{Allowlist: &domain.PlatformSSRFAllowlist{AllowLoopback: true}, AllowLoopback: true})
+}
+
+func critical() *domain.Finding {
+	return &domain.Finding{ID: uuid.New(), TenantID: uuid.New(), Title: "Remote code execution", Description: "bad", Severity: domain.SeverityCritical, RiskScore: 940, RuleID: "CVE-1"}
+}
+
+func TestJira_CreatingAnIssueIsNotRetried_SoALostAnswerCannotOpenTwoTickets(t *testing.T) {
+	ts := newTrackerServer(http.StatusBadGateway)
+	defer ts.srv.Close()
+	tr, _ := connectors.NewJiraTracker(domain.JiraConnectorConfig{URL: ts.srv.URL, DefaultProject: "SEC"}, loopbackClient(), []byte("a@b.c:tok"), "")
+	_, _, err := tr.CreateIssue(context.Background(), critical(), "App")
+	if err == nil || ts.calls != 1 {
+		t.Fatalf("one attempt and an error: calls %d, err %v", ts.calls, err)
+	}
+	if strings.Contains(err.Error(), "SECRET-IN-FINDING") {
+		t.Fatalf("the answer of the tracker can echo a finding's text and is not put in the error: %v", err)
+	}
+}
+
+func TestGitHub_CreatingAnIssueIsNotRetried(t *testing.T) {
+	ts := newTrackerServer(http.StatusServiceUnavailable)
+	defer ts.srv.Close()
+	tr, _ := connectors.NewGitHubTracker(domain.GitHubConnectorConfig{Owner: "a", Repo: "b"}, loopbackClient(), []byte("tok"), "")
+	tr.SetAPIBaseURL(ts.srv.URL)
+	if _, _, err := tr.CreateIssue(context.Background(), critical(), "App"); err == nil || ts.calls != 1 {
+		t.Fatalf("calls %d, err %v", ts.calls, err)
+	}
+}
+
+func TestJira_NoGuessedProject_CoreFieldsStayTheTrackersAndPlaceholdersAreFilled(t *testing.T) {
+	ts := newTrackerServer(http.StatusCreated)
+	defer ts.srv.Close()
+	client := loopbackClient()
+	noProject, _ := connectors.NewJiraTracker(domain.JiraConnectorConfig{URL: ts.srv.URL}, client, []byte("a@b.c:tok"), "")
+	if _, _, err := noProject.CreateIssue(context.Background(), critical(), "App"); err == nil || ts.calls != 0 {
+		t.Fatalf("a project is not guessed: calls %d, err %v", ts.calls, err)
+	}
+
+	cfg := domain.JiraConnectorConfig{URL: ts.srv.URL, DefaultProject: "SEC", CustomFields: map[string]string{
+		"project":           "EVIL",                     // a core field: ignored
+		"description":       "replaced",                 // a core field: ignored
+		"customfield_10042": "{{ finding.risk_score }}", // a number stays a number
+		"customfield_10043": "{{ finding.severity }} in {{ app.name }}",
+	}}
+	tr, _ := connectors.NewJiraTracker(cfg, client, []byte("a@b.c:tok"), "")
+	f := critical()
+	if _, _, err := tr.CreateIssue(context.Background(), f, "Shop"); err != nil {
+		t.Fatal(err)
+	}
+	fields := ts.payloads[0]["fields"].(map[string]any)
+	if fields["project"].(map[string]any)["key"] != "SEC" {
+		t.Fatalf("a custom field replaced the project: %v", fields["project"])
+	}
+	if _, isString := fields["description"].(string); isString {
+		t.Fatal("a custom field replaced the description")
+	}
+	if fields["customfield_10042"] != float64(940) {
+		t.Fatalf("the score is a number: %#v", fields["customfield_10042"])
+	}
+	if fields["customfield_10043"] != "critical in Shop" {
+		t.Fatalf("placeholders in a sentence: %#v", fields["customfield_10043"])
+	}
+	labels := fields["labels"].([]any)
+	found := false
+	for _, l := range labels {
+		if l == connectors.FindingLabel(f.ID) {
+			found = true
+		}
+		if len(l.(string)) > 50 {
+			t.Fatalf("a label longer than the 50 characters GitHub allows: %q", l)
+		}
+	}
+	if !found {
+		t.Fatalf("the finding label is missing: %v", labels)
+	}
+}
+
+func TestTrackers_LongTextIsCutOnARuneBoundary(t *testing.T) {
+	ts := newTrackerServer(http.StatusCreated)
+	defer ts.srv.Close()
+	f := critical()
+	f.Title = strings.Repeat("ثغرة ", 200) + "\n" + "second line"
+	f.Description = strings.Repeat("ع", 40000)
+	tr, _ := connectors.NewJiraTracker(domain.JiraConnectorConfig{URL: ts.srv.URL, DefaultProject: "SEC"}, loopbackClient(), []byte("a@b.c:tok"), "")
+	if _, _, err := tr.CreateIssue(context.Background(), f, "App"); err != nil {
+		t.Fatal(err)
+	}
+	fields := ts.payloads[0]["fields"].(map[string]any)
+	summary := fields["summary"].(string)
+	if n := len([]rune(summary)); n > 255 || strings.ContainsAny(summary, "\r\n") {
+		t.Fatalf("a summary is at most 255 characters on one line: %d", n)
+	}
+	desc, _ := json.Marshal(fields["description"])
+	if n := len([]rune(string(desc))); n > 31000 {
+		t.Fatalf("the description is cut: %d runes", n)
+	}
+}
+
+func TestGitHub_TextFromAScannerCannotMentionLinkOrCloseAnything(t *testing.T) {
+	ts := newTrackerServer(http.StatusCreated)
+	defer ts.srv.Close()
+	tr, _ := connectors.NewGitHubTracker(domain.GitHubConnectorConfig{Owner: "a", Repo: "b"}, loopbackClient(), []byte("tok"), "")
+	tr.SetAPIBaseURL(ts.srv.URL)
+	f := critical()
+	f.Title = "Hi @octocat see ![x](https://evil.example/pixel.png) fixes #1"
+	f.Description = "```\nclose the fence\n``` @everyone ![p](https://evil.example/p.png)\nfixes #2"
+	if _, _, err := tr.CreateIssue(context.Background(), f, "App @team"); err != nil {
+		t.Fatal(err)
+	}
+	body := ts.payloads[0]["body"].(string)
+	// Everything from the scanner is inside a code block or code span: the fence around the description is longer
+	// than any run of backticks in it, so it cannot be closed from inside.
+	i := strings.Index(body, "#### Description")
+	if i < 0 {
+		t.Fatalf("no description: %s", body)
+	}
+	rest := body[i:]
+	fence := strings.TrimSpace(strings.SplitN(strings.SplitN(rest, "\n", 3)[2], "\n", 2)[0])
+	if len(fence) < 4 || strings.Trim(fence, "`") != "" {
+		t.Fatalf("the fence must be longer than the backticks inside the text: %q", fence)
+	}
+	if strings.Count(rest, fence) != 2 {
+		t.Fatalf("the description is opened and closed once: %s", rest)
+	}
+	if strings.Contains(strings.SplitN(body, "#### Description", 2)[0], "@octocat") && !strings.Contains(body, "`") {
+		t.Fatal("text outside a code span")
+	}
+}
+
+func TestResolver_ASecretThatCannotBeReadIsAnErrorNotAReasonToUseAnotherConnector(t *testing.T) {
+	ctx := context.Background()
+	tenant := uuid.New()
+	st := ingest.NewMemoryStore()
+	for _, name := range []string{"jira-a", "gh-b"} {
+		c := domain.Connector{Name: name, TenantID: tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{Type: domain.ConnectorTypeJira,
+			Jira: &domain.JiraConnectorConfig{URL: "https://a.atlassian.net", DefaultProject: "SEC", CredentialsSecretRef: domain.SecretKeyRef{Name: "s", Key: "apiToken"}}}}
+		if name == "gh-b" {
+			c.Type = domain.ConnectorTypeGitHub
+			c.Spec = domain.ConnectorSpec{Type: domain.ConnectorTypeGitHub, GitHub: &domain.GitHubConnectorConfig{Owner: "a", Repo: "b", CredentialsSecretRef: domain.SecretKeyRef{Name: "s", Key: "token"}}}
+		}
+		_ = st.SaveConnector(ctx, tenant, c)
+	}
+	// Only the GitHub secret exists: the Jira one is missing, and the ticket must not quietly go to GitHub.
+	secrets := &mockSecretResolver{secrets: map[string][]byte{tenant.String() + ":connector:gh-b:token": []byte("ghp")}}
+	tr, err := connectors.NewDefaultTrackerResolver(st, secrets, loopbackClient(), "").ResolveTracker(ctx, tenant)
+	if err == nil && tr != nil {
+		if _, isGH := tr.(*connectors.GitHubTracker); isGH {
+			t.Fatal("the ticket went to the other connector")
+		}
 	}
 }

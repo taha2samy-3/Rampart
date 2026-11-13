@@ -14,6 +14,63 @@ import (
 	"rampart/internal/domain"
 )
 
+// Limits of the trackers' fields, so a long finding title or description cannot make the whole request fail.
+const (
+	jiraSummaryMax     = 255
+	jiraDescriptionMax = 30000
+	githubTitleMax     = 256
+	githubBodyMax      = 60000
+	trackerErrBodyMax  = 0 // an error body can echo what was sent (a finding's text): only the status is reported
+)
+
+// coreJiraFields are the fields a connector's customFields may not replace.
+var coreJiraFields = map[string]bool{"project": true, "issuetype": true, "summary": true, "description": true, "labels": true, "reporter": true}
+
+// truncateRunes cuts s to n runes, never in the middle of one (the findings of an Arabic-speaking team are not ASCII).
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// renderCustomField fills the placeholders docs/04 documents (`{{ finding.risk_score }}`). A value that is exactly
+// one placeholder keeps its type: the score is a number, as Jira's number fields want.
+func renderCustomField(v string, f *domain.Finding, appName string) any {
+	t := strings.TrimSpace(v)
+	if !strings.HasPrefix(t, "{{") || !strings.HasSuffix(t, "}}") {
+		return strings.NewReplacer(
+			"{{ finding.severity }}", strings.ToLower(string(f.Severity)),
+			"{{ finding.title }}", f.Title,
+			"{{ finding.id }}", f.ID.String(),
+			"{{ finding.rule_id }}", f.RuleID,
+			"{{ app.name }}", appName,
+		).Replace(v)
+	}
+	switch strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(t, "{{"), "}}")) {
+	case "finding.risk_score":
+		return f.RiskScore
+	case "finding.severity":
+		return strings.ToLower(string(f.Severity))
+	case "finding.id":
+		return f.ID.String()
+	case "finding.title":
+		return f.Title
+	case "finding.rule_id":
+		return f.RuleID
+	case "app.name":
+		return appName
+	}
+	return v
+}
+
 func basicAuthToken(userPass string) string {
 	return base64.StdEncoding.EncodeToString([]byte(userPass))
 }
@@ -30,6 +87,17 @@ type JiraTracker struct {
 	client     *SafeClient
 	authHeader string
 	publicURL  string
+	tenantSlug string
+}
+
+// SetTenantSlug sets the tenant as the UI names it in links (/t/<slug>/...): the slug, not the id.
+func (j *JiraTracker) SetTenantSlug(s string) { j.tenantSlug = s }
+
+func (j *JiraTracker) findingLink(f *domain.Finding) string {
+	if j.publicURL == "" || j.tenantSlug == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/t/%s/findings/%s", j.publicURL, j.tenantSlug, f.ID.String())
 }
 
 // NewJiraTracker creates a new JiraTracker instance.
@@ -68,9 +136,9 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 		return "", "", errors.New("finding is nil")
 	}
 
-	proj := j.cfg.DefaultProject
+	proj := strings.TrimSpace(j.cfg.DefaultProject)
 	if proj == "" {
-		proj = "SEC"
+		return "", "", errors.New("jira: defaultProject is not set; Rampart does not guess a project")
 	}
 	issueType := j.cfg.IssueType
 	if issueType == "" {
@@ -96,25 +164,20 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 		}
 	}
 
-	findingURL := ""
-	if j.publicURL != "" {
-		findingURL = fmt.Sprintf("%s/t/%s/findings/%s", j.publicURL, finding.TenantID.String(), finding.ID.String())
-	}
-
-	adfDesc := BuildJiraADF(finding, appName, findingURL)
+	adfDesc := BuildJiraADF(finding, appName, j.findingLink(finding))
 
 	labels := []string{
 		"rampart",
 		"security",
 		"severity-" + strings.ToLower(string(finding.Severity)),
-		"rampart-finding-" + finding.ID.String(),
+		FindingLabel(finding.ID),
 	}
 
 	fields := map[string]any{
 		"project": map[string]string{
 			"key": proj,
 		},
-		"summary":     fmt.Sprintf("[%s] %s in %s", strings.ToUpper(string(finding.Severity)), finding.Title, appName),
+		"summary":     truncateRunes(strings.NewReplacer("\r", " ", "\n", " ").Replace(fmt.Sprintf("[%s] %s in %s", strings.ToUpper(string(finding.Severity)), finding.Title, appName)), jiraSummaryMax),
 		"description": adfDesc,
 		"issuetype": map[string]string{
 			"name": issueType,
@@ -125,9 +188,12 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 		"labels": labels,
 	}
 
-	// Apply any custom fields configured
+	// Custom fields: placeholders are filled, and none may replace a field this tracker owns.
 	for k, v := range j.cfg.CustomFields {
-		fields[k] = v
+		if coreJiraFields[strings.ToLower(k)] {
+			continue
+		}
+		fields[k] = renderCustomField(v, finding, appName)
 	}
 
 	payload := map[string]any{
@@ -149,13 +215,15 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	respBody, status, _, err := j.client.DoWithRetry(ctx, req, true)
+	// Creating an issue is not idempotent: a retry after a lost answer would open a second ticket. One attempt; the
+	// ticket sweeper decides about another (D70).
+	respBody, status, _, err := j.client.DoWithRetry(ctx, req, false)
 	if err != nil {
 		return "", "", fmt.Errorf("jira: issue creation failed: %w", err)
 	}
 
 	if status != http.StatusCreated && status != http.StatusOK {
-		return "", "", fmt.Errorf("jira: issue creation returned status %d: %s", status, string(respBody))
+		return "", "", fmt.Errorf("jira: issue creation returned status %d", status)
 	}
 
 	var res struct {
@@ -171,7 +239,8 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 	return res.Key, ticketURL, nil
 }
 
-// Check verifies Jira connectivity and credentials.
+// Check verifies Jira connectivity and credentials. It speaks REST v3, which Jira Cloud offers; Jira Data Center
+// speaks v2 and is not supported yet (D70).
 func (j *JiraTracker) Check(ctx context.Context) error {
 	endpoint := strings.TrimSuffix(j.cfg.URL, "/") + "/rest/api/3/myself"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -211,7 +280,7 @@ func BuildJiraADF(finding *domain.Finding, appName, findingURL string) map[strin
 			"type": "paragraph",
 			"content": []map[string]any{
 				{"type": "text", "text": "Description: ", "marks": []map[string]any{{"type": "strong"}}},
-				{"type": "text", "text": finding.Description},
+				{"type": "text", "text": truncateRunes(finding.Description, jiraDescriptionMax)},
 			},
 		})
 	}
@@ -266,7 +335,31 @@ type GitHubTracker struct {
 	client     *SafeClient
 	token      string
 	publicURL  string
+	tenantSlug string
 	apiBaseURL string
+}
+
+// SetTenantSlug sets the tenant as the UI names it in links.
+func (g *GitHubTracker) SetTenantSlug(s string) { g.tenantSlug = s }
+
+// fenceFor returns a code fence longer than any run of backticks in s, so text from a scanner cannot close it.
+func fenceFor(s string) string {
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	n := 3
+	if longest >= n {
+		n = longest + 1
+	}
+	return strings.Repeat("`", n)
 }
 
 // NewGitHubTracker creates a new GitHubTracker instance.
@@ -302,27 +395,32 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 		return "", "", errors.New("finding is nil")
 	}
 
-	title := fmt.Sprintf("[%s] %s in %s", strings.ToUpper(string(finding.Severity)), finding.Title, appName)
+	title := truncateRunes(strings.NewReplacer("\r", " ", "\n", " ").Replace(fmt.Sprintf("[%s] %s in %s", strings.ToUpper(string(finding.Severity)), finding.Title, appName)), githubTitleMax)
 
+	// Text from a scanner is untrusted. Written as markdown it could mention people (@name), link or load an image
+	// from another host, or close another issue ("fixes #1"); inside a code block it is only text (D70).
 	var bodyBuilder strings.Builder
-	fmt.Fprintf(&bodyBuilder, "### Vulnerability Alert: %s\n\n", finding.Title)
-	fmt.Fprintf(&bodyBuilder, "- **Application**: `%s`\n", appName)
+	fmt.Fprintf(&bodyBuilder, "### Vulnerability Alert\n\n")
+	fmt.Fprintf(&bodyBuilder, "- **Application**: %s\n", codeSpan(appName))
 	fmt.Fprintf(&bodyBuilder, "- **Severity**: **%s**\n", strings.ToUpper(string(finding.Severity)))
 	if finding.RuleID != "" {
-		fmt.Fprintf(&bodyBuilder, "- **Rule**: `%s`\n", finding.RuleID)
+		fmt.Fprintf(&bodyBuilder, "- **Rule**: %s\n", codeSpan(finding.RuleID))
 	}
 	locStr := finding.Location.PrimaryPath()
 	if locStr == "" && finding.Location.Code != nil {
 		locStr = fmt.Sprintf("%s:%d", finding.Location.Code.FilePath, finding.Location.Code.StartLine)
 	}
 	if locStr != "" {
-		fmt.Fprintf(&bodyBuilder, "- **Location**: `%s`\n", locStr)
+		fmt.Fprintf(&bodyBuilder, "- **Location**: %s\n", codeSpan(locStr))
 	}
+	fmt.Fprintf(&bodyBuilder, "- **Finding**: %s\n", codeSpan(truncateRunes(finding.Title, 300)))
 	if finding.Description != "" {
-		fmt.Fprintf(&bodyBuilder, "\n#### Description\n%s\n", finding.Description)
+		desc := truncateRunes(finding.Description, githubBodyMax-2000)
+		fence := fenceFor(desc)
+		fmt.Fprintf(&bodyBuilder, "\n#### Description\n\n%s\n%s\n%s\n", fence, desc, fence)
 	}
-	if g.publicURL != "" {
-		findingURL := fmt.Sprintf("%s/t/%s/findings/%s", g.publicURL, finding.TenantID.String(), finding.ID.String())
+	if g.publicURL != "" && g.tenantSlug != "" {
+		findingURL := fmt.Sprintf("%s/t/%s/findings/%s", g.publicURL, g.tenantSlug, finding.ID.String())
 		fmt.Fprintf(&bodyBuilder, "\n[**View in Rampart**](%s)\n", findingURL)
 	}
 
@@ -339,7 +437,7 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 	} else {
 		labels = append(labels, "severity:"+strings.ToLower(string(finding.Severity)))
 	}
-	labels = append(labels, "rampart-finding-"+finding.ID.String())
+	labels = append(labels, FindingLabel(finding.ID))
 
 	payload := map[string]any{
 		"title":  title,
@@ -363,13 +461,14 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Content-Type", "application/json")
 
-	respBody, status, _, err := g.client.DoWithRetry(ctx, req, true)
+	// Not idempotent: one attempt, see JiraTracker.CreateIssue.
+	respBody, status, _, err := g.client.DoWithRetry(ctx, req, false)
 	if err != nil {
 		return "", "", fmt.Errorf("github: issue creation failed: %w", err)
 	}
 
 	if status != http.StatusCreated {
-		return "", "", fmt.Errorf("github: issue creation returned status %d: %s", status, string(respBody))
+		return "", "", fmt.Errorf("github: issue creation returned status %d", status)
 	}
 
 	var res struct {
@@ -401,7 +500,7 @@ func (g *GitHubTracker) Check(ctx context.Context) error {
 		return fmt.Errorf("github check failed: %w", err)
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("github check returned status %d: %s", status, string(respBody))
+		return fmt.Errorf("github check returned status %d", status)
 	}
 
 	var repo struct {
@@ -443,7 +542,9 @@ func NewDefaultTrackerResolver(st domainConnectorStore, secretResolver SecretRes
 	}
 }
 
-// ResolveTracker returns the first active tracker connector configured for tenant.
+// ResolveTracker returns the tracker of the tenant: the first tracker connector that is not known to be failing.
+// A tracker whose secret cannot be read is an error, not a reason to use another connector: a ticket must not
+// go to a project the owner did not choose.
 func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uuid.UUID) (Tracker, error) {
 	if r.store == nil {
 		return nil, nil
@@ -453,44 +554,82 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 		return nil, err
 	}
 
+	slug := ""
+	if ts, ok := r.store.(interface {
+		GetTenant(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
+	}); ok {
+		if t, terr := ts.GetTenant(ctx, tenantID); terr == nil && t != nil {
+			slug = t.Slug
+		}
+	}
+	secret := func(conn domain.Connector, ref domain.SecretKeyRef) ([]byte, error) {
+		if r.secretResolver == nil {
+			return nil, fmt.Errorf("connector %q: no secret resolver", conn.Name)
+		}
+		b, serr := r.secretResolver.GetSecretMaterial(ctx, tenantID, domain.ConnectorSecretStorageKey(conn.Name, ref.Key))
+		if serr != nil || len(b) == 0 {
+			return nil, fmt.Errorf("connector %q: its credentials could not be read", conn.Name)
+		}
+		return b, nil
+	}
+
 	for _, conn := range connectors {
-		if !conn.IsConnected() && conn.GetCondition("Connected") != nil && conn.GetCondition("Connected").Status == "False" {
+		if c := conn.GetCondition("Connected"); c != nil && c.Status == "False" {
 			continue
 		}
-
 		switch conn.Type {
 		case domain.ConnectorTypeJira:
 			if conn.Spec.Jira == nil {
 				continue
 			}
-			secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.Jira.CredentialsSecretRef.Key)
-			if conn.Spec.Jira.CredentialsSecretRef.Key == "" {
-				secKey = domain.ConnectorSecretStorageKey(conn.Name, "apiToken")
+			b, serr := secret(conn, conn.Spec.Jira.CredentialsSecretRef)
+			if serr != nil {
+				return nil, serr
 			}
-			var secretBytes []byte
-			if r.secretResolver != nil {
-				secretBytes, _ = r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			t, terr := NewJiraTracker(*conn.Spec.Jira, r.client, b, r.publicURL)
+			if terr != nil {
+				return nil, terr
 			}
-			if len(secretBytes) == 0 {
-				continue
-			}
-			return NewJiraTracker(*conn.Spec.Jira, r.client, secretBytes, r.publicURL)
+			t.SetTenantSlug(slug)
+			return t, nil
 
 		case domain.ConnectorTypeGitHub:
 			if conn.Spec.GitHub == nil {
 				continue
 			}
-			secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.GitHub.CredentialsSecretRef.Key)
-			var secretBytes []byte
-			if r.secretResolver != nil {
-				secretBytes, _ = r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			b, serr := secret(conn, conn.Spec.GitHub.CredentialsSecretRef)
+			if serr != nil {
+				return nil, serr
 			}
-			if len(secretBytes) == 0 {
-				continue
+			t, terr := NewGitHubTracker(*conn.Spec.GitHub, r.client, b, r.publicURL)
+			if terr != nil {
+				return nil, terr
 			}
-			return NewGitHubTracker(*conn.Spec.GitHub, r.client, secretBytes, r.publicURL)
+			t.SetTenantSlug(slug)
+			return t, nil
 		}
 	}
 
 	return nil, nil
+}
+
+// codeSpan writes s as a markdown code span that s itself cannot end.
+func codeSpan(s string) string {
+	s = strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
 }

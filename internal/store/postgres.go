@@ -2544,8 +2544,8 @@ func (s *PostgresStore) ReserveAction(ctx context.Context, tenantID, policyID, f
 	var reserved bool
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO action_ledger (tenant_id, policy_id, finding_id, action, created_at)
-			VALUES ($1, $2, $3, $4, NOW())
+			INSERT INTO action_ledger (tenant_id, policy_id, finding_id, action, created_at, status, next_attempt_at, updated_at)
+			VALUES ($1, $2, $3, $4, NOW(), 'reserved', NOW(), NOW())
 			ON CONFLICT (tenant_id, policy_id, finding_id, action) DO NOTHING
 		`, tenantID, policyID, findingID, action)
 		if err != nil {

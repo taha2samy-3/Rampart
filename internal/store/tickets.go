@@ -1,0 +1,105 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"rampart/internal/domain"
+)
+
+// PendingTicket is a ticket the outbox still owes a tracker.
+type PendingTicket struct {
+	TenantID  uuid.UUID
+	FindingID uuid.UUID
+	Attempts  int
+	Reserved  time.Time
+}
+
+// TicketOutbox is the ledger of tickets to open (docs/16 D70). Only the PostgreSQL store implements it.
+type TicketOutbox interface {
+	// ListPendingTickets returns, across tenants, the reservations that are due. It reads across tenants: it needs rampart_system.
+	ListPendingTickets(ctx context.Context, now time.Time, limit int) ([]PendingTicket, error)
+	// CompleteTicket records the ticket that was opened.
+	CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error
+	// RetryTicket schedules another attempt, or gives up (status failed) when giveUp is set.
+	RetryTicket(ctx context.Context, tenantID, findingID uuid.UUID, errMsg string, next time.Time, giveUp bool) error
+	// DeferTicket pushes the next attempt back without counting it (no tracker is configured yet).
+	DeferTicket(ctx context.Context, tenantID, findingID uuid.UUID, next time.Time) error
+	// SkipTicket closes a reservation that will not be acted on.
+	SkipTicket(ctx context.Context, tenantID, findingID uuid.UUID, reason string) error
+	// FindingHasTicket says whether a ticket with this reference was opened for the finding. It is what ties a ticket
+	// that comes back in a webhook to a finding.
+	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error)
+}
+
+var ticketAction = domain.ActionCreateTicket
+
+func (s *PostgresStore) ListPendingTickets(ctx context.Context, now time.Time, limit int) ([]PendingTicket, error) {
+	rows, err := s.pool.Query(ctx, `SELECT tenant_id, finding_id, attempts, created_at FROM action_ledger
+		WHERE action = $1 AND status = 'reserved' AND next_attempt_at <= $2 ORDER BY next_attempt_at LIMIT $3`, ticketAction, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingTicket
+	for rows.Next() {
+		var p PendingTicket
+		if err := rows.Scan(&p.TenantID, &p.FindingID, &p.Attempts, &p.Reserved); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error {
+	res, _ := json.Marshal(map[string]string{"ticket_id": ticketRef, "url": url})
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE action_ledger SET status = 'done', result = $4, last_error = NULL, updated_at = NOW()
+			WHERE tenant_id = $1 AND finding_id = $2 AND action = $3`, tenantID, findingID, ticketAction, res)
+		return err
+	})
+}
+
+func (s *PostgresStore) RetryTicket(ctx context.Context, tenantID, findingID uuid.UUID, errMsg string, next time.Time, giveUp bool) error {
+	status := "reserved"
+	if giveUp {
+		status = "failed"
+	}
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE action_ledger SET status = $4, attempts = attempts + 1, next_attempt_at = $5, last_error = $6, updated_at = NOW()
+			WHERE tenant_id = $1 AND finding_id = $2 AND action = $3`, tenantID, findingID, ticketAction, status, next, errMsg)
+		return err
+	})
+}
+
+func (s *PostgresStore) DeferTicket(ctx context.Context, tenantID, findingID uuid.UUID, next time.Time) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE action_ledger SET next_attempt_at = $4, updated_at = NOW()
+			WHERE tenant_id = $1 AND finding_id = $2 AND action = $3 AND status = 'reserved'`, tenantID, findingID, ticketAction, next)
+		return err
+	})
+}
+
+func (s *PostgresStore) SkipTicket(ctx context.Context, tenantID, findingID uuid.UUID, reason string) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE action_ledger SET status = 'skipped', last_error = $4, updated_at = NOW()
+			WHERE tenant_id = $1 AND finding_id = $2 AND action = $3 AND status = 'reserved'`, tenantID, findingID, ticketAction, reason)
+		return err
+	})
+}
+
+func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error) {
+	if ticketRef == "" {
+		return false, nil
+	}
+	var ok bool
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM action_ledger WHERE tenant_id = $1 AND finding_id = $2 AND action = $3
+			AND status = 'done' AND result->>'ticket_id' = $4)`, tenantID, findingID, ticketAction, ticketRef).Scan(&ok)
+	})
+	return ok, err
+}

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/connectors"
@@ -26,252 +27,300 @@ type mockWorkflowService struct {
 
 func (m *mockWorkflowService) Request(_ context.Context, _ uuid.UUID, _ string, req domain.RiskAcceptanceRequest) (*workflow.Outcome, error) {
 	m.requests = append(m.requests, req)
-	return &workflow.Outcome{
-		Acceptance: &domain.RiskAcceptance{
-			ID:     uuid.New(),
-			Status: domain.AcceptancePending,
-		},
-		Applied: 0,
-	}, nil
+	return &workflow.Outcome{Acceptance: &domain.RiskAcceptance{ID: uuid.New(), Status: domain.AcceptancePending}}, nil
 }
 
-func signPayloadSHA256(secret, payload []byte) string {
+type fakeVerifier struct{ tickets map[string]bool } // "<finding>|<ref>"
+
+func (f fakeVerifier) FindingHasTicket(_ context.Context, _, finding uuid.UUID, ref string) (bool, error) {
+	return f.tickets[finding.String()+"|"+ref], nil
+}
+
+type fakeNotifier struct{ titles []string }
+
+func (n *fakeNotifier) NotifyTenant(_ context.Context, _ uuid.UUID, title, _, _ string) error {
+	n.titles = append(n.titles, title)
+	return nil
+}
+
+type fakeSettings struct{ maxDays int }
+
+func (f fakeSettings) GetTenantSettings(context.Context, uuid.UUID) (domain.TenantSettings, error) {
+	return domain.TenantSettings{RiskAcceptanceMaxDays: f.maxDays}, nil
+}
+
+func sign(secret, payload []byte) string {
 	mac := hmac.New(sha256.New, secret)
 	mac.Write(payload)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func TestInboundWebhook_JiraSigned_CreatesApprovalRequest(t *testing.T) {
-	tenantID := uuid.New()
-	findingID := uuid.New()
-	connectorName := "jira-inbound"
-	secretKey := "apiToken"
-	webhookSecret := []byte("jira-webhook-secret-12345")
+// inboundHarness is a Jira connector (two-way) and a GitHub one, each with its own webhook secret, and a ticket
+// that Rampart opened for one finding of each.
+type inboundHarness struct {
+	t         *testing.T
+	tenant    uuid.UUID
+	finding   uuid.UUID
+	secret    []byte
+	wf        *mockWorkflowService
+	notifier  *fakeNotifier
+	handler   *connectors.InboundWebhookHandler
+	jiraURL   string
+	githubURL string
+}
 
-	mStore := ingest.NewMemoryStore()
-	jiraConn := domain.Connector{
-		Name:     connectorName,
-		TenantID: tenantID,
-		Type:     domain.ConnectorTypeJira,
-		Spec: domain.ConnectorSpec{
-			Type:      domain.ConnectorTypeJira,
-			Direction: domain.DirectionBidirectional,
-			Jira: &domain.JiraConnectorConfig{
-				URL:                  "https://acme.atlassian.net",
-				CredentialsSecretRef: domain.SecretKeyRef{Name: "sec", Key: secretKey},
-			},
-		},
+func newInbound(t *testing.T, withSecret bool, maxDays int) *inboundHarness {
+	t.Helper()
+	h := &inboundHarness{t: t, tenant: uuid.New(), finding: uuid.New(), secret: []byte("webhook-secret-12345"), wf: &mockWorkflowService{}, notifier: &fakeNotifier{}}
+	st := ingest.NewMemoryStore()
+	jira := domain.Connector{Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
+		Jira: &domain.JiraConnectorConfig{URL: "https://acme.atlassian.net", DefaultProject: "SEC", TwoWaySync: true, AccountID: "rampart-bot",
+			CredentialsSecretRef: domain.SecretKeyRef{Name: "api", Key: "apiToken"}},
+	}}
+	gh := domain.Connector{Name: "gh-in", TenantID: h.tenant, Type: domain.ConnectorTypeGitHub, Spec: domain.ConnectorSpec{
+		Type: domain.ConnectorTypeGitHub, Direction: domain.DirectionBidirectional,
+		GitHub: &domain.GitHubConnectorConfig{Owner: "acme", Repo: "shop", TwoWaySync: true, CredentialsSecretRef: domain.SecretKeyRef{Name: "api", Key: "token"}},
+	}}
+	if withSecret {
+		jira.Spec.Jira.WebhookSecretRef = domain.SecretKeyRef{Name: "hook", Key: "secret"}
+		gh.Spec.GitHub.WebhookSecretRef = domain.SecretKeyRef{Name: "hook", Key: "secret"}
 	}
-	condTrue := domain.ConnectorCondition{Type: "Ready", Status: "True"}
-	jiraConn.Status.Conditions = []domain.ConnectorCondition{condTrue}
-	_ = mStore.SaveConnector(context.Background(), tenantID, jiraConn)
+	_ = st.SaveConnector(context.Background(), h.tenant, jira)
+	_ = st.SaveConnector(context.Background(), h.tenant, gh)
 
-	secResolver := &mockSecretResolver{
-		secrets: map[string][]byte{
-			tenantID.String() + ":connector:" + connectorName + ":" + secretKey: webhookSecret,
-		},
+	secrets := &mockSecretResolver{secrets: map[string][]byte{
+		// the API credentials are NOT the webhook secret, and are present to prove they are not used as one
+		h.tenant.String() + ":connector:jira-in:apiToken":       []byte("the-jira-api-token"),
+		h.tenant.String() + ":connector:jira-in:webhook:secret": h.secret,
+		h.tenant.String() + ":connector:gh-in:webhook:secret":   h.secret,
+	}}
+	v := fakeVerifier{tickets: map[string]bool{h.finding.String() + "|SEC-77": true, h.finding.String() + "|#12": true}}
+	h.handler = connectors.NewInboundWebhookHandler(st, h.wf, secrets).WithTicketVerifier(v).WithNotifier(h.notifier).WithSettings(fakeSettings{maxDays: maxDays})
+	h.jiraURL = fmt.Sprintf("/api/v1/t/%s/connectors/jira-in/webhook", h.tenant)
+	h.githubURL = fmt.Sprintf("/api/v1/t/%s/connectors/gh-in/webhook", h.tenant)
+	return h
+}
+
+func (h *inboundHarness) jiraPayload(event, resolution, key, accountID string, labels []string, changed ...string) []byte {
+	items := []map[string]string{}
+	for _, c := range changed {
+		items = append(items, map[string]string{"field": c})
 	}
+	body, _ := json.Marshal(map[string]any{
+		"webhookEvent": event,
+		"changelog":    map[string]any{"items": items},
+		"issue": map[string]any{"key": key, "fields": map[string]any{
+			"labels": labels, "resolution": map[string]string{"name": resolution}, "status": map[string]string{"name": "Closed"},
+		}},
+		"user": map[string]string{"displayName": "Bob", "accountId": accountID},
+	})
+	return body
+}
 
-	wf := &mockWorkflowService{}
-	handler := connectors.NewInboundWebhookHandler(mStore, wf, secResolver)
-
-	payload := map[string]any{
-		"webhookEvent": "jira:issue_updated",
-		"issue": map[string]any{
-			"id":  "1001",
-			"key": "SEC-77",
-			"fields": map[string]any{
-				"labels": []string{"security", "rampart-finding-" + findingID.String()},
-				"resolution": map[string]string{
-					"name": "Won't Do",
-				},
-				"status": map[string]string{
-					"name": "Closed",
-				},
-			},
-		},
-		"user": map[string]string{
-			"displayName": "Security Lead Bob",
-			"accountId":   "acc-123",
-		},
+func (h *inboundHarness) send(path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
-
-	bodyBytes, _ := json.Marshal(payload)
-	signature := signPayloadSHA256(webhookSecret, bodyBytes)
-
-	// 1. Success case: valid signature and Won't Do resolution submits workflow request (D27)
-	reqURL := fmt.Sprintf("/api/v1/t/%s/connectors/%s/webhook", tenantID, connectorName)
-	req := httptest.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
-	req.Header.Set("X-Hub-Signature", "sha256="+signature)
-	req.Header.Set("X-Atlassian-Webhook-Identifier", "deliv-101")
-
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	h.handler.ServeHTTP(w, req)
+	return w
+}
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
-	}
+func (h *inboundHarness) jira(body []byte, delivery string) *httptest.ResponseRecorder {
+	return h.send(h.jiraURL, body, map[string]string{"X-Hub-Signature": "sha256=" + sign(h.secret, body), "X-Atlassian-Webhook-Identifier": delivery})
+}
 
-	if len(wf.requests) != 1 {
-		t.Fatalf("expected 1 risk acceptance request created, got %d", len(wf.requests))
-	}
-	if len(wf.requests[0].FindingIDs) != 1 || wf.requests[0].FindingIDs[0] != findingID {
-		t.Fatalf("expected findingID %s in request, got %+v", findingID, wf.requests[0].FindingIDs)
-	}
+func (h *inboundHarness) label() []string {
+	return []string{"security", connectors.FindingLabel(h.finding)}
+}
 
-	// 2. Duplicate delivery deduplicated
-	wDup := httptest.NewRecorder()
-	reqDup := httptest.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
-	reqDup.Header.Set("X-Hub-Signature", "sha256="+signature)
-	reqDup.Header.Set("X-Atlassian-Webhook-Identifier", "deliv-101")
-	handler.ServeHTTP(wDup, reqDup)
-	if wDup.Code != http.StatusOK || !bytes.Contains(wDup.Body.Bytes(), []byte("duplicate_delivery")) {
-		t.Errorf("expected duplicate delivery to be skipped, got %d: %s", wDup.Code, wDup.Body.String())
+func TestInbound_JiraSignedResolutionOnATicketRampartOpened_AsksForAnAcceptance(t *testing.T) {
+	h := newInbound(t, true, 0)
+	w := h.jira(h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution"), "d-1")
+	if w.Code != http.StatusOK || len(h.wf.requests) != 1 {
+		t.Fatalf("want one request, got %d requests, status %d: %s", len(h.wf.requests), w.Code, w.Body.String())
+	}
+	r := h.wf.requests[0]
+	if r.FindingIDs[0] != h.finding || !r.ExpiresAt.After(time.Now().Add(80*24*time.Hour)) || r.ExpiresAt.After(time.Now().Add(91*24*time.Hour)) {
+		t.Fatalf("a request for the finding, ending in about 90 days: %+v", r)
+	}
+	// The same delivery again is a duplicate.
+	if dup := h.jira(h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution"), "d-1"); !strings.Contains(dup.Body.String(), "duplicate_delivery") || len(h.wf.requests) != 1 {
+		t.Fatalf("duplicate: %s, requests %d", dup.Body.String(), len(h.wf.requests))
 	}
 }
 
-func TestInboundWebhook_InvalidSignature_Rejected(t *testing.T) {
-	tenantID := uuid.New()
-	connectorName := "gh-hook"
-	webhookSecret := []byte("secret")
-
-	mStore := ingest.NewMemoryStore()
-	ghConn := domain.Connector{
-		Name:     connectorName,
-		TenantID: tenantID,
-		Type:     domain.ConnectorTypeGitHub,
-		Spec: domain.ConnectorSpec{
-			Type:      domain.ConnectorTypeGitHub,
-			Direction: domain.DirectionInbound,
-			GitHub: &domain.GitHubConnectorConfig{
-				Owner:                "acme",
-				Repo:                 "repo",
-				CredentialsSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"},
-			},
-		},
+func TestInbound_NoWebhookSecret_RefusesEverything(t *testing.T) {
+	h := newInbound(t, false, 0) // the connector has no webhookSecretRef
+	for name, headers := range map[string]map[string]string{"unsigned": nil, "signed with the API token": {"X-Hub-Signature": "sha256=" + sign([]byte("the-jira-api-token"), []byte(`{}`))}} {
+		w := h.send(h.jiraURL, []byte(`{}`), headers)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s: a connector with no webhook secret must refuse, got %d", name, w.Code)
+		}
 	}
-	_ = mStore.SaveConnector(context.Background(), tenantID, ghConn)
-
-	secResolver := &mockSecretResolver{
-		secrets: map[string][]byte{
-			tenantID.String() + ":connector:" + connectorName + ":token": webhookSecret,
-		},
-	}
-
-	wf := &mockWorkflowService{}
-	handler := connectors.NewInboundWebhookHandler(mStore, wf, secResolver)
-
-	reqURL := fmt.Sprintf("/api/v1/t/%s/connectors/%s/webhook", tenantID, connectorName)
-	req := httptest.NewRequest(http.MethodPost, reqURL, strings.NewReader(`{}`))
-	req.Header.Set("X-Hub-Signature-256", "sha256=invalid-signature")
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 Unauthorized for bad signature, got %d", w.Code)
+	if len(h.wf.requests) != 0 {
+		t.Fatal("nothing may be requested")
 	}
 }
 
-func TestInboundWebhook_GitHubNotPlanned_CreatesApprovalRequest(t *testing.T) {
-	tenantID := uuid.New()
-	findingID := uuid.New()
-	connectorName := "gh-inbound"
-	webhookSecret := []byte("gh-secret-456")
-
-	mStore := ingest.NewMemoryStore()
-	ghConn := domain.Connector{
-		Name:     connectorName,
-		TenantID: tenantID,
-		Type:     domain.ConnectorTypeGitHub,
-		Spec: domain.ConnectorSpec{
-			Type:      domain.ConnectorTypeGitHub,
-			Direction: domain.DirectionBidirectional,
-			GitHub: &domain.GitHubConnectorConfig{
-				Owner:                "acme",
-				Repo:                 "frontend",
-				CredentialsSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"},
-			},
-		},
-	}
-	_ = mStore.SaveConnector(context.Background(), tenantID, ghConn)
-
-	secResolver := &mockSecretResolver{
-		secrets: map[string][]byte{
-			tenantID.String() + ":connector:" + connectorName + ":token": webhookSecret,
-		},
-	}
-
-	wf := &mockWorkflowService{}
-	handler := connectors.NewInboundWebhookHandler(mStore, wf, secResolver)
-
-	payload := map[string]any{
-		"action": "closed",
-		"issue": map[string]any{
-			"number":       105,
-			"state":        "closed",
-			"state_reason": "not_planned", // Indicates won't fix
-			"labels": []map[string]string{
-				{"name": "security"},
-				{"name": "rampart-finding-" + findingID.String()},
-			},
-		},
-		"sender": map[string]string{
-			"login": "octocat-maintainer",
-		},
-	}
-
-	bodyBytes, _ := json.Marshal(payload)
-	signature := signPayloadSHA256(webhookSecret, bodyBytes)
-
-	reqURL := fmt.Sprintf("/api/v1/t/%s/connectors/%s/webhook", tenantID, connectorName)
-	req := httptest.NewRequest(http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
-	req.Header.Set("X-Hub-Signature-256", "sha256="+signature)
-	req.Header.Set("X-GitHub-Delivery", "gh-deliv-888")
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
-	}
-
-	if len(wf.requests) != 1 {
-		t.Fatalf("expected 1 approval request created for closed not_planned issue, got %d", len(wf.requests))
-	}
-	if wf.requests[0].FindingIDs[0] != findingID {
-		t.Fatalf("expected findingID %s, got %s", findingID, wf.requests[0].FindingIDs[0])
+func TestInbound_TheAPITokenIsNotTheWebhookSecret(t *testing.T) {
+	h := newInbound(t, true, 0)
+	body := h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution")
+	w := h.send(h.jiraURL, body, map[string]string{"X-Hub-Signature": "sha256=" + sign([]byte("the-jira-api-token"), body)})
+	if w.Code != http.StatusUnauthorized || len(h.wf.requests) != 0 {
+		t.Fatalf("a delivery signed with the API credential must be refused: %d", w.Code)
 	}
 }
 
-func TestInboundWebhook_OutboundOnlyDirection_Rejected(t *testing.T) {
-	tenantID := uuid.New()
-	connectorName := "slack-out"
-
-	mStore := ingest.NewMemoryStore()
-	slackConn := domain.Connector{
-		Name:     connectorName,
-		TenantID: tenantID,
-		Type:     domain.ConnectorTypeSlack,
-		Spec: domain.ConnectorSpec{
-			Type:      domain.ConnectorTypeSlack,
-			Direction: domain.DirectionOutbound, // strictly outbound
-			Slack: &domain.SlackConnectorConfig{
-				TokenSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"},
-				DefaultChannel: "#general",
-			},
-		},
+func TestInbound_BadOrMissingSignature_IsRefusedAndRemembersNothing(t *testing.T) {
+	h := newInbound(t, true, 0)
+	body := h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution")
+	for name, headers := range map[string]map[string]string{
+		"missing":      {"X-Atlassian-Webhook-Identifier": "d-9"},
+		"wrong":        {"X-Hub-Signature": "sha256=deadbeef", "X-Atlassian-Webhook-Identifier": "d-9"},
+		"no method":    {"X-Hub-Signature": sign(h.secret, body), "X-Atlassian-Webhook-Identifier": "d-9"},
+		"other method": {"X-Hub-Signature": "md5=" + sign(h.secret, body), "X-Atlassian-Webhook-Identifier": "d-9"},
+	} {
+		if w := h.send(h.jiraURL, body, headers); w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: want 401, got %d", name, w.Code)
+		}
 	}
-	_ = mStore.SaveConnector(context.Background(), tenantID, slackConn)
+	// The forged requests used the delivery id d-9. The real one must still go through: an unsigned request can
+	// neither fill the duplicate cache nor make the genuine delivery look like a repeat.
+	if w := h.jira(body, "d-9"); w.Code != http.StatusOK || len(h.wf.requests) != 1 {
+		t.Fatalf("the genuine delivery was dropped: %d %s (requests %d)", w.Code, w.Body.String(), len(h.wf.requests))
+	}
+}
 
-	handler := connectors.NewInboundWebhookHandler(mStore, nil, nil)
-	reqURL := fmt.Sprintf("/api/v1/t/%s/connectors/%s/webhook", tenantID, connectorName)
-	req := httptest.NewRequest(http.MethodPost, reqURL, strings.NewReader(`{}`))
+func TestInbound_ALabelOnSomeoneElsesTicket_ProvesNothing(t *testing.T) {
+	h := newInbound(t, true, 0)
+	// Another ticket, which Rampart did not open for this finding, carries the finding's label.
+	w := h.jira(h.jiraPayload("jira:issue_updated", "Won't Do", "OTHER-1", "acc-1", h.label(), "resolution"), "d-2")
+	if !strings.Contains(w.Body.String(), "ignored_unknown_ticket") || len(h.wf.requests) != 0 {
+		t.Fatalf("a forged label must not open a request: %s", w.Body.String())
+	}
+	// And a ticket Rampart did open, but for another finding.
+	other := uuid.New()
+	w = h.jira(h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", []string{connectors.FindingLabel(other)}, "resolution"), "d-3")
+	if !strings.Contains(w.Body.String(), "ignored_unknown_ticket") || len(h.wf.requests) != 0 {
+		t.Fatalf("a ticket for another finding must not decide this one: %s", w.Body.String())
+	}
+}
 
+func TestInbound_OnlyAResolutionChangeDecides(t *testing.T) {
+	h := newInbound(t, true, 0)
+	cases := map[string][]byte{
+		"a comment":                    h.jiraPayload("comment_created", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution"),
+		"a label edited when closed":   h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "labels"),
+		"Rampart's own account":        h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "rampart-bot", h.label(), "resolution"),
+		"a resolution with no mapping": h.jiraPayload("jira:issue_updated", "Done", "SEC-77", "acc-1", h.label(), "resolution"),
+	}
+	i := 0
+	for name, body := range cases {
+		i++
+		h.jira(body, fmt.Sprintf("d-%d", i))
+		if len(h.wf.requests) != 0 {
+			t.Fatalf("%s must not open a request", name)
+		}
+	}
+}
+
+func TestInbound_FalsePositive_AsksAPersonToLook_NotForAnAcceptance(t *testing.T) {
+	h := newInbound(t, true, 0)
+	w := h.jira(h.jiraPayload("jira:issue_updated", "False Positive", "SEC-77", "acc-1", h.label(), "resolution"), "d-4")
+	if !strings.Contains(w.Body.String(), "review_requested") || len(h.wf.requests) != 0 || len(h.notifier.titles) != 1 {
+		t.Fatalf("a false positive is not an acceptance that ends in 90 days: %s, requests %d, notifications %d", w.Body.String(), len(h.wf.requests), len(h.notifier.titles))
+	}
+}
+
+func TestInbound_TheAcceptanceNeverRunsLongerThanTheTenantAllows(t *testing.T) {
+	h := newInbound(t, true, 30)
+	h.jira(h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution"), "d-5")
+	if len(h.wf.requests) != 1 || h.wf.requests[0].ExpiresAt.After(time.Now().Add(31*24*time.Hour)) {
+		t.Fatalf("a tenant that allows 30 days must not be given 90: %+v", h.wf.requests)
+	}
+}
+
+func TestInbound_ABodyOverTheLimitIsRefused(t *testing.T) {
+	h := newInbound(t, true, 0)
+	body := bytes.Repeat([]byte("a"), connectors.MaxInboundBody+10)
+	if w := h.send(h.jiraURL, body, nil); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d", w.Code)
+	}
+}
+
+func TestInbound_NoVerifier_ActsOnNothing(t *testing.T) {
+	h := newInbound(t, true, 0)
+	bare := connectors.NewInboundWebhookHandler(ingest.NewMemoryStore(), h.wf, nil)
+	_ = bare
+	// A handler without a ticket verifier must not act on a signed delivery.
+	st := ingest.NewMemoryStore()
+	conn := domain.Connector{Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
+		Jira: &domain.JiraConnectorConfig{URL: "https://acme.atlassian.net", DefaultProject: "SEC", TwoWaySync: true,
+			WebhookSecretRef: domain.SecretKeyRef{Name: "hook", Key: "secret"}, CredentialsSecretRef: domain.SecretKeyRef{Name: "api"}},
+	}}
+	_ = st.SaveConnector(context.Background(), h.tenant, conn)
+	secrets := &mockSecretResolver{secrets: map[string][]byte{h.tenant.String() + ":connector:jira-in:webhook:secret": h.secret}}
+	handler := connectors.NewInboundWebhookHandler(st, h.wf, secrets) // no verifier
+	body := h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution")
+	req := httptest.NewRequest(http.MethodPost, h.jiraURL, bytes.NewReader(body))
+	req.Header.Set("X-Hub-Signature", "sha256="+sign(h.secret, body))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
+	if len(h.wf.requests) != 0 || !strings.Contains(w.Body.String(), "ignored_unknown_ticket") {
+		t.Fatalf("without a verifier nothing is acted on: %s", w.Body.String())
+	}
+}
 
+func TestInbound_GitHub(t *testing.T) {
+	h := newInbound(t, true, 0)
+	event := func(action, reason, repo string, number int) []byte {
+		b, _ := json.Marshal(map[string]any{
+			"action":     action,
+			"issue":      map[string]any{"number": number, "state_reason": reason, "labels": []map[string]string{{"name": connectors.FindingLabel(h.finding)}}},
+			"repository": map[string]string{"full_name": repo}, "sender": map[string]string{"login": "bob"},
+		})
+		return b
+	}
+	post := func(body []byte, sig string, delivery string) *httptest.ResponseRecorder {
+		return h.send(h.githubURL, body, map[string]string{"X-Hub-Signature-256": sig, "X-GitHub-Delivery": delivery})
+	}
+	ok := event("closed", "not_planned", "Acme/Shop", 12)
+	if w := post(ok, "sha256="+sign([]byte("not-the-secret"), ok), "g-1"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong signature: %d", w.Code)
+	}
+	if w := post(ok, "sha256="+sign(h.secret, ok), "g-2"); w.Code != http.StatusOK || len(h.wf.requests) != 1 {
+		t.Fatalf("closed as not planned on a ticket Rampart opened: %d %s", w.Code, w.Body.String())
+	}
+	if w := post(event("closed", "not_planned", "evil/repo", 12), "", "g-3"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned: %d", w.Code)
+	}
+	other := event("closed", "not_planned", "evil/repo", 12)
+	post(other, "sha256="+sign(h.secret, other), "g-4")
+	completed := event("closed", "completed", "acme/shop", 12)
+	post(completed, "sha256="+sign(h.secret, completed), "g-5")
+	unknown := event("closed", "not_planned", "acme/shop", 99)
+	post(unknown, "sha256="+sign(h.secret, unknown), "g-6")
+	if len(h.wf.requests) != 1 {
+		t.Fatalf("another repository, a completed issue and a ticket Rampart did not open must not open requests: %d", len(h.wf.requests))
+	}
+}
+
+func TestInbound_OutboundOnlyDirection_Rejected(t *testing.T) {
+	tenantID := uuid.New()
+	st := ingest.NewMemoryStore()
+	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{Name: "slack-out", TenantID: tenantID, Type: domain.ConnectorTypeSlack, Spec: domain.ConnectorSpec{
+		Type: domain.ConnectorTypeSlack, Direction: domain.DirectionOutbound,
+		Slack: &domain.SlackConnectorConfig{TokenSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"}, DefaultChannel: "#general"},
+	}})
+	handler := connectors.NewInboundWebhookHandler(st, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/t/%s/connectors/slack-out/webhook", tenantID), strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 Bad Request for outbound-only connector, got %d", w.Code)
+		t.Fatalf("an outbound-only connector accepts no webhook: %d", w.Code)
 	}
 }

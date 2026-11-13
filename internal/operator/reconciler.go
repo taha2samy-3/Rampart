@@ -655,6 +655,25 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		}
 	}
 
+	// The secret an inbound webhook is verified with is its own Secret, never the API credential (D70).
+	if ws := conn.WebhookSecret(); ws != nil && cr.Spec.Type != domain.ConnectorTypeWebhook && r.secrets != nil && r.secretStore != nil {
+		wsKey := ws.Key
+		if wsKey == "" {
+			wsKey = "secret"
+		}
+		wb, werr := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, ws.Name, wsKey)
+		if werr != nil || len(wb) == 0 {
+			msg := fmt.Sprintf("webhook secret %s/%s was not found or is empty: inbound webhooks are refused until it is", ws.Name, wsKey)
+			status.SetCondition("Connected", "False", "WebhookSecretNotFound", msg)
+			status.SetCondition("Ready", "False", "WebhookSecretNotFound", msg)
+			return status, nil
+		}
+		if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, domain.ConnectorWebhookSecretStorageKey(cr.Metadata.Name, ws.Key), wb); err != nil {
+			status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync webhook secret: %v", err))
+			return status, err
+		}
+	}
+
 	now := time.Now().UTC()
 	status.ObservedGeneration = cr.Metadata.Generation
 	status.LastSync = &now
