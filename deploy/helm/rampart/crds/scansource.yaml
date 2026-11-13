@@ -66,6 +66,28 @@ spec:
                       type: array
                       items:
                         type: string
+                trustRules:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      issuer:
+                        type: string
+                      provider:
+                        type: string
+                      repositoryId:
+                        type: string
+                      repositoryOwnerId:
+                        type: string
+                      projectId:
+                        type: string
+                      namespaceId:
+                        type: string
+                      repository:
+                        type: string
+                    required:
+                      - issuer
+                      - provider
               required:
                 - scannerFamily
             status:

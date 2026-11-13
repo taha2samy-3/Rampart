@@ -215,10 +215,26 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		}
 	}
 
+	for _, tr := range cr.Spec.TrustRules {
+		if err := tr.Validate(); err != nil {
+			status.SetCondition("Ready", "False", "InvalidTrustRule", fmt.Sprintf("invalid trustRule: %v", err))
+			return status, nil
+		}
+	}
+
 	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily, cr.Spec.IngestionPolicy)
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
 		return status, err
+	}
+
+	if trSaver, ok := r.store.(interface {
+		SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
+	}); ok {
+		if err := trSaver.SaveTrustRules(ctx, tenant.ID, sourceID, cr.Spec.TrustRules); err != nil {
+			status.SetCondition("Ready", "False", "StorageError", fmt.Sprintf("failed to save trust rules: %v", err))
+			return status, err
+		}
 	}
 
 	status.ObservedGeneration = cr.Metadata.Generation

@@ -26,6 +26,8 @@ var (
 type Role string
 
 const (
+	// RoleIngest is a scoped token role for CI ingestion only (D22).
+	RoleIngest  Role = "ingest"
 	RoleViewer  Role = "viewer"
 	RoleTriager Role = "triager"
 	// RoleMaintainer approves risk acceptances and manages what belongs to an application (docs/07).
@@ -38,7 +40,7 @@ const (
 // ParseRole returns a known role, or false.
 func ParseRole(s string) (Role, bool) {
 	switch r := Role(s); r {
-	case RoleViewer, RoleTriager, RoleMaintainer, RoleOwner, RoleAdmin:
+	case RoleIngest, RoleViewer, RoleTriager, RoleMaintainer, RoleOwner, RoleAdmin:
 		return r, true
 	}
 	return "", false
@@ -56,6 +58,8 @@ func (r Role) Rank() int {
 		return 20
 	case RoleViewer:
 		return 10
+	case RoleIngest:
+		return 5
 	default:
 		return 0
 	}
@@ -63,24 +67,26 @@ func (r Role) Rank() int {
 
 // TokenRecord holds the metadata associated with an issued API token (D8).
 type TokenRecord struct {
-	ID        uuid.UUID `json:"id"`
-	TokenHash string    `json:"token_hash"`
-	Subject   string    `json:"subject"`
-	TenantID  uuid.UUID `json:"tenant_id"`
-	Role      Role      `json:"role"`
-	Scopes    []string  `json:"scopes"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           uuid.UUID  `json:"id"`
+	TokenHash    string     `json:"token_hash"`
+	Subject      string     `json:"subject"`
+	TenantID     uuid.UUID  `json:"tenant_id"`
+	Role         Role       `json:"role"`
+	ScanSourceID *uuid.UUID `json:"scan_source_id,omitempty"`
+	Scopes       []string   `json:"scopes"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type authContextKey struct{}
 
 // ContextUser represents an authenticated caller in request context.
 type ContextUser struct {
-	Subject  string
-	TenantID uuid.UUID
-	Role     Role
-	Scopes   []string
+	Subject      string
+	TenantID     uuid.UUID
+	Role         Role
+	Scopes       []string
+	ScanSourceID *uuid.UUID
 
 	// Set for browser sessions only (zero for API tokens).
 	UserID    uuid.UUID
@@ -265,10 +271,11 @@ func (a *Authenticator) AuthenticateRequest(r *http.Request) (*ContextUser, erro
 	}
 
 	return &ContextUser{
-		Subject:  record.Subject,
-		TenantID: record.TenantID,
-		Role:     record.Role,
-		Scopes:   record.Scopes,
+		Subject:      record.Subject,
+		TenantID:     record.TenantID,
+		Role:         record.Role,
+		Scopes:       record.Scopes,
+		ScanSourceID: record.ScanSourceID,
 	}, nil
 }
 

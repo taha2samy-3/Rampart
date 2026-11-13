@@ -55,3 +55,40 @@ const (
 	HeldCloseDecisionConfirmed = "confirmed"
 	HeldCloseDecisionDiscarded = "discarded"
 )
+
+// TrustRule defines CI OIDC federation rules for a ScanSource (D22).
+type TrustRule struct {
+	Issuer            string `json:"issuer"`
+	Provider          string `json:"provider"`
+	RepositoryID      string `json:"repositoryId,omitempty"`
+	RepositoryOwnerID string `json:"repositoryOwnerId,omitempty"`
+	ProjectID         string `json:"projectId,omitempty"`
+	NamespaceID       string `json:"namespaceId,omitempty"`
+	Repository        string `json:"repository,omitempty"`
+}
+
+// Validate checks that the trust rule contains valid and complete identifiers.
+func (r *TrustRule) Validate() error {
+	if r.Issuer == "" {
+		return fmt.Errorf("issuer cannot be empty")
+	}
+	if r.Provider != "github" && r.Provider != "gitlab" {
+		return fmt.Errorf("provider must be 'github' or 'gitlab', got %q", r.Provider)
+	}
+	if r.Provider == "github" && r.RepositoryID == "" && r.RepositoryOwnerID == "" {
+		return fmt.Errorf("github trust rule must specify repositoryId or repositoryOwnerId")
+	}
+	if r.Provider == "gitlab" && r.ProjectID == "" && r.NamespaceID == "" {
+		return fmt.Errorf("gitlab trust rule must specify projectId or namespaceId")
+	}
+	return nil
+}
+
+// TrustRuleRecord represents a stored trust rule linked to a ScanSource.
+type TrustRuleRecord struct {
+	ID           uuid.UUID `json:"id"`
+	TenantID     uuid.UUID `json:"tenant_id"`
+	ScanSourceID uuid.UUID `json:"scan_source_id"`
+	Rule         TrustRule `json:"rule"`
+	CreatedAt    time.Time `json:"created_at"`
+}

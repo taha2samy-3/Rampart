@@ -9,7 +9,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 | 3.0 decisions and the spike | done (D69; the spike is a measurement of one simple expression, not a benchmark) |
 | 3.1 connectors: CRD, store, safe client, notifiers, router, `Check()` | done, CI green |
 | 3.2 trackers, inbound webhooks, ticket outbox | built and tested; **not finished** (section 2) and carries twelve known redesign items (D70 part B) |
-| 3.3 CI federation, mass-close guard settings, quotas | not started (section 3); the guard's engine exists |
+| 3.3 CI federation, mass-close guard settings, quotas | CI federation (D72) and mass-close guard (D71) done; quotas remaining (section 3.4) |
 | 3.4 Dependency-Track | not started (section 4) |
 | 3.5 SDK, mapping engine, parsers wave 2 | not started (section 5) |
 | 3.6 groups, views, exports, live updates, enrichment, dashboards | not started (section 6) |
@@ -92,18 +92,15 @@ These are in D70 part B. The first four make what is already built safe to switc
 
 ## 3. Milestone 3.3: CI federation, the close guard, quotas
 
-### 3.1 CI OIDC federation (D22)
-- **What:** a pipeline proves who it is with the token its CI provider issues; Rampart exchanges it once for a 15-minute ingest token. No stored secret in CI.
-- **Facts (read from the providers' documentation):** GitHub tokens carry `iss`, `aud`, `sub`, `repository`, `repository_id`, `repository_owner`, `repository_owner_id`, `jti`, `ref`, `workflow_ref`, `run_id`; a workflow can request a custom audience. GitLab ID tokens carry `project_id`, `namespace_id`, `project_path`, `ref`, `ref_protected`, `jti`, `exp` (5 minutes by default). The key set is read from the issuer's discovery document, not a fixed path. The lifetime of a GitHub token is **not stated** by GitHub (about five minutes in secondary sources): read `exp`, never assume it. RFC 8693 gives the request and answer names for an exchange.
-- **How:**
-  1. **Trust rules:** a `TrustRule` on a `ScanSource` (CRD field and a table `source_trust`): `issuer`, `provider` (github or gitlab), and the **immutable** ids (`repository_id` and `repository_owner_id`, or `project_id` and `namespace_id`); a display name only as an extra check. A source with no rule accepts no exchange.
-  2. **Endpoint:** `POST /ingest/v1/t/{tenant}/token`, form-encoded: `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token`, `subject_token_type=urn:ietf:params:oauth:token-type:jwt`, optional `audience`; answers JSON `access_token`, `issued_token_type`, `token_type`, `expires_in`.
-  3. **Verification, in this order:** size; parse the header and read `iss` without trusting it; the issuer must be one a trust rule of this tenant names (an allow-list, never "any issuer"); fetch the key set through the safe client (the SSRF rules apply, cached with a short expiry and a refetch on an unknown `kid`); verify the signature with the algorithms you allow (RS256, ES256; refuse `none` and HS*); check `exp` (with a small skew), `nbf`, and the **audience `rampart:<public-host>:<tenant>`**; then match the immutable ids to a rule.
-  4. **Replay:** a table `federation_jti (issuer, jti, expires_at)` with a primary key on `(issuer, jti)`; insert in the exchange; a conflict is a replay and is refused. Keep each row until the token's `exp` plus the skew. A token without `jti` is refused. (RFC 7519 makes `jti` optional and unique per issuer, so the key is the pair.)
-  5. **Issue the token:** reuse `api_token` with `scan_source_id`, role `ingest`, `expires_at = now + 15 min`, bound to the source and to the context derived from the claims (repository, ref, commit). Audit the exchange (who, which rule, which repository).
-  6. **Tighten, never loosen (D22):** the request may raise `minimumSeverity` for creating findings and may turn closing off; it can never turn closing on.
-- **Check:** a signed test token from a local key set served by an `httptest` server: accepted; wrong audience; expired; unknown issuer; a rule for another repository id (a renamed repository with the same name must not match); `alg: none`; a replay; a token whose `jti` is missing; a key set that points at a private address (blocked); the audit entry. Fuzz the token parser.
-- **Unverified:** whether to support GitHub Enterprise Server's issuer (its immutable `sub` format is not available there): decide per instance.
+### 3.1 CI OIDC federation (D22 / D72 — done)
+- **Built & Tested:**
+  1. `TrustRule` CRD schema on `ScanSource` and table `source_trust` (migration `00030_ci_federation.sql`) with tenant RLS.
+  2. RFC 8693 token exchange handler at `POST /ingest/v1/t/{tenant}/token`.
+  3. Strict token verification: RS256/ES256 whitelist, unverified `iss` lookup against configured trust rules, SSRF-safe JWKS fetching with TTL cache, audience `rampart:<public-host>:<tenant>`, immutable ID matching (`repository_id` / `repository_owner_id` for GitHub; `project_id` / `namespace_id` for GitLab).
+  4. Global replay prevention table `federation_jti (issuer, jti, expires_at)`.
+  5. Short-lived 15-minute token issuance with `role = "ingest"` (rank 5), bound to `scan_source_id`.
+  6. Option tightening (raising severity, disabling close).
+  7. Comprehensive test suite: `TestFederation_TokenExchange` (13 unit scenarios covering GitHub, GitLab, replay, expired, bad aud, alg: none, symmetric HS, SSRF), `FuzzFederationToken` (15,000+ iterations), and `TestFederation_PostgresScenarios` (tenant RLS, JTI conflict across tenants).
 
 ### 3.2 The mass-close guard: configurable settings, review and confirmation (D71 — done)
 - **Built:**

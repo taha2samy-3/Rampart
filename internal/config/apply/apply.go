@@ -881,6 +881,10 @@ func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UU
 	return id, nil
 }
 
+func (m *MemoryConfigStore) SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error {
+	return nil
+}
+
 // Ensure interface compatibility
 var _ = io.Reader(bytes.NewBuffer(nil))
 

@@ -1089,3 +1089,55 @@ When a scanner misbehaves (e.g., scanner configuration error, misconfigured bran
 7. **UI:**
    The Workflow page provides a dedicated "Held Closes" tab with a table of held close scopes, finding counts, and timestamps. Selecting a row opens a detail drawer with the list of affected findings and "Confirm Close" / "Discard" actions for maintainers. The Ingest Run Inspector provides a deep link directly to the held close in Workflow.
 
+
+## D72. CI OIDC federation and RFC 8693 token exchange (Phase 3, milestone 3.3)
+
+Decision D22 defined the architectural principles for keyless CI pipeline authentication via OIDC federation. D72 specifies the protocol implementation, security controls, schema, and validation semantics.
+
+### 1. Protocol and Endpoint
+- Standard OAuth 2.0 Token Exchange (RFC 8693) implemented at `POST /ingest/v1/t/{tenant}/token`.
+- Accepts form-encoded requests:
+  - `grant_type = urn:ietf:params:oauth:grant-type:token-exchange`
+  - `subject_token = <JWT>`
+  - `subject_token_type = urn:ietf:params:oauth:token-type:jwt`
+  - optional `audience`, `scope`
+- Responds with JSON:
+  - `access_token = rpt_<random_hex>`
+  - `issued_token_type = urn:ietf:params:oauth:token-type:access_token`
+  - `token_type = Bearer`
+  - `expires_in = 900` (15 minutes)
+
+### 2. Trust Rules and Verification Pipeline
+1. **Trust Rules on ScanSource (`source_trust` table, migration 00030):**
+   - Each `ScanSource` CRD can declare `trustRules[]` containing: `issuer`, `provider` (`github` or `gitlab`), immutable IDs (`repository_id` and `repository_owner_id` for GitHub; `project_id` and `namespace_id` for GitLab), and optional display name `repository`.
+   - Stored in table `source_trust (id UUID PRIMARY KEY, tenant_id UUID, scan_source_id UUID, issuer VARCHAR, provider VARCHAR, repository_id VARCHAR, repository_owner_id VARCHAR, project_id VARCHAR, namespace_id VARCHAR, repository VARCHAR, created_at TIMESTAMPTZ)` with tenant RLS.
+2. **Step-by-Step JWT Verification:**
+   - **Size Limit:** Max request size capped at 64 KiB.
+   - **Algorithm Whitelist:** Only asymmetric signatures (`RS256`, `ES256`) allowed. Insecure algorithms (`none`) and symmetric algorithms (`HS256`, etc.) are rejected immediately.
+   - **Issuer Allowlist:** The token's unverified `iss` is extracted and matched against configured trust rules for the specified tenant. If no trust rule exists for the issuer, the request is rejected without contacting external networks.
+   - **SSRF-Guarded OIDC Discovery & JWKS Fetching:**
+     - Key sets are retrieved via `connectors.SafeClient` using the issuer's `/.well-known/openid-configuration` and `jwks_uri`.
+     - Private IP ranges, loopback, metadata addresses (e.g. AWS/GCP `169.254.169.254`), and multicast are blocked at dial time.
+     - JWKS responses are cached in memory (1 hour TTL) and automatically refreshed on unknown `kid`.
+   - **Signature Verification:** The JWT signature is verified against the fetched key set.
+   - **Standard Claims Check:** `exp` (with 1-minute clock skew allowance), `nbf` (with 1-minute skew allowance), and required `jti`.
+   - **Audience Enforcement:** The token's audience must match `rampart:<public-host>:<tenant.Slug>` (or explicit tenant UUID).
+   - **Immutable ID Matching:**
+     - For GitHub: token `repository_id` must match `rule.RepositoryID`, and if set, `repository_owner_id` must match `rule.RepositoryOwnerID`.
+     - For GitLab: token `project_id` must match `rule.ProjectID`, and if set, `namespace_id` must match `rule.NamespaceID`.
+     - Mutable display strings (e.g. `repository`) alone are never sufficient to authorize an exchange, preventing repository takeover/renaming attacks.
+
+### 3. Global Replay Prevention
+- Table `federation_jti (issuer VARCHAR, jti VARCHAR, expires_at TIMESTAMPTZ, PRIMARY KEY (issuer, jti))` in migration 00030.
+- Because `jti` uniqueness is guaranteed per-issuer (RFC 7519 §4.1.7), the primary key is `(issuer, jti)`.
+- Replay check uses `INSERT INTO federation_jti` during the exchange; a unique constraint violation returns 400 (`invalid_grant: token has already been exchanged`).
+- Unexpired JTI records are retained until `exp + 1m skew`.
+
+### 4. Downscoped Ingest Token Issuance and Option Tightening
+- The issued token has `role = "ingest"` (rank 5, below `viewer` rank 10), granting access solely to report uploads and ingest runs.
+- Token is bound to the matched `scan_source_id`.
+- Claims context (repository, git ref, commit SHA, run ID) is captured in `token_context`.
+- **Tighten, Never Loosen (D22):** The client may pass query/scope parameters to raise `minimum_severity` (e.g. `high` instead of `medium`) or disable closing (`close_old_findings=false`). It can never lower severity below the ScanSource setting or turn closing on when disabled on the source.
+- Structured audit event `federation.token_exchange` is logged on every successful exchange.
+
+

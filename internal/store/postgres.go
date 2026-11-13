@@ -1329,17 +1329,19 @@ func (s *PostgresStore) LookupTokenByHash(ctx context.Context, tenantID uuid.UUI
 		var (
 			name, roleStr string
 			expiresAt     *time.Time
+			scanSourceID  *uuid.UUID
 		)
 		err := tx.QueryRow(ctx, `
-			SELECT id, tenant_id, name, encode(hash, 'hex'), role, scopes, expires_at, created_at
+			SELECT id, tenant_id, name, encode(hash, 'hex'), role, scopes, expires_at, created_at, scan_source_id
 			FROM api_token
 			WHERE tenant_id = $1 AND hash = decode($2, 'hex') AND revoked_at IS NULL`, tenantID, tokenHash).Scan(
-			&rec.ID, &rec.TenantID, &name, &rec.TokenHash, &roleStr, &rec.Scopes, &expiresAt, &rec.CreatedAt)
+			&rec.ID, &rec.TenantID, &name, &rec.TokenHash, &roleStr, &rec.Scopes, &expiresAt, &rec.CreatedAt, &scanSourceID)
 		if err != nil {
 			return err
 		}
 		rec.Subject = name
 		rec.Role = auth.Role(roleStr)
+		rec.ScanSourceID = scanSourceID
 		if expiresAt != nil {
 			rec.ExpiresAt = *expiresAt
 		}
@@ -1357,12 +1359,13 @@ func (s *PostgresStore) LookupTokenByHash(ctx context.Context, tenantID uuid.UUI
 // SaveToken persists or updates an API token record (D8).
 func (s *PostgresStore) SaveToken(ctx context.Context, record *auth.TokenRecord) error {
 	query := `
-		INSERT INTO api_token (id, tenant_id, name, prefix, hash, role, scopes, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6, $7, $8, $9)
+		INSERT INTO api_token (id, tenant_id, name, prefix, hash, role, scopes, expires_at, created_at, scan_source_id)
+		VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
 			role = EXCLUDED.role,
 			scopes = EXCLUDED.scopes,
-			expires_at = EXCLUDED.expires_at`
+			expires_at = EXCLUDED.expires_at,
+			scan_source_id = EXCLUDED.scan_source_id`
 
 	var expiresAt *time.Time
 	if !record.ExpiresAt.IsZero() {
@@ -1380,7 +1383,7 @@ func (s *PostgresStore) SaveToken(ctx context.Context, record *auth.TokenRecord)
 	return s.withTenantTx(ctx, record.TenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, query,
 			record.ID, record.TenantID, record.Subject, prefix, record.TokenHash, string(record.Role),
-			record.Scopes, expiresAt, createdAt,
+			record.Scopes, expiresAt, createdAt, record.ScanSourceID,
 		)
 		return err
 	})

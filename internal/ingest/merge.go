@@ -643,6 +643,8 @@ type MemoryStore struct {
 	bindings              map[uuid.UUID]memBinding
 	idps                  map[string]*domain.IdentityProvider
 	connectors            map[string]*domain.Connector
+	trustRules            map[uuid.UUID][]domain.TrustRuleRecord
+	federationJTIs        map[string]time.Time
 }
 
 type memBinding struct {
@@ -679,6 +681,8 @@ func NewMemoryStore() *MemoryStore {
 		bindings:              make(map[uuid.UUID]memBinding),
 		idps:                  make(map[string]*domain.IdentityProvider),
 		connectors:            make(map[string]*domain.Connector),
+		trustRules:            make(map[uuid.UUID][]domain.TrustRuleRecord),
+		federationJTIs:        make(map[string]time.Time),
 	}
 }
 
@@ -2156,6 +2160,59 @@ func (m *MemoryStore) DecideHeldClose(ctx context.Context, tenantID uuid.UUID, i
 
 func (m *MemoryStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, decidedBy string) (int, error) {
 	return 0, nil
+}
+
+func (m *MemoryStore) SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var kept []domain.TrustRuleRecord
+	for _, tr := range m.trustRules[tenantID] {
+		if tr.ScanSourceID != scanSourceID {
+			kept = append(kept, tr)
+		}
+	}
+	for _, r := range rules {
+		kept = append(kept, domain.TrustRuleRecord{
+			ID:           domain.NewID(),
+			TenantID:     tenantID,
+			ScanSourceID: scanSourceID,
+			Rule:         r,
+			CreatedAt:    time.Now().UTC(),
+		})
+	}
+	m.trustRules[tenantID] = kept
+	return nil
+}
+
+func (m *MemoryStore) ListTrustRules(ctx context.Context, tenantID uuid.UUID) ([]domain.TrustRuleRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make([]domain.TrustRuleRecord, len(m.trustRules[tenantID]))
+	copy(res, m.trustRules[tenantID])
+	return res, nil
+}
+
+func (m *MemoryStore) ListTrustRulesByIssuer(ctx context.Context, tenantID uuid.UUID, issuer string) ([]domain.TrustRuleRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var res []domain.TrustRuleRecord
+	for _, tr := range m.trustRules[tenantID] {
+		if tr.Rule.Issuer == issuer {
+			res = append(res, tr)
+		}
+	}
+	return res, nil
+}
+
+func (m *MemoryStore) RecordFederationJTI(ctx context.Context, issuer, jti string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := issuer + ":" + jti
+	if _, exists := m.federationJTIs[key]; exists {
+		return store.ErrJTIReplay
+	}
+	m.federationJTIs[key] = expiresAt
+	return nil
 }
 
 func firstNonEmptyStr(vals ...string) string {

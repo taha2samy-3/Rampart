@@ -120,6 +120,7 @@ type ScanSourceSpec struct {
 	Type            string                  `json:"type,omitempty"`
 	SecretRef       *SecretRef              `json:"secretRef,omitempty"`
 	IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy,omitempty"`
+	TrustRules      []domain.TrustRule      `json:"trustRules,omitempty"`
 }
 
 type ScanSourceStatus struct {

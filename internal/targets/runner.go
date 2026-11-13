@@ -253,6 +253,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	gw := ingest.NewGatewayWithDeps(queue, storeBackend, registry, feeds)
 	gw.SetAuthenticator(authn)
+	gw.SetPublicURL(r.cfg.Server.PublicURL)
 	gw.SetLimits(r.cfg.Ingest.MaxReportBytes, r.cfg.Ingest.BatchRows)
 	if objects != nil {
 		gw.SetObjectStore(objects)

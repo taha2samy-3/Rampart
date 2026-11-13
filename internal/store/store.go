@@ -29,6 +29,7 @@ type Store interface {
 	Tickets
 	TicketOutbox
 	HeldCloses
+	Federation
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error
@@ -36,6 +37,7 @@ type Store interface {
 	RecomputeOccurrenceCounts(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) error
 	EnsureScanSource(ctx context.Context, tenantID uuid.UUID, ref string) (uuid.UUID, error)
 	GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error)
+	GetTenantBySlug(ctx context.Context, slug string) (*domain.Tenant, error)
 
 	// Finding & Occurrence Merge Engine (D12, D13)
 	GetFindingsByKeys(ctx context.Context, tenantID uuid.UUID, keys []string) (map[string]*domain.Finding, error)

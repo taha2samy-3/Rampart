@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"io"
 	"net/http"
+	"net/url"
 	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
+	"rampart/internal/connectors"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/integrations"
@@ -90,6 +92,11 @@ type Gateway struct {
 
 	maxReportBytes int64
 	presignTTL     time.Duration
+
+	safeClient *connectors.SafeClient
+	jwksCache  *JWKSCache
+	publicURL  string
+	publicHost string
 }
 
 // NewGateway creates a new ingest gateway instance with default dependencies.
@@ -152,6 +159,20 @@ func (g *Gateway) SetAuthenticator(a *auth.Authenticator) {
 	g.authn = a
 }
 
+// SetPublicURL sets the public base URL of Rampart for federation audience checks (D22).
+func (g *Gateway) SetPublicURL(publicURL string) {
+	g.publicURL = publicURL
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		g.publicHost = u.Host
+	}
+}
+
+// SetSafeClient binds a safe client to the gateway (e.g. for testing with loopback).
+func (g *Gateway) SetSafeClient(sc *connectors.SafeClient) {
+	g.safeClient = sc
+	g.jwksCache = NewJWKSCache(sc)
+}
+
 // Store returns the underlying store for queries and inspection.
 func (g *Gateway) Store() Store {
 	return g.store
@@ -164,6 +185,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /ingest/v1/reports", g.handleUploadReport)
 	mux.HandleFunc("POST /ingest/v1/sbom", g.handleUploadSBOM)
 	mux.HandleFunc("GET /ingest/v1/runs/{id}", g.handleGetRun)
+	mux.HandleFunc("POST /ingest/v1/t/{tenant}/token", g.handleTokenExchange)
 }
 
 // HandleCreateUpload is exported for query-api (manual uploads from the Web UI, docs/13 §1).
