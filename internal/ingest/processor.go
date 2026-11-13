@@ -255,6 +255,34 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 		closed += res.Closed
 		if res.HeldForConfirmation { // D22: a held close is reported, not applied
 			status, reason = domain.RunCompletedWithErrors, "close_held"
+			heldClose := &domain.HeldClose{
+				ID:          domain.NewID(),
+				TenantID:    run.TenantID,
+				IngestRunID: run.ID,
+				Scope:       f.scope,
+				FindingIDs:  res.HeldFindingIDs,
+				CreatedAt:   time.Now().UTC(),
+			}
+			if err := p.store.CreateHeldClose(ctx, run.TenantID, heldClose); err != nil {
+				return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeCloseFailed, err)
+			}
+			type notificationCreator interface {
+				CreateNotification(ctx context.Context, tenantID uuid.UUID, n *domain.Notification) error
+			}
+			if notifier, ok := p.store.(notificationCreator); ok {
+				n := &domain.Notification{
+					ID:        domain.NewID(),
+					TenantID:  run.TenantID,
+					Kind:      domain.NotifyCloseHeld,
+					Title:     fmt.Sprintf("Mass close held for run %s (%d findings)", run.ID.String()[:8], len(res.HeldFindingIDs)),
+					Body:      fmt.Sprintf("A scan on %s would close %d findings. Review and confirm or discard.", f.scope.ScannerFamily, len(res.HeldFindingIDs)),
+					Link:      fmt.Sprintf("/workflow?held_close=%s", heldClose.ID.String()),
+					CreatedAt: time.Now().UTC(),
+				}
+				if err := notifier.CreateNotification(ctx, run.TenantID, n); err != nil {
+					slog.Warn("ingest: failed to create in-app notification for held close", "error", err, "run_id", run.ID, "held_close_id", heldClose.ID)
+				}
+			}
 		}
 	}
 	if stale == len(order) {

@@ -53,6 +53,13 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <h3 id="run-error" className="mb-1 text-13 font-semibold">{t('ingestion.error')}</h3>
           <p className="m-0 text-13">{t(`ingestion.errors.${run.error}`, { defaultValue: t('ingestion.errors.default') })}</p>
           <p className="m-0 mt-1 font-mono text-12 text-ink-2">{run.error}</p>
+          {run.error === 'close_held' && (
+            <p className="m-0 mt-2 text-13">
+              <a href={`/workflow?tab=held_closes&run_id=${encodeURIComponent(run.id)}`} className="font-medium text-accent hover:underline">
+                {t('ingestion.viewHeldClose', { defaultValue: 'Review held close in Workflow →' })}
+              </a>
+            </p>
+          )}
         </section>
       )}
 

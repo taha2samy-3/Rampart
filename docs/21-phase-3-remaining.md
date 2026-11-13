@@ -105,16 +105,14 @@ These are in D70 part B. The first four make what is already built safe to switc
 - **Check:** a signed test token from a local key set served by an `httptest` server: accepted; wrong audience; expired; unknown issuer; a rule for another repository id (a renamed repository with the same name must not match); `alg: none`; a replay; a token whose `jti` is missing; a key set that points at a private address (blocked); the audit entry. Fuzz the token parser.
 - **Unverified:** whether to support GitHub Enterprise Server's issuer (its immutable `sub` format is not available there): decide per instance.
 
-### 3.2 The mass-close guard: the engine exists, the rest does not
-- **What exists:** `CloseScopeStepWithGuard` holds a close that would close more than 50% of a scope's open findings and more than 20, and the run ends `completed_with_errors`, reason `close_held` (D22 defaults).
-- **What is missing:** the setting, and a way to decide.
-- **How:**
-  1. `ingestionPolicy.maxClosePercent` and `minHeldClose` on the `ScanSource` (CRD, store, validation), read by the engine instead of the constants.
-  2. **Store what was held:** a table `held_close (tenant_id, id, ingest_run_id, scope, finding_ids, created_at, decided_by, decision)` written when a close is held (the ids of the findings that would have closed).
-  3. **API:** `GET /api/v1/held-closes`, `POST /api/v1/held-closes/{id}/confirm` (applies the close for those findings that are still open and still absent) and `/discard`; maintainer on the application (the scope rules of D48); audited.
-  4. **UI:** the Workflow page lists held closes with the count and a sample, and the buttons; the run page links to its held close.
-  5. **Notify:** an in-app notification (D45) when a close is held.
-- **Check:** PostgreSQL: a run that would close 60% of 40 findings is held; confirm closes exactly those; discard closes none; a finding that came back between is not closed; a viewer cannot decide.
+### 3.2 The mass-close guard: configurable settings, review and confirmation (D71 — done)
+- **Built:**
+  1. `ingestionPolicy.maxClosePercent` and `minHeldClose` on `ScanSource` (CRD, store, validation, operator reconciler).
+  2. Table `held_close` (migration `00029_held_close.sql`) with tenant RLS, schema version 29.
+  3. API endpoints `GET /api/v1/held-closes`, `POST /api/v1/held-closes/{id}/confirm`, `POST /api/v1/held-closes/{id}/discard` requiring maintainer role on application and recording audit entries.
+  4. Safe confirmation under scope advisory lock, verifying findings that reappeared in newer runs are not closed, closing absent findings with `closed_by_rescan` events.
+  5. UI in Workflow page (tab switcher, list, detail drawer with confirm/discard buttons) and link from Ingest Run Inspector on `close_held`.
+  6. Verified by PostgreSQL tests (`TestHeldClose_PostgresScenarios`), API tests (`TestHeldClosesAPI_AuthorizationAndDecisions`), and web unit tests.
 
 ### 3.3 Dependency-Track's guard
 - The D23 rule (a run that sees components changed but zero vulnerabilities where the last had some is subject to the guard) is built in 3.4, on this same engine.

@@ -73,11 +73,11 @@ func TestFinalizers_OnPostgreSQL(t *testing.T) {
 	}
 
 	// A scan source: deleting its resource disables it, revokes its tokens, removes its secret material, keeps the row.
-	id, err := sys.SaveScanSource(ctx, tn.ID, "ci_x", "semgrep")
+	id, err := sys.SaveScanSource(ctx, tn.ID, "ci_x", "semgrep", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _ := sys.SaveScanSource(ctx, tn.ID, "ciAx", "semgrep") // '_' in a name must not match a neighbour
+	other, _ := sys.SaveScanSource(ctx, tn.ID, "ciAx", "semgrep", nil) // '_' in a name must not match a neighbour
 	_ = other
 	_, rec, _ := auth.GenerateToken(tn.ID, auth.RoleTriager, "ci", []string{"*"}, time.Hour)
 	if err := appStore.SaveToken(ctx, rec); err != nil {
@@ -118,7 +118,7 @@ func TestFinalizers_OnPostgreSQL(t *testing.T) {
 	if n, err := sys.DisableScanSource(ctx, tn.ID, "never-existed"); err != nil || n != 0 {
 		t.Fatalf("a source that was never reconciled: %d %v", n, err)
 	}
-	if _, err := sys.SaveScanSource(ctx, tn.ID, "ci_x", "semgrep"); err != nil { // the resource returns
+	if _, err := sys.SaveScanSource(ctx, tn.ID, "ci_x", "semgrep", nil); err != nil { // the resource returns
 		t.Fatal(err)
 	}
 	if _, err := appStore.EnsureScanSource(ctx, tn.ID, "ci_x"); err != nil {

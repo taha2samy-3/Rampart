@@ -2,8 +2,8 @@ import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { decideAcceptance, listAcceptances, listProofs, proofHref, qk, toProblem, uploadProof } from '@/api';
-import type { AcceptanceStatus, RiskAcceptance } from '@/api/types';
+import { confirmHeldClose, decideAcceptance, discardHeldClose, listAcceptances, listHeldCloses, listProofs, proofHref, qk, toProblem, uploadProof } from '@/api';
+import type { AcceptanceStatus, HeldClose, RiskAcceptance } from '@/api/types';
 import { Button, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
 import { useSession } from '@/app/session';
 import { useAccess } from '@/app/useAccess';
@@ -11,23 +11,38 @@ import { cn } from '@/lib/cn';
 import { absoluteDate } from '@/lib/format';
 
 export interface WorkflowSearch {
+  tab?: 'acceptances' | 'held_closes';
   sel?: string;
   status?: AcceptanceStatus;
+  run_id?: string;
 }
 const STATUSES: (AcceptanceStatus | '')[] = ['', 'pending', 'approved', 'rejected', 'expired', 'revoked'];
 
-/** Risk acceptances: what is waiting for approval, what is accepted, and what ended (docs/13, Workflow). */
+/** Risk acceptances and held mass-closes: what is waiting for approval or confirmation (docs/13, docs/21 Section 3.2). */
 export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const tab = search.tab ?? 'acceptances';
+
   useEffect(() => {
-    document.title = `${t('acceptance.workflow')} - Rampart`;
-  }, [t]);
+    document.title = `${tab === 'held_closes' ? 'Held Closes' : t('acceptance.workflow')} - Rampart`;
+  }, [t, tab]);
+
+  const set = (patch: Partial<WorkflowSearch>) => void navigate({ to: '/workflow', search: (p: WorkflowSearch) => ({ ...p, ...patch }), replace: true });
+
+  if (tab === 'held_closes') {
+    return <HeldClosesView search={search} set={set} />;
+  }
+
+  return <AcceptancesView search={search} set={set} />;
+}
+
+function AcceptancesView({ search, set }: { search: WorkflowSearch; set: (patch: Partial<WorkflowSearch>) => void }) {
+  const { t } = useTranslation();
   const status = search.status ?? '';
   const q = useQuery({ queryKey: qk.acceptances.list(status), queryFn: ({ signal }) => listAcceptances(status, signal) });
   const rows = q.data ?? [];
   const selected = rows.find((r) => r.id === search.sel);
-  const set = (patch: Partial<WorkflowSearch>) => void navigate({ to: '/workflow', search: (p: WorkflowSearch) => ({ ...p, ...patch }), replace: true });
 
   let list: React.ReactNode;
   if (q.isPending) {
@@ -92,7 +107,22 @@ export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
     <div className="flex h-full min-h-0 flex-col tablet:flex-row">
       <section aria-label={t('acceptance.list')} className="flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
         <div className="flex items-center gap-3 border-b border-rule px-3 py-2">
-          <h1 className="display text-16">{t('acceptance.list')}</h1>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => set({ tab: 'acceptances', sel: undefined })}
+              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
+            >
+              {t('acceptance.tabAcceptances', { defaultValue: 'Risk Acceptances' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => set({ tab: 'held_closes', sel: undefined })}
+              className="rounded-ctl px-2.5 py-1 text-13 font-medium text-ink-2 transition-colors hover:text-ink"
+            >
+              {t('acceptance.tabHeldCloses', { defaultValue: 'Held Closes' })}
+            </button>
+          </div>
           <Select
             className="ms-auto w-[200px]"
             label={t('acceptance.filter')}
@@ -109,6 +139,187 @@ export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: Partial<WorkflowSearch>) => void }) {
+  const { t } = useTranslation();
+  const q = useQuery({ queryKey: qk.heldCloses.list(), queryFn: ({ signal }) => listHeldCloses('', signal) });
+  const rows = q.data ?? [];
+  const selected = rows.find((r) => r.id === search.sel || (search.run_id && r.ingest_run_id === search.run_id));
+
+  let list: React.ReactNode;
+  if (q.isPending) {
+    list = (
+      <div className="flex-1" aria-busy="true" aria-label={t('common.loading')}>
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="flex h-[46px] items-center gap-3 border-b border-rule px-3"><Skeleton className="h-3 flex-1" /></div>
+        ))}
+      </div>
+    );
+  } else if (q.isError) {
+    list = <div className="p-4"><ProblemMessage problem={toProblem(q.error)} title="Failed to load held closes" onRetry={() => void q.refetch()} /></div>;
+  } else if (rows.length === 0) {
+    list = <EmptyState title="No mass-closes held">{t('heldClose.emptyBody', { defaultValue: 'No scans have had their close step held by the safety guard.' })}</EmptyState>;
+  } else {
+    const tabbable = selected?.id ?? rows[0]?.id;
+    list = (
+      <div className="min-h-0 flex-1 overflow-auto">
+        <Table role="grid" aria-label="Held closes table" aria-rowcount={rows.length}>
+          <colgroup><col /><col className="w-[120px]" /><col className="w-[120px]" /><col className="w-[120px]" /></colgroup>
+          <THead className="sticky top-0 z-10">
+            <tr role="row">
+              <Th>Scope</Th>
+              <Th>Status</Th>
+              <Th>Findings</Th>
+              <Th align="end">Date</Th>
+            </tr>
+          </THead>
+          <TBody>
+            {rows.map((r, i) => {
+              const status = r.decision || 'pending';
+              return (
+                <Tr
+                  key={r.id}
+                  data-row-id={r.id}
+                  aria-rowindex={i + 2}
+                  selected={r.id === selected?.id}
+                  tabIndex={r.id === tabbable ? 0 : -1}
+                  onClick={() => set({ sel: r.id, run_id: undefined })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      set({ sel: r.id, run_id: undefined });
+                    }
+                  }}
+                  className="h-[46px] cursor-default align-middle focus-visible:outline-offset-[-2px]"
+                >
+                  <Td className={cn('py-0', r.id === selected?.id && 'shadow-[inset_3px_0_0_var(--accent)]')}>
+                    <span className="block truncate font-medium">{r.scope.scanner_family || 'scan'} ({r.scope.track || 'main'})</span>
+                    <span className="block truncate font-mono text-[11px] text-ink-2">{r.ingest_run_id.slice(0, 8)}</span>
+                  </Td>
+                  <Td>
+                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-12 font-medium capitalize', status === 'pending' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-ink-3/10 text-ink-2')}>
+                      {status}
+                    </span>
+                  </Td>
+                  <Td className="text-ink-2">{r.finding_ids.length} to close</Td>
+                  <Td align="end" className="text-ink-2" title={absoluteDate(r.created_at)}>{absoluteDate(r.created_at)}</Td>
+                </Tr>
+              );
+            })}
+          </TBody>
+        </Table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col tablet:flex-row">
+      <section aria-label="Held mass-closes" className="flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
+        <div className="flex items-center gap-3 border-b border-rule px-3 py-2">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => set({ tab: 'acceptances', sel: undefined })}
+              className="rounded-ctl px-2.5 py-1 text-13 font-medium text-ink-2 transition-colors hover:text-ink"
+            >
+              {t('acceptance.tabAcceptances', { defaultValue: 'Risk Acceptances' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => set({ tab: 'held_closes', sel: undefined })}
+              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
+            >
+              {t('acceptance.tabHeldCloses', { defaultValue: 'Held Closes' })}
+            </button>
+          </div>
+        </div>
+        {list}
+      </section>
+      <div className="min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
+        <aside aria-label="Held close details" className="h-full overflow-y-auto">
+          {selected ? <HeldCloseDetail key={selected.id} hc={selected} /> : <EmptyState title="Select a held close">Choose a held close from the list to review the affected findings and confirm or discard.</EmptyState>}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function HeldCloseDetail({ hc }: { hc: HeldClose }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { canAnywhere } = useAccess();
+  const isMaintainer = canAnywhere('maintainer');
+  const isPending = !hc.decision;
+
+  const mutation = useMutation({
+    mutationFn: (action: 'confirm' | 'discard') =>
+      action === 'confirm' ? confirmHeldClose(hc.id) : discardHeldClose(hc.id),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: qk.heldCloses.all() });
+      void qc.invalidateQueries({ queryKey: qk.findings.all() });
+      toast.info(data.decision === 'confirmed' ? `Held close confirmed (${'closed' in data ? data.closed : 0} findings closed)` : 'Held close discarded');
+    },
+  });
+
+  const problem = mutation.isError ? toProblem(mutation.error) : null;
+  const sample = hc.finding_ids.slice(0, 5);
+
+  return (
+    <article aria-label="Held close detail" className="px-4 py-3">
+      <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">
+        {hc.scope.scanner_family || 'Scan'} — {hc.finding_ids.length} findings held
+      </h2>
+      <p className="mt-1 text-13 text-ink-2">
+        Status: <span className="font-semibold capitalize">{hc.decision || 'pending review'}</span>
+      </p>
+
+      <dl className="m-0 mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
+        <dt className="text-ink-2">Scan Run</dt>
+        <dd className="m-0">
+          <a href={`/ingestion?run=${encodeURIComponent(hc.ingest_run_id)}`} className="font-mono text-12 text-accent hover:underline">
+            {hc.ingest_run_id}
+          </a>
+        </dd>
+        <dt className="text-ink-2">Scanner</dt><dd className="m-0">{hc.scope.scanner_family || '—'}</dd>
+        <dt className="text-ink-2">Track</dt><dd className="m-0 font-mono text-12">{hc.scope.track || '—'}</dd>
+        <dt className="text-ink-2">Date</dt><dd className="m-0">{absoluteDate(hc.created_at)}</dd>
+        {hc.decided_by && (<><dt className="text-ink-2">Decided by</dt><dd className="m-0">{hc.decided_by.replace(/^user:/, '')}</dd></>)}
+        {hc.decided_at && (<><dt className="text-ink-2">Decided at</dt><dd className="m-0">{absoluteDate(hc.decided_at)}</dd></>)}
+      </dl>
+
+      <section className="mt-4">
+        <h3 className="m-0 mb-1 text-13 font-semibold">Sample Findings ({sample.length} of {hc.finding_ids.length})</h3>
+        <ul className="m-0 list-none p-0 text-12 font-mono text-ink-2">
+          {sample.map((id) => (
+            <li key={id} className="border-b border-rule py-1">{id}</li>
+          ))}
+        </ul>
+        {hc.finding_ids.length > 5 && (
+          <p className="m-0 mt-1 text-11 text-ink-2">...and {hc.finding_ids.length - 5} more</p>
+        )}
+      </section>
+
+      {problem && <ProblemMessage className="mt-3" problem={problem} title="Action failed" />}
+
+      {isPending && (
+        <div className="mt-5 flex flex-wrap gap-2">
+          {isMaintainer ? (
+            <>
+              <Button variant="primary" loading={mutation.isPending} onClick={() => mutation.mutate('confirm')}>
+                Confirm Close
+              </Button>
+              <Button loading={mutation.isPending} onClick={() => mutation.mutate('discard')}>
+                Discard
+              </Button>
+            </>
+          ) : (
+            <p className="m-0 text-13 text-ink-2">Confirming or discarding mass-closes requires the maintainer role on the application.</p>
+          )}
+        </div>
+      )}
+    </article>
   );
 }
 

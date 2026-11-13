@@ -23,6 +23,10 @@ export const qk = {
   },
   overview: () => ['overview'] as const,
   trend: (metric: string, days: number) => ['trend', metric, days] as const,
+  heldCloses: {
+    all: () => ['held-closes'] as const,
+    list: (decision?: string) => ['held-closes', 'list', decision ?? ''] as const,
+  },
   runs: {
     all: () => ['runs'] as const,
     list: () => ['runs', 'list'] as const,

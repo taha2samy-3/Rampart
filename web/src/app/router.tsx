@@ -129,8 +129,10 @@ const workflowRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/workflow',
   validateSearch: (s: Record<string, unknown>): WorkflowSearch => ({
+    tab: s.tab === 'held_closes' ? 'held_closes' : undefined,
     sel: str(s.sel),
     status: ['pending', 'approved', 'rejected', 'expired', 'revoked'].includes(s.status as string) ? (s.status as AcceptanceStatus) : undefined,
+    run_id: str(s.run_id),
   }),
   component: function Workflow() {
     return <WorkflowRoute search={workflowRoute.useSearch()} />;

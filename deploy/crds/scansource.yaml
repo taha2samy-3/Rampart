@@ -43,6 +43,29 @@ spec:
                   required:
                     - name
                     - key
+                ingestionPolicy:
+                  type: object
+                  properties:
+                    minimumSeverity:
+                      type: string
+                    closeOldFindings:
+                      type: boolean
+                    closeScope:
+                      type: string
+                    doNotReactivate:
+                      type: boolean
+                    fieldMerge:
+                      type: string
+                    maxClosePercent:
+                      type: number
+                    minHeldClose:
+                      type: integer
+                    maxReportBytes:
+                      type: integer
+                    acceptedFormats:
+                      type: array
+                      items:
+                        type: string
               required:
                 - scannerFamily
             status:

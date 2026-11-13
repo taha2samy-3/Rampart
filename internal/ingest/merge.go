@@ -66,8 +66,9 @@ type MergeOptions struct {
 
 // CloseScopeResult records the outcome of closing missing findings.
 type CloseScopeResult struct {
-	Closed              int  `json:"closed"`
-	HeldForConfirmation bool `json:"held_for_confirmation"`
+	Closed              int         `json:"closed"`
+	HeldForConfirmation bool        `json:"held_for_confirmation"`
+	HeldFindingIDs      []uuid.UUID `json:"held_finding_ids,omitempty"`
 }
 
 // Store abstracts the persistence layer for the merge engine.
@@ -564,9 +565,29 @@ func (e *Engine) closeScope(
 	}
 
 	// Mass-close guard (D22): hold the close when it would close more than
-	// maxClosePercent (default 50%) of the scope's open findings AND more than 20.
-	if enableMassCloseGuard && closedCount > massCloseMinFindings && closedCount*100 > len(activeFindings)*massClosePercent {
-		return CloseScopeResult{HeldForConfirmation: true}, nil
+	// maxClosePercent (default 50%) of the scope's open findings AND more than minHeldClose (default 20).
+	thresholdPercent := float64(massClosePercent)
+	minFindings := massCloseMinFindings
+	if scope.ScanSourceID != uuid.Nil {
+		if policy, err := st.GetScanSourceIngestionPolicy(ctx, scope.TenantID, scope.ScanSourceID); err == nil && policy != nil {
+			if policy.MaxClosePercent != nil {
+				thresholdPercent = *policy.MaxClosePercent
+			}
+			if policy.MinHeldClose != nil {
+				minFindings = *policy.MinHeldClose
+			}
+		}
+	}
+
+	if enableMassCloseGuard && closedCount > minFindings && float64(closedCount)*100.0 > float64(len(activeFindings))*thresholdPercent {
+		heldIDs := make([]uuid.UUID, 0, len(fixedFindings))
+		for _, f := range fixedFindings {
+			heldIDs = append(heldIDs, f.ID)
+		}
+		return CloseScopeResult{
+			HeldForConfirmation: true,
+			HeldFindingIDs:      heldIDs,
+		}, nil
 	}
 
 	if err := st.UpdateOccurrencesPresence(ctx, scope.TenantID, absentIDs, false); err != nil {
@@ -2111,6 +2132,30 @@ func (m *MemoryStore) CountTicketsCreatedSince(ctx context.Context, tenantID uui
 
 func (m *MemoryStore) RecordWebhookDelivery(ctx context.Context, tenantID uuid.UUID, connector, deliveryID string, expiresAt time.Time) (bool, error) {
 	return true, nil
+}
+
+func (m *MemoryStore) GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) CreateHeldClose(ctx context.Context, tenantID uuid.UUID, hc *domain.HeldClose) error {
+	return nil
+}
+
+func (m *MemoryStore) GetHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*domain.HeldClose, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) ListHeldCloses(ctx context.Context, tenantID uuid.UUID, decision string) ([]domain.HeldClose, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) DecideHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, decision string, decidedBy string) error {
+	return nil
+}
+
+func (m *MemoryStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, decidedBy string) (int, error) {
+	return 0, nil
 }
 
 func firstNonEmptyStr(vals ...string) string {

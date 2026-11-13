@@ -353,3 +353,23 @@ export interface Taxonomy { id: string; name: string; version: string; source: s
 export type ControlState = 'open' | 'clear' | 'not_assessed';
 export interface ControlStatus { id: string; name: string; status: ControlState; open: number; bands: Record<OpenBand, number>; query: string; evidence?: string[] }
 export interface TaxonomyStatus extends Taxonomy { evaluated_at: string; window_days: number; status: ControlStatus[] }
+
+/** A mass-close held by the safety guard for confirmation (docs/16 D22, docs/21 Section 3.2). */
+export interface HeldCloseScope {
+  tenant_id: string;
+  scan_source_id: string;
+  scanner_family: string;
+  asset_id: string;
+  track: string;
+}
+
+export interface HeldClose {
+  id: string;
+  ingest_run_id: string;
+  scope: HeldCloseScope;
+  finding_ids: string[];
+  created_at: string;
+  decided_by?: string;
+  decision?: string;
+  decided_at?: string;
+}

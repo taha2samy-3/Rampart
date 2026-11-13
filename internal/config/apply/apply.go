@@ -48,7 +48,7 @@ type ConfigStore interface {
 	GetTenantByNamespace(ctx context.Context, namespace string) (*domain.Tenant, error)
 	SaveApplication(ctx context.Context, app domain.Application) error
 	GetApplicationBySlug(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
-	SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error)
+	SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error)
 	// SaveSLAPolicy stores an SLAPolicy of a tenant. A spec that failed validation is stored with its error, so
 	// the object's status can say why it is not applied (docs/16 D41).
 	SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
@@ -253,8 +253,9 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 
 	case "scansource":
 		var spec struct {
-			ScannerFamily string `json:"scannerFamily"`
-			Type          string `json:"type"`
+			ScannerFamily   string                  `json:"scannerFamily"`
+			Type            string                  `json:"type"`
+			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 
@@ -264,7 +265,13 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
 		}
 
-		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily)
+		if spec.IngestionPolicy != nil {
+			if err := spec.IngestionPolicy.Validate(); err != nil {
+				return "", fmt.Errorf("apply: invalid ingestionPolicy: %w", err)
+			}
+		}
+
+		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily, spec.IngestionPolicy)
 		if err != nil {
 			return "", err
 		}
@@ -862,7 +869,7 @@ func (m *MemoryConfigStore) GetApplicationBySlug(ctx context.Context, tenantID u
 	return &app, nil
 }
 
-func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error) {
+func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := tenantID.String() + ":" + name

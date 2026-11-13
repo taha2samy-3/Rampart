@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
-import { acceptance, finding, mockFetch, renderApp } from '@/test/helpers';
+import { acceptance, finding, heldClose, mockFetch, renderApp } from '@/test/helpers';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -209,5 +209,43 @@ describe('the workflow page', () => {
     mockFetch({ loggedIn: true, acceptances: [] });
     renderApp('/workflow');
     expect(await screen.findByText('No risk acceptances')).toBeInTheDocument();
+  });
+});
+
+describe('held mass-closes on workflow page', () => {
+  it('switches to held closes tab and displays held closes with confirm and discard buttons for maintainers', async () => {
+    const hc = heldClose(1, { id: 'hc-1', finding_ids: ['f-1', 'f-2', 'f-3'] });
+    const calls = mockFetch({ loggedIn: true, role: 'maintainer', heldCloses: [hc] });
+    renderApp('/workflow');
+
+    // Switch to Held Closes tab
+    const tabBtn = await screen.findByRole('button', { name: 'Held Closes' });
+    await userEvent.click(tabBtn);
+
+    expect(await screen.findByRole('grid', { name: 'Held closes table' })).toBeInTheDocument();
+    expect(screen.getByText('3 to close')).toBeInTheDocument();
+
+    // Select the row
+    await userEvent.click(screen.getByText('3 to close'));
+
+    // Drawer shows details and confirm/discard buttons
+    const detail = await screen.findByRole('complementary', { name: 'Held close details' });
+    expect(within(detail).getByRole('button', { name: 'Confirm Close' })).toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+
+    // Confirm close
+    await userEvent.click(within(detail).getByRole('button', { name: 'Confirm Close' }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/confirm'))).toBe(true));
+  });
+
+  it('a viewer sees the held closes but cannot confirm or discard', async () => {
+    const hc = heldClose(2, { id: 'hc-2' });
+    mockFetch({ loggedIn: true, role: 'viewer', heldCloses: [hc] });
+    renderApp('/workflow?tab=held_closes&sel=hc-2');
+
+    await screen.findByRole('grid', { name: 'Held closes table' });
+    const detail = await screen.findByRole('complementary', { name: 'Held close details' });
+    expect(within(detail).queryByRole('button', { name: 'Confirm Close' })).toBeNull();
+    expect(await within(detail).findByText(/requires the maintainer role/i)).toBeInTheDocument();
   });
 });

@@ -116,9 +116,10 @@ type SecretRef struct {
 }
 
 type ScanSourceSpec struct {
-	ScannerFamily string     `json:"scannerFamily"`
-	Type          string     `json:"type,omitempty"`
-	SecretRef     *SecretRef `json:"secretRef,omitempty"`
+	ScannerFamily   string                  `json:"scannerFamily"`
+	Type            string                  `json:"type,omitempty"`
+	SecretRef       *SecretRef              `json:"secretRef,omitempty"`
+	IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy,omitempty"`
 }
 
 type ScanSourceStatus struct {

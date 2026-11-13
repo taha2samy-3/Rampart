@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 28
+  minSchemaVersion: 29
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)

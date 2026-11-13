@@ -208,7 +208,14 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		}
 	}
 
-	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily)
+	if cr.Spec.IngestionPolicy != nil {
+		if err := cr.Spec.IngestionPolicy.Validate(); err != nil {
+			status.SetCondition("Ready", "False", "InvalidPolicy", fmt.Sprintf("invalid ingestionPolicy: %v", err))
+			return status, nil
+		}
+	}
+
+	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily, cr.Spec.IngestionPolicy)
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
 		return status, err

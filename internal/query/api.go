@@ -187,6 +187,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/uploads", a.handleCreateUpload)
 	mux.HandleFunc("POST /api/v1/uploads/{id}/complete", a.handleCompleteUpload)
 	mux.HandleFunc("POST /api/v1/uploads/direct", a.handleDirectUpload)
+	mux.HandleFunc("GET /api/v1/held-closes", a.handleListHeldCloses)
+	mux.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
+	mux.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
 	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
 	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
 	if a.webhookHandler != nil {

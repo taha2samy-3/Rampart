@@ -12,6 +12,7 @@ const (
 	NotifySLADueSoon       = "sla_due_soon"
 	NotifyAcceptanceEnding = "acceptance_expiring"
 	NotifyAcceptanceEnded  = "acceptance_expired"
+	NotifyCloseHeld        = "close_held"
 )
 
 // Notification is one message to the people of a tenant: what a sweep found, with a link to where to act.

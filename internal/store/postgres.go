@@ -1590,23 +1590,54 @@ func (s *PostgresStore) GetApplicationBySlug(ctx context.Context, tenantID uuid.
 }
 
 // SaveScanSource implements apply.ConfigStore.
-func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string) (uuid.UUID, error) {
+func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		policyJSON, _ := json.Marshal(policy)
+		if policy == nil {
+			policyJSON = []byte("{}")
+		}
 		query := `
-			INSERT INTO scan_source (id, tenant_id, name, type, scanner_family, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO scan_source (id, tenant_id, name, type, scanner_family, ingestion_policy, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (tenant_id, name) DO UPDATE SET
-				scanner_family = EXCLUDED.scanner_family, disabled_at = NULL
+				scanner_family = EXCLUDED.scanner_family,
+				ingestion_policy = CASE WHEN EXCLUDED.ingestion_policy = '{}'::jsonb THEN scan_source.ingestion_policy ELSE EXCLUDED.ingestion_policy END,
+				disabled_at = NULL
 			RETURNING id`
 		scanType := scannerFamily
 		if scanType == "" {
 			scanType = "generic"
 		}
 		newID := domain.NewID()
-		return tx.QueryRow(ctx, query, newID, tenantID, name, scanType, scannerFamily, time.Now().UTC()).Scan(&id)
+		return tx.QueryRow(ctx, query, newID, tenantID, name, scanType, scannerFamily, policyJSON, time.Now().UTC()).Scan(&id)
 	})
 	return id, err
+}
+
+// GetScanSourceIngestionPolicy retrieves the ingestion policy for a scan source.
+func (s *PostgresStore) GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error) {
+	if sourceID == uuid.Nil {
+		return nil, nil
+	}
+	var raw []byte
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT ingestion_policy FROM scan_source WHERE tenant_id = $1 AND id = $2`, tenantID, sourceID).Scan(&raw)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil, nil
+	}
+	var policy domain.IngestionPolicy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return nil, err
+	}
+	return &policy, nil
 }
 
 // SaveSecretMaterial stores encrypted credentials into secret_material (D4 line 30).

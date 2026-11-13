@@ -171,7 +171,7 @@ func TestPostgresStore_ConfigStoreAndSecrets(t *testing.T) {
 	}
 
 	// 3. Save ScanSource
-	sourceID, err := s.SaveScanSource(ctx, gotTenant.ID, "ci-trivy", "trivy")
+	sourceID, err := s.SaveScanSource(ctx, gotTenant.ID, "ci-trivy", "trivy", nil)
 	if err != nil || sourceID == uuid.Nil {
 		t.Fatalf("SaveScanSource failed: %v", err)
 	}

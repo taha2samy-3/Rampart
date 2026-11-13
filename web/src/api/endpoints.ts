@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -120,6 +120,16 @@ export async function listAcceptances(status: AcceptanceStatus | '', signal?: Ab
 export const getAcceptance = (id: string, signal?: AbortSignal) => get<RiskAcceptance>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}`, { signal });
 export const decideAcceptance = (id: string, action: 'approve' | 'reject' | 'revoke', note?: string) =>
   post<unknown>(`/api/v1/risk-acceptances/${encodeURIComponent(id)}/${action}`, note ? { note } : {});
+
+export async function listHeldCloses(decision?: string, signal?: AbortSignal): Promise<HeldClose[]> {
+  const raw = await get<{ items?: HeldClose[] | null }>('/api/v1/held-closes', { query: { decision: decision || undefined }, signal });
+  return raw.items ?? [];
+}
+export const confirmHeldClose = (id: string) =>
+  post<{ id: string; decision: string; closed: number }>(`/api/v1/held-closes/${encodeURIComponent(id)}/confirm`, undefined);
+export const discardHeldClose = (id: string) =>
+  post<{ id: string; decision: string }>(`/api/v1/held-closes/${encodeURIComponent(id)}/discard`, undefined);
+
 export const getSettings = (signal?: AbortSignal) => get<TenantSettings>('/api/v1/settings', { signal });
 
 export async function listApplications(signal?: AbortSignal): Promise<AppSummary[]> {

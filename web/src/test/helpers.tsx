@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, Reporter } from '@/api/types';
+import type { CorrelatedRef, HeldClose, Reporter, Role } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -39,7 +39,7 @@ export interface Scenario {
   /** Pages of runs for GET /api/v1/runs; each call returns the next page. 'error' answers 500. */
   runs?: ReturnType<typeof run>[][] | 'error';
   /** The signed-in role (default triager). */
-  role?: 'viewer' | 'triager' | 'admin';
+  role?: Role;
   /** What POST /api/v1/findings/bulk answers (default: one changed, one refused). */
   bulk?: { matched: number; updated: number; unchanged: number; failed: { id: string; error: string }[] | null };
   /** What PATCH /api/v1/findings/{id} answers: 200 (default), or a problem status. */
@@ -65,6 +65,7 @@ export interface Scenario {
   trend?: { day: string; value: number }[];
   /** Risk acceptances GET /api/v1/risk-acceptances returns (filtered by ?status=). */
   acceptances?: ReturnType<typeof acceptance>[];
+  heldCloses?: HeldClose[];
   /** What POST /api/v1/risk-acceptances answers: approved at once (default), pending, or a 400. */
   accept?: 'approved' | 'pending' | 400;
   /** Proof files GET .../proofs returns; what POST .../proofs answers (201 by default, or 422). */
@@ -73,6 +74,17 @@ export interface Scenario {
   /** What POST .../approve|reject|revoke answers: 200 (default) or 400. */
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
+}
+
+export function heldClose(i: number, over: Partial<HeldClose> = {}): HeldClose {
+  return {
+    id: `hc-${i}`,
+    ingest_run_id: `run-${i}-00000000`,
+    scope: { tenant_id: 't-1', scan_source_id: 'src-1', scanner_family: 'trivy', asset_id: 'a-1', track: 'main' },
+    finding_ids: [`f-${i}-1`, `f-${i}-2`, `f-${i}-3`],
+    created_at: '2026-11-13T10:00:00Z',
+    ...over,
+  };
 }
 
 export function app(i: number, over: Record<string, unknown> = {}) {
@@ -219,6 +231,15 @@ export function mockFetch(sc: Scenario): Calls {
       }
       const found = (sc.acceptances ?? []).find((a) => a.id === parts[4]);
       return found ? json(found) : json({ title: 'Not found', status: 404 }, 404);
+    }
+    if (path === '/api/v1/held-closes') {
+      return json({ items: sc.heldCloses ?? [] });
+    }
+    if (path.startsWith('/api/v1/held-closes/') && path.endsWith('/confirm')) {
+      return json({ id: path.split('/')[4], decision: 'confirmed', closed: 5 });
+    }
+    if (path.startsWith('/api/v1/held-closes/') && path.endsWith('/discard')) {
+      return json({ id: path.split('/')[4], decision: 'discarded' });
     }
     if (path === '/api/v1/runs') {
       if (sc.runs === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list runs', status: 500, request_id: 'req_runs' }, 500);

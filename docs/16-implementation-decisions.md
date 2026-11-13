@@ -1054,3 +1054,38 @@ Written after a review of the first 3.2 code (the Jira and GitHub trackers, the 
 
 ### C. Not built
 Jira's webhook registration and its 30-day refresh (milestone 3.2 continues), GitHub's secondary rate limits (a 403 with `Retry-After`), updating or closing a ticket when its finding is fixed, and the unmapped-state handling for a ticket reopened in Jira.
+
+
+## D71. Mass-close guard settings, held-close management and confirmation (Phase 3, milestone 3.3)
+
+Decision D22 introduced the mass-close safety guard (`CloseScopeStepWithGuard`) with built-in default constants (holding close when absent findings exceed 50% and 20 findings). D71 formalizes user configuration, persistence of held closes, review and confirmation API/UI, and safe execution semantics.
+
+### 1. Context and Problems
+When a scanner misbehaves (e.g., scanner configuration error, misconfigured branch, scanner crash mid-run, or broken rule set), an empty or truncated scan output would otherwise cause Rampart to mark previously open findings as `fixed` (rescan close). D22 prevented mass unintended closure by holding the close step. However:
+1. Fixed constants (50% and 20) were hardcoded and could not be tuned per scanner or application.
+2. The findings that were held were not stored anywhere, so the user had no way to inspect or confirm the close without re-running the pipeline.
+3. No API or UI existed to view, confirm, or discard held mass-closes.
+
+### 2. Decision and Implementation
+1. **Configurable Ingestion Policy on ScanSource:**
+   `ScanSourceSpec.IngestionPolicy` (`ingestionPolicy`) allows setting:
+   - `maxClosePercent`: percentage threshold (1–100, default 50).
+   - `minHeldClose`: minimum absolute count of absent findings before the threshold triggers (min 1, default 20).
+   Validated on CRD admission, store persistence, and operator reconciliation.
+2. **Table `held_close` and Migration 00029:**
+   `held_close (id UUID PRIMARY KEY, tenant_id UUID NOT NULL, ingest_run_id UUID NOT NULL, scope JSONB NOT NULL, finding_ids UUID[] NOT NULL, created_at TIMESTAMPTZ, decided_at TIMESTAMPTZ, decided_by VARCHAR, decision VARCHAR)` with row-level security, tenant isolation, and indexes on `(tenant_id, created_at DESC)` and `(tenant_id, ingest_run_id)`.
+3. **Ingest Processor Holding Logic & Notification:**
+   When `closeScope` detects that absent findings exceed the policy thresholds, it returns `HeldForConfirmation: true` and the list of `HeldFindingIDs`. The ingest processor persists the `held_close` record, generates an in-app notification `close_held` (`NotifyCloseHeld`), and marks the run status as `completed_with_errors` with reason `close_held`. Errors in notification creation are logged (`slog.Warn`) rather than failing the run.
+4. **Safe Confirmation with Scope Lock & Staleness Check:**
+   When a maintainer confirms a held close (`POST /api/v1/held-closes/{id}/confirm`):
+   - An advisory lock is acquired on the scope hash (`pg_advisory_xact_lock`) to serialize concurrent rescans.
+   - For each held finding ID, Rampart queries if newer runs for the same scope have re-detected the finding. If a finding came back between the held run and the confirmation, it is **not** closed.
+   - Remaining open absent findings are transitioned to `StateFixed`, `ResolutionFixed`, `DetectionAbsent`, and a `closed_by_rescan` event is appended.
+   - The held close is marked `decision = 'confirmed'`, `decided_by = caller`, `decided_at = now()`.
+5. **Discard API:**
+   `POST /api/v1/held-closes/{id}/discard` marks `decision = 'discarded'` without modifying finding states.
+6. **Authorization and Audit:**
+   Listing held closes requires `viewer` role; confirming or discarding requires `maintainer` role on the application (`scope.allows`). All confirmation and discard operations record structured audit log entries (`action = "held_close.confirm"` / `"held_close.discard"`).
+7. **UI:**
+   The Workflow page provides a dedicated "Held Closes" tab with a table of held close scopes, finding counts, and timestamps. Selecting a row opens a detail drawer with the list of affected findings and "Confirm Close" / "Discard" actions for maintainers. The Ingest Run Inspector provides a deep link directly to the held close in Workflow.
+
