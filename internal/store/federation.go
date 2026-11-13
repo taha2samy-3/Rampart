@@ -22,6 +22,7 @@ type Federation interface {
 	ListTrustRules(ctx context.Context, tenantID uuid.UUID) ([]domain.TrustRuleRecord, error)
 	ListTrustRulesByIssuer(ctx context.Context, tenantID uuid.UUID, issuer string) ([]domain.TrustRuleRecord, error)
 	RecordFederationJTI(ctx context.Context, issuer, jti string, expiresAt time.Time) error
+	PurgeExpiredFederationJTIs(ctx context.Context, now time.Time) (int64, error)
 }
 
 // SaveTrustRules replaces the trust rules for a ScanSource under tenant RLS.
@@ -151,4 +152,13 @@ func (s *PostgresStore) RecordFederationJTI(ctx context.Context, issuer, jti str
 		return fmt.Errorf("store: failed to record federation jti: %w", err)
 	}
 	return nil
+}
+
+// PurgeExpiredFederationJTIs deletes expired JTI records from the replay table.
+func (s *PostgresStore) PurgeExpiredFederationJTIs(ctx context.Context, now time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM federation_jti WHERE expires_at < $1`, now)
+	if err != nil {
+		return 0, fmt.Errorf("store: failed to purge expired federation jtis: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

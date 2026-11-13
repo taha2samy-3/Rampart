@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,12 +40,14 @@ type TokenExchangeResponse struct {
 type JWKSCache struct {
 	mu     sync.RWMutex
 	client *connectors.SafeClient
-	sets   map[string]cachedJWKS
+	sets   map[string]*cachedJWKS
 }
 
 type cachedJWKS struct {
-	jwks      *jose.JSONWebKeySet
-	fetchedAt time.Time
+	mu          sync.Mutex
+	jwks        *jose.JSONWebKeySet
+	fetchedAt   time.Time
+	lastRefetch time.Time
 }
 
 // NewJWKSCache creates a JWKS cache using the provided safe client.
@@ -54,34 +57,54 @@ func NewJWKSCache(client *connectors.SafeClient) *JWKSCache {
 	}
 	return &JWKSCache{
 		client: client,
-		sets:   make(map[string]cachedJWKS),
+		sets:   make(map[string]*cachedJWKS),
 	}
 }
 
 // GetKeySet fetches the JWKS for an issuer using OIDC discovery and SafeClient SSRF protections.
 func (c *JWKSCache) GetKeySet(ctx context.Context, issuer string, forceRefetch bool) (*jose.JSONWebKeySet, error) {
-	c.mu.RLock()
-	cached, ok := c.sets[issuer]
-	c.mu.RUnlock()
-
-	if ok && !forceRefetch && time.Since(cached.fetchedAt) < 1*time.Hour {
-		return cached.jwks, nil
+	// Enforce https on issuer unless loopback test client is configured (D22, D69)
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("federation: invalid issuer URL %q: %w", issuer, err)
+	}
+	if u.Scheme != "https" {
+		if c.client == nil || !c.client.AllowLoopback() || u.Scheme != "http" {
+			return nil, fmt.Errorf("federation: issuer must use https scheme: %q", issuer)
+		}
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	entry, ok := c.sets[issuer]
+	if !ok {
+		entry = &cachedJWKS{}
+		c.sets[issuer] = entry
+	}
+	c.mu.Unlock()
 
-	if !forceRefetch {
-		if cached, ok := c.sets[issuer]; ok && time.Since(cached.fetchedAt) < 1*time.Hour {
-			return cached.jwks, nil
-		}
+	// Per-issuer locking: network calls do NOT hold the cache-wide lock (Audit point 9)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	if entry.jwks != nil && !forceRefetch && time.Since(entry.fetchedAt) < 1*time.Hour {
+		return entry.jwks, nil
+	}
+
+	// Rate limit forceRefetch (minimum 15-second cooldown to avoid amplification/DoS, Audit point 8)
+	if forceRefetch && entry.jwks != nil && time.Since(entry.lastRefetch) < 15*time.Second {
+		return entry.jwks, nil
 	}
 
 	// 1. Discover JWKS URI via .well-known/openid-configuration
 	discoURL := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	discoU, err := url.Parse(discoURL)
+	if err != nil || (discoU.Scheme != "https" && (c.client == nil || !c.client.AllowLoopback() || discoU.Scheme != "http")) {
+		return nil, fmt.Errorf("federation: invalid or non-https discovery URL")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", discoURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("federation: invalid discovery URL: %w", err)
+		return nil, fmt.Errorf("federation: invalid discovery request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -100,10 +123,16 @@ func (c *JWKSCache) GetKeySet(ctx context.Context, issuer string, forceRefetch b
 		jwksURL = strings.TrimSuffix(issuer, "/") + "/.well-known/jwks.json"
 	}
 
+	// Enforce https on jwksURL (Audit point 7)
+	parsedJWKS, err := url.Parse(jwksURL)
+	if err != nil || (parsedJWKS.Scheme != "https" && (c.client == nil || !c.client.AllowLoopback() || parsedJWKS.Scheme != "http")) {
+		return nil, fmt.Errorf("federation: jwks_uri must use https scheme: %q", jwksURL)
+	}
+
 	// 2. Fetch JWKS via SafeClient
 	jwksReq, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("federation: invalid jwks URL: %w", err)
+		return nil, fmt.Errorf("federation: invalid jwks request: %w", err)
 	}
 	jwksReq.Header.Set("Accept", "application/json")
 
@@ -120,10 +149,10 @@ func (c *JWKSCache) GetKeySet(ctx context.Context, issuer string, forceRefetch b
 		return nil, fmt.Errorf("federation: failed to parse jwks: %w", err)
 	}
 
-	c.sets[issuer] = cachedJWKS{
-		jwks:      &set,
-		fetchedAt: time.Now(),
-	}
+	now := time.Now()
+	entry.jwks = &set
+	entry.fetchedAt = now
+	entry.lastRefetch = now
 
 	return &set, nil
 }
@@ -184,67 +213,74 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		tenant, err = g.store.GetTenantBySlug(r.Context(), tenantParam)
 	}
 	if err != nil || tenant == nil {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "tenant not found")
+		slog.Warn("federation: tenant not found", "tenant", tenantParam, "error", err)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	// 3. Parse JWT header & claims without verification
 	tok, err := jwt.ParseSigned(subjectToken, []jose.SignatureAlgorithm{jose.RS256, jose.ES256})
 	if err != nil {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "unsupported or insecure signing algorithm")
+		slog.Warn("federation: parse signed jwt failed", "error", err)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 	if len(tok.Headers) == 0 {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "missing token headers")
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	header := tok.Headers[0]
 	if header.Algorithm != string(jose.RS256) && header.Algorithm != string(jose.ES256) {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "unsupported signing algorithm; only RS256 and ES256 allowed")
+		slog.Warn("federation: unsupported algorithm", "alg", header.Algorithm)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	var rawClaims map[string]any
 	if err := tok.UnsafeClaimsWithoutVerification(&rawClaims); err != nil {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "failed to parse token claims")
+		slog.Warn("federation: unsafe claims failed", "error", err)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	iss, _ := rawClaims["iss"].(string)
 	if iss == "" {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "missing iss claim")
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	jti, _ := rawClaims["jti"].(string)
 	if jti == "" {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "token must carry jti claim (D22)")
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
-	// 4. Verify issuer is named by a trust rule for this tenant
+	// 4. Verify public host configuration (Audit point 11: fail-closed, never fall back to r.Host)
+	publicHost := g.publicHost
+	if publicHost == "" {
+		if u, err := url.Parse(g.publicURL); err == nil && u.Host != "" {
+			publicHost = u.Host
+		}
+	}
+	if publicHost == "" {
+		slog.Error("federation: publicURL is not configured on gateway; refusing exchange (fail-closed)")
+		oauthError(w, http.StatusInternalServerError, "server_error", "federation is not configured")
+		return
+	}
+
+	expectedAudience := fmt.Sprintf("rampart:%s:%s", publicHost, tenant.Slug)
+	if reqAudience := r.Form.Get("audience"); reqAudience != "" && reqAudience != expectedAudience {
+		slog.Warn("federation: requested audience does not match expected", "req", reqAudience, "expected", expectedAudience)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
+		return
+	}
+
+	// 5. Verify issuer is named by a trust rule for this tenant
 	trustRules, err := g.store.ListTrustRulesByIssuer(r.Context(), tenant.ID, iss)
 	if err != nil || len(trustRules) == 0 {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "issuer is not trusted for this tenant")
-		return
-	}
-
-	// 5. Replay protection: insert (issuer, jti) before issuance
-	var expTime time.Time
-	if expNum, ok := rawClaims["exp"].(float64); ok {
-		expTime = time.Unix(int64(expNum), 0).UTC()
-	} else {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "missing or invalid exp claim")
-		return
-	}
-
-	if err := g.store.RecordFederationJTI(r.Context(), iss, jti, expTime.Add(time.Minute)); err != nil {
-		if errors.Is(err, store.ErrJTIReplay) {
-			oauthError(w, http.StatusBadRequest, "invalid_grant", "token replay detected: jti has already been exchanged")
-			return
-		}
-		oauthError(w, http.StatusInternalServerError, "server_error", "failed to verify token uniqueness")
+		slog.Warn("federation: issuer not trusted for tenant", "issuer", iss, "tenant", tenant.Slug)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
@@ -255,7 +291,8 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 
 	keySet, err := g.jwksCache.GetKeySet(r.Context(), iss, false)
 	if err != nil {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", fmt.Sprintf("failed to fetch issuer key set: %v", err))
+		slog.Warn("federation: failed to fetch issuer key set", "issuer", iss, "error", err)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
@@ -269,7 +306,8 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(matchingKeys) == 0 {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown key id (kid)")
+		slog.Warn("federation: unknown key id", "kid", kid, "issuer", iss)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
@@ -283,51 +321,39 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !sigVerified {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "invalid token signature")
+		slog.Warn("federation: invalid token signature", "issuer", iss)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
 	// 7. Validate standard claims: exp, nbf, aud
 	now := time.Now().UTC()
 	if now.After(stdClaims.Expiry.Time().Add(time.Minute)) {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "token has expired")
+		slog.Warn("federation: token has expired", "exp", stdClaims.Expiry.Time())
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 	if stdClaims.NotBefore != nil && now.Before(stdClaims.NotBefore.Time().Add(-time.Minute)) {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "token is not yet valid (nbf)")
+		slog.Warn("federation: token not yet valid (nbf)", "nbf", stdClaims.NotBefore.Time())
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
-	// Audience check: rampart:<public-host>:<tenant>
-	publicHost := g.publicHost
-	if publicHost == "" {
-		if u, err := url.Parse(g.publicURL); err == nil && u.Host != "" {
-			publicHost = u.Host
-		} else {
-			publicHost = r.Host
-		}
-	}
-
-	expectedAudience := fmt.Sprintf("rampart:%s:%s", publicHost, tenant.Slug)
-	reqAudience := r.Form.Get("audience")
-	if reqAudience != "" && reqAudience != expectedAudience && !stdClaims.Audience.Contains(reqAudience) {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "requested audience does not match token audience")
-		return
-	}
-
+	// Strict Audience check: rampart:<public-host>:<tenant> (Audit point 2, D22)
 	audMatched := false
 	for _, aud := range stdClaims.Audience {
-		if aud == expectedAudience || aud == tenant.Slug || aud == "rampart" || strings.HasSuffix(aud, ":"+tenant.Slug) {
+		if aud == expectedAudience {
 			audMatched = true
 			break
 		}
 	}
 	if !audMatched {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", fmt.Sprintf("token audience mismatch: expected %q", expectedAudience))
+		slog.Warn("federation: token audience mismatch", "got", stdClaims.Audience, "expected", expectedAudience)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
-	// 8. Match claims against trust rules (immutable IDs)
+	// 8. Match claims against trust rules (immutable IDs per D22)
 	var matchedRule *domain.TrustRuleRecord
 	for _, tr := range trustRules {
 		rule := tr.Rule
@@ -336,6 +362,7 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			ownerID := claimStr(verifiedClaims, "repository_owner_id")
 			repo := claimStr(verifiedClaims, "repository")
 
+			// D22 requires matching both repository_id and repository_owner_id (Audit point 6)
 			if rule.RepositoryID != "" && rule.RepositoryID != repoID {
 				continue
 			}
@@ -352,6 +379,7 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			nsID := claimStr(verifiedClaims, "namespace_id")
 			projPath := claimStr(verifiedClaims, "project_path")
 
+			// D22 requires matching both project_id and namespace_id
 			if rule.ProjectID != "" && rule.ProjectID != projID {
 				continue
 			}
@@ -367,11 +395,33 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if matchedRule == nil {
-		oauthError(w, http.StatusBadRequest, "invalid_grant", "token claims do not match any trust rule for this repository")
+		slog.Warn("federation: claims do not match any trust rule", "claims", verifiedClaims)
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
 
-	// 9. Tighten options (D22): clients may tighten, never loosen
+	// 9. Replay protection (Audit point 3, D22): Record (issuer, jti) ONLY after signature, audience & rules verified.
+	// Cap expiration record at 1 hour from now to prevent table bloat.
+	expRecordTime := stdClaims.Expiry.Time()
+	if expRecordTime.IsZero() {
+		expRecordTime = now.Add(15 * time.Minute)
+	}
+	maxExp := now.Add(1 * time.Hour)
+	if expRecordTime.After(maxExp) {
+		expRecordTime = maxExp
+	}
+
+	if err := g.store.RecordFederationJTI(r.Context(), iss, jti, expRecordTime.Add(time.Minute)); err != nil {
+		if errors.Is(err, store.ErrJTIReplay) {
+			oauthError(w, http.StatusBadRequest, "invalid_grant", "token replay detected: jti has already been exchanged")
+			return
+		}
+		slog.Error("federation: failed to record JTI", "error", err)
+		oauthError(w, http.StatusInternalServerError, "server_error", "failed to record token")
+		return
+	}
+
+	// 10. Tighten options (D22): clients may tighten, never loosen
 	var scopes []string
 	scopes = append(scopes, "ingest")
 	if minSev := r.Form.Get("minimum_severity"); minSev != "" {
@@ -384,7 +434,7 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		scopes = append(scopes, "no_close")
 	}
 
-	// 10. Issue short-lived API token (role: ingest, 15 minutes, bound to scanSourceID)
+	// 11. Issue short-lived API token (role: ingest, 15 minutes, bound to scanSourceID)
 	subject := claimStr(verifiedClaims, "repository")
 	if subject == "" {
 		subject = claimStr(verifiedClaims, "project_path")
@@ -395,17 +445,19 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 
 	rawToken, record, err := auth.GenerateToken(tenant.ID, auth.RoleIngest, fmt.Sprintf("%s:%s", matchedRule.Rule.Provider, subject), scopes, FederationTokenExpirySec*time.Second)
 	if err != nil {
+		slog.Error("federation: failed to generate token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to issue ingest token")
 		return
 	}
 	record.ScanSourceID = &matchedRule.ScanSourceID
 
 	if err := g.store.SaveToken(r.Context(), record); err != nil {
+		slog.Error("federation: failed to save token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to save ingest token")
 		return
 	}
 
-	// 11. Audit token exchange
+	// 12. Audit token exchange
 	_ = g.store.RecordAudit(r.Context(), auth.AuditEvent{
 		TenantID:     tenant.ID,
 		Actor:        fmt.Sprintf("%s:%s", matchedRule.Rule.Provider, subject),

@@ -122,4 +122,17 @@ func TestFederation_PostgresScenarios(t *testing.T) {
 	if len(afterDelete) != 0 {
 		t.Fatalf("expected 0 trust rules after scan source deleted, got %d", len(afterDelete))
 	}
+
+	// 7. Test PurgeExpiredFederationJTIs
+	expiredJTI := uuid.New().String()
+	if err := app.RecordFederationJTI(ctx, "https://token.actions.githubusercontent.com", expiredJTI, time.Now().Add(-5*time.Minute)); err != nil {
+		t.Fatalf("failed to insert expired JTI: %v", err)
+	}
+	purged, err := app.PurgeExpiredFederationJTIs(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("PurgeExpiredFederationJTIs failed: %v", err)
+	}
+	if purged < 1 {
+		t.Fatalf("expected at least 1 purged JTI, got %d", purged)
+	}
 }

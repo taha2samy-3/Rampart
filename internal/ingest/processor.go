@@ -100,7 +100,9 @@ type ProcessParams struct {
 	ScannerOverride string // names the scanner when the report has no findings to read it from
 	ScanFinished    time.Time
 	IsEphemeral     bool
-	BaselineTrack   string // the track an ephemeral run is compared with (D10 mapping.baselineTrack, default main)
+	NoClose         bool            // D22: token scope no_close prevents closing missing findings
+	MinSeverity     domain.Severity // D22: token scope min_sev filters findings below this threshold
+	BaselineTrack   string          // the track an ephemeral run is compared with (D10 mapping.baselineTrack, default main)
 	IsSBOM          bool
 	Open            StreamSource
 }
@@ -188,6 +190,10 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			break
 		}
 		stats.Parsed++
+		if pp.MinSeverity.Valid() && raw.Severity.Rank() < pp.MinSeverity.Rank() {
+			stats.SkippedMinSeverity++
+			continue
+		}
 		if raw.Category == domain.CategorySecret {
 			run.HoldsSecrets = true // its raw report names the secret, so it is kept for less time (D53)
 		}
@@ -241,7 +247,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			stale++
 			continue
 		}
-		if pp.IsEphemeral { // D10: no close for ephemeral runs
+		if pp.IsEphemeral || pp.NoClose { // D10: no close for ephemeral runs; D22: token scope no_close
 			continue
 		}
 		if recs.n > 0 { // D13: a report with records we could not read may be missing findings; closing on it would hide them
@@ -638,6 +644,10 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 			break
 		}
 		stats.Parsed++
+		if pp.MinSeverity.Valid() && raw.Severity.Rank() < pp.MinSeverity.Rank() {
+			stats.SkippedMinSeverity++
+			continue
+		}
 		if raw.Category == domain.CategorySecret {
 			run.HoldsSecrets = true
 		}

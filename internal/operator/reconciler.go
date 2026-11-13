@@ -228,9 +228,14 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		return status, err
 	}
 
-	if trSaver, ok := r.store.(interface {
-		SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
-	}); ok {
+	if len(cr.Spec.TrustRules) > 0 {
+		trSaver, ok := r.store.(interface {
+			SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
+		})
+		if !ok {
+			status.SetCondition("Ready", "False", "StorageError", "store does not support trust rules")
+			return status, fmt.Errorf("store does not support trust rules")
+		}
 		if err := trSaver.SaveTrustRules(ctx, tenant.ID, sourceID, cr.Spec.TrustRules); err != nil {
 			status.SetCondition("Ready", "False", "StorageError", fmt.Sprintf("failed to save trust rules: %v", err))
 			return status, err

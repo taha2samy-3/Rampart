@@ -256,6 +256,7 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			ScannerFamily   string                  `json:"scannerFamily"`
 			Type            string                  `json:"type"`
 			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
+			TrustRules      []domain.TrustRule      `json:"trustRules"`
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 
@@ -271,9 +272,27 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			}
 		}
 
+		for _, tr := range spec.TrustRules {
+			if err := tr.Validate(); err != nil {
+				return "", fmt.Errorf("apply: invalid trustRule: %w", err)
+			}
+		}
+
 		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily, spec.IngestionPolicy)
 		if err != nil {
 			return "", err
+		}
+
+		if len(spec.TrustRules) > 0 {
+			trSaver, ok := a.store.(interface {
+				SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
+			})
+			if !ok {
+				return "", fmt.Errorf("apply: store does not support trust rules")
+			}
+			if err := trSaver.SaveTrustRules(ctx, tenant.ID, id, spec.TrustRules); err != nil {
+				return "", fmt.Errorf("apply: failed to save trust rules: %w", err)
+			}
 		}
 		return fmt.Sprintf("scansource.rampart.aspm.dev/%s configured (id=%s)", header.Metadata.Name, id), nil
 
@@ -611,6 +630,7 @@ type MemoryConfigStore struct {
 	policies     map[string]PolicyObject
 	idps         map[string]domain.IdentityProvider
 	connectors   map[string]domain.Connector
+	trustRules   map[uuid.UUID][]domain.TrustRuleRecord
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -623,6 +643,7 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		policies:     make(map[string]PolicyObject),
 		idps:         make(map[string]domain.IdentityProvider),
 		connectors:   make(map[string]domain.Connector),
+		trustRules:   make(map[uuid.UUID][]domain.TrustRuleRecord),
 		orphaned:     make(map[string]bool),
 		disabled:     make(map[string]bool),
 		withData:     make(map[uuid.UUID]bool),
@@ -882,7 +903,36 @@ func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UU
 }
 
 func (m *MemoryConfigStore) SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.trustRules == nil {
+		m.trustRules = make(map[uuid.UUID][]domain.TrustRuleRecord)
+	}
+	var kept []domain.TrustRuleRecord
+	for _, tr := range m.trustRules[tenantID] {
+		if tr.ScanSourceID != scanSourceID {
+			kept = append(kept, tr)
+		}
+	}
+	for _, r := range rules {
+		kept = append(kept, domain.TrustRuleRecord{
+			ID:           domain.NewID(),
+			TenantID:     tenantID,
+			ScanSourceID: scanSourceID,
+			Rule:         r,
+			CreatedAt:    time.Now().UTC(),
+		})
+	}
+	m.trustRules[tenantID] = kept
 	return nil
+}
+
+func (m *MemoryConfigStore) ListTrustRules(ctx context.Context, tenantID uuid.UUID) ([]domain.TrustRuleRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make([]domain.TrustRuleRecord, len(m.trustRules[tenantID]))
+	copy(res, m.trustRules[tenantID])
+	return res, nil
 }
 
 // Ensure interface compatibility

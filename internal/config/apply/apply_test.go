@@ -81,6 +81,77 @@ func TestApplyDeclarativeResources(t *testing.T) {
 	}
 }
 
+func TestApplyScanSource_WithTrustRules(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["acme"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+
+	// 1. Valid TrustRule with both IDs
+	validSource := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "ScanSource",
+		"metadata": {"name": "gh-source", "namespace": "acme"},
+		"spec": {
+			"scannerFamily": "semgrep",
+			"type": "reportUpload",
+			"trustRules": [
+				{
+					"issuer": "https://token.actions.githubusercontent.com",
+					"provider": "github",
+					"repositoryId": "123456",
+					"repositoryOwnerId": "654321",
+					"repository": "acme/repo"
+				}
+			]
+		}
+	}`)
+	msg, err := applier.ApplyDocument(ctx, validSource)
+	if err != nil {
+		t.Fatalf("apply valid scan source with trust rules failed: %v", err)
+	}
+	if !strings.Contains(msg, "gh-source configured") {
+		t.Fatalf("unexpected message: %s", msg)
+	}
+
+	rules, err := store.ListTrustRules(ctx, tn.ID)
+	if err != nil || len(rules) != 1 {
+		t.Fatalf("expected 1 stored trust rule, got %d (err: %v)", len(rules), err)
+	}
+	if rules[0].Rule.RepositoryID != "123456" || rules[0].Rule.RepositoryOwnerID != "654321" {
+		t.Fatalf("unexpected stored rule: %+v", rules[0].Rule)
+	}
+
+	// 2. Invalid TrustRule missing repositoryOwnerId is rejected
+	invalidSource := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "ScanSource",
+		"metadata": {"name": "gh-invalid", "namespace": "acme"},
+		"spec": {
+			"scannerFamily": "semgrep",
+			"type": "reportUpload",
+			"trustRules": [
+				{
+					"issuer": "https://token.actions.githubusercontent.com",
+					"provider": "github",
+					"repositoryId": "123456"
+				}
+			]
+		}
+	}`)
+	_, err = applier.ApplyDocument(ctx, invalidSource)
+	if err == nil {
+		t.Fatal("expected error for trust rule missing repositoryOwnerId, got nil")
+	}
+	if !strings.Contains(err.Error(), "both repositoryId and repositoryOwnerId") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
 func TestApplySLAPolicy(t *testing.T) {
 	ctx := context.Background()
 	store := apply.NewMemoryConfigStore()

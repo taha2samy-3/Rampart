@@ -164,6 +164,8 @@ func (g *Gateway) SetPublicURL(publicURL string) {
 	g.publicURL = publicURL
 	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
 		g.publicHost = u.Host
+	} else {
+		g.publicHost = ""
 	}
 }
 
@@ -203,16 +205,27 @@ func (g *Gateway) HandleUploadReport(w http.ResponseWriter, r *http.Request) {
 	g.handleUploadReport(w, r)
 }
 
-func (g *Gateway) resolveTenant(r *http.Request) (uuid.UUID, error) {
-	if tid, err := auth.TenantFromContext(r.Context()); err == nil && tid != domain.NilID {
-		return tid, nil
+func (g *Gateway) resolveCaller(r *http.Request) (*auth.ContextUser, error) {
+	if u, ok := auth.FromContext(r.Context()); ok && u != nil && u.TenantID != domain.NilID {
+		return u, nil
 	}
 	if g.authn != nil {
 		if u, err := g.authn.AuthenticateRequest(r); err == nil && u != nil && u.TenantID != domain.NilID {
-			return u.TenantID, nil
+			return u, nil
 		}
 	}
-	return domain.NilID, auth.ErrUnauthorized
+	if tid, err := auth.TenantFromContext(r.Context()); err == nil && tid != domain.NilID {
+		return &auth.ContextUser{TenantID: tid, Role: auth.RoleOwner}, nil
+	}
+	return nil, auth.ErrUnauthorized
+}
+
+func (g *Gateway) resolveTenant(r *http.Request) (uuid.UUID, error) {
+	caller, err := g.resolveCaller(r)
+	if err != nil {
+		return domain.NilID, err
+	}
+	return caller.TenantID, nil
 }
 
 func problemJSON(w http.ResponseWriter, status int, typ, title, detail string) {
@@ -231,11 +244,12 @@ const idempotencyWindow = 7 * 24 * time.Hour
 // handleCreateUpload allocates an upload and returns a presigned PUT whose Content-Length is signed in,
 // so the object store itself refuses a body of another size (D9).
 func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := g.resolveTenant(r)
+	caller, err := g.resolveCaller(r)
 	if err != nil {
 		problemJSON(w, http.StatusUnauthorized, "unauthorized", "Authentication required", "")
 		return
 	}
+	tenantID := caller.TenantID
 	if g.objects == nil {
 		problemJSON(w, http.StatusNotImplemented, "unsupported-format", "Presigned uploads are not available",
 			"Object storage is not configured. Send the report to POST /ingest/v1/reports instead.")
@@ -259,7 +273,13 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 		problemJSON(w, http.StatusRequestEntityTooLarge, "payload-too-large", "The report is larger than the upload limit", fmt.Sprintf("The limit is %d bytes.", g.maxReportBytes))
 		return
 	}
-	sourceID, err := g.store.EnsureScanSource(r.Context(), tenantID, req.ScanSourceID)
+
+	sourceParam := req.ScanSourceID
+	if caller.ScanSourceID != nil && *caller.ScanSourceID != uuid.Nil && sourceParam == "" {
+		sourceParam = caller.ScanSourceID.String()
+	}
+
+	sourceID, err := g.store.EnsureScanSource(r.Context(), tenantID, sourceParam)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			problemJSON(w, http.StatusNotFound, "not-found", "Scan source not found", "")
@@ -270,6 +290,11 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		problemJSON(w, http.StatusInternalServerError, "internal", "Failed to resolve the scan source", "")
+		return
+	}
+
+	if caller.ScanSourceID != nil && *caller.ScanSourceID != uuid.Nil && sourceID != *caller.ScanSourceID {
+		problemJSON(w, http.StatusForbidden, "forbidden", "Token is bound to another scan source", "Federated token cannot ingest to a different scan source.")
 		return
 	}
 
@@ -450,13 +475,14 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	// Enforce 32 MiB body limit
 	r.Body = http.MaxBytesReader(w, r.Body, MaxDirectReportBytes)
 
-	tenantID, err := g.resolveTenant(r)
+	caller, err := g.resolveCaller(r)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
 		return
 	}
+	tenantID := caller.TenantID
 
 	var (
 		filename    string
@@ -515,7 +541,12 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	scanFinished := parseScanFinished(get("scanFinished"))
 	uploadCtx.ScanFinished = scanFinished
 
-	sourceID, err := g.store.EnsureScanSource(r.Context(), tenantID, get("source"))
+	sourceParam := get("source")
+	if caller.ScanSourceID != nil && *caller.ScanSourceID != domain.NilID && sourceParam == "" {
+		sourceParam = caller.ScanSourceID.String()
+	}
+
+	sourceID, err := g.store.EnsureScanSource(r.Context(), tenantID, sourceParam)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"Scan source not found"}`, http.StatusNotFound)
@@ -526,6 +557,11 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 			return
 		}
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve scan source"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if caller.ScanSourceID != nil && *caller.ScanSourceID != domain.NilID && sourceID != *caller.ScanSourceID {
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/forbidden","title":"Token is bound to another scan source"}`, http.StatusForbidden)
 		return
 	}
 	track := ""
@@ -601,9 +637,19 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		return
 	}
 
+	var minSeverity domain.Severity
+	noClose := false
+	for _, sc := range caller.Scopes {
+		if sc == "no_close" {
+			noClose = true
+		} else if strings.HasPrefix(sc, "min_sev:") {
+			minSeverity = domain.ParseSeverity(strings.TrimPrefix(sc, "min_sev:"))
+		}
+	}
+
 	res, err := g.processor.Process(r.Context(), ProcessParams{
 		Run: run, Parser: selectedParser, ScannerOverride: scannerOverride, ScanFinished: scanFinished,
-		IsEphemeral: isEphemeral, IsSBOM: isSBOM,
+		IsEphemeral: isEphemeral, NoClose: noClose, MinSeverity: minSeverity, IsSBOM: isSBOM,
 		Open: func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
 	})
 	if err != nil {
@@ -642,13 +688,14 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 }
 
 func (g *Gateway) handleGetRun(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := g.resolveTenant(r)
+	caller, err := g.resolveCaller(r)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
 		return
 	}
+	tenantID := caller.TenantID
 
 	runIDStr := r.PathValue("id")
 	if runIDStr == "" {

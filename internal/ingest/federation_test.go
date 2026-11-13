@@ -388,8 +388,8 @@ func TestFederation_TokenExchange(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
 		}
-		if !strings.Contains(res["error_description"].(string), "do not match any trust rule") {
-			t.Fatalf("unexpected description: %v", res["error_description"])
+		if res["error"] != "invalid_grant" || res["error_description"] != "token validation failed" {
+			t.Fatalf("unexpected error response (leaks details): %v", res)
 		}
 	})
 
@@ -416,8 +416,8 @@ func TestFederation_TokenExchange(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
 		}
-		if !strings.Contains(res["error_description"].(string), "jti") {
-			t.Fatalf("expected jti error description, got: %v", res["error_description"])
+		if res["error"] != "invalid_grant" || res["error_description"] != "token validation failed" {
+			t.Fatalf("unexpected error response (leaks details): %v", res)
 		}
 	})
 
@@ -529,9 +529,8 @@ func TestFederation_TokenExchange(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 Bad Request for SSRF block, got %d", rec.Code)
 		}
-		if !strings.Contains(res["error_description"].(string), "blocked") &&
-			!strings.Contains(res["error_description"].(string), "failed to fetch") {
-			t.Fatalf("expected SSRF block description, got: %v", res["error_description"])
+		if res["error"] != "invalid_grant" || res["error_description"] != "token validation failed" {
+			t.Fatalf("unexpected error response (leaks details): %v", res)
 		}
 	})
 
@@ -583,6 +582,188 @@ func TestFederation_TokenExchange(t *testing.T) {
 			t.Fatalf("expected min_sev:high and no_close in scopes, got: %v", saved.Scopes)
 		}
 	})
+}
+
+func TestFederation_ScanSourceEnforcement(t *testing.T) {
+	gw, memStore, idp, tenant, sourceID := setupFederationGateway(t)
+	authn := auth.NewAuthenticatorWithStore(memStore)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	// Create a second scan source for the same tenant
+	otherSourceID := domain.NewID()
+
+	// Exchange token bound to sourceID
+	std := jwt.Claims{
+		Issuer:   idp.server.URL,
+		Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+		Subject:  "repo:acme/backend:ref:refs/heads/main",
+		Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+		ID:       uuid.New().String(),
+	}
+	claims := map[string]any{
+		"repository_id":       "12345",
+		"repository_owner_id": "67890",
+		"repository":          "acme/backend",
+	}
+	rawJWT := idp.signRSA(claims, std)
+
+	form := url.Values{
+		"grant_type":         {ingest.GrantTypeTokenExchange},
+		"subject_token_type": {ingest.TokenTypeJWT},
+		"subject_token":      {rawJWT},
+	}
+	rec, res := exchangeToken(mux, tenant.Slug, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %v", rec.Code, rec.Body.String())
+	}
+	tok := res["access_token"].(string)
+	saved, _ := memStore.LookupTokenByHash(context.Background(), tenant.ID, auth.HashToken(tok))
+	if saved == nil || saved.ScanSourceID == nil || *saved.ScanSourceID != sourceID {
+		t.Fatalf("expected token bound to sourceID %v", sourceID)
+	}
+
+	// 1. Uploading to a mismatched source fails with 403 Forbidden
+	reportJSON := `{"runs":[]}`
+	req, _ := http.NewRequest("POST", "/ingest/v1/reports?source="+otherSourceID.String()+"&format=sarif", strings.NewReader(reportJSON))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for mismatched scan source, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Uploading without source query param defaults to bound scanSourceID (doesn't fail with 403)
+	req2, _ := http.NewRequest("POST", "/ingest/v1/reports?format=sarif", strings.NewReader(reportJSON))
+	req2.Header.Set("Authorization", "Bearer "+tok)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code == http.StatusForbidden {
+		t.Fatalf("unexpected 403 Forbidden when source defaults to token scanSourceID: %s", w2.Body.String())
+	}
+}
+
+func TestFederation_StrictAudienceAndFailClosed(t *testing.T) {
+	gw, _, idp, tenant, _ := setupFederationGateway(t)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	t.Run("loose suffix audience is rejected", func(t *testing.T) {
+		std := jwt.Claims{
+			Issuer:   idp.server.URL,
+			Audience: jwt.Audience{":" + tenant.Slug, tenant.Slug, "rampart"},
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"repository_id":       "12345",
+			"repository_owner_id": "67890",
+			"repository":          "acme/backend",
+		}
+		rawJWT := idp.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+		rec, res := exchangeToken(mux, tenant.Slug, form)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for loose audience, got %d", rec.Code)
+		}
+		if res["error"] != "invalid_grant" {
+			t.Fatalf("expected invalid_grant, got: %v", res)
+		}
+	})
+
+	t.Run("empty PublicURL fails closed without falling back to r.Host", func(t *testing.T) {
+		gwNoURL, _, idp2, tenant2, _ := setupFederationGateway(t)
+		gwNoURL.SetPublicURL("") // cleared!
+		muxNoURL := http.NewServeMux()
+		gwNoURL.RegisterRoutes(muxNoURL)
+
+		std := jwt.Claims{
+			Issuer:   idp2.server.URL,
+			Audience: jwt.Audience{"rampart:attacker.host:acme"},
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"repository_id":       "12345",
+			"repository_owner_id": "67890",
+			"repository":          "acme/backend",
+		}
+		rawJWT := idp2.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+		req := httptest.NewRequest("POST", "/ingest/v1/t/"+tenant2.Slug+"/token", strings.NewReader(form.Encode()))
+		req.Host = "attacker.host" // attacker controlled header
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		muxNoURL.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 Server Error (fail-closed) when PublicURL not set, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func TestFederation_JWKSCacheRateLimiting(t *testing.T) {
+	idp := newFakeOIDCServer(t)
+	sc := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	cache := ingest.NewJWKSCache(sc)
+
+	// First fetch populates cache
+	ks1, err := cache.GetKeySet(context.Background(), idp.server.URL, false)
+	if err != nil {
+		t.Fatalf("initial GetKeySet failed: %v", err)
+	}
+	if len(ks1.Keys) == 0 {
+		t.Fatal("expected keys in key set")
+	}
+
+	// Immediate forceRefetch within cooldown returns cached set without HTTP call
+	ks2, err := cache.GetKeySet(context.Background(), idp.server.URL, true)
+	if err != nil {
+		t.Fatalf("rate-limited GetKeySet failed: %v", err)
+	}
+	if ks2 != ks1 {
+		t.Fatal("expected same cached pointer due to 15s rate limit cooldown")
+	}
+}
+
+func TestFederation_JTIPurge(t *testing.T) {
+	_, memStore, _, _, _ := setupFederationGateway(t)
+	now := time.Now().UTC()
+
+	// 1. Record an expired JTI and an active JTI
+	if err := memStore.RecordFederationJTI(context.Background(), "https://issuer.example.com", "jti-old", now.Add(-5*time.Minute)); err != nil {
+		t.Fatalf("record jti failed: %v", err)
+	}
+	if err := memStore.RecordFederationJTI(context.Background(), "https://issuer.example.com", "jti-fresh", now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("record jti failed: %v", err)
+	}
+
+	// 2. Purge expired
+	purged, err := memStore.PurgeExpiredFederationJTIs(context.Background(), now)
+	if err != nil {
+		t.Fatalf("purge failed: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("expected 1 purged JTI, got %d", purged)
+	}
+
+	// 3. Re-recording jti-old should succeed now that it was purged
+	if err := memStore.RecordFederationJTI(context.Background(), "https://issuer.example.com", "jti-old", now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("expected jti-old to be accepted after purge, got error: %v", err)
+	}
 }
 
 func FuzzFederationToken(f *testing.F) {

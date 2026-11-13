@@ -75,11 +75,11 @@ func (r *TrustRule) Validate() error {
 	if r.Provider != "github" && r.Provider != "gitlab" {
 		return fmt.Errorf("provider must be 'github' or 'gitlab', got %q", r.Provider)
 	}
-	if r.Provider == "github" && r.RepositoryID == "" && r.RepositoryOwnerID == "" {
-		return fmt.Errorf("github trust rule must specify repositoryId or repositoryOwnerId")
+	if r.Provider == "github" && (r.RepositoryID == "" || r.RepositoryOwnerID == "") {
+		return fmt.Errorf("github trust rule must specify both repositoryId and repositoryOwnerId (D22)")
 	}
-	if r.Provider == "gitlab" && r.ProjectID == "" && r.NamespaceID == "" {
-		return fmt.Errorf("gitlab trust rule must specify projectId or namespaceId")
+	if r.Provider == "gitlab" && (r.ProjectID == "" || r.NamespaceID == "") {
+		return fmt.Errorf("gitlab trust rule must specify both projectId and namespaceId (D22)")
 	}
 	return nil
 }

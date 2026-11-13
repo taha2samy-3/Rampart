@@ -2217,6 +2217,19 @@ func (m *MemoryStore) RecordFederationJTI(ctx context.Context, issuer, jti strin
 	return nil
 }
 
+func (m *MemoryStore) PurgeExpiredFederationJTIs(ctx context.Context, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var purged int64
+	for k, exp := range m.federationJTIs {
+		if exp.Before(now) {
+			delete(m.federationJTIs, k)
+			purged++
+		}
+	}
+	return purged, nil
+}
+
 func (m *MemoryStore) IncrementQuota(ctx context.Context, tenantID uuid.UUID, key string, windowStart time.Time, amount int64) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

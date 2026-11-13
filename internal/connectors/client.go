@@ -31,6 +31,15 @@ const (
 // SafeClient is the hardened outbound HTTP client enforcing SSRF guards, timeouts, and response limits (D69).
 type SafeClient struct {
 	httpClient *http.Client
+	cfg        SafeClientConfig
+}
+
+// AllowLoopback returns whether this client allows loopback connections (test mode only).
+func (c *SafeClient) AllowLoopback() bool {
+	if c == nil {
+		return false
+	}
+	return c.cfg.AllowLoopback
 }
 
 // SafeClientConfig configures SafeClient options.
@@ -138,7 +147,7 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 		},
 	}
 
-	return &SafeClient{httpClient: client}
+	return &SafeClient{httpClient: client, cfg: cfg}
 }
 
 // SanitizeURL removes sensitive query parameters and credentials from URLs for safe logging and error reporting.
