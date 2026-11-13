@@ -191,3 +191,12 @@ Written 2026-11-13 after code review of commit `b6d7b40` and `29076ca`:
    - Tested under PostgreSQL RLS in `internal/store/postgres_test.go` and in `internal/operator/operator_test.go`.
 
 Sources read for this section: [Microsoft, retirement of Office 365 connectors](https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/); [GitHub, OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) (no lifetime stated); the Dependency-Track [v5 breaking changes](https://dependencytrack.github.io/docs/next/reference/api/v5-breaking-changes/) page and mirrored `openapi.json` documents of running 4.x servers; Atlassian's [REST v3 introduction](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/) and the community and JRACLOUD tickets on ADF descriptions.
+
+### 9.8 Review of the 3.2 code (trackers, inbound webhooks, ticket automation): fixed, and recorded as needing redesign
+
+Written 2026-11-13. The findings, the fixes and the tests are in docs/16 **D70**; this section is the pointer and the order of work.
+
+- **Fixed before any commit** (they let an unauthenticated caller have a risk accepted): the inbound webhook failed open when no secret was configured; delivery ids were remembered before the signature was checked; the API token was used as the webhook secret; a label typed on someone else's ticket was trusted; a "false positive" created a 90-day acceptance; the acceptance ignored the tenant's maximum; the tracker was called inside the merge transaction and a failed call was never tried again; GitHub issue text from scanners was written as raw markdown.
+- **Recorded as needing redesign (D70 part B, twelve items):** the ledger is not a ticket model (one ticket per finding, no groups, no second tracker), an ambiguous failure can still open two tickets, every critical finding opens a ticket on the first tracker with no opt-in or cap, 4xx answers are retried, false positives only notify, `accountId` is typed by hand, the public endpoint has no rate limit, the delivery cache is per process, Jira Data Center is not supported, `priority` and `labels` are not checked against the project, the sweeper needs the system role, and the migration's blanket `skipped`.
+- **Order:** items 1 and 3 (a `ticket` table and an explicit ticketing policy) before 3.6; 2 and 4 before this is switched on for a real tenant; the rest as the milestone continues.
+

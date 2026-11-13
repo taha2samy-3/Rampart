@@ -45,7 +45,7 @@ func truncateRunes(s string, n int) string {
 // one placeholder keeps its type: the score is a number, as Jira's number fields want.
 func renderCustomField(v string, f *domain.Finding, appName string) any {
 	t := strings.TrimSpace(v)
-	if !strings.HasPrefix(t, "{{") || !strings.HasSuffix(t, "}}") {
+	if !strings.HasPrefix(t, "{{") || !strings.HasSuffix(t, "}}") || strings.Count(t, "{{") != 1 {
 		return strings.NewReplacer(
 			"{{ finding.severity }}", strings.ToLower(string(f.Severity)),
 			"{{ finding.title }}", f.Title,

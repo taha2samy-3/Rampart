@@ -271,7 +271,7 @@ func critical() *domain.Finding {
 	return &domain.Finding{ID: uuid.New(), TenantID: uuid.New(), Title: "Remote code execution", Description: "bad", Severity: domain.SeverityCritical, RiskScore: 940, RuleID: "CVE-1"}
 }
 
-func TestJira_CreatingAnIssueIsNotRetried_SoALostAnswerCannotOpenTwoTickets(t *testing.T) {
+func TestJira_CreatingAnIssueIsNotRetriedWithinOneCall(t *testing.T) {
 	ts := newTrackerServer(http.StatusBadGateway)
 	defer ts.srv.Close()
 	tr, _ := connectors.NewJiraTracker(domain.JiraConnectorConfig{URL: ts.srv.URL, DefaultProject: "SEC"}, loopbackClient(), []byte("a@b.c:tok"), "")

@@ -272,13 +272,16 @@ func (r *Runner) Run(ctx context.Context) error {
 		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
 	}
 	queryAPI.SetInboundWebhookHandler(inboundHandler)
+	// The ticket sweeper reads the pending tickets of every tenant, which row-level security allows only the system
+	// role. Without it the application role would see no rows at all and every ticket would wait for ever, so it is
+	// not started, and the log says why. The advisory lock the sweeper takes needs the system pool as well: without
+	// one, two replicas could open the same ticket.
 	if pgStore != nil {
-		ticketStore := connectors.TicketStore(pgStore)
-		var ticketPool *pgxpool.Pool
-		if sysStore != nil { // the pending tickets are read across tenants
-			ticketStore, ticketPool = sysStore, sysStore.Pool()
+		if sysStore != nil {
+			go connectors.RunTicketSweeper(ctx, sysStore, trackerResolver, sysStore.Pool(), time.Minute, r.logger)
+		} else {
+			r.logger.Warn("tickets: the ticket sweeper needs the system database role (database.systemUrl); critical findings are reserved but no ticket will be opened")
 		}
-		go connectors.RunTicketSweeper(ctx, ticketStore, trackerResolver, ticketPool, time.Minute, r.logger)
 	}
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
