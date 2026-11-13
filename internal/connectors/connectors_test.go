@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +28,11 @@ type mockSecretResolver struct {
 
 func (m *mockSecretResolver) GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error) {
 	k := tenantID.String() + ":" + key
-	return m.secrets[k], nil
+	val, ok := m.secrets[k]
+	if !ok {
+		return nil, fmt.Errorf("secret %q not found", key)
+	}
+	return val, nil
 }
 
 func TestSafeClient_SSRFBlocked(t *testing.T) {
@@ -316,5 +323,309 @@ func TestNotificationRouter_D25Digests(t *testing.T) {
 	}
 	if !strings.Contains(digest.Title, "25 findings detected") {
 		t.Errorf("unexpected digest title: %s", digest.Title)
+	}
+}
+
+func TestSlackAndTeamsNotifier_RejectsRelativeURL(t *testing.T) {
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	slack := connectors.NewSlackNotifier(client, "xoxb-test", "#general")
+	teams := connectors.NewTeamsNotifier(client, "https://example.com/webhook")
+
+	relMsg := connectors.NotificationMessage{
+		Title:    "Test finding",
+		Severity: "high",
+		URL:      "/findings/12345", // Relative URL should be rejected
+	}
+
+	errSlack := slack.Send(context.Background(), relMsg)
+	if errSlack == nil || !strings.Contains(errSlack.Error(), "must be absolute http/https url") {
+		t.Fatalf("expected slack relative url error, got: %v", errSlack)
+	}
+
+	errTeams := teams.Send(context.Background(), relMsg)
+	if errTeams == nil || !strings.Contains(errTeams.Error(), "must be absolute http/https url") {
+		t.Fatalf("expected teams relative url error, got: %v", errTeams)
+	}
+}
+
+func TestNotificationRouter_SecretExistsButEmptyValue(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	mStore := ingest.NewMemoryStore()
+
+	conn := domain.Connector{
+		ID:       uuid.New(),
+		TenantID: tenantID,
+		Name:     "slack-empty-secret",
+		Type:     domain.ConnectorTypeSlack,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeSlack,
+			Slack: &domain.SlackConnectorConfig{
+				TokenSecretRef: domain.SecretKeyRef{Name: "my-slack-token", Key: "token"},
+				DefaultChannel: "#alerts",
+			},
+		},
+		Status: domain.ConnectorStatus{
+			Conditions: []domain.ConnectorCondition{
+				{Type: "Connected", Status: "True", LastTransitionTime: time.Now()},
+			},
+		},
+	}
+	_ = mStore.SaveConnector(ctx, tenantID, conn)
+
+	// Resolver returns empty byte slice (len 0) without error
+	resolver := &mockSecretResolver{
+		secrets: map[string][]byte{
+			tenantID.String() + ":connector:slack-empty-secret:token": []byte(""),
+		},
+	}
+
+	router := connectors.NewNotificationRouter(mStore, resolver, nil)
+	errs := router.RouteNotification(ctx, tenantID, connectors.NotificationMessage{
+		Title:    "Alert",
+		Severity: "high",
+		URL:      "https://rampart.example.com/findings/1",
+	})
+
+	if len(errs) == 0 {
+		t.Fatal("expected error on empty secret value, got nil")
+	}
+	errStr := errs[0].Error()
+	if strings.Contains(errStr, "%!w(<nil>)") || strings.Contains(errStr, "%!(EXTRA") {
+		t.Fatalf("found broken error formatting in: %s", errStr)
+	}
+	if !strings.Contains(errStr, "exists but value is empty") {
+		t.Fatalf("expected 'exists but value is empty', got: %s", errStr)
+	}
+}
+
+func TestNotificationRouter_DeepLinkIsAbsolute(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	mStore := ingest.NewMemoryStore()
+
+	var receivedURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m connectors.NotificationMessage
+		_ = json.Unmarshal(body, &m)
+		receivedURL = m.URL
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	conn := domain.Connector{
+		ID:       uuid.New(),
+		TenantID: tenantID,
+		Name:     "webhook-links",
+		Type:     domain.ConnectorTypeWebhook,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeWebhook,
+			Webhook: &domain.WebhookConnectorConfig{
+				URL:    srv.URL,
+				Format: "raw",
+			},
+		},
+		Status: domain.ConnectorStatus{
+			Conditions: []domain.ConnectorCondition{
+				{Type: "Connected", Status: "True", LastTransitionTime: time.Now()},
+			},
+		},
+	}
+	_ = mStore.SaveConnector(ctx, tenantID, conn)
+
+	testClient := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	router := connectors.NewNotificationRouterWithConfig(mStore, nil, testClient, connectors.RouterConfig{
+		PublicURL: "https://security.corp.internal",
+	})
+
+	findingID := domain.NewID()
+	batch := []*domain.Finding{
+		{
+			ID:          findingID,
+			Title:       "Test",
+			Description: "Desc",
+			Severity:    "high",
+		},
+	}
+
+	errs := router.RouteIngestRunFindings(ctx, tenantID, "PaymentSvc", batch)
+	if len(errs) > 0 {
+		t.Fatalf("route errors: %v", errs)
+	}
+
+	expectedPrefix := "https://security.corp.internal/t/" + tenantID.String() + "/findings/" + findingID.String()
+	if receivedURL != expectedPrefix {
+		t.Fatalf("expected absolute deep link %q, got %q", expectedPrefix, receivedURL)
+	}
+}
+
+func TestNotificationRouter_RoutingRules(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	mStore := ingest.NewMemoryStore()
+
+	var deliveredTitles []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m connectors.NotificationMessage
+		_ = json.Unmarshal(body, &m)
+		deliveredTitles = append(deliveredTitles, m.Title)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Connector configured to only receive Critical findings for "PaymentGateway" application
+	conn := domain.Connector{
+		ID:       uuid.New(),
+		TenantID: tenantID,
+		Name:     "crit-payment-only",
+		Type:     domain.ConnectorTypeWebhook,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeWebhook,
+			Routing: &domain.NotificationRoutingRule{
+				MinSeverity:  domain.SeverityCritical,
+				Applications: []string{"PaymentGateway"},
+			},
+			Webhook: &domain.WebhookConnectorConfig{
+				URL:    srv.URL,
+				Format: "raw",
+			},
+		},
+		Status: domain.ConnectorStatus{
+			Conditions: []domain.ConnectorCondition{
+				{Type: "Connected", Status: "True", LastTransitionTime: time.Now()},
+			},
+		},
+	}
+	_ = mStore.SaveConnector(ctx, tenantID, conn)
+
+	testClient := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	router := connectors.NewNotificationRouter(mStore, nil, testClient)
+
+	// Finding 1: High for PaymentGateway -> Filtered out (below Critical)
+	// Finding 2: Critical for OtherApp -> Filtered out (not PaymentGateway)
+	// Finding 3: Critical for PaymentGateway -> Delivered!
+	batch := []*domain.Finding{
+		{ID: domain.NewID(), Title: "F1-High-Payment", Severity: "high"},
+		{ID: domain.NewID(), Title: "F2-Crit-Other", Severity: "critical"},
+		{ID: domain.NewID(), Title: "F3-Crit-Payment", Severity: "critical"},
+	}
+
+	_ = router.RouteIngestRunFindings(ctx, tenantID, "PaymentGateway", []*domain.Finding{batch[0]})
+	_ = router.RouteIngestRunFindings(ctx, tenantID, "OtherApp", []*domain.Finding{batch[1]})
+	_ = router.RouteIngestRunFindings(ctx, tenantID, "PaymentGateway", []*domain.Finding{batch[2]})
+
+	if len(deliveredTitles) != 1 || deliveredTitles[0] != "F3-Crit-Payment" {
+		t.Fatalf("expected only F3-Crit-Payment delivered, got: %v", deliveredTitles)
+	}
+}
+
+func TestSanitizeError_UnwrapsURLError(t *testing.T) {
+	rawURLErr := &url.Error{
+		Op:  "Post",
+		URL: "https://example.com/hook?sig=SECRET_TOKEN_42&auth=true",
+		Err: context.DeadlineExceeded,
+	}
+
+	sanitized := connectors.SanitizeError(rawURLErr)
+	if strings.Contains(sanitized.Error(), "SECRET_TOKEN_42") {
+		t.Fatalf("token leaked in sanitized error: %v", sanitized)
+	}
+	if !strings.Contains(sanitized.Error(), "https://example.com/hook") {
+		t.Fatalf("expected host and path retained: %v", sanitized)
+	}
+}
+
+func TestEmailNotifier_MandatorySTARTTLS_FailsWhenUnsupported(t *testing.T) {
+	// TCP listener returning 220 banner, then 250 with only 8BITMIME (no STARTTLS) on EHLO
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot bind local test port")
+	}
+	defer func() { _ = l.Close() }()
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = c.Write([]byte("220 mail.example.com ESMTP\r\n"))
+				buf := make([]byte, 1024)
+				n, _ := c.Read(buf)
+				if strings.HasPrefix(string(buf[:n]), "EHLO") {
+					_, _ = c.Write([]byte("250-mail.example.com\r\n250 8BITMIME\r\n"))
+				}
+				_, _ = c.Read(buf)
+			}(conn)
+		}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(l.Addr().String())
+	var port int
+	_, _ = fmt.Sscanf(portStr, "%d", &port)
+
+	allowlist := &domain.PlatformSSRFAllowlist{
+		AllowedHosts: []string{host},
+		AllowedCIDRs: []*net.IPNet{{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(32, 32)}},
+	}
+
+	notifier := connectors.NewEmailNotifierWithAllowlist(
+		domain.EmailSMTPConfig{
+			Host:    host,
+			Port:    port,
+			TLSMode: domain.EmailTLSModeStartTLS, // Default mandatory STARTTLS
+		},
+		"sec@corp.internal",
+		[]string{"admin@corp.internal"},
+		"", "",
+		allowlist,
+	)
+
+	msg := connectors.NotificationMessage{
+		Title:    "Test",
+		Summary:  "Summary",
+		Severity: "high",
+	}
+
+	sendErr := notifier.Send(context.Background(), msg)
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "does not support mandatory STARTTLS") {
+		t.Fatalf("expected mandatory STARTTLS failure, got: %v", sendErr)
+	}
+}
+
+func TestPlatformSSRFAllowlist_InClusterAndOnPrem(t *testing.T) {
+	_, clusterCIDR, _ := net.ParseCIDR("10.96.0.0/12")
+	allowlist := &domain.PlatformSSRFAllowlist{
+		AllowedCIDRs:      []*net.IPNet{clusterCIDR},
+		AllowedHosts:      []string{"dtrack.dtrack.svc", "*.corp.internal"},
+		AllowInternalHTTP: true,
+	}
+
+	// 1. In-cluster Dependency-Track HTTP on .svc is allowed with allowlist
+	err := domain.ValidateConnectorURLWithAllowlist("http://dtrack.dtrack.svc:8080", allowlist)
+	if err != nil {
+		t.Fatalf("expected allowed in-cluster HTTP on .svc, got: %v", err)
+	}
+
+	// 2. Normal validation without allowlist rejects in-cluster HTTP
+	err = domain.ValidateConnectorURL("http://dtrack.dtrack.svc:8080")
+	if err == nil {
+		t.Fatal("expected rejection without allowlist, got nil")
+	}
+
+	// 3. On-prem Jira Data Center on internal HTTPS
+	err = domain.ValidateConnectorURLWithAllowlist("https://jira.corp.internal:8443", allowlist)
+	if err != nil {
+		t.Fatalf("expected allowed on-prem Jira, got: %v", err)
+	}
+
+	// 4. Disallowed internal host without allowlist match is rejected
+	err = domain.ValidateConnectorURLWithAllowlist("https://secret.other.internal", allowlist)
+	if err == nil {
+		t.Fatal("expected rejection of non-allowlisted internal host, got nil")
 	}
 }

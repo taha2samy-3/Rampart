@@ -99,12 +99,29 @@ type TeamsConnectorConfig struct {
 	WebhookSecretRef SecretKeyRef `json:"webhookSecretRef"` // Key: url
 }
 
+// EmailTLSMode specifies the encryption mode for SMTP connections.
+type EmailTLSMode string
+
+const (
+	EmailTLSModeStartTLS EmailTLSMode = "starttls" // Mandatory STARTTLS on port 587/25 (default)
+	EmailTLSModeImplicit EmailTLSMode = "implicit" // Implicit TLS (SMTPS) on port 465
+	EmailTLSModeInsecure EmailTLSMode = "insecure" // Plaintext unencrypted (internal/testing only)
+)
+
 // EmailSMTPConfig contains SMTP server connection settings.
 type EmailSMTPConfig struct {
 	Host                 string       `json:"host"`
 	Port                 int          `json:"port"`
 	CredentialsSecretRef SecretKeyRef `json:"credentialsSecretRef,omitempty"` // Keys: username, password
-	TLS                  bool         `json:"tls,omitempty"`
+	TLS                  bool         `json:"tls,omitempty"`                  // Legacy boolean (true => implicit TLS)
+	TLSMode              EmailTLSMode `json:"tlsMode,omitempty"`              // "starttls" | "implicit" | "insecure"
+}
+
+// NotificationRoutingRule specifies filter criteria for dispatching notifications to a connector.
+type NotificationRoutingRule struct {
+	MinSeverity  Severity `json:"minSeverity,omitempty"`  // e.g. "high" (filters out lower severities)
+	Applications []string `json:"applications,omitempty"` // Filter by application names (empty means all)
+	Events       []string `json:"events,omitempty"`       // Filter by event types (empty means all)
 }
 
 // EmailConnectorConfig holds outbound email notification settings.
@@ -132,6 +149,7 @@ type DependencyTrackConnectorConfig struct {
 type ConnectorSpec struct {
 	Type            ConnectorType                   `json:"type"`
 	Direction       ConnectorDirection              `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
+	Routing         *NotificationRoutingRule        `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
 	Jira            *JiraConnectorConfig            `json:"jira,omitempty"`
 	GitHub          *GitHubConnectorConfig          `json:"github,omitempty"`
 	Slack           *SlackConnectorConfig           `json:"slack,omitempty"`
@@ -196,6 +214,11 @@ func (c *Connector) Direction() ConnectorDirection {
 
 // Validate checks the structural validity, SSRF safety, and header constraints of a Connector.
 func (c *Connector) Validate() error {
+	return c.ValidateWithAllowlist(nil)
+}
+
+// ValidateWithAllowlist validates a Connector with a platform administrator SSRF allowlist (D69).
+func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) error {
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("%w: connector name is required", ErrConnectorInvalid)
 	}
@@ -234,7 +257,7 @@ func (c *Connector) Validate() error {
 		if c.Spec.Jira == nil {
 			return fmt.Errorf("%w: jira config is required for jira connector", ErrConnectorInvalid)
 		}
-		if err := ValidateConnectorURL(c.Spec.Jira.URL); err != nil {
+		if err := ValidateConnectorURLWithAllowlist(c.Spec.Jira.URL, allowlist); err != nil {
 			return fmt.Errorf("%w: invalid jira url: %w", ErrConnectorInvalid, err)
 		}
 		if strings.TrimSpace(c.Spec.Jira.CredentialsSecretRef.Name) == "" {
@@ -272,7 +295,7 @@ func (c *Connector) Validate() error {
 		if c.Spec.Webhook == nil {
 			return fmt.Errorf("%w: webhook config is required for webhook connector", ErrConnectorInvalid)
 		}
-		if err := ValidateConnectorURL(c.Spec.Webhook.URL); err != nil {
+		if err := ValidateConnectorURLWithAllowlist(c.Spec.Webhook.URL, allowlist); err != nil {
 			return fmt.Errorf("%w: invalid webhook url: %w", ErrConnectorInvalid, err)
 		}
 		// Validate headers: check forbidden names and valid token syntax
@@ -296,7 +319,7 @@ func (c *Connector) Validate() error {
 		if c.Spec.DependencyTrack == nil {
 			return fmt.Errorf("%w: dependencyTrack config is required for dependencyTrack connector", ErrConnectorInvalid)
 		}
-		if err := ValidateConnectorURL(c.Spec.DependencyTrack.URL); err != nil {
+		if err := ValidateConnectorURLWithAllowlist(c.Spec.DependencyTrack.URL, allowlist); err != nil {
 			return fmt.Errorf("%w: invalid dependencyTrack url: %w", ErrConnectorInvalid, err)
 		}
 	default:

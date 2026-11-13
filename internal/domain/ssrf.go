@@ -36,8 +36,16 @@ func init() {
 // IsBlockedIP checks whether an IP falls into private, loopback, link-local, multicast,
 // CGNAT, or cloud metadata ranges (D69).
 func IsBlockedIP(ip net.IP) bool {
+	return IsBlockedIPWithAllowlist(ip, nil)
+}
+
+// IsBlockedIPWithAllowlist checks whether an IP is blocked, respecting platform allowlists for in-cluster/on-prem hosts (D69).
+func IsBlockedIPWithAllowlist(ip net.IP, allowlist *PlatformSSRFAllowlist) bool {
 	if ip == nil {
 		return true
+	}
+	if allowlist != nil && allowlist.IsIPAllowed(ip) {
+		return false
 	}
 	// Use standard library classification for private, loopback, link-local, multicast, unspecified
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
@@ -53,14 +61,68 @@ func IsBlockedIP(ip net.IP) bool {
 	return false
 }
 
+// PlatformSSRFAllowlist defines administrator-configured network ranges and hosts
+// permitted for in-cluster (e.g. Dependency-Track on .svc:8080) or on-premise integrations (D69).
+type PlatformSSRFAllowlist struct {
+	AllowedCIDRs      []*net.IPNet
+	AllowedHosts      []string
+	AllowInternalHTTP bool
+}
+
+// IsIPAllowed returns true if the IP matches any allowed CIDR in the platform allowlist.
+func (p *PlatformSSRFAllowlist) IsIPAllowed(ip net.IP) bool {
+	if p == nil || ip == nil {
+		return false
+	}
+	for _, cidr := range p.AllowedCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsHostAllowed returns true if hostname matches any allowed host or domain suffix.
+func (p *PlatformSSRFAllowlist) IsHostAllowed(hostname string) bool {
+	if p == nil || hostname == "" {
+		return false
+	}
+	h := strings.ToLower(hostname)
+	for _, allowed := range p.AllowedHosts {
+		allowedLower := strings.ToLower(allowed)
+		if allowedLower == "*" || h == allowedLower {
+			return true
+		}
+		if strings.HasPrefix(allowedLower, "*.") && strings.HasSuffix(h, allowedLower[1:]) {
+			return true
+		}
+		if strings.HasPrefix(allowedLower, ".") && strings.HasSuffix(h, allowedLower) {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateConnectorURL checks destination URL scheme and validates that the resolved host
 // does not target loopback, private RFC 1918, CGNAT, or cloud metadata endpoints (SSRF guard D69).
 func ValidateConnectorURL(rawURL string) error {
-	return ValidateConnectorURLWithPolicy(rawURL, false)
+	return ValidateConnectorURLWithAllowlist(rawURL, nil)
 }
 
 // ValidateConnectorURLWithPolicy validates connector URL, with optional allowance for insecure HTTP (testing only).
 func ValidateConnectorURLWithPolicy(rawURL string, allowInsecureHTTP bool) error {
+	var allowlist *PlatformSSRFAllowlist
+	if allowInsecureHTTP {
+		allowlist = &PlatformSSRFAllowlist{
+			AllowInternalHTTP: true,
+			AllowedHosts:      []string{"*"},
+		}
+	}
+	return ValidateConnectorURLWithAllowlist(rawURL, allowlist)
+}
+
+// ValidateConnectorURLWithAllowlist validates connector URL using a platform administrator allowlist.
+func ValidateConnectorURLWithAllowlist(rawURL string, allowlist *PlatformSSRFAllowlist) error {
 	trimmed := strings.TrimSpace(rawURL)
 	if trimmed == "" {
 		return fmt.Errorf("%w: url cannot be empty", ErrSSRFBlocked)
@@ -71,26 +133,34 @@ func ValidateConnectorURLWithPolicy(rawURL string, allowInsecureHTTP bool) error
 		return fmt.Errorf("%w: malformed url: %v", ErrSSRFBlocked, err)
 	}
 
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "https" {
-		if !allowInsecureHTTP || scheme != "http" {
-			return fmt.Errorf("%w: unsupported scheme %q (must be https)", ErrSSRFBlocked, scheme)
-		}
-	}
-
 	hostname := u.Hostname()
 	if hostname == "" {
 		return fmt.Errorf("%w: empty host in url", ErrSSRFBlocked)
 	}
 
+	isAllowedHost := allowlist != nil && allowlist.IsHostAllowed(hostname)
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "https" {
+		allowedHTTP := isAllowedHost && allowlist != nil && allowlist.AllowInternalHTTP
+		if !allowedHTTP {
+			return fmt.Errorf("%w: unsupported scheme %q (must be https)", ErrSSRFBlocked, scheme)
+		}
+	}
+
 	hostnameLower := strings.ToLower(hostname)
-	if hostnameLower == "localhost" || strings.HasSuffix(hostnameLower, ".localhost") ||
-		strings.HasSuffix(hostnameLower, ".local") || strings.HasSuffix(hostnameLower, ".internal") {
-		return fmt.Errorf("%w: local or internal destination %q is forbidden (D69)", ErrSSRFBlocked, hostname)
+	if !isAllowedHost {
+		if hostnameLower == "localhost" || strings.HasSuffix(hostnameLower, ".localhost") ||
+			strings.HasSuffix(hostnameLower, ".local") || strings.HasSuffix(hostnameLower, ".internal") {
+			return fmt.Errorf("%w: local or internal destination %q is forbidden (D69)", ErrSSRFBlocked, hostname)
+		}
 	}
 
 	// Check if hostname is an explicit IP literal
 	if ip := net.ParseIP(hostname); ip != nil {
+		if allowlist != nil && allowlist.IsIPAllowed(ip) {
+			return nil
+		}
 		if IsBlockedIP(ip) {
 			return fmt.Errorf("%w: destination IP %s is a private or link-local address (D69)", ErrSSRFBlocked, ip.String())
 		}
@@ -105,6 +175,12 @@ func ValidateConnectorURLWithPolicy(rawURL string, allowInsecureHTTP bool) error
 	}
 
 	for _, ip := range ips {
+		if allowlist != nil && allowlist.IsIPAllowed(ip) {
+			continue
+		}
+		if isAllowedHost {
+			continue
+		}
 		if IsBlockedIP(ip) {
 			return fmt.Errorf("%w: host %q resolves to blocked IP %s (D69)", ErrSSRFBlocked, hostname, ip.String())
 		}

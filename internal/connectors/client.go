@@ -36,6 +36,7 @@ type SafeClient struct {
 // SafeClientConfig configures SafeClient options.
 type SafeClientConfig struct {
 	AllowLoopback bool
+	Allowlist     *domain.PlatformSSRFAllowlist
 }
 
 // NewSafeClient creates a hardened HTTP client with dial-time SSRF verification (D69).
@@ -56,6 +57,9 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 			ip := net.ParseIP(host)
 			if ip != nil {
 				if cfg.AllowLoopback && (ip.IsLoopback() || host == "127.0.0.1" || host == "::1") {
+					return nil
+				}
+				if cfg.Allowlist != nil && cfg.Allowlist.IsIPAllowed(ip) {
 					return nil
 				}
 				if domain.IsBlockedIP(ip) {
@@ -96,7 +100,7 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 			}
 			// Verify redirect target URL scheme and host against SSRF
 			if !cfg.AllowLoopback {
-				if err := domain.ValidateConnectorURL(req.URL.String()); err != nil {
+				if err := domain.ValidateConnectorURLWithAllowlist(req.URL.String(), cfg.Allowlist); err != nil {
 					return fmt.Errorf("%w: redirect target blocked: %v", ErrSSRFDialBlocked, err)
 				}
 			}
@@ -116,6 +120,19 @@ func SanitizeURL(rawURL string) string {
 	u.User = nil
 	u.RawQuery = ""
 	return u.String()
+}
+
+// SanitizeError unboxes *url.Error with errors.As to redact sensitive tokens/parameters in URLs (D69).
+func SanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		sanitizedURL := SanitizeURL(urlErr.URL)
+		return fmt.Errorf("%s %s: %w", urlErr.Op, sanitizedURL, urlErr.Err)
+	}
+	return err
 }
 
 func parseRetryAfter(headerVal string) (time.Duration, error) {

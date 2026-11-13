@@ -17,22 +17,38 @@ type SecretResolver interface {
 	GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error)
 }
 
+// RouterConfig configures the notification router options.
+type RouterConfig struct {
+	PublicURL string // Base URL for constructing absolute deep links (e.g. "https://rampart.example.com")
+}
+
 // NotificationRouter routes security events and findings to active connectors with D25 digests.
 type NotificationRouter struct {
 	store          store.Store
 	secretResolver SecretResolver
 	client         *SafeClient
+	publicURL      string
 }
 
-// NewNotificationRouter creates a new notification routing engine.
+// NewNotificationRouter creates a new notification routing engine with default configuration.
 func NewNotificationRouter(st store.Store, resolver SecretResolver, client *SafeClient) *NotificationRouter {
+	return NewNotificationRouterWithConfig(st, resolver, client, RouterConfig{})
+}
+
+// NewNotificationRouterWithConfig creates a notification routing engine with custom settings (e.g. PublicURL).
+func NewNotificationRouterWithConfig(st store.Store, resolver SecretResolver, client *SafeClient, cfg RouterConfig) *NotificationRouter {
 	if client == nil {
 		client = NewSafeClient()
+	}
+	pubURL := strings.TrimRight(cfg.PublicURL, "/")
+	if pubURL == "" {
+		pubURL = "https://rampart.local"
 	}
 	return &NotificationRouter{
 		store:          st,
 		secretResolver: resolver,
 		client:         client,
+		publicURL:      pubURL,
 	}
 }
 
@@ -50,6 +66,11 @@ func (r *NotificationRouter) RouteNotification(ctx context.Context, tenantID uui
 	for _, conn := range connectors {
 		if !conn.IsConnected() && conn.GetCondition("Connected") != nil && conn.GetCondition("Connected").Status == "False" {
 			continue // Skip connectors known to be failing
+		}
+
+		// Apply noise-reduction routing filters (D25/D69)
+		if !matchesRouting(conn.Spec.Routing, msg) {
+			continue
 		}
 
 		notifier, err := r.buildNotifier(ctx, tenantID, conn)
@@ -114,7 +135,7 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		summary := fmt.Sprintf("Ingest run produced %d findings for %s:\n• Critical: %d\n• High: %d\n• Medium: %d\n• Low: %d\n• Info: %d",
 			len(findings), appName, critCount, highCount, medCount, lowCount, infoCount)
 
-		digestURL := fmt.Sprintf("/applications/%s/runs", appName)
+		digestURL := fmt.Sprintf("%s/t/%s/applications/%s", r.publicURL, tenantID.String(), appName)
 		digestMsg := NotificationMessage{
 			ID:          uuid.New().String(),
 			TenantID:    tenantID.String(),
@@ -137,8 +158,14 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		return []error{fmt.Errorf("router: failed to list connectors: %w", err)}
 	}
 
+	type activeTarget struct {
+		name     string
+		routing  *domain.NotificationRoutingRule
+		notifier Notifier
+	}
+
 	var allErrs []error
-	var notifiers []Notifier
+	var targets []activeTarget
 	for _, conn := range connectors {
 		if !conn.IsConnected() && conn.GetCondition("Connected") != nil && conn.GetCondition("Connected").Status == "False" {
 			continue
@@ -149,7 +176,11 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			continue
 		}
 		if notifier != nil {
-			notifiers = append(notifiers, notifier)
+			targets = append(targets, activeTarget{
+				name:     conn.Name,
+				routing:  conn.Spec.Routing,
+				notifier: notifier,
+			})
 		}
 	}
 
@@ -162,12 +193,15 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			Summary:   f.Description,
 			Severity:  strings.ToLower(string(f.Severity)),
 			FindingID: f.ID.String(),
-			URL:       fmt.Sprintf("/findings/%s", f.ID.String()),
+			URL:       fmt.Sprintf("%s/t/%s/findings/%s", r.publicURL, tenantID.String(), f.ID.String()),
 			Timestamp: time.Now().UTC(),
 		}
-		for _, n := range notifiers {
-			if err := n.Send(ctx, msg); err != nil {
-				allErrs = append(allErrs, err)
+		for _, tgt := range targets {
+			if !matchesRouting(tgt.routing, msg) {
+				continue
+			}
+			if err := tgt.notifier.Send(ctx, msg); err != nil {
+				allErrs = append(allErrs, fmt.Errorf("connector %q send failed: %w", tgt.name, err))
 			}
 		}
 	}
@@ -187,8 +221,11 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Slack.TokenSecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
-			if err != nil || len(b) == 0 {
+			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve token secret %q: %w", conn.Name, conn.Spec.Slack.TokenSecretRef.Name, err)
+			}
+			if len(b) == 0 {
+				return nil, fmt.Errorf("connector %q token secret %q exists but value is empty", conn.Name, conn.Spec.Slack.TokenSecretRef.Name)
 			}
 			token = string(b)
 		}
@@ -205,8 +242,11 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Teams.WebhookSecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
-			if err != nil || len(b) == 0 {
+			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve webhook URL secret %q: %w", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name, err)
+			}
+			if len(b) == 0 {
+				return nil, fmt.Errorf("connector %q webhook URL secret %q exists but value is empty", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name)
 			}
 			webhookURL = string(b)
 		}
@@ -223,8 +263,11 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Webhook.SecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
-			if err != nil || len(b) == 0 {
+			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve HMAC secret %q: %w", conn.Name, conn.Spec.Webhook.SecretRef.Name, err)
+			}
+			if len(b) == 0 {
+				return nil, fmt.Errorf("connector %q HMAC secret %q exists but value is empty", conn.Name, conn.Spec.Webhook.SecretRef.Name)
 			}
 			secret = b
 		}
@@ -241,8 +284,11 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
-			if err != nil || len(b) == 0 {
+			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve SMTP credentials %q: %w", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name, err)
+			}
+			if len(b) == 0 {
+				return nil, fmt.Errorf("connector %q SMTP credentials secret %q exists but value is empty", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name)
 			}
 			parts := strings.SplitN(string(b), ":", 2)
 			if len(parts) == 2 {
@@ -254,4 +300,45 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 	default:
 		return nil, nil
 	}
+}
+
+func severityRank(s string) int {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func matchesRouting(rule *domain.NotificationRoutingRule, msg NotificationMessage) bool {
+	if rule == nil {
+		return true
+	}
+	// 1. Min severity
+	if rule.MinSeverity != "" {
+		if severityRank(msg.Severity) < severityRank(string(rule.MinSeverity)) {
+			return false
+		}
+	}
+	// 2. Application filter
+	if len(rule.Applications) > 0 && msg.AppName != "" {
+		matched := false
+		for _, app := range rule.Applications {
+			if strings.EqualFold(app, msg.AppName) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }

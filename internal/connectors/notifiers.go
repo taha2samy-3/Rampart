@@ -99,6 +99,9 @@ func (s *SlackNotifier) Send(ctx context.Context, msg NotificationMessage) error
 	}
 
 	if msg.URL != "" {
+		if !strings.HasPrefix(msg.URL, "http://") && !strings.HasPrefix(msg.URL, "https://") {
+			return fmt.Errorf("slack: action url %q is invalid (must be absolute http/https url)", msg.URL)
+		}
 		blocks = append(blocks, map[string]any{
 			"type": "actions",
 			"elements": []map[string]any{
@@ -198,6 +201,9 @@ func (t *TeamsNotifier) Send(ctx context.Context, msg NotificationMessage) error
 	}
 
 	if msg.URL != "" {
+		if !strings.HasPrefix(msg.URL, "http://") && !strings.HasPrefix(msg.URL, "https://") {
+			return fmt.Errorf("teams: action url %q is invalid (must be absolute http/https url)", msg.URL)
+		}
 		adaptiveCard["actions"] = []map[string]any{
 			{
 				"type":  "Action.OpenUrl",
@@ -341,9 +347,14 @@ type EmailNotifier struct {
 	from       string
 	to         []string
 	auth       smtp.Auth
+	allowlist  *domain.PlatformSSRFAllowlist
 }
 
 func NewEmailNotifier(cfg domain.EmailSMTPConfig, from string, to []string, username, password string) *EmailNotifier {
+	return NewEmailNotifierWithAllowlist(cfg, from, to, username, password, nil)
+}
+
+func NewEmailNotifierWithAllowlist(cfg domain.EmailSMTPConfig, from string, to []string, username, password string, allowlist *domain.PlatformSSRFAllowlist) *EmailNotifier {
 	var a smtp.Auth
 	if username != "" && password != "" {
 		a = smtp.PlainAuth("", username, password, cfg.Host)
@@ -353,6 +364,7 @@ func NewEmailNotifier(cfg domain.EmailSMTPConfig, from string, to []string, user
 		from:       from,
 		to:         to,
 		auth:       a,
+		allowlist:  allowlist,
 	}
 }
 
@@ -366,14 +378,13 @@ func sanitizeErrorURL(err error, rawURL string) error {
 	if err == nil {
 		return nil
 	}
-	u, parseErr := url.Parse(rawURL)
-	if parseErr != nil {
-		return err
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return SanitizeError(err)
 	}
-	errStr := err.Error()
-	if strings.Contains(errStr, rawURL) {
-		sanitized := fmt.Sprintf("%s://%s/...", u.Scheme, u.Host)
-		errStr = strings.ReplaceAll(errStr, rawURL, sanitized)
+	if rawURL != "" {
+		sanitized := SanitizeURL(rawURL)
+		errStr := strings.ReplaceAll(err.Error(), rawURL, sanitized)
 		return errors.New(errStr)
 	}
 	return err
@@ -392,17 +403,22 @@ func (e *EmailNotifier) Send(ctx context.Context, msg NotificationMessage) error
 	}
 	cleanTo := strings.Join(cleanToList, ", ")
 
+	cleanSummary := truncateString(msg.Summary, 16384)
+	if len([]rune(msg.Summary)) > 16384 {
+		cleanSummary += "\n[Summary truncated due to size limit]"
+	}
+
 	mimeHeader := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",
 		cleanFrom, cleanTo, encodedSubject)
 	body := fmt.Sprintf("%s\n\nSeverity: %s\nApplication: %s\nLink: %s\n\n%s",
-		msg.Title, strings.ToUpper(msg.Severity), msg.AppName, msg.URL, msg.Summary)
+		msg.Title, strings.ToUpper(msg.Severity), msg.AppName, msg.URL, cleanSummary)
 
 	msgBytes := []byte(mimeHeader + body)
 
-	return sendSMTPGuarded(ctx, e.smtpConfig.Host, e.smtpConfig.Port, e.smtpConfig.TLS, e.auth, cleanFrom, cleanToList, msgBytes)
+	return sendSMTPGuarded(ctx, e.smtpConfig.Host, e.smtpConfig.Port, e.smtpConfig.TLS, e.smtpConfig.TLSMode, e.auth, cleanFrom, cleanToList, msgBytes, e.allowlist)
 }
 
-func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, auth smtp.Auth, from string, to []string, msg []byte) error {
+func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, tlsMode domain.EmailTLSMode, auth smtp.Auth, from string, to []string, msg []byte, allowlist *domain.PlatformSSRFAllowlist) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// 1. Resolve host and check against SSRF
@@ -411,7 +427,7 @@ func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, au
 		return fmt.Errorf("smtp: failed to resolve host %q: %w", host, err)
 	}
 	for _, ip := range ips {
-		if domain.IsBlockedIP(ip) {
+		if domain.IsBlockedIPWithAllowlist(ip, allowlist) {
 			return fmt.Errorf("%w: smtp host %q resolves to blocked IP %s (D69)", domain.ErrSSRFBlocked, host, ip.String())
 		}
 	}
@@ -424,15 +440,16 @@ func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, au
 				h = address
 			}
 			ip := net.ParseIP(h)
-			if ip != nil && domain.IsBlockedIP(ip) {
+			if ip != nil && domain.IsBlockedIPWithAllowlist(ip, allowlist) {
 				return fmt.Errorf("%w: dial to blocked SMTP IP %s", domain.ErrSSRFBlocked, ip.String())
 			}
 			return nil
 		},
 	}
 
+	isImplicitTLS := useTLS || tlsMode == domain.EmailTLSModeImplicit || port == 465
 	var conn net.Conn
-	if useTLS {
+	if isImplicitTLS {
 		tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
 		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
 	} else {
@@ -443,14 +460,32 @@ func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, au
 	}
 	defer func() { _ = conn.Close() }()
 
+	// Apply session deadline to prevent hanging goroutines on slow/unresponsive SMTP servers
+	sessionDeadline := time.Now().Add(30 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(sessionDeadline) {
+		sessionDeadline = d
+	}
+	_ = conn.SetDeadline(sessionDeadline)
+
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return fmt.Errorf("smtp client init failed: %w", err)
 	}
 	defer func() { _ = client.Quit() }()
 
-	if !useTLS {
-		if ok, _ := client.Extension("STARTTLS"); ok {
+	if !isImplicitTLS {
+		hasStartTLS, _ := client.Extension("STARTTLS")
+		if tlsMode == domain.EmailTLSModeInsecure {
+			// Insecure plaintext explicitly permitted
+			if hasStartTLS {
+				tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+				_ = client.StartTLS(tlsConfig)
+			}
+		} else {
+			// Default: Mandatory STARTTLS
+			if !hasStartTLS {
+				return fmt.Errorf("smtp server %q does not support mandatory STARTTLS", host)
+			}
 			tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
 			if err := client.StartTLS(tlsConfig); err != nil {
 				return fmt.Errorf("smtp starttls failed: %w", err)
