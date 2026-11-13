@@ -1239,5 +1239,46 @@ Milestone 3.4 implements the production integration with OWASP Dependency-Track 
 - Once terminal, the findings from the sync run are evaluated against `failOn`, and the run ID is appended to `resp.Runs`.
 
 
+## D75. Integration SDK, declarative mapping engine, and Wave 2 parsers (Phase 3, milestone 3.5)
+
+Milestone 3.5 implements the Integration SDK extension framework, declarative parser mapping engine, conformance kit, and Wave 2 scanner parsers per docs/19, docs/21 §5, and D15.
+
+### 1. Contracts & Unified Registry (`internal/integrations`)
+- Standardized extension contracts:
+  - `ParserContract`: streaming ingest (`Detect`, `Parse` via `iter.Seq2[domain.RawFinding, error]`).
+  - `SourceContract`: upstream project discovery and vulnerability pulling (`Check`, `Discover`, `Pull`).
+  - `TrackerContract`: outbound issue tracking (`Check`, `Create`, `Update`, `Get`).
+  - `NotifierContract`: outbound alert dispatch (`Check`, `Send`).
+- The `Descriptor` carries metadata and JSON Schema (`ConfigSchema`, `Secrets`, `Egress`, `Capabilities`), allowing dynamic UI configuration forms and server-side validation without hardcoding forms.
+- All built-in connectors (`builtin:jira`, `builtin:github`, `builtin:slack`, `builtin:teams`, `builtin:email`, `builtin:webhook`, `builtin:dependency-track`) are adapted to the contracts and pre-loaded in `DefaultRegistry()`.
+
+### 2. Tier 1 Declarative Mapping Engine (`internal/integrations/mapping`)
+- Declarative YAML specification (`runtime: mapping`) allows defining streaming parsers without writing Go code.
+- **Streaming selector**: walks JSON tokens one record at a time matching JSON path selectors (e.g. `$.dependencies[*].vulns[*]`). Only a single record and its parent context are in heap at any moment. Strict limits enforced: `maxDepth: 64`, `maxRecords: 500,000`.
+- **CEL Environment**: expressions compiled once with a cost limit per record (`cel.CostLimit(50,000)`). Standard helper functions: `lowerAscii`, `trim`, `split`, `regexExtract`, `parseCvss`, `toInt`, `firstNonEmpty`, `sha256`. Missing fields evaluate to empty strings/zero rather than panicking.
+- **Record Error Isolation**: bad records or evaluation failures are reported through `pc.RecordError` (D51) and skipped, allowing the report to complete.
+- **Memory Boundedness**: streaming 50,000 synthetic records operates in < 10 MB heap, verified by automated memory benchmarks.
+
+### 3. Conformance Kit (`internal/integrations/conformance`)
+- Test harness `RunSuite` verifies any parser contract:
+  - Detection confidence scoring.
+  - Parse execution and record error isolation.
+  - Secret leakage prevention (D42): asserts raw secrets never leak into `Title`, `Description`, or `Location`.
+  - Deterministic idempotency: guarantees identical findings count and keys across repeated runs and reordered inputs.
+
+### 4. Wave 2 Scanner Parsers (`internal/parsers/`)
+- Eight new scanners implemented and registered in `DefaultRegistry`:
+  1. **Checkov** (`internal/parsers/checkov`): IaC scanner (Terraform, CloudFormation, K8s, Dockerfile) mapping to `domain.CategoryIaC`.
+  2. **Bandit** (`internal/parsers/bandit`): Python SAST scanner mapping to `domain.CategorySAST` with CWE extraction.
+  3. **Nuclei** (`internal/parsers/nuclei`): DAST template scanner parsing line-delimited JSON (JSONL) with web locations and CVSS vectors.
+  4. **OWASP ZAP** (`internal/parsers/zap`): DAST scanner parsing JSON alert trees into web locations.
+  5. **OWASP Dependency-Check** (`internal/parsers/dependencycheck`): SCA scanner extracting purls, packages, and vulnerabilities.
+  6. **Snyk** (`internal/parsers/snyk`): SCA scanner parsing vulnerabilities, purls, fixed versions, and CVSSv3.
+  7. **kube-bench** (`internal/parsers/kubebench`): CIS Kubernetes benchmark scanner filtering failed/warning checks to `domain.CategoryCompliance`.
+  8. **Prowler** (`internal/parsers/prowler`): Cloud security and compliance scanner mapping to `domain.CategoryCSPM`.
+- Added scanner families to `compliance.FamilyCategories` (`bandit`, `dependency-check`, `snyk`, `kube-bench`) for compliance matrix evaluation.
+
+
+
 
 

@@ -127,6 +127,7 @@ var FamilyCategories = map[string][]string{
 	"semgrep": {"sast", "secret"}, "sarif": {"sast"}, "gitleaks": {"secret"}, "trufflehog": {"secret"},
 	"trivy": {"sca", "container", "iac", "secret"}, "grype": {"sca", "container"}, "syft": {"sca"},
 	"dependency-track": {"sca"}, "zap": {"dast"}, "nuclei": {"dast"}, "checkov": {"iac"}, "kics": {"iac"}, "prowler": {"cspm"},
+	"bandit": {"sast"}, "dependency-check": {"sca"}, "snyk": {"sca", "sast", "container"}, "kube-bench": {"compliance", "k8s"},
 }
 
 // Status is a control's reading.
