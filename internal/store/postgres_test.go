@@ -455,8 +455,14 @@ func TestPostgresStore_Integration_RLS(t *testing.T) {
 			},
 		},
 	}
-	if err := appStore.SaveConnector(ctx, tenantA.ID, connA); err != nil {
-		t.Fatalf("failed to save connector for tenant A: %v", err)
+	// rampart_app cannot write connectors (D69: operator writes as rampart_system)
+	if err := appStore.SaveConnector(ctx, tenantA.ID, connA); err == nil {
+		t.Fatalf("expected appStore (rampart_app) to be denied write access to connector table")
+	}
+
+	// rampart_system writes the connector
+	if err := sysStore.SaveConnector(ctx, tenantA.ID, connA); err != nil {
+		t.Fatalf("failed to save connector for tenant A as rampart_system: %v", err)
 	}
 
 	// Tenant A can see it

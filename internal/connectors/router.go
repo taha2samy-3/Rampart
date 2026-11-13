@@ -135,7 +135,10 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		summary := fmt.Sprintf("Ingest run produced %d findings for %s:\n• Critical: %d\n• High: %d\n• Medium: %d\n• Low: %d\n• Info: %d",
 			len(findings), appName, critCount, highCount, medCount, lowCount, infoCount)
 
-		digestURL := fmt.Sprintf("%s/t/%s/applications/%s", r.publicURL, tenantID.String(), appName)
+		digestURL := ""
+		if r.publicURL != "" && len(findings) > 0 && findings[0].ApplicationID != uuid.Nil {
+			digestURL = fmt.Sprintf("%s/applications/%s", r.publicURL, findings[0].ApplicationID.String())
+		}
 		digestMsg := NotificationMessage{
 			ID:          uuid.New().String(),
 			TenantID:    tenantID.String(),
@@ -147,6 +150,7 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			Timestamp:   time.Now().UTC(),
 			IsDigest:    true,
 			DigestCount: len(findings),
+			Fields:      map[string]string{"event": "digest"},
 		}
 
 		return r.RouteNotification(ctx, tenantID, digestMsg)
@@ -167,7 +171,10 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 	var allErrs []error
 	var targets []activeTarget
 	for _, conn := range connectors {
-		if !conn.IsConnected() && conn.GetCondition("Connected") != nil && conn.GetCondition("Connected").Status == "False" {
+		if cond := conn.GetCondition("Ready"); cond != nil && cond.Status == "False" {
+			continue
+		}
+		if cond := conn.GetCondition("Connected"); cond != nil && cond.Status == "False" {
 			continue
 		}
 		notifier, err := r.buildNotifier(ctx, tenantID, conn)
@@ -184,7 +191,18 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		}
 	}
 
+	tenantSlug := tenantID.String()
+	if r.store != nil {
+		if t, err := r.store.GetTenant(ctx, tenantID); err == nil && t != nil && t.Slug != "" {
+			tenantSlug = t.Slug
+		}
+	}
+
 	for _, f := range findings {
+		findingURL := ""
+		if r.publicURL != "" {
+			findingURL = fmt.Sprintf("%s/t/%s/findings/%s", r.publicURL, tenantSlug, f.ID.String())
+		}
 		msg := NotificationMessage{
 			ID:        uuid.New().String(),
 			TenantID:  tenantID.String(),
@@ -193,8 +211,9 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			Summary:   f.Description,
 			Severity:  strings.ToLower(string(f.Severity)),
 			FindingID: f.ID.String(),
-			URL:       fmt.Sprintf("%s/t/%s/findings/%s", r.publicURL, tenantID.String(), f.ID.String()),
+			URL:       findingURL,
 			Timestamp: time.Now().UTC(),
+			Fields:    map[string]string{"event": "finding_created"},
 		}
 		for _, tgt := range targets {
 			if !matchesRouting(tgt.routing, msg) {
@@ -219,7 +238,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			if r.secretResolver == nil {
 				return nil, fmt.Errorf("connector %q requires secretResolver for token %q", conn.Name, conn.Spec.Slack.TokenSecretRef.Name)
 			}
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Slack.TokenSecretRef.Key)
+			secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.Slack.TokenSecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
 			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve token secret %q: %w", conn.Name, conn.Spec.Slack.TokenSecretRef.Name, err)
@@ -240,7 +259,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			if r.secretResolver == nil {
 				return nil, fmt.Errorf("connector %q requires secretResolver for webhook %q", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name)
 			}
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Teams.WebhookSecretRef.Key)
+			secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.Teams.WebhookSecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
 			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve webhook URL secret %q: %w", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name, err)
@@ -261,7 +280,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			if r.secretResolver == nil {
 				return nil, fmt.Errorf("connector %q requires secretResolver for secretRef %q", conn.Name, conn.Spec.Webhook.SecretRef.Name)
 			}
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Webhook.SecretRef.Key)
+			secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.Webhook.SecretRef.Key)
 			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
 			if err != nil {
 				return nil, fmt.Errorf("connector %q failed to resolve HMAC secret %q: %w", conn.Name, conn.Spec.Webhook.SecretRef.Name, err)
@@ -282,17 +301,30 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			if r.secretResolver == nil {
 				return nil, fmt.Errorf("connector %q requires secretResolver for SMTP credentials %q", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name)
 			}
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Key)
-			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
-			if err != nil {
-				return nil, fmt.Errorf("connector %q failed to resolve SMTP credentials %q: %w", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name, err)
-			}
-			if len(b) == 0 {
-				return nil, fmt.Errorf("connector %q SMTP credentials secret %q exists but value is empty", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name)
-			}
-			parts := strings.SplitN(string(b), ":", 2)
-			if len(parts) == 2 {
-				username, password = parts[0], parts[1]
+			// 1. Check separate username and password keys
+			userKey := fmt.Sprintf("connector:%s:username", conn.Name)
+			passKey := fmt.Sprintf("connector:%s:password", conn.Name)
+			uBytes, errU := r.secretResolver.GetSecretMaterial(ctx, tenantID, userKey)
+			pBytes, errP := r.secretResolver.GetSecretMaterial(ctx, tenantID, passKey)
+			if errU == nil && errP == nil && len(pBytes) > 0 {
+				username = string(uBytes)
+				password = string(pBytes)
+			} else {
+				// 2. Fall back to combined key (e.g. key "token", "password", or "credentials")
+				secKey := domain.ConnectorSecretStorageKey(conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Key)
+				b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+				if err != nil {
+					return nil, fmt.Errorf("connector %q failed to resolve SMTP credentials %q: %w", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name, err)
+				}
+				if len(b) == 0 {
+					return nil, fmt.Errorf("connector %q SMTP credentials secret %q exists but value is empty", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name)
+				}
+				parts := strings.SplitN(string(b), ":", 2)
+				if len(parts) == 2 {
+					username, password = parts[0], parts[1]
+				} else {
+					password = string(b)
+				}
 			}
 		}
 		return NewEmailNotifier(conn.Spec.Email.SMTP, conn.Spec.Email.From, conn.Spec.Email.To, username, password), nil
@@ -312,8 +344,10 @@ func severityRank(s string) int {
 		return 2
 	case "low":
 		return 1
-	default:
+	case "info":
 		return 0
+	default:
+		return -1 // Unrecognized or misspelled severities rank below info
 	}
 }
 
@@ -323,15 +357,34 @@ func matchesRouting(rule *domain.NotificationRoutingRule, msg NotificationMessag
 	}
 	// 1. Min severity
 	if rule.MinSeverity != "" {
-		if severityRank(msg.Severity) < severityRank(string(rule.MinSeverity)) {
+		targetRank := severityRank(string(rule.MinSeverity))
+		msgRank := severityRank(msg.Severity)
+		if targetRank == -1 || msgRank < targetRank {
 			return false
 		}
 	}
-	// 2. Application filter
-	if len(rule.Applications) > 0 && msg.AppName != "" {
+	// 2. Application filter (matches application name or application slug)
+	if len(rule.Applications) > 0 {
 		matched := false
 		for _, app := range rule.Applications {
-			if strings.EqualFold(app, msg.AppName) {
+			if msg.AppName != "" && strings.EqualFold(app, msg.AppName) {
+				matched = true
+				break
+			}
+			if msg.Fields != nil && msg.Fields["appSlug"] != "" && strings.EqualFold(app, msg.Fields["appSlug"]) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	// 3. Events filter
+	if len(rule.Events) > 0 && msg.Fields != nil && msg.Fields["event"] != "" {
+		matched := false
+		for _, ev := range rule.Events {
+			if strings.EqualFold(ev, msg.Fields["event"]) {
 				matched = true
 				break
 			}

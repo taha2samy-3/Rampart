@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"rampart/internal/config/apply"
+	"rampart/internal/domain"
 )
 
 // Operator manages Rampart Kubernetes reconciliation loops.
@@ -22,6 +23,11 @@ type Operator struct {
 
 // NewOperator creates a new Rampart operator instance.
 func NewOperator(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore, logger *slog.Logger) *Operator {
+	return NewOperatorWithAllowlist(store, secrets, secretStore, nil, logger)
+}
+
+// NewOperatorWithAllowlist creates a new Rampart operator instance with administrator SSRF allowlist for in-cluster/on-prem destinations.
+func NewOperatorWithAllowlist(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore, allowlist *domain.PlatformSSRFAllowlist, logger *slog.Logger) *Operator {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -33,7 +39,7 @@ func NewOperator(store apply.ConfigStore, secrets SecretProvider, secretStore Se
 		slaPolicies: NewSLAPolicyReconciler(store),
 		idps:        NewIdentityProviderReconciler(store),
 		clusterIdps: NewClusterIdentityProviderReconciler(store),
-		connectors:  NewConnectorReconciler(store, secrets, secretStore),
+		connectors:  NewConnectorReconciler(store, secrets, secretStore, allowlist),
 	}
 }
 

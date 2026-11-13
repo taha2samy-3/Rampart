@@ -252,6 +252,16 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		return fmt.Errorf("%w: connector type %q is not supported in Phase 3 (planned for future phases)", ErrConnectorNotSupported, c.Type)
 	}
 
+	if c.Spec.Routing != nil && c.Spec.Routing.MinSeverity != "" {
+		s := strings.ToLower(string(c.Spec.Routing.MinSeverity))
+		switch s {
+		case "critical", "high", "medium", "low", "info":
+			// valid
+		default:
+			return fmt.Errorf("%w: invalid routing minSeverity %q (must be critical, high, medium, low, or info)", ErrConnectorInvalid, c.Spec.Routing.MinSeverity)
+		}
+	}
+
 	switch c.Type {
 	case ConnectorTypeJira:
 		if c.Spec.Jira == nil {
@@ -366,4 +376,20 @@ func (c *Connector) SetCondition(condType, status, reason, message string) {
 func (c *Connector) IsConnected() bool {
 	cond := c.GetCondition("Connected")
 	return cond != nil && cond.Status == "True"
+}
+
+// IsReady returns true if the Ready condition is "True".
+func (c *Connector) IsReady() bool {
+	cond := c.GetCondition("Ready")
+	return cond != nil && cond.Status == "True"
+}
+
+// ConnectorSecretStorageKey returns the canonical storage key for a connector secret in secret_material (D69).
+// If key is empty, it defaults to "token".
+func ConnectorSecretStorageKey(connectorName, key string) string {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		k = "token"
+	}
+	return fmt.Sprintf("connector:%s:%s", connectorName, k)
 }

@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"rampart/internal/config/apply"
+	"rampart/internal/domain"
 )
 
 // Group and version of the Rampart custom resources.
@@ -72,6 +73,9 @@ type ManagerConfig struct {
 	SecretReaderClusterRole string
 	ServiceAccountName      string
 	ServiceAccountNamespace string
+
+	// SSRFAllowlist defines administrator-configured network ranges and hosts allowed for in-cluster/on-prem connectors (D69).
+	SSRFAllowlist *domain.PlatformSSRFAllowlist
 }
 
 // NewManager builds a controller-runtime manager with the Rampart controllers.
@@ -109,7 +113,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		// every namespace, which D1 forbids. GET by name in a tenant namespace is all we need.
 		secrets = &apiSecretProvider{reader: mgr.GetAPIReader()}
 	}
-	op := NewOperator(cfg.Store, secrets, cfg.SecretStore, logger)
+	op := NewOperatorWithAllowlist(cfg.Store, secrets, cfg.SecretStore, cfg.SSRFAllowlist, logger)
 	k := &kube{c: mgr.GetClient(), reader: mgr.GetAPIReader(), cfg: cfg, logger: logger}
 
 	tenants := &cr[TenantCR, TenantStatus]{k: k, gvk: gvkTenant, reconcile: func(ctx context.Context, c *TenantCR) (*TenantStatus, error) {

@@ -159,3 +159,35 @@ func TestOIDCNeedsSessionKeyAndPublicURL(t *testing.T) {
 		t.Fatal("an unknown default role must be refused")
 	}
 }
+
+func TestConnectorsSSRFAllowlistConfig(t *testing.T) {
+	// 1. Wildcard '*' in hosts must be rejected
+	c := config.SSRFAllowlistConfig{
+		Hosts: []string{"*"},
+	}
+	if _, err := c.ToPlatformSSRFAllowlist(); err == nil {
+		t.Fatal("expected wildcard '*' in SSRF allowlist to be rejected, got nil")
+	}
+
+	// 2. Invalid CIDR must be rejected
+	cInvalidCIDR := config.SSRFAllowlistConfig{
+		CIDRs: []string{"not-a-cidr"},
+	}
+	if _, err := cInvalidCIDR.ToPlatformSSRFAllowlist(); err == nil {
+		t.Fatal("expected invalid CIDR to be rejected, got nil")
+	}
+
+	// 3. Valid CIDR and host converts properly
+	cValid := config.SSRFAllowlistConfig{
+		CIDRs:             []string{"10.96.0.0/12"},
+		Hosts:             []string{"dtrack.dtrack.svc"},
+		AllowInternalHTTP: true,
+	}
+	al, err := cValid.ToPlatformSSRFAllowlist()
+	if err != nil {
+		t.Fatalf("expected valid config to succeed, got: %v", err)
+	}
+	if len(al.AllowedCIDRs) != 1 || len(al.AllowedHosts) != 1 || !al.AllowInternalHTTP {
+		t.Errorf("unexpected allowlist fields: %+v", al)
+	}
+}

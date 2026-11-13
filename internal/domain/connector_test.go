@@ -337,4 +337,45 @@ func TestConnector_Conditions(t *testing.T) {
 	if conn.IsConnected() {
 		t.Error("expected IsConnected to be false after updating to False")
 	}
+
+	if conn.IsReady() {
+		t.Error("expected IsReady to be false before Ready condition is set")
+	}
+	conn.SetCondition("Ready", "True", "Reconciled", "Reconciled")
+	if !conn.IsReady() {
+		t.Error("expected IsReady to be true after setting Ready=True")
+	}
+}
+
+func TestConnector_RoutingMinSeverityValidation(t *testing.T) {
+	conn := domain.Connector{
+		Name: "slack-test",
+		Type: domain.ConnectorTypeSlack,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeSlack,
+			Slack: &domain.SlackConnectorConfig{
+				DefaultChannel: "#alerts",
+			},
+			Routing: &domain.NotificationRoutingRule{
+				MinSeverity: "hgih", // Typo!
+			},
+		},
+	}
+	if err := conn.Validate(); err == nil {
+		t.Fatal("expected error on misspelled minSeverity 'hgih', got nil")
+	}
+
+	conn.Spec.Routing.MinSeverity = "high"
+	if err := conn.Validate(); err != nil {
+		t.Fatalf("expected valid minSeverity 'high' to pass, got: %v", err)
+	}
+}
+
+func TestConnectorSecretStorageKey(t *testing.T) {
+	if k := domain.ConnectorSecretStorageKey("my-slack", ""); k != "connector:my-slack:token" {
+		t.Errorf("expected default key 'token', got %q", k)
+	}
+	if k := domain.ConnectorSecretStorageKey("my-slack", "customKey"); k != "connector:my-slack:customKey" {
+		t.Errorf("expected 'connector:my-slack:customKey', got %q", k)
+	}
 }

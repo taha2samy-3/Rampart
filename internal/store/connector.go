@@ -49,7 +49,7 @@ func (s *PostgresStore) SaveConnector(ctx context.Context, tenantID uuid.UUID, c
 		typeName = string(conn.Spec.Type)
 	}
 
-	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO connector (id, tenant_id, name, type, spec, status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
@@ -69,7 +69,7 @@ func (s *PostgresStore) GetConnector(ctx context.Context, tenantID uuid.UUID, na
 	var specRaw, statusRaw []byte
 	var typeStr string
 
-	err := s.withSystemTx(ctx, func(tx pgx.Tx) error {
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			SELECT id, tenant_id, name, type, spec, status, created_at, updated_at
 			FROM connector
@@ -106,7 +106,7 @@ func (s *PostgresStore) GetConnector(ctx context.Context, tenantID uuid.UUID, na
 func (s *PostgresStore) ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error) {
 	var list []domain.Connector
 
-	err := s.withSystemTx(ctx, func(tx pgx.Tx) error {
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var rows pgx.Rows
 		var err error
 
@@ -155,7 +155,7 @@ func (s *PostgresStore) ListConnectors(ctx context.Context, tenantID uuid.UUID, 
 }
 
 func (s *PostgresStore) DeleteConnector(ctx context.Context, tenantID uuid.UUID, name string) error {
-	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM connector WHERE tenant_id = $1 AND name = $2`, tenantID, name)
 		if err != nil {
 			return err
@@ -174,7 +174,7 @@ func (s *PostgresStore) UpdateConnectorStatus(ctx context.Context, tenantID uuid
 	}
 	now := time.Now().UTC()
 
-	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE connector
 			SET status = $1::jsonb, updated_at = $2

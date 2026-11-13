@@ -708,12 +708,15 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 	}
 
 	ns := firstNonEmpty(r.cfg.Operator.Namespace, os.Getenv("POD_NAMESPACE"))
+	// Error is ignored here because cfg.Connectors.SSRFAllowlist is strictly validated during config loading on startup.
+	allowlist, _ := r.cfg.Connectors.SSRFAllowlist.ToPlatformSSRFAllowlist()
 	r.logger.Info("operator starting", "cluster", source, "leaderElectionNamespace", ns)
 	go func() {
 		errCh <- operator.Run(ctx, operator.ManagerConfig{
 			REST: rc, Store: configStore, SecretStore: secretStore, Logger: r.logger,
 			LeaderElectionNamespace: ns, SecretReaderClusterRole: r.cfg.Operator.SecretReaderClusterRole,
 			ServiceAccountName: r.cfg.Operator.ServiceAccount, ServiceAccountNamespace: ns,
+			SSRFAllowlist: allowlist,
 		})
 	}()
 	return nil

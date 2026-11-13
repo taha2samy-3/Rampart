@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ type Config struct {
 	Auth          AuthConfig          `json:"auth" yaml:"auth"`
 	Feeds         FeedsConfig         `json:"feeds" yaml:"feeds"`
 	Retention     RetentionConfig     `json:"retention" yaml:"retention"`
+	Connectors    ConnectorsConfig    `json:"connectors" yaml:"connectors"`
 }
 
 // RetentionConfig is how long data is kept and how often the sweep runs (docs/16 D53). The days apply to every
@@ -175,6 +177,48 @@ type OperatorConfig struct {
 	ServiceAccount          string `json:"service_account" yaml:"serviceAccount"`
 	Namespace               string `json:"namespace" yaml:"namespace"`
 	SecretReaderClusterRole string `json:"secret_reader_cluster_role" yaml:"secretReaderClusterRole"`
+}
+
+// ConnectorsConfig holds platform-level connector settings, including SSRF allowlists for internal integrations (D69).
+type ConnectorsConfig struct {
+	SSRFAllowlist SSRFAllowlistConfig `json:"ssrf_allowlist" yaml:"ssrfAllowlist"`
+}
+
+// SSRFAllowlistConfig configures platform network ranges and hosts allowed for connectors (e.g. Dependency-Track on .svc:8080).
+type SSRFAllowlistConfig struct {
+	CIDRs             []string `json:"cidrs" yaml:"cidrs"`
+	Hosts             []string `json:"hosts" yaml:"hosts"`
+	AllowInternalHTTP bool     `json:"allow_internal_http" yaml:"allowInternalHttp"`
+}
+
+// ToPlatformSSRFAllowlist converts SSRFAllowlistConfig to domain.PlatformSSRFAllowlist.
+// It returns an error if any CIDR is malformed or if any host pattern contains "*".
+func (c *SSRFAllowlistConfig) ToPlatformSSRFAllowlist() (*domain.PlatformSSRFAllowlist, error) {
+	if c == nil || (len(c.CIDRs) == 0 && len(c.Hosts) == 0 && !c.AllowInternalHTTP) {
+		return nil, nil
+	}
+	for _, h := range c.Hosts {
+		trimmed := strings.TrimSpace(h)
+		if trimmed == "*" {
+			return nil, fmt.Errorf("ssrf allowlist: wildcard '*' is not allowed (all hosts permitted is insecure)")
+		}
+	}
+	out := &domain.PlatformSSRFAllowlist{
+		AllowedHosts:      c.Hosts,
+		AllowInternalHTTP: c.AllowInternalHTTP,
+	}
+	for _, cidr := range c.CIDRs {
+		trimmed := strings.TrimSpace(cidr)
+		if trimmed == "" {
+			continue
+		}
+		_, ipNet, err := net.ParseCIDR(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("ssrf allowlist: invalid CIDR %q: %w", trimmed, err)
+		}
+		out.AllowedCIDRs = append(out.AllowedCIDRs, ipNet)
+	}
+	return out, nil
 }
 
 // DefaultConfig provides standard normative defaults.
@@ -339,6 +383,9 @@ func (c *Config) Validate() error {
 		if err := c.Retention.Validate(); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+	}
+	if _, err := c.Connectors.SSRFAllowlist.ToPlatformSSRFAllowlist(); err != nil {
+		return fmt.Errorf("config: connectors: %w", err)
 	}
 	return nil
 }
@@ -553,6 +600,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v := get("OPERATOR_MODE"); v != "" {
 		cfg.Operator.Mode = v
+	}
+	if v := get("CONNECTORS_SSRF_ALLOWLIST_CIDRS"); v != "" {
+		cfg.Connectors.SSRFAllowlist.CIDRs = splitList(v)
+	}
+	if v := get("CONNECTORS_SSRF_ALLOWLIST_HOSTS"); v != "" {
+		cfg.Connectors.SSRFAllowlist.Hosts = splitList(v)
+	}
+	if v := get("CONNECTORS_SSRF_ALLOWLIST_ALLOW_INTERNAL_HTTP"); v != "" {
+		cfg.Connectors.SSRFAllowlist.AllowInternalHTTP = strings.ToLower(v) == "true" || v == "1"
 	}
 }
 

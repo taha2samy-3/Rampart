@@ -420,6 +420,7 @@ func (e *EmailNotifier) Send(ctx context.Context, msg NotificationMessage) error
 
 func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, tlsMode domain.EmailTLSMode, auth smtp.Auth, from string, to []string, msg []byte, allowlist *domain.PlatformSSRFAllowlist) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
+	allowLoopback := allowlist != nil && allowlist.AllowLoopback
 
 	// 1. Resolve host and check against SSRF
 	ips, err := net.LookupIP(host)
@@ -427,7 +428,7 @@ func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, tl
 		return fmt.Errorf("smtp: failed to resolve host %q: %w", host, err)
 	}
 	for _, ip := range ips {
-		if domain.IsBlockedIPWithAllowlist(ip, allowlist) {
+		if domain.IsBlockedIPWithAllowlistAndHost(ip, host, allowlist, allowLoopback) {
 			return fmt.Errorf("%w: smtp host %q resolves to blocked IP %s (D69)", domain.ErrSSRFBlocked, host, ip.String())
 		}
 	}
@@ -440,7 +441,7 @@ func sendSMTPGuarded(ctx context.Context, host string, port int, useTLS bool, tl
 				h = address
 			}
 			ip := net.ParseIP(h)
-			if ip != nil && domain.IsBlockedIPWithAllowlist(ip, allowlist) {
+			if ip != nil && domain.IsBlockedIPWithAllowlistAndHost(ip, host, allowlist, allowLoopback) {
 				return fmt.Errorf("%w: dial to blocked SMTP IP %s", domain.ErrSSRFBlocked, ip.String())
 			}
 			return nil

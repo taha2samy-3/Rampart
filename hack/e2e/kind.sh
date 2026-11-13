@@ -172,8 +172,8 @@ assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles wher
 assert_eq "$(pg "select tenant_id is not null from tenant_namespace where namespace='$TEAM_NS'")" "t" "namespace ownership recorded (D20)"
 assert_eq "$(pg "select count(*) from application where slug='checkout'")" "1" "application stored"
 assert_eq "$(pg "select count(*) from connector where name='e2e-webhook'")" "1" "connector stored"
-assert_eq "$(pg "select count(*) from secret_material")" "1" "one secret synced"
-assert_eq "$(pg "select position('$SECRET_VALUE'::bytea in encrypted_value) from secret_material")" "0" "the Secret is not stored in plaintext"
+assert_eq "$(pg "select count(*) from secret_material")" "2" "two secrets synced (scansource and connector)"
+assert_eq "$(pg "select count(*) from secret_material where position('$SECRET_VALUE'::bytea in encrypted_value) > 0")" "0" "no Secret is stored in plaintext"
 assert_eq "$(pg "select count(*) from information_schema.tables where table_schema='river' and table_name='river_job'")" "1" "river schema"
 
 before_session="$(kubectl -n "$NS" get secret "$REL-session" -o jsonpath='{.data.session\.key}')"

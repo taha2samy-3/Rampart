@@ -36,23 +36,56 @@ func init() {
 // IsBlockedIP checks whether an IP falls into private, loopback, link-local, multicast,
 // CGNAT, or cloud metadata ranges (D69).
 func IsBlockedIP(ip net.IP) bool {
-	return IsBlockedIPWithAllowlist(ip, nil)
+	return IsBlockedIPWithAllowlistAndHost(ip, "", nil, false)
 }
 
-// IsBlockedIPWithAllowlist checks whether an IP is blocked, respecting platform allowlists for in-cluster/on-prem hosts (D69).
-func IsBlockedIPWithAllowlist(ip net.IP, allowlist *PlatformSSRFAllowlist) bool {
+// IsAlwaysBlockedIP checks whether an IP is an absolute forbidden address (cloud metadata, link-local, loopback, multicast, or unspecified 0.0.0.0/8).
+// Platform allowlists may NEVER bypass these addresses under any circumstances (D69).
+func IsAlwaysBlockedIP(ip net.IP, allowLoopback bool) bool {
 	if ip == nil {
 		return true
 	}
-	if allowlist != nil && allowlist.IsIPAllowed(ip) {
-		return false
+	if !allowLoopback && (ip.IsLoopback() || ip.Equal(net.IPv4(127, 0, 0, 1)) || ip.Equal(net.IPv6loopback)) {
+		return true
 	}
-	// Use standard library classification for private, loopback, link-local, multicast, unspecified
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
 		ip.IsMulticast() || ip.IsUnspecified() {
 		return true
 	}
+	// Alibaba Cloud metadata IP (100.100.100.200) inside RFC 6598
+	if ip.Equal(net.ParseIP("100.100.100.200")) {
+		return true
+	}
+	// 0.0.0.0/8 (broadcast/this host)
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return true
+	}
+	return false
+}
+
+// IsBlockedIPWithAllowlistAndHost evaluates whether an IP is blocked for a specific destination host,
+// respecting platform allowlists for private RFC 1918 / CGNAT networks while unconditionally blocking metadata/link-local (D69).
+func IsBlockedIPWithAllowlistAndHost(ip net.IP, hostname string, allowlist *PlatformSSRFAllowlist, allowLoopback bool) bool {
+	if ip == nil {
+		return true
+	}
+	// 1. Critical dangerous destinations (metadata, link-local, loopback, multicast, broadcast) are ALWAYS blocked.
+	if IsAlwaysBlockedIP(ip, allowLoopback) {
+		return true
+	}
+	// 2. Explicit CIDR match in administrator allowlist (allows private / CGNAT range)
+	if allowlist != nil && allowlist.IsIPAllowed(ip) {
+		return false
+	}
+	// 3. Host match in administrator allowlist (allows private / CGNAT range for this specific host)
+	if allowlist != nil && hostname != "" && allowlist.IsHostAllowed(hostname) {
+		return false
+	}
+	// 4. Private RFC 1918 ranges
+	if ip.IsPrivate() {
+		return true
+	}
+	// 5. Blocked CIDRs (CGNAT, benchmarking, documentation)
 	for _, block := range blockedCIDRs {
 		if block.Contains(ip) {
 			return true
@@ -61,12 +94,19 @@ func IsBlockedIPWithAllowlist(ip net.IP, allowlist *PlatformSSRFAllowlist) bool 
 	return false
 }
 
+// IsBlockedIPWithAllowlist checks whether an IP is blocked, respecting platform allowlists for in-cluster/on-prem hosts (D69).
+func IsBlockedIPWithAllowlist(ip net.IP, allowlist *PlatformSSRFAllowlist) bool {
+	allowLoopback := allowlist != nil && allowlist.AllowLoopback
+	return IsBlockedIPWithAllowlistAndHost(ip, "", allowlist, allowLoopback)
+}
+
 // PlatformSSRFAllowlist defines administrator-configured network ranges and hosts
 // permitted for in-cluster (e.g. Dependency-Track on .svc:8080) or on-premise integrations (D69).
 type PlatformSSRFAllowlist struct {
 	AllowedCIDRs      []*net.IPNet
 	AllowedHosts      []string
 	AllowInternalHTTP bool
+	AllowLoopback     bool // Only for testing with local mock servers
 }
 
 // IsIPAllowed returns true if the IP matches any allowed CIDR in the platform allowlist.
@@ -90,7 +130,10 @@ func (p *PlatformSSRFAllowlist) IsHostAllowed(hostname string) bool {
 	h := strings.ToLower(hostname)
 	for _, allowed := range p.AllowedHosts {
 		allowedLower := strings.ToLower(allowed)
-		if allowedLower == "*" || h == allowedLower {
+		if allowedLower == "*" {
+			continue // Universal wildcard '*' is disallowed
+		}
+		if h == allowedLower {
 			return true
 		}
 		if strings.HasPrefix(allowedLower, "*.") && strings.HasSuffix(h, allowedLower[1:]) {
@@ -156,13 +199,12 @@ func ValidateConnectorURLWithAllowlist(rawURL string, allowlist *PlatformSSRFAll
 		}
 	}
 
+	allowLoopback := allowlist != nil && allowlist.AllowLoopback
+
 	// Check if hostname is an explicit IP literal
 	if ip := net.ParseIP(hostname); ip != nil {
-		if allowlist != nil && allowlist.IsIPAllowed(ip) {
-			return nil
-		}
-		if IsBlockedIP(ip) {
-			return fmt.Errorf("%w: destination IP %s is a private or link-local address (D69)", ErrSSRFBlocked, ip.String())
+		if IsBlockedIPWithAllowlistAndHost(ip, hostname, allowlist, allowLoopback) {
+			return fmt.Errorf("%w: destination IP %s is a private, link-local, or metadata address (D69)", ErrSSRFBlocked, ip.String())
 		}
 		return nil
 	}
@@ -170,18 +212,12 @@ func ValidateConnectorURLWithAllowlist(rawURL string, allowlist *PlatformSSRFAll
 	// Resolve hostname to IP addresses
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		// If DNS resolution fails, allow it only if it is a plausible external domain name
+		// If DNS resolution fails, allow it only if it is a plausible external domain name or an allowed internal host
 		return nil
 	}
 
 	for _, ip := range ips {
-		if allowlist != nil && allowlist.IsIPAllowed(ip) {
-			continue
-		}
-		if isAllowedHost {
-			continue
-		}
-		if IsBlockedIP(ip) {
+		if IsBlockedIPWithAllowlistAndHost(ip, hostname, allowlist, allowLoopback) {
 			return fmt.Errorf("%w: host %q resolves to blocked IP %s (D69)", ErrSSRFBlocked, hostname, ip.String())
 		}
 	}

@@ -56,14 +56,8 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 			}
 			ip := net.ParseIP(host)
 			if ip != nil {
-				if cfg.AllowLoopback && (ip.IsLoopback() || host == "127.0.0.1" || host == "::1") {
-					return nil
-				}
-				if cfg.Allowlist != nil && cfg.Allowlist.IsIPAllowed(ip) {
-					return nil
-				}
-				if domain.IsBlockedIP(ip) {
-					return fmt.Errorf("%w: IP %s is in blocked range", ErrSSRFDialBlocked, ip.String())
+				if domain.IsAlwaysBlockedIP(ip, cfg.AllowLoopback) {
+					return fmt.Errorf("%w: IP %s is in forbidden range (metadata/loopback/link-local/multicast)", ErrSSRFDialBlocked, ip.String())
 				}
 			}
 			return nil
@@ -71,8 +65,44 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 	}
 
 	transport := &http.Transport{
-		Proxy:                 nil, // No ambient proxy bypass
-		DialContext:           dialer.DialContext,
+		Proxy: nil, // No ambient proxy bypass
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				host = addr
+				port = "443"
+			}
+			var ips []net.IP
+			if ip := net.ParseIP(host); ip != nil {
+				ips = []net.IP{ip}
+			} else {
+				var lerr error
+				ips, lerr = net.DefaultResolver.LookupIP(ctx, "ip", host)
+				if lerr != nil {
+					return nil, fmt.Errorf("%w: dns lookup failed for %q: %v", ErrSSRFDialBlocked, host, lerr)
+				}
+				if len(ips) == 0 {
+					return nil, fmt.Errorf("%w: no IPs found for %q", ErrSSRFDialBlocked, host)
+				}
+			}
+
+			var lastErr error
+			for _, ip := range ips {
+				if domain.IsBlockedIPWithAllowlistAndHost(ip, host, cfg.Allowlist, cfg.AllowLoopback) {
+					lastErr = fmt.Errorf("%w: destination %s (%s) is blocked by SSRF policy (D69)", ErrSSRFDialBlocked, host, ip.String())
+					continue
+				}
+				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, fmt.Errorf("%w: failed to dial destination %s", ErrSSRFDialBlocked, host)
+		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,

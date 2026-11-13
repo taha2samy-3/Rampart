@@ -437,11 +437,11 @@ func TestConnectorReconciler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected reconcile error: %v", err)
 	}
-	if st.GetCondition("Connected") == nil || st.GetCondition("Connected").Status != "True" {
-		t.Fatalf("expected Connected=True, got %+v", st.GetCondition("Connected"))
+	if st.GetCondition("Connected") == nil || st.GetCondition("Connected").Status != "Unknown" || st.GetCondition("Connected").Reason != "PendingVerification" {
+		t.Fatalf("expected Connected=Unknown (PendingVerification), got %+v", st.GetCondition("Connected"))
 	}
-	if st.WebhookURL != "/hooks/jira/jira-sec" {
-		t.Errorf("expected webhook url /hooks/jira/jira-sec, got %s", st.WebhookURL)
+	if st.GetCondition("Ready") == nil || st.GetCondition("Ready").Status != "True" {
+		t.Fatalf("expected Ready=True, got %+v", st.GetCondition("Ready"))
 	}
 
 	// Verify secret was synced to SecretStore

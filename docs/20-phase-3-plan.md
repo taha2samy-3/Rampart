@@ -138,16 +138,50 @@ One session owns `internal/connectors`, `internal/domain/connector*.go`, `intern
 
 Written 2026-11-13 after review of commit `e1864fa`. Items are strictly ordered by priority: P1 (functional & architectural blockers) must land before proceeding to 3.2/3.4, P2 (security & error resilience), followed by P3 (workflow scalability & test coverage).
 
-| # | Priority | Issue | Files Affected | Fix & Acceptance Criteria |
-|---|---|---|---|---|
-| 1 | **P1 (Blocker)** | **Relative URLs break Slack & Teams messages** (`invalid_blocks`) | `internal/connectors/router.go`, `notifiers.go` | Route must accept `server.publicUrl` (or base URL) and build absolute links `https://<publicUrl>/t/<tenant>/findings/<id>`. Digest must point to an existing UI view instead of `/applications/<name>/runs`. Unit test asserting all generated button URLs are absolute HTTPS. |
-| 2 | **P1 (Arch)** | **In-cluster / On-premise services blocked by strict public-only SSRF** | `internal/domain/ssrf.go`, `internal/connectors/client.go`, `docs/16` (D69) | Add platform-level allowlist (operator/server config, not per-tenant): allowed CIDRs (e.g., in-cluster pod/service network) and allowed HTTP schemes for internal services (Dependency-Track on `http://...svc:8080`, on-prem Jira DC/GitLab). Document in D69 before milestone 3.4. |
-| 3 | **P2 (Security)** | **Opportunistic STARTTLS fallback to plaintext** | `internal/connectors/notifiers.go`, `internal/domain/connector.go` | Add explicit `tlsMode` (`starttls` mandatory by default, `implicit_tls`/`smtps` for port 465, or explicit `none`/`insecure`). Fail if server does not advertise STARTTLS under `starttls` mode. Add transaction deadline context to the entire SMTP session to prevent hanging goroutines. |
-| 4 | **P2 (Resilience)** | **Fragile URL sanitization & empty secret `%w(<nil>)` error** | `internal/connectors/client.go`, `router.go` | Unwrap errors with `errors.As(err, &urlErr)` and sanitize `urlErr.URL` rather than substring search. When secret key exists in map but value is empty string, return explicit `fmt.Errorf("secret key %q is empty", key)` instead of wrapping `nil`. |
-| 5 | **P2 (Resilience)** | **Unbounded email body size** | `internal/connectors/notifiers.go` | Enforce maximum body size / rune-truncate finding descriptions in SMTP email bodies (e.g. 64 KiB cap) to prevent memory spikes or SMTP rejection. |
-| 6 | **P3 (Workflow)** | **Missing routing rules (noise reduction)** | `internal/connectors/router.go`, `domain/connector.go` | Add routing filter criteria (min severity, events, application selectors) so connectors only receive relevant notifications rather than all 20 findings per run. |
-| 7 | **P3 (Scalability)** | **Inline delivery blocks ingest (needs River job)** | `internal/connectors/router.go`, `internal/ingest/` | Outbound notifications should enqueue into River with persistent retries and backoff so 429 rate-limiting (>60s) or slow destinations don't delay the ingest pipeline. |
-| 8 | **P3 (Docs)** | **Reconcile-time DNS resolution policy** | `docs/16` (D69), `domain/ssrf.go` | Explicitly document that allowing unresolved DNS during reconcile is safe and intended, because strict SSRF dial checks happen at runtime. |
-| 9 | **P3 (Testing)** | **Missing test coverage suite** | `internal/connectors/connectors_test.go` | Add unit tests for: (1) Slack relative URL rejection, (2) mandatory STARTTLS refusal, (3) SMTP full session deadline, (4) empty secret values, (5) routing filters, (6) unexpected `url.Error` wrapping. |
+| # | Priority | Issue | Files Affected | Fix & Acceptance Criteria | Status |
+|---|---|---|---|---|---|
+| 1 | **P1 (Blocker)** | **Relative URLs break Slack & Teams messages** (`invalid_blocks`) | `internal/connectors/router.go`, `notifiers.go` | Route must accept `server.publicUrl` (or base URL) and build absolute links `https://<publicUrl>/t/<tenant>/findings/<id>`. Digest must point to an existing UI view instead of `/applications/<name>/runs`. Unit test asserting all generated button URLs are absolute HTTPS. | **Done** |
+| 2 | **P1 (Arch)** | **In-cluster / On-premise services blocked by strict public-only SSRF** | `internal/domain/ssrf.go`, `internal/connectors/client.go`, `docs/16` (D69) | Add platform-level allowlist (operator/server config, not per-tenant): allowed CIDRs (e.g., in-cluster pod/service network) and allowed HTTP schemes for internal services (Dependency-Track on `http://...svc:8080`, on-prem Jira DC/GitLab). Document in D69 before milestone 3.4. | **Done** |
+| 3 | **P2 (Security)** | **Opportunistic STARTTLS fallback to plaintext** | `internal/connectors/notifiers.go`, `internal/domain/connector.go` | Add explicit `tlsMode` (`starttls` mandatory by default, `implicit_tls`/`smtps` for port 465, or explicit `none`/`insecure`). Fail if server does not advertise STARTTLS under `starttls` mode. Add transaction deadline context to the entire SMTP session to prevent hanging goroutines. | **Done** |
+| 4 | **P2 (Resilience)** | **Fragile URL sanitization & empty secret `%w(<nil>)` error** | `internal/connectors/client.go`, `router.go` | Unwrap errors with `errors.As(err, &urlErr)` and sanitize `urlErr.URL` rather than substring search. When secret key exists in map but value is empty string, return explicit `fmt.Errorf("secret key %q is empty", key)` instead of wrapping `nil`. | **Done** |
+| 5 | **P2 (Resilience)** | **Unbounded email body size** | `internal/connectors/notifiers.go` | Enforce maximum body size / rune-truncate finding descriptions in SMTP email bodies (e.g. 64 KiB cap) to prevent memory spikes or SMTP rejection. | **Done** |
+| 6 | **P3 (Workflow)** | **Missing routing rules (noise reduction)** | `internal/connectors/router.go`, `domain/connector.go` | Add routing filter criteria (min severity, events, application selectors) so connectors only receive relevant notifications rather than all 20 findings per run. | **Done** |
+| 7 | **P3 (Scalability)** | **Inline delivery blocks ingest (needs River job)** | `internal/connectors/router.go`, `internal/ingest/` | Outbound notifications should enqueue into River with persistent retries and backoff so 429 rate-limiting (>60s) or slow destinations don't delay the ingest pipeline. | Tracked for 3.2 |
+| 8 | **P3 (Docs)** | **Reconcile-time DNS resolution policy** | `docs/16` (D69), `domain/ssrf.go` | Explicitly document that allowing unresolved DNS during reconcile is safe and intended, because strict SSRF dial checks happen at runtime. | **Done** |
+| 9 | **P3 (Testing)** | **Missing test coverage suite** | `internal/connectors/connectors_test.go` | Add unit tests for: (1) Slack relative URL rejection, (2) mandatory STARTTLS refusal, (3) SMTP full session deadline, (4) empty secret values, (5) routing filters, (6) unexpected `url.Error` wrapping. | **Done** |
+
+### 9.7 Post-commit b6d7b40 review: platform SSRF allowlist wiring, dial consistency, and e2e fixes
+
+Written 2026-11-13 after code review of commit `b6d7b40` and `29076ca`:
+
+1. **Platform SSRF allowlist configuration wiring**:
+   - Added `ConnectorsConfig` with `SSRFAllowlistConfig` to `internal/config/config.go`, exposing env vars `RAMPART_CONNECTORS_SSRF_ALLOWLIST_CIDRS`, `RAMPART_CONNECTORS_SSRF_ALLOWLIST_HOSTS`, and `RAMPART_CONNECTORS_SSRF_ALLOWLIST_ALLOW_INTERNAL_HTTP`.
+   - Wired allowlist through `internal/targets/runner.go` into `internal/operator/manager.go` and `ConnectorReconciler`.
+   - Rejects insecure wildcard `*` host definitions during configuration validation.
+
+2. **Reconcile and Dial-Time SSRF consistency**:
+   - Fixed inconsistency where host-based allowlists passed during reconcile DNS check but were blocked by IP-only checks in `SafeClient.Control`.
+   - `SafeClient.DialContext` resolves DNS and executes `IsBlockedIPWithAllowlistAndHost(ip, host, allowlist)` on all resolved IPs before connecting; dialer `Control` validates the connected socket IP.
+   - Host matching permits private cluster IPs for explicitly allowed host patterns (e.g. `*.svc.cluster.local`, `*.internal`).
+
+3. **Non-bypassable sensitive IP and metadata protection**:
+   - `IsAlwaysBlockedIP` unconditionally blocks Cloud metadata (`169.254.169.254`, `100.100.100.200`), link-local (`169.254.0.0/16`, `fe80::/10`), loopback (`127.0.0.0/8`, `::1`), multicast, and `0.0.0.0/8`, even if an administrator allowlist or wildcard matches.
+
+4. **Secret storage key harmonization**:
+   - Standardized secret storage keys using `domain.ConnectorSecretStorageKey(connectorName, key)` (canonical format `connector:<name>:<key>`, defaulting empty key to `"token"`).
+   - Reconciler and router now access the exact same secret key across Slack, Teams, Webhook, and SMTP (with separate `username`/`password` support).
+
+5. **Honest status reporting & deferred webhook URLs**:
+   - Connector reconciler records `Connected=Unknown` (reason: `PendingVerification`, message: `Connector registered, connection not yet tested`) and `Ready=True` (`Reconciled`) upon creation, eliminating misleading premature `Connected=True` claims.
+   - `WebhookURL` is left empty until milestone 3.2 implements inbound authenticated webhook endpoints per D23.
+
+6. **Absolute deep links and clean fallbacks**:
+   - When `publicURL` is omitted, action buttons in Slack and Teams are omitted cleanly rather than generating broken relative links.
+   - Digest routes point to real UI routes (`/applications/<appID>`) and findings use `/t/<tenant>/findings/<findingID>`.
+   - Routing rules match against event name (`msg.Fields["event"]`) and application name or slug, safely rejecting misspelled or invalid severities.
+
+7. **E2E Kind script assertion update**:
+   - Updated `hack/e2e/kind.sh` to assert `count(*) from secret_material = 2` (for both ScanSource and Connector synced secrets).
+   - Changed plaintext position assertion to `count(*) where position(...) > 0 == 0`, ensuring multi-row results never break e2e validation.
 
 Sources read for this section: [Microsoft, retirement of Office 365 connectors](https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/); [GitHub, OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) (no lifetime stated); the Dependency-Track [v5 breaking changes](https://dependencytrack.github.io/docs/next/reference/api/v5-breaking-changes/) page and mirrored `openapi.json` documents of running 4.x servers; Atlassian's [REST v3 introduction](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/) and the community and JRACLOUD tickets on ADF descriptions.

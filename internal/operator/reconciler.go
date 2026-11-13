@@ -485,13 +485,15 @@ type ConnectorReconciler struct {
 	store       apply.ConfigStore
 	secrets     SecretProvider
 	secretStore SecretMaterialStore
+	allowlist   *domain.PlatformSSRFAllowlist
 }
 
-func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore) *ConnectorReconciler {
+func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore, allowlist *domain.PlatformSSRFAllowlist) *ConnectorReconciler {
 	return &ConnectorReconciler{
 		store:       store,
 		secrets:     secrets,
 		secretStore: secretStore,
+		allowlist:   allowlist,
 	}
 }
 
@@ -553,7 +555,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		Type:      cr.Spec.Type,
 		Spec:      cr.Spec,
 	}
-	if err := conn.Validate(); err != nil {
+	if err := conn.ValidateWithAllowlist(r.allowlist); err != nil {
 		reason := "InvalidSpec"
 		if errors.Is(err, domain.ErrConnectorNotSupported) {
 			reason = "NotSupported"
@@ -568,31 +570,69 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 	// Secret synchronization (D69: Secrets read from secret_material, synced from K8s secrets)
 	secRef := extractConnectorSecretRef(&cr.Spec)
 	if secRef != nil && secRef.Name != "" && r.secrets != nil && r.secretStore != nil {
-		secretKey := secRef.Key
-		if secretKey == "" {
-			secretKey = "token"
-		}
-		secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
-		if err != nil {
-			status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
-			status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
-			return status, nil
-		}
+		if cr.Spec.Type == domain.ConnectorTypeEmail {
+			// For email: check if username and password keys exist separately
+			userBytes, errUser := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, "username")
+			passBytes, errPass := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, "password")
+			if errUser == nil && errPass == nil {
+				userKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, "username")
+				if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, userKey, userBytes); err != nil {
+					status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync email username: %v", err))
+					status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync email username: %v", err))
+					return status, err
+				}
+				passKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, "password")
+				if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, passKey, passBytes); err != nil {
+					status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync email password: %v", err))
+					status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync email password: %v", err))
+					return status, err
+				}
+			} else {
+				secretKey := secRef.Key
+				if secretKey == "" {
+					secretKey = "token"
+				}
+				secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
+				if err != nil {
+					status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+					status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+					return status, nil
+				}
+				storageKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, secretKey)
+				if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
+					status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+					status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+					return status, err
+				}
+			}
+		} else {
+			secretKey := secRef.Key
+			if secretKey == "" {
+				secretKey = "token"
+			}
+			secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
+			if err != nil {
+				status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+				status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+				return status, nil
+			}
 
-		storageKey := fmt.Sprintf("connector:%s:%s", cr.Metadata.Name, secretKey)
-		if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
-			status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
-			status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
-			return status, err
+			storageKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, secretKey)
+			if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
+				status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+				status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+				return status, err
+			}
 		}
 	}
 
 	now := time.Now().UTC()
 	status.ObservedGeneration = cr.Metadata.Generation
-	status.WebhookURL = fmt.Sprintf("/hooks/%s/%s", cr.Spec.Type, cr.Metadata.Name)
+	status.WebhookURL = "" // Inbound webhook URL design deferred to 3.2 per D23
 	status.LastSync = &now
 
-	status.SetCondition("Connected", "True", "AuthOK", "Connector verified and secrets synced")
+	// Honest state: configuration valid and secrets synced, but connection not yet tested externally
+	status.SetCondition("Connected", "Unknown", "PendingVerification", "Connector registered, connection not yet tested")
 	status.SetCondition("Ready", "True", "Reconciled", "Connector reconciled successfully")
 
 	conn.Status = domain.ConnectorStatus{
