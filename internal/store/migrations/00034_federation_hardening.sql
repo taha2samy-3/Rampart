@@ -5,3 +5,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_source_trust_unique ON source_trust (tenan
 
 -- +goose Down
 DROP INDEX IF EXISTS idx_source_trust_unique;
+
