@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -488,5 +489,35 @@ func TestPostgresStore_Integration_RLS(t *testing.T) {
 	}
 	if connCountWithoutTenant != 0 {
 		t.Fatalf("SECURITY VIOLATION: rampart_app role without app.tenant_id saw %d connectors! FORCE RLS failed.", connCountWithoutTenant)
+	}
+
+	// 13. Test DeleteSecretMaterialPrefix (D49 connector and scansource cleanup)
+	if err := sysStore.SaveSecretMaterial(ctx, tenantA.ID, "connector:mail:username", []byte("enc-u")); err != nil {
+		t.Fatalf("failed to save secret material username: %v", err)
+	}
+	if err := sysStore.SaveSecretMaterial(ctx, tenantA.ID, "connector:mail:password", []byte("enc-p")); err != nil {
+		t.Fatalf("failed to save secret material password: %v", err)
+	}
+	if err := sysStore.SaveSecretMaterial(ctx, tenantB.ID, "connector:mail:username", []byte("enc-u-b")); err != nil {
+		t.Fatalf("failed to save secret material for tenant B: %v", err)
+	}
+
+	// Delete prefix for Tenant A
+	if err := sysStore.DeleteSecretMaterialPrefix(ctx, tenantA.ID, "connector:mail:"); err != nil {
+		t.Fatalf("failed to delete secret material prefix for tenant A: %v", err)
+	}
+
+	// Tenant A secrets must be gone
+	if _, err := sysStore.GetSecretMaterial(ctx, tenantA.ID, "connector:mail:username"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for tenant A username after prefix deletion, got %v", err)
+	}
+	if _, err := sysStore.GetSecretMaterial(ctx, tenantA.ID, "connector:mail:password"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for tenant A password after prefix deletion, got %v", err)
+	}
+
+	// Tenant B secret must still exist (RLS & tenant isolation)
+	secB, err := sysStore.GetSecretMaterial(ctx, tenantB.ID, "connector:mail:username")
+	if err != nil || string(secB) != "enc-u-b" {
+		t.Fatalf("expected tenant B secret to be undisturbed, got %v (%q)", err, string(secB))
 	}
 }

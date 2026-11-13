@@ -27,6 +27,16 @@ func (m *memorySecretStore) SaveSecretMaterial(ctx context.Context, tenantID uui
 	return nil
 }
 
+func (m *memorySecretStore) DeleteSecretMaterialPrefix(ctx context.Context, tenantID uuid.UUID, prefix string) error {
+	prefixFull := tenantID.String() + ":" + prefix
+	for k := range m.secrets {
+		if strings.HasPrefix(k, prefixFull) {
+			delete(m.secrets, k)
+		}
+	}
+	return nil
+}
+
 func TestTenantReconciler(t *testing.T) {
 	ctx := context.Background()
 	store := apply.NewMemoryConfigStore()
@@ -183,6 +193,15 @@ func (c *captureSecretStore) SaveSecretMaterial(_ context.Context, _ uuid.UUID, 
 		c.saved = map[string][]byte{}
 	}
 	c.saved[key] = v
+	return nil
+}
+
+func (c *captureSecretStore) DeleteSecretMaterialPrefix(_ context.Context, _ uuid.UUID, prefix string) error {
+	for k := range c.saved {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.saved, k)
+		}
+	}
 	return nil
 }
 
@@ -504,5 +523,47 @@ func TestConnectorReconciler(t *testing.T) {
 	deleted, err := store.GetConnector(ctx, tenantID, "jira-sec")
 	if err != nil || deleted != nil {
 		t.Errorf("expected connector to be deleted from store, got %+v", deleted)
+	}
+
+	// 4. Email connector with separate username & password, verify both synced and then cleaned up on finalize
+	crEmail := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "smtp-alerts", Namespace: "acme-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeEmail,
+			Email: &domain.EmailConnectorConfig{
+				From: "alerts@example.com",
+				To:   []string{"sec@example.com"},
+				SMTP: domain.EmailSMTPConfig{
+					Host:                 "smtp.example.com",
+					Port:                 587,
+					CredentialsSecretRef: domain.SecretKeyRef{Name: "smtp-creds"},
+				},
+			},
+		},
+	}
+	mockSecrets.Secrets["acme-ns/smtp-creds:username"] = []byte("smtp-user")
+	mockSecrets.Secrets["acme-ns/smtp-creds:password"] = []byte("smtp-pass")
+
+	stEmail, err := op.ReconcileConnector(ctx, crEmail)
+	if err != nil || stEmail.GetCondition("Ready") == nil || stEmail.GetCondition("Ready").Status != "True" {
+		t.Fatalf("reconcile email connector failed: %v, cond: %+v", err, stEmail.GetCondition("Ready"))
+	}
+	userKey := tenantID.String() + ":connector:smtp-alerts:username"
+	passKey := tenantID.String() + ":connector:smtp-alerts:password"
+	if string(secStore.secrets[userKey]) != "smtp-user" || string(secStore.secrets[passKey]) != "smtp-pass" {
+		t.Fatalf("expected email username and password secrets to be synced, got user=%q pass=%q",
+			string(secStore.secrets[userKey]), string(secStore.secrets[passKey]))
+	}
+
+	// Finalize email connector: both username and password must be removed by prefix deletion
+	_, doneEmail, err := op.FinalizeConnector(ctx, crEmail)
+	if err != nil || !doneEmail {
+		t.Fatalf("finalize email connector failed: %v", err)
+	}
+	if _, ok := secStore.secrets[userKey]; ok {
+		t.Errorf("expected user secret to be deleted by prefix, still present")
+	}
+	if _, ok := secStore.secrets[passKey]; ok {
+		t.Errorf("expected pass secret to be deleted by prefix, still present")
 	}
 }

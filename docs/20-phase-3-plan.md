@@ -184,4 +184,10 @@ Written 2026-11-13 after code review of commit `b6d7b40` and `29076ca`:
    - Updated `hack/e2e/kind.sh` to assert `count(*) from secret_material = 2` (for both ScanSource and Connector synced secrets).
    - Changed plaintext position assertion to `count(*) where position(...) > 0 == 0`, ensuring multi-row results never break e2e validation.
 
+8. **Connector finalizer secret cleanup by prefix**:
+   - Replaced single-key deletion and `SaveSecretMaterial(..., nil)` with `DeleteSecretMaterialPrefix` (`LIKE 'connector:<name>:%' ESCAPE '\'`).
+   - Ensures multi-key secrets (e.g. Email `username` and `password`) and altered secret keys leave zero leftover garbage rows in `secret_material`.
+   - Propagates deletion errors so the finalizer retries rather than completing with orphaned secret material.
+   - Tested under PostgreSQL RLS in `internal/store/postgres_test.go` and in `internal/operator/operator_test.go`.
+
 Sources read for this section: [Microsoft, retirement of Office 365 connectors](https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/); [GitHub, OIDC reference](https://docs.github.com/en/actions/reference/security/oidc) (no lifetime stated); the Dependency-Track [v5 breaking changes](https://dependencytrack.github.io/docs/next/reference/api/v5-breaking-changes/) page and mirrored `openapi.json` documents of running 4.x servers; Atlassian's [REST v3 introduction](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/) and the community and JRACLOUD tickets on ADF descriptions.

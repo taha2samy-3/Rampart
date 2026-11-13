@@ -25,6 +25,7 @@ type SecretProvider interface {
 // receive ciphertext only; wrap them in EncryptingSecretStore.
 type SecretMaterialStore interface {
 	SaveSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string, encryptedValue []byte) error
+	DeleteSecretMaterialPrefix(ctx context.Context, tenantID uuid.UUID, prefix string) error
 }
 
 // EncryptingSecretStore encrypts secret material (AES-256-GCM, per-tenant key, D1) before it
@@ -42,6 +43,14 @@ func (s *EncryptingSecretStore) SaveSecretMaterial(ctx context.Context, tenantID
 		return fmt.Errorf("encrypting secret material: %w", err)
 	}
 	return s.Inner.SaveSecretMaterial(ctx, tenantID, key, ct)
+}
+
+// DeleteSecretMaterialPrefix delegates prefix deletion to the underlying store.
+func (s *EncryptingSecretStore) DeleteSecretMaterialPrefix(ctx context.Context, tenantID uuid.UUID, prefix string) error {
+	if s.Inner != nil {
+		return s.Inner.DeleteSecretMaterialPrefix(ctx, tenantID, prefix)
+	}
+	return nil
 }
 
 // TenantReconciler handles reconciliation of Tenant custom resources.
@@ -666,18 +675,16 @@ func (r *ConnectorReconciler) Finalize(ctx context.Context, cr *ConnectorCR) (*C
 		return nil, true, nil
 	}
 
-	// D49: Clean up secret material copied for this connector
+	// D49: Clean up all secret material copied for this connector (prefix: connector:<name>:)
 	if r.secretStore != nil {
-		secRef := extractConnectorSecretRef(&cr.Spec)
-		if secRef != nil {
-			secretKey := secRef.Key
-			if secretKey == "" {
-				secretKey = "token"
-			}
-			storageKey := fmt.Sprintf("connector:%s:%s", cr.Metadata.Name, secretKey)
-			_ = r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, nil)
+		prefix := fmt.Sprintf("connector:%s:", cr.Metadata.Name)
+		if err := r.secretStore.DeleteSecretMaterialPrefix(ctx, tenant.ID, prefix); err != nil {
+			return nil, false, fmt.Errorf("deleting connector secret material: %w", err)
 		}
 	}
 
-	return nil, true, r.store.DeleteConnector(ctx, tenant.ID, cr.Metadata.Name)
+	if err := r.store.DeleteConnector(ctx, tenant.ID, cr.Metadata.Name); err != nil {
+		return nil, false, err
+	}
+	return nil, true, nil
 }

@@ -1640,6 +1640,15 @@ func (s *PostgresStore) GetSecretMaterial(ctx context.Context, tenantID uuid.UUI
 	return val, err
 }
 
+// DeleteSecretMaterialPrefix removes all secret_material rows whose key starts with prefix for a tenant (D49).
+func (s *PostgresStore) DeleteSecretMaterialPrefix(ctx context.Context, tenantID uuid.UUID, prefix string) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		pattern := likeEscape(prefix) + "%"
+		_, err := tx.Exec(ctx, `DELETE FROM secret_material WHERE tenant_id = $1 AND key LIKE $2 ESCAPE '\'`, tenantID, pattern)
+		return err
+	})
+}
+
 // sendBatch runs every queued statement in one round trip, inside the open transaction. A merge batch is
 // thousands of rows (D2), and one round trip per row made 10 000 results take two minutes.
 func sendBatch(ctx context.Context, tx pgx.Tx, b *pgx.Batch, what string) error {
