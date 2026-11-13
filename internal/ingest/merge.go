@@ -645,6 +645,7 @@ type MemoryStore struct {
 	connectors            map[string]*domain.Connector
 	trustRules            map[uuid.UUID][]domain.TrustRuleRecord
 	federationJTIs        map[string]time.Time
+	quotaUsage            map[string]int64
 }
 
 type memBinding struct {
@@ -683,6 +684,7 @@ func NewMemoryStore() *MemoryStore {
 		connectors:            make(map[string]*domain.Connector),
 		trustRules:            make(map[uuid.UUID][]domain.TrustRuleRecord),
 		federationJTIs:        make(map[string]time.Time),
+		quotaUsage:            make(map[string]int64),
 	}
 }
 
@@ -2213,6 +2215,21 @@ func (m *MemoryStore) RecordFederationJTI(ctx context.Context, issuer, jti strin
 	}
 	m.federationJTIs[key] = expiresAt
 	return nil
+}
+
+func (m *MemoryStore) IncrementQuota(ctx context.Context, tenantID uuid.UUID, key string, windowStart time.Time, amount int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mapKey := tenantID.String() + ":" + key + ":" + windowStart.UTC().Format(time.RFC3339)
+	m.quotaUsage[mapKey] += amount
+	return m.quotaUsage[mapKey], nil
+}
+
+func (m *MemoryStore) GetQuotaUsage(ctx context.Context, tenantID uuid.UUID, key string, windowStart time.Time) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mapKey := tenantID.String() + ":" + key + ":" + windowStart.UTC().Format(time.RFC3339)
+	return m.quotaUsage[mapKey], nil
 }
 
 func firstNonEmptyStr(vals ...string) string {

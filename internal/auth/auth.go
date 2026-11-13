@@ -74,6 +74,8 @@ type TokenRecord struct {
 	Role         Role       `json:"role"`
 	ScanSourceID *uuid.UUID `json:"scan_source_id,omitempty"`
 	Scopes       []string   `json:"scopes"`
+	RateLimit    *int       `json:"rate_limit,omitempty"`
+	Quota        *int64     `json:"quota,omitempty"`
 	ExpiresAt    time.Time  `json:"expires_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 }
@@ -87,6 +89,8 @@ type ContextUser struct {
 	Role         Role
 	Scopes       []string
 	ScanSourceID *uuid.UUID
+	RateLimit    *int
+	Quota        *int64
 
 	// Set for browser sessions only (zero for API tokens).
 	UserID    uuid.UUID
@@ -276,6 +280,8 @@ func (a *Authenticator) AuthenticateRequest(r *http.Request) (*ContextUser, erro
 		Role:         record.Role,
 		Scopes:       record.Scopes,
 		ScanSourceID: record.ScanSourceID,
+		RateLimit:    record.RateLimit,
+		Quota:        record.Quota,
 	}, nil
 }
 

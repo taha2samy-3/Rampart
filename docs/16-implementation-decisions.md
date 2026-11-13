@@ -1141,3 +1141,51 @@ Decision D22 defined the architectural principles for keyless CI pipeline authen
 - Structured audit event `federation.token_exchange` is logged on every successful exchange.
 
 
+## D73. Rate limiting, replica-shared quotas and RFC 9457 throttling (Phase 3, milestone 3.3)
+
+Milestone 3.3 Section 3.4 introduces systematic request rate limiting, payload size controls, and replica-shared usage quotas across API, ingestion, and webhook endpoints.
+
+### 1. In-Memory Token Bucket Limiter (`internal/ratelimit`)
+- High-performance, concurrent token bucket implementation in `internal/ratelimit`.
+- Evaluates caller identity:
+  - For authenticated API tokens: `api:tok:<tenant_id>:<subject>`.
+  - For unauthenticated or address-bound callers: `api:ip:<client_ip>`.
+- Token-level configuration:
+  - Columns `rate_limit INT` and `quota BIGINT` on table `api_token` (migration `00031_rate_limiting.sql`).
+  - When configured on `api_token`, custom limits override global defaults.
+  - Global defaults from `limits` config block (`limits.apiPerSecond`, default 50 req/sec; burst `max(10, rate)`).
+- **Zero-DB Fast Path (Benchmark Verified):**
+  - Requests exceeding the in-memory token bucket are rejected in sub-microsecond time (~760 ns/op) without executing database queries or touching connection pools.
+- Standard headers on every response:
+  - `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.
+  - On 429: `Retry-After: <seconds>` header.
+
+### 2. Replica-Shared Quotas (`quota_usage` table)
+- Quotas that must hold across horizontally scaled instances (e.g. hourly uploads per tenant) are persisted in PostgreSQL table `quota_usage`:
+  - `(tenant_id UUID, key TEXT, window_start TIMESTAMPTZ, used BIGINT, PRIMARY KEY (tenant_id, key, window_start))`
+  - Row Level Security (RLS) enforced with tenant isolation policy.
+  - Increments use atomic upsert:
+    `INSERT INTO quota_usage ... ON CONFLICT (tenant_id, key, window_start) DO UPDATE SET used = quota_usage.used + EXCLUDED.used RETURNING used;`
+- Ingest upload limits:
+  - Evaluated on report uploads (`POST /ingest/v1/reports`, `/uploads`, `/sbom`).
+  - Window: 1 hour (`time.Hour`). Limit from `token.Quota` or `limits.ingestPerHour` (default 1000/hour).
+  - Exceeding the quota returns 429 Too Many Requests with `Retry-After` computed until the next window boundary.
+
+### 3. Payload Size Bounds
+- `limits.reportBytes` (default 50 MiB) enforces maximum request body size on direct report and SBOM uploads.
+- Excessively large payloads return HTTP 413 (`payload-too-large`).
+
+### 4. Public Inbound Connector Webhooks
+- Specialized rate limiter in `InboundWebhookHandler` on `POST /api/v1/t/{tenant}/connectors/{name}/webhook`:
+  - Keyed by `webhook:<client_ip>:<connector_name>`.
+  - Configurable via `limits.webhookPerMinute` (default 60 req/min, burst 5).
+  - Evaluated immediately before reading the request body, connector lookups, or secret resolution, protecting Rampart from webhook amplification floods.
+
+### 5. RFC 9457 Problem Details
+- All 429 responses return `Content-Type: application/problem+json` with:
+  - `type: "https://rampart.aspm.dev/problems/rate-limit-exceeded"` for burst/token rate limits.
+  - `type: "https://rampart.aspm.dev/problems/quota-exceeded"` for tenant hourly upload quotas.
+  - `status: 429`, `title`, `detail`, and `retry_after`.
+
+
+

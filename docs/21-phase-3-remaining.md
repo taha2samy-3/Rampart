@@ -9,7 +9,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 | 3.0 decisions and the spike | done (D69; the spike is a measurement of one simple expression, not a benchmark) |
 | 3.1 connectors: CRD, store, safe client, notifiers, router, `Check()` | done, CI green |
 | 3.2 trackers, inbound webhooks, ticket outbox | built and tested; **not finished** (section 2) and carries twelve known redesign items (D70 part B) |
-| 3.3 CI federation, mass-close guard settings, quotas | CI federation (D72) and mass-close guard (D71) done; quotas remaining (section 3.4) |
+| 3.3 CI federation, mass-close guard settings, quotas | done (D71, D72, D73) |
 | 3.4 Dependency-Track | not started (section 4) |
 | 3.5 SDK, mapping engine, parsers wave 2 | not started (section 5) |
 | 3.6 groups, views, exports, live updates, enrichment, dashboards | not started (section 6) |
@@ -114,14 +114,15 @@ These are in D70 part B. The first four make what is already built safe to switc
 ### 3.3 Dependency-Track's guard
 - The D23 rule (a run that sees components changed but zero vulnerabilities where the last had some is subject to the guard) is built in 3.4, on this same engine.
 
-### 3.4 Rate limiting and quotas
-- **What:** limits per token and per tenant; only the login has a limit today.
-- **How:**
-  1. A small `ratelimit` package: token bucket per key, in memory per process; a Postgres-backed counter for quotas that must hold across replicas (uploads per hour, bytes per day) in a table `quota_usage (tenant_id, key, window_start, used)` updated with `INSERT ... ON CONFLICT DO UPDATE`.
-  2. Limits in the configuration (`limits.ingestPerHour`, `limits.reportBytes`, `limits.apiPerSecond`) and per token on `api_token` (`rate_limit`, `quota`).
-  3. Middleware on `/api/v1` and `/ingest/v1`, answering **429 with `Retry-After`** and the RFC 9457 problem body; the CLI already understands 429 (retry with backoff).
-  4. The public webhook endpoint of 2.x gets its own tighter limit per address and per connector.
-- **Check:** a burst is limited and recovers; two replicas share a quota; the limit is per token and per tenant, not global; a limited call does not touch the database (benchmark it).
+### 3.4 Rate limiting and quotas (D73 — done)
+- **Built & Tested:**
+  1. In-memory token bucket limiter (`internal/ratelimit`) with zero-DB fast-path rejection benchmark (~760 ns/op).
+  2. Postgres-backed counter table `quota_usage` (migration `00031_rate_limiting.sql`) with tenant RLS isolation and atomic upsert across replicas.
+  3. `rate_limit` and `quota` columns added to `api_token` for per-token overrides.
+  4. Configuration tree extended with `limits` (`ingestPerHour`, `reportBytes`, `apiPerSecond`, `webhookPerMinute`).
+  5. HTTP middleware on `/api/v1` and `/ingest/v1` answering 429 with `Retry-After`, `RateLimit-*` headers, and RFC 9457 Problem Details (`rate-limit-exceeded`, `quota-exceeded`).
+  6. Dedicated rate limiter on inbound connector webhooks per IP and connector.
+  7. Full test coverage: unit tests, Postgres integration tests (`TestQuota_PostgresScenarios`), middleware integration tests, and benchmark.
 
 ---
 

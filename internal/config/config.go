@@ -26,6 +26,15 @@ type Config struct {
 	Feeds         FeedsConfig         `json:"feeds" yaml:"feeds"`
 	Retention     RetentionConfig     `json:"retention" yaml:"retention"`
 	Connectors    ConnectorsConfig    `json:"connectors" yaml:"connectors"`
+	Limits        LimitsConfig        `json:"limits" yaml:"limits"`
+}
+
+// LimitsConfig configures request rate limits and usage quotas (Milestone 3.3, Section 3.4).
+type LimitsConfig struct {
+	IngestPerHour    int   `json:"ingest_per_hour" yaml:"ingestPerHour"`
+	ReportBytes      int64 `json:"report_bytes" yaml:"reportBytes"`
+	APIPerSecond     int   `json:"api_per_second" yaml:"apiPerSecond"`
+	WebhookPerMinute int   `json:"webhook_per_minute" yaml:"webhookPerMinute"`
 }
 
 // RetentionConfig is how long data is kept and how often the sweep runs (docs/16 D53). The days apply to every
@@ -258,6 +267,12 @@ func DefaultConfig() *Config {
 			Session:        SessionSettings{IdleTimeout: 8 * time.Hour, AbsoluteTimeout: 24 * time.Hour},
 			BootstrapAdmin: BootstrapAdminSettings{Username: "admin", Tenant: "default"},
 		},
+		Limits: LimitsConfig{
+			IngestPerHour:    1000,
+			ReportBytes:      52428800, // 50 MiB
+			APIPerSecond:     50,
+			WebhookPerMinute: 60,
+		},
 	}
 }
 
@@ -375,6 +390,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Ingest.MaxReportBytes <= 0 {
 		return fmt.Errorf("config: ingest.max_report_bytes must be greater than zero")
+	}
+	if c.Limits.IngestPerHour < 0 {
+		return fmt.Errorf("config: limits.ingest_per_hour cannot be negative")
+	}
+	if c.Limits.ReportBytes < 0 {
+		return fmt.Errorf("config: limits.report_bytes cannot be negative")
+	}
+	if c.Limits.APIPerSecond < 0 {
+		return fmt.Errorf("config: limits.api_per_second cannot be negative")
+	}
+	if c.Limits.WebhookPerMinute < 0 {
+		return fmt.Errorf("config: limits.webhook_per_minute cannot be negative")
 	}
 	if c.Retention.Enabled {
 		if c.Retention.Interval < time.Minute {
@@ -609,6 +636,26 @@ func applyEnv(cfg *Config) {
 	}
 	if v := get("CONNECTORS_SSRF_ALLOWLIST_ALLOW_INTERNAL_HTTP"); v != "" {
 		cfg.Connectors.SSRFAllowlist.AllowInternalHTTP = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := get("LIMITS_INGEST_PER_HOUR"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			cfg.Limits.IngestPerHour = val
+		}
+	}
+	if v := get("LIMITS_REPORT_BYTES"); v != "" {
+		if val, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Limits.ReportBytes = val
+		}
+	}
+	if v := get("LIMITS_API_PER_SECOND"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			cfg.Limits.APIPerSecond = val
+		}
+	}
+	if v := get("LIMITS_WEBHOOK_PER_MINUTE"); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			cfg.Limits.WebhookPerMinute = val
+		}
 	}
 }
 

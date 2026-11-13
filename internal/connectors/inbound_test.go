@@ -324,3 +324,50 @@ func TestInbound_OutboundOnlyDirection_Rejected(t *testing.T) {
 		t.Fatalf("an outbound-only connector accepts no webhook: %d", w.Code)
 	}
 }
+
+func TestInbound_WebhookRateLimitedPerAddress(t *testing.T) {
+	st := ingest.NewMemoryStore()
+	tenantID := domain.NewID()
+	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{Name: "jira-hook", TenantID: tenantID, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
+		Jira: &domain.JiraConnectorConfig{
+			URL:              "https://acme.atlassian.net",
+			DefaultProject:   "SEC",
+			TwoWaySync:       true,
+			WebhookSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"},
+		},
+	}})
+
+	handler := connectors.NewInboundWebhookHandler(st, nil, nil).WithRateLimit(60) // 1 req/sec, burst 5
+
+	url := fmt.Sprintf("/api/v1/t/%s/connectors/jira-hook/webhook", tenantID)
+
+	// First 5 requests consume burst capacity
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{}`))
+		req.RemoteAddr = "192.0.2.1:12345"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d should not be rate limited", i)
+		}
+	}
+
+	// 6th request immediately from the same client IP should be 429
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{}`))
+	req.RemoteAddr = "192.0.2.1:12345"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests on webhook flood, got %d", w.Code)
+	}
+
+	// Another client address should still be allowed
+	req2 := httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{}`))
+	req2.RemoteAddr = "198.51.100.2:54321"
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	if w2.Code == http.StatusTooManyRequests {
+		t.Fatalf("different client IP should not be rate limited by address 1")
+	}
+}

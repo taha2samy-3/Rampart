@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/domain"
+	"rampart/internal/ratelimit"
 	"rampart/internal/workflow"
 )
 
@@ -102,6 +103,8 @@ type InboundWebhookHandler struct {
 	deliveries     *deliveryCache
 	logger         *slog.Logger
 	now            func() time.Time
+	limiter        *ratelimit.Limiter
+	ratePerMin     int
 }
 
 // NewInboundWebhookHandler creates a new InboundWebhookHandler. Without a TicketVerifier it acts on nothing.
@@ -109,7 +112,20 @@ func NewInboundWebhookHandler(store InboundConnectorStore, wf WorkflowService, s
 	return &InboundWebhookHandler{
 		store: store, workflow: wf, secretResolver: secrets,
 		deliveries: newDeliveryCache(10000, 24*time.Hour), logger: slog.Default(), now: time.Now,
+		limiter:    ratelimit.NewLimiter(1.0, 5), // default 60 requests/minute (1/sec), burst 5
+		ratePerMin: 60,
 	}
+}
+
+// WithRateLimit sets custom rate limiting per IP and connector (in requests per minute).
+func (h *InboundWebhookHandler) WithRateLimit(ratePerMin int) *InboundWebhookHandler {
+	h.ratePerMin = ratePerMin
+	rate := float64(ratePerMin) / 60.0
+	if rate <= 0 {
+		rate = 1.0
+	}
+	h.limiter = ratelimit.NewLimiter(rate, 5)
+	return h
 }
 
 // WithTicketVerifier sets how a ticket is tied to a finding.
@@ -160,6 +176,17 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
+	}
+	if h.limiter != nil {
+		key := "webhook:" + ratelimit.ClientIP(r) + ":" + connectorName
+		rate := float64(h.ratePerMin) / 60.0
+		if rate <= 0 {
+			rate = 1.0
+		}
+		if allowed, retryAfter, _, _ := h.limiter.Allow(key, rate, 5); !allowed {
+			ratelimit.Problem429(w, "rate-limit-exceeded", "Too Many Requests", "Webhook rate limit exceeded for client address", retryAfter)
+			return
+		}
 	}
 	conn, err := h.store.GetConnector(r.Context(), tenantID, connectorName)
 	if err != nil || conn == nil {

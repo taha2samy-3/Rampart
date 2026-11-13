@@ -30,6 +30,7 @@ type Store interface {
 	TicketOutbox
 	HeldCloses
 	Federation
+	QuotaStore
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error
@@ -162,4 +163,10 @@ type Store interface {
 	// ReserveAction reserves a side effect (ticket, notification) in action_ledger so a retried
 	// or repeated event cannot create a second ticket. Returns true if newly reserved.
 	ReserveAction(ctx context.Context, tenantID, policyID, findingID uuid.UUID, action string) (bool, error)
+}
+
+// QuotaStore tracks usage counts across replicas per tenant and window (Milestone 3.3).
+type QuotaStore interface {
+	IncrementQuota(ctx context.Context, tenantID uuid.UUID, key string, windowStart time.Time, amount int64) (int64, error)
+	GetQuotaUsage(ctx context.Context, tenantID uuid.UUID, key string, windowStart time.Time) (int64, error)
 }

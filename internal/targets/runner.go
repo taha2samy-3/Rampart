@@ -30,6 +30,7 @@ import (
 	"rampart/internal/integrations"
 	"rampart/internal/jobs"
 	"rampart/internal/query"
+	"rampart/internal/ratelimit"
 	"rampart/internal/retention"
 	"rampart/internal/store"
 	"rampart/internal/telemetry"
@@ -268,7 +269,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	wfService := workflow.New(storeBackend)
 	wfService.SetScorer(scorer)
 	inboundHandler := connectors.NewInboundWebhookHandler(storeBackend, wfService, secretResolver).
-		WithSettings(storeBackend).WithLogger(r.logger)
+		WithSettings(storeBackend).WithLogger(r.logger).WithRateLimit(r.cfg.Limits.WebhookPerMinute)
 	if pgStore != nil { // a ticket is tied to its finding by the outbox, which only PostgreSQL has
 		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
 	}
@@ -386,9 +387,11 @@ func (r *Runner) Run(ctx context.Context) error {
 		mux.Handle("/", ui.Handler(ui.Options{HSTS: strings.HasPrefix(r.cfg.Server.PublicURL, "https://")}))
 	}
 
+	rlMiddleware := ratelimit.NewMiddleware(r.cfg.Limits, storeBackend, authn)
+
 	httpServer := &http.Server{
 		Addr:              r.cfg.Server.HTTPAddr,
-		Handler:           telemetry.RequestIDMiddleware(telemetry.HTTPMiddleware(queryAPI.Audited(mux))),
+		Handler:           telemetry.RequestIDMiddleware(telemetry.HTTPMiddleware(rlMiddleware.Wrap(queryAPI.Audited(mux)))),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
