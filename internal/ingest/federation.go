@@ -333,6 +333,11 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
 		return
 	}
+	if stdClaims.Expiry.Time().Sub(now) > 1*time.Hour {
+		slog.Warn("federation: token lifetime exceeds 1 hour cap", "exp", stdClaims.Expiry.Time())
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")
+		return
+	}
 	if stdClaims.NotBefore != nil && now.Before(stdClaims.NotBefore.Time().Add(-time.Minute)) {
 		slog.Warn("federation: token not yet valid (nbf)", "nbf", stdClaims.NotBefore.Time())
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "token validation failed")

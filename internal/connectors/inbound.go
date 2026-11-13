@@ -105,6 +105,7 @@ type InboundWebhookHandler struct {
 	now            func() time.Time
 	limiter        *ratelimit.Limiter
 	ratePerMin     int
+	burst          int
 }
 
 // NewInboundWebhookHandler creates a new InboundWebhookHandler. Without a TicketVerifier it acts on nothing.
@@ -114,6 +115,7 @@ func NewInboundWebhookHandler(store InboundConnectorStore, wf WorkflowService, s
 		deliveries: newDeliveryCache(10000, 24*time.Hour), logger: slog.Default(), now: time.Now,
 		limiter:    ratelimit.NewLimiter(1.0, 5), // default 60 requests/minute (1/sec), burst 5
 		ratePerMin: 60,
+		burst:      5,
 	}
 }
 
@@ -124,7 +126,11 @@ func (h *InboundWebhookHandler) WithRateLimit(ratePerMin int) *InboundWebhookHan
 	if rate <= 0 {
 		rate = 1.0
 	}
-	h.limiter = ratelimit.NewLimiter(rate, 5)
+	h.burst = 5
+	if ratePerMin > 60 {
+		h.burst = ratePerMin / 10
+	}
+	h.limiter = ratelimit.NewLimiter(rate, h.burst)
 	return h
 }
 
@@ -183,7 +189,11 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		if rate <= 0 {
 			rate = 1.0
 		}
-		if allowed, retryAfter, _, _ := h.limiter.Allow(key, rate, 5); !allowed {
+		burst := h.burst
+		if burst <= 0 {
+			burst = 5
+		}
+		if allowed, retryAfter, _, _ := h.limiter.Allow(key, rate, burst); !allowed {
 			ratelimit.Problem429(w, "rate-limit-exceeded", "Too Many Requests", "Webhook rate limit exceeded for client address", retryAfter)
 			return
 		}

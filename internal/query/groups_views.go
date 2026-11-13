@@ -61,6 +61,10 @@ func (a *API) handleCreateView(w http.ResponseWriter, r *http.Request) {
 		writeJSONProblem(w, http.StatusBadRequest, "https://rampart.aspm.dev/problems/validation", "Name and query are required")
 		return
 	}
+	if len([]rune(req.Name)) > 255 {
+		writeJSONProblem(w, http.StatusBadRequest, "https://rampart.aspm.dev/problems/validation", "View name cannot exceed 255 characters")
+		return
+	}
 
 	// Validate query syntax through the grammar (D59)
 	if _, err := grammar.Parse(req.Query); err != nil {
@@ -108,6 +112,10 @@ func (a *API) handleDeleteView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.store.DeleteSavedView(r.Context(), tenantID, viewID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSONProblem(w, http.StatusNotFound, "https://rampart.aspm.dev/problems/not-found", "Saved view not found")
+			return
+		}
 		writeJSONProblem(w, http.StatusInternalServerError, "https://rampart.aspm.dev/problems/internal", err.Error())
 		return
 	}
@@ -161,6 +169,10 @@ func (a *API) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		writeJSONProblem(w, http.StatusBadRequest, "https://rampart.aspm.dev/problems/validation", "Group name is required")
+		return
+	}
+	if len([]rune(req.Name)) > 255 {
+		writeJSONProblem(w, http.StatusBadRequest, "https://rampart.aspm.dev/problems/validation", "Group name cannot exceed 255 characters")
 		return
 	}
 

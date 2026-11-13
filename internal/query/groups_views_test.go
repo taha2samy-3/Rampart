@@ -113,6 +113,9 @@ func (m *mockGroupViewStore) ListSavedViews(ctx context.Context, tenantID uuid.U
 }
 
 func (m *mockGroupViewStore) DeleteSavedView(ctx context.Context, tenantID, id uuid.UUID) error {
+	if _, ok := m.views[id]; !ok {
+		return store.ErrNotFound
+	}
 	delete(m.views, id)
 	return nil
 }
