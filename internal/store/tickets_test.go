@@ -26,6 +26,9 @@ func (f *fakeTracker) CreateIssue(context.Context, *domain.Finding, string) (str
 	return "SEC-7", "https://jira.example/browse/SEC-7", nil
 }
 func (f *fakeTracker) Check(context.Context) error { return nil }
+func (f *fakeTracker) FindIssueByLabel(context.Context, string) (string, string, error) {
+	return "", "", nil
+}
 
 type fakeResolver struct{ t domain.Tracker }
 
@@ -173,3 +176,279 @@ func TestTicketOutbox_OnPostgreSQL(t *testing.T) {
 		t.Fatalf("no ticket for a finding that is no longer open: %d", tr2.calls)
 	}
 }
+
+func TestTicketTable_MultiTracker_Grouping_Reactivation_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+
+	tnA := &domain.Tenant{ID: uuid.New(), Slug: "tka-" + uuid.NewString()[:8], DisplayName: "Tenant A", CreatedAt: time.Now().UTC()}
+	tnB := &domain.Tenant{ID: uuid.New(), Slug: "tkb-" + uuid.NewString()[:8], DisplayName: "Tenant B", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tnA); err != nil {
+		t.Fatal(err)
+	}
+	if err := sys.CreateTenant(ctx, tnB); err != nil {
+		t.Fatal(err)
+	}
+
+	seedFindings(t, ctx, appStore, tnA.ID, 0)
+	seedFindings(t, ctx, appStore, tnB.ID, 0)
+	appA, _ := appStore.LookupApplication(ctx, tnA.ID, "shop")
+	assetA, _ := appStore.LookupAsset(ctx, tnA.ID, domain.AssetRepository, "github.com/acme/shop")
+
+	now := time.Now().UTC()
+	f1 := &domain.Finding{ID: uuid.New(), TenantID: tnA.ID, FindingKey: uuid.NewString(), DedupScope: "shop:main", AssetID: assetA.ID, ApplicationID: appA.ID, Track: "main",
+		RuleScannerFamily: "semgrep", RuleID: "r1", Title: "Crit 1", Category: domain.CategorySAST, Severity: domain.SeverityCritical, ToolSeverity: "critical",
+		State: domain.StateOpen, FirstSeen: now, LastSeen: now, OccurrenceCount: 1, Version: 1, CreatedAt: now, UpdatedAt: now}
+	f2 := &domain.Finding{ID: uuid.New(), TenantID: tnA.ID, FindingKey: uuid.NewString(), DedupScope: "shop:main", AssetID: assetA.ID, ApplicationID: appA.ID, Track: "main",
+		RuleScannerFamily: "semgrep", RuleID: "r2", Title: "Crit 2", Category: domain.CategorySAST, Severity: domain.SeverityCritical, ToolSeverity: "critical",
+		State: domain.StateOpen, FirstSeen: now, LastSeen: now, OccurrenceCount: 1, Version: 1, CreatedAt: now, UpdatedAt: now}
+
+	if err := appStore.UpsertFindings(ctx, tnA.ID, []*domain.Finding{f1, f2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Two trackers on one finding (D70 B1): Jira & GitHub
+	tJira, err := appStore.CreateTicket(ctx, tnA.ID, &domain.Ticket{
+		Connector:   "jira",
+		ExternalRef: "SEC-101",
+		URL:         "https://jira.example/browse/SEC-101",
+		State:       "open",
+	})
+	if err != nil {
+		t.Fatalf("CreateTicket jira failed: %v", err)
+	}
+	tGH, err := appStore.CreateTicket(ctx, tnA.ID, &domain.Ticket{
+		Connector:   "github",
+		ExternalRef: "#42",
+		URL:         "https://github.com/acme/shop/issues/42",
+		State:       "open",
+	})
+	if err != nil {
+		t.Fatalf("CreateTicket github failed: %v", err)
+	}
+
+	if err := appStore.LinkFinding(ctx, tnA.ID, tJira.ID, f1.ID); err != nil {
+		t.Fatalf("LinkFinding f1 -> tJira failed: %v", err)
+	}
+	if err := appStore.LinkFinding(ctx, tnA.ID, tGH.ID, f1.ID); err != nil {
+		t.Fatalf("LinkFinding f1 -> tGH failed: %v", err)
+	}
+
+	tickets, err := appStore.TicketsOfFinding(ctx, tnA.ID, f1.ID)
+	if err != nil {
+		t.Fatalf("TicketsOfFinding failed: %v", err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("expected 2 tickets on f1, got %d", len(tickets))
+	}
+
+	// 2. One ticket on two findings (grouping, D70 B1): link f2 to tJira
+	if err := appStore.LinkFinding(ctx, tnA.ID, tJira.ID, f2.ID); err != nil {
+		t.Fatalf("LinkFinding f2 -> tJira failed: %v", err)
+	}
+	hasF1Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-101")
+	hasF2Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f2.ID, "SEC-101")
+	if !hasF1Jira || !hasF2Jira {
+		t.Fatalf("one ticket covers both findings: f1=%v, f2=%v", hasF1Jira, hasF2Jira)
+	}
+
+	// 3. Reactivated finding: f1 is fixed, then later a new ticket JIRA-2 is opened
+	if err := appStore.SetTicketState(ctx, tnA.ID, tJira.ID, "closed"); err != nil {
+		t.Fatalf("SetTicketState failed: %v", err)
+	}
+	tJira2, err := appStore.CreateTicket(ctx, tnA.ID, &domain.Ticket{
+		Connector:   "jira",
+		ExternalRef: "SEC-202",
+		URL:         "https://jira.example/browse/SEC-202",
+		State:       "open",
+	})
+	if err != nil {
+		t.Fatalf("CreateTicket jira2 failed: %v", err)
+	}
+	if err := appStore.LinkFinding(ctx, tnA.ID, tJira2.ID, f1.ID); err != nil {
+		t.Fatalf("LinkFinding f1 -> tJira2 failed: %v", err)
+	}
+	hasReactivated, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-202")
+	if !hasReactivated {
+		t.Fatal("reactivated finding has new ticket SEC-202")
+	}
+
+	// 4. Verifier answers per ticket
+	hasUnknown, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-999")
+	if hasUnknown {
+		t.Fatal("unknown ticket must answer false")
+	}
+
+	// 5. Tenant isolation: tenantB cannot read tenantA's tickets or link findings across tenants
+	ticketsB, err := appStore.TicketsOfFinding(ctx, tnB.ID, f1.ID)
+	if err != nil {
+		t.Fatalf("TicketsOfFinding under tenantB: %v", err)
+	}
+	if len(ticketsB) != 0 {
+		t.Fatalf("tenant isolation broken: tenantB saw tenantA tickets: %d", len(ticketsB))
+	}
+	hasB, _ := appStore.FindingHasTicket(ctx, tnB.ID, f1.ID, "SEC-101")
+	if hasB {
+		t.Fatal("tenantB must not verify tenantA's ticket")
+	}
+}
+
+func TestProcessTickets_LookupBeforeRetry_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "lookup-" + uuid.NewString()[:8], DisplayName: "Tenant Lookup", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	app, _ := appStore.LookupApplication(ctx, tn.ID, "shop")
+	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
+	now := time.Now().UTC()
+	f := &domain.Finding{ID: uuid.New(), TenantID: tn.ID, FindingKey: uuid.NewString(), DedupScope: "shop:main", AssetID: asset.ID, ApplicationID: app.ID, Track: "main",
+		RuleScannerFamily: "semgrep", RuleID: "r", Title: "Crit Ambiguous", Category: domain.CategorySAST, Severity: domain.SeverityCritical, ToolSeverity: "critical",
+		State: domain.StateOpen, FirstSeen: now, LastSeen: now, OccurrenceCount: 1, Version: 1, CreatedAt: now, UpdatedAt: now}
+
+	if err := appStore.UpsertFindings(ctx, tn.ID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := appStore.ReserveAction(ctx, tn.ID, domain.PolicyTicketOnCriticalID, f.ID, domain.ActionCreateTicket); err != nil || !ok {
+		t.Fatalf("reserve: %v %v", ok, err)
+	}
+
+	// Tracker creates ticket on attempt 1, but network times out returning 504
+	failingTracker := &ambiguousTracker{
+		createdRef: "SEC-AMBIGUOUS-1",
+		createdURL: "https://jira.example/browse/SEC-AMBIGUOUS-1",
+	}
+
+	// Sweep 1: attempt 1 fails
+	opened, failed := connectors.ProcessTickets(ctx, sys, fakeResolver{failingTracker}, now.Add(time.Minute), log)
+	if opened != 0 || failed != 1 {
+		t.Fatalf("sweep 1: opened %d, failed %d", opened, failed)
+	}
+
+	// Sweep 2: attempt > 0, FindIssueByLabel finds the ticket created in attempt 1!
+	clock := now.Add(10 * time.Minute)
+	opened2, failed2 := connectors.ProcessTickets(ctx, sys, fakeResolver{failingTracker}, clock, log)
+	if opened2 != 1 || failed2 != 0 {
+		t.Fatalf("sweep 2: opened %d, failed %d", opened2, failed2)
+	}
+
+	// Exactly one ticket was created in external tracker (no duplicate)
+	if failingTracker.createCalls != 1 {
+		t.Fatalf("expected exactly 1 CreateIssue call, got %d", failingTracker.createCalls)
+	}
+	has, _ := appStore.FindingHasTicket(ctx, tn.ID, f.ID, "SEC-AMBIGUOUS-1")
+	if !has {
+		t.Fatal("expected ticket to be recorded via FindIssueByLabel")
+	}
+}
+
+type ambiguousTracker struct {
+	createCalls int
+	createdRef  string
+	createdURL  string
+}
+
+func (a *ambiguousTracker) CreateIssue(ctx context.Context, f *domain.Finding, app string) (string, string, error) {
+	a.createCalls++
+	return "", "", errors.New("gateway timeout 504")
+}
+
+func (a *ambiguousTracker) FindIssueByLabel(ctx context.Context, label string) (string, string, error) {
+	if a.createCalls > 0 {
+		return a.createdRef, a.createdURL, nil
+	}
+	return "", "", nil
+}
+
+func (a *ambiguousTracker) Check(ctx context.Context) error { return nil }
+
+func TestProcessTickets_FatalErrorsGiveUp_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "fatal-" + uuid.NewString()[:8], DisplayName: "Tenant Fatal", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	app, _ := appStore.LookupApplication(ctx, tn.ID, "shop")
+	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
+	now := time.Now().UTC()
+	f := &domain.Finding{ID: uuid.New(), TenantID: tn.ID, FindingKey: uuid.NewString(), DedupScope: "shop:main", AssetID: asset.ID, ApplicationID: app.ID, Track: "main",
+		RuleScannerFamily: "semgrep", RuleID: "r", Title: "Crit Fatal", Category: domain.CategorySAST, Severity: domain.SeverityCritical, ToolSeverity: "critical",
+		State: domain.StateOpen, FirstSeen: now, LastSeen: now, OccurrenceCount: 1, Version: 1, CreatedAt: now, UpdatedAt: now}
+
+	if err := appStore.UpsertFindings(ctx, tn.ID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := appStore.ReserveAction(ctx, tn.ID, domain.PolicyTicketOnCriticalID, f.ID, domain.ActionCreateTicket); err != nil || !ok {
+		t.Fatalf("reserve: %v %v", ok, err)
+	}
+
+	// Register a Jira connector so we can verify Connected condition turns False on 403
+	conn := domain.Connector{
+		Name:     "jira-prod",
+		TenantID: tn.ID,
+		Type:     domain.ConnectorTypeJira,
+		Spec: domain.ConnectorSpec{
+			Type:      domain.ConnectorTypeJira,
+			Jira:      &domain.JiraConnectorConfig{URL: "https://jira.acme.com", DefaultProject: "SEC"},
+			Ticketing: &domain.ConnectorTicketingPolicy{OnCritical: true},
+		},
+	}
+	conn.SetCondition("Connected", "True", "AuthOK", "Ready")
+	if err := sys.SaveConnector(ctx, tn.ID, conn); err != nil {
+		t.Fatal(err)
+	}
+
+	fatalTracker := &fatalTrackerStub{err: &domain.TrackerError{Status: 403, Message: "Forbidden: invalid credentials"}}
+
+	// Attempt 1: 403 error is fatal (D70 B4) -> give up immediately!
+	opened, failed := connectors.ProcessTickets(ctx, sys, fakeResolver{fatalTracker}, now.Add(time.Minute), log)
+	if opened != 0 || failed != 1 {
+		t.Fatalf("opened %d, failed %d", opened, failed)
+	}
+
+	// Check that reservation is already failed (attempts = 1, giveUp = true)
+	pending, err := sys.ListPendingTickets(ctx, now.Add(48*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pending {
+		if p.FindingID == f.ID {
+			t.Fatal("fatal error must not remain in pending queue")
+		}
+	}
+
+	// Check connector condition turned Connected=False with AuthFailed
+	savedConn, err := sys.GetConnector(ctx, tn.ID, "jira-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cond := savedConn.GetCondition("Connected")
+	if cond == nil || cond.Status != "False" || cond.Reason != "AuthFailed" {
+		t.Fatalf("expected Connected=False/AuthFailed, got %+v", cond)
+	}
+}
+
+type fatalTrackerStub struct {
+	err error
+}
+
+func (f *fatalTrackerStub) CreateIssue(ctx context.Context, finding *domain.Finding, app string) (string, string, error) {
+	return "", "", f.err
+}
+
+func (f *fatalTrackerStub) FindIssueByLabel(ctx context.Context, label string) (string, string, error) {
+	return "", "", nil
+}
+
+func (f *fatalTrackerStub) Check(ctx context.Context) error { return nil }

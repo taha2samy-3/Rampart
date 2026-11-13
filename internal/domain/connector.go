@@ -11,15 +11,60 @@ import (
 	"github.com/google/uuid"
 )
 
-// Tracker creates and manages external issues/tickets for findings (Milestone 3.2, D23, D66).
+// Tracker creates and manages external issues/tickets for findings (Milestone 3.2, D23, D66, D70).
 type Tracker interface {
 	CreateIssue(ctx context.Context, finding *Finding, appName string) (ticketID string, ticketURL string, err error)
+	FindIssueByLabel(ctx context.Context, label string) (ticketID string, ticketURL string, err error)
 	Check(ctx context.Context) error
 }
 
 // TrackerResolver resolves external issue trackers for a tenant (Milestone 3.2, D66).
 type TrackerResolver interface {
 	ResolveTracker(ctx context.Context, tenantID uuid.UUID) (Tracker, error)
+}
+
+// TrackerError represents an error returned by an external issue tracker HTTP API (D70 B4).
+type TrackerError struct {
+	Status  int
+	Message string
+}
+
+func (e *TrackerError) Error() string {
+	return fmt.Sprintf("tracker HTTP %d: %s", e.Status, e.Message)
+}
+
+// IsFatalTrackerError returns true and the status code for non-recoverable 4xx errors (D70 B4).
+func IsFatalTrackerError(err error) (bool, int) {
+	var te *TrackerError
+	if errors.As(err, &te) {
+		switch te.Status {
+		case 400, 401, 403, 404, 422:
+			return true, te.Status
+		}
+		return false, te.Status
+	}
+	return false, 0
+}
+
+// Ticket represents an external issue/ticket opened for findings (D70 B1).
+type Ticket struct {
+	ID          uuid.UUID `json:"id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	Connector   string    `json:"connector"`
+	ExternalRef string    `json:"external_ref"`
+	URL         string    `json:"url"`
+	State       string    `json:"state"` // e.g. "open", "closed"
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ConnectorTicketingPolicy configures automated ticket opening (D70 B3).
+type ConnectorTicketingPolicy struct {
+	OnCritical bool              `json:"onCritical,omitempty"`
+	MinBand    string            `json:"minBand,omitempty"`
+	Project    string            `json:"project,omitempty"`
+	Projects   map[string]string `json:"projects,omitempty"`
+	MaxPerHour int               `json:"maxPerHour,omitempty"`
 }
 
 var (
@@ -169,6 +214,7 @@ type DependencyTrackConnectorConfig struct {
 type ConnectorSpec struct {
 	Type            ConnectorType                   `json:"type"`
 	Direction       ConnectorDirection              `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
+	Ticketing       *ConnectorTicketingPolicy       `json:"ticketing,omitempty"` // Automated ticketing policy (D70 B3)
 	Routing         *NotificationRoutingRule        `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
 	Jira            *JiraConnectorConfig            `json:"jira,omitempty"`
 	GitHub          *GitHubConnectorConfig          `json:"github,omitempty"`
@@ -193,6 +239,7 @@ type ConnectorStatus struct {
 	ObservedGeneration int64                `json:"observedGeneration,omitempty"`
 	Conditions         []ConnectorCondition `json:"conditions,omitempty"`
 	WebhookURL         string               `json:"webhookURL,omitempty"`
+	AccountID          string               `json:"accountId,omitempty"`
 	LastSync           *time.Time           `json:"lastSync,omitempty"`
 }
 
@@ -363,6 +410,15 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		}
 	default:
 		return fmt.Errorf("%w: unrecognized connector type %q", ErrConnectorInvalid, c.Type)
+	}
+
+	if c.Spec.Ticketing != nil {
+		if c.Type != ConnectorTypeJira && c.Type != ConnectorTypeGitHub {
+			return fmt.Errorf("%w: ticketing policy only supported on tracker connectors (jira, github)", ErrConnectorInvalid)
+		}
+		if c.Spec.Ticketing.MaxPerHour < 0 {
+			return fmt.Errorf("%w: ticketing maxPerHour cannot be negative", ErrConnectorInvalid)
+		}
 	}
 
 	return nil

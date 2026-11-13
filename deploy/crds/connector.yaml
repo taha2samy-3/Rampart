@@ -51,6 +51,27 @@ spec:
                     - outbound
                     - inbound
                     - bidirectional
+                ticketing:
+                  type: object
+                  description: Policy for automated ticket opening (docs/16 D70 B3).
+                  properties:
+                    onCritical:
+                      type: boolean
+                      description: Automatically open a ticket when a critical finding is ingested.
+                    minBand:
+                      type: string
+                      description: Minimum risk band required to open a ticket.
+                    project:
+                      type: string
+                      description: Default project key.
+                    projects:
+                      type: object
+                      description: Project per application mapping.
+                      additionalProperties:
+                        type: string
+                    maxPerHour:
+                      type: integer
+                      description: Maximum tickets opened per hour across findings.
                 jira:
                   type: object
                   properties:
@@ -243,6 +264,8 @@ spec:
                         type: string
                         format: date-time
                 webhookURL:
+                  type: string
+                accountId:
                   type: string
                 lastSync:
                   type: string

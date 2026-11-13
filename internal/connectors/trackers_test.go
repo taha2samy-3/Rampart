@@ -210,6 +210,7 @@ func TestDefaultTrackerResolver(t *testing.T) {
 				DefaultProject:       "SEC",
 				CredentialsSecretRef: domain.SecretKeyRef{Name: "jira-sec", Key: "apiToken"},
 			},
+			Ticketing: &domain.ConnectorTicketingPolicy{OnCritical: true},
 		},
 	}
 	condTrue := domain.ConnectorCondition{Type: "Connected", Status: "True"}
@@ -400,7 +401,8 @@ func TestResolver_ASecretThatCannotBeReadIsAnErrorNotAReasonToUseAnotherConnecto
 	st := ingest.NewMemoryStore()
 	for _, name := range []string{"jira-a", "gh-b"} {
 		c := domain.Connector{Name: name, TenantID: tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{Type: domain.ConnectorTypeJira,
-			Jira: &domain.JiraConnectorConfig{URL: "https://a.atlassian.net", DefaultProject: "SEC", CredentialsSecretRef: domain.SecretKeyRef{Name: "s", Key: "apiToken"}}}}
+			Ticketing: &domain.ConnectorTicketingPolicy{OnCritical: true},
+			Jira:      &domain.JiraConnectorConfig{URL: "https://a.atlassian.net", DefaultProject: "SEC", CredentialsSecretRef: domain.SecretKeyRef{Name: "s", Key: "apiToken"}}}}
 		if name == "gh-b" {
 			c.Type = domain.ConnectorTypeGitHub
 			c.Spec = domain.ConnectorSpec{Type: domain.ConnectorTypeGitHub, GitHub: &domain.GitHubConnectorConfig{Owner: "a", Repo: "b", CredentialsSecretRef: domain.SecretKeyRef{Name: "s", Key: "token"}}}

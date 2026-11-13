@@ -26,6 +26,8 @@ type Store interface {
 	auth.AuditStore
 	IdentityProviders
 	Connectors
+	Tickets
+	TicketOutbox
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error

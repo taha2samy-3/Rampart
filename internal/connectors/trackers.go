@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -223,7 +224,7 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 	}
 
 	if status != http.StatusCreated && status != http.StatusOK {
-		return "", "", fmt.Errorf("jira: issue creation returned status %d", status)
+		return "", "", &domain.TrackerError{Status: status, Message: fmt.Sprintf("jira: issue creation returned status %d", status)}
 	}
 
 	var res struct {
@@ -237,6 +238,44 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 
 	ticketURL := fmt.Sprintf("%s/browse/%s", strings.TrimSuffix(j.cfg.URL, "/"), res.Key)
 	return res.Key, ticketURL, nil
+}
+
+// FindIssueByLabel searches for an existing Jira issue carrying the given finding label (D70 B2).
+func (j *JiraTracker) FindIssueByLabel(ctx context.Context, label string) (string, string, error) {
+	if label == "" {
+		return "", "", errors.New("label is empty")
+	}
+	jql := fmt.Sprintf("labels = %q", label)
+	endpoint := fmt.Sprintf("%s/rest/api/3/search?jql=%s&maxResults=1&fields=key", strings.TrimSuffix(j.cfg.URL, "/"), url.QueryEscape(jql))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("jira find issue: %w", err)
+	}
+	req.Header.Set("Authorization", j.authHeader)
+	req.Header.Set("Accept", "application/json")
+
+	respBody, status, _, err := j.client.DoWithRetry(ctx, req, true)
+	if err != nil {
+		return "", "", fmt.Errorf("jira find issue failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return "", "", &domain.TrackerError{Status: status, Message: fmt.Sprintf("jira find issue returned status %d", status)}
+	}
+
+	var res struct {
+		Issues []struct {
+			Key string `json:"key"`
+		} `json:"issues"`
+	}
+	if err := json.Unmarshal(respBody, &res); err != nil {
+		return "", "", fmt.Errorf("jira find issue: unmarshaling response: %w", err)
+	}
+	if len(res.Issues) == 0 {
+		return "", "", nil
+	}
+	key := res.Issues[0].Key
+	ticketURL := fmt.Sprintf("%s/browse/%s", strings.TrimSuffix(j.cfg.URL, "/"), key)
+	return key, ticketURL, nil
 }
 
 // Check verifies Jira connectivity and credentials. It speaks REST v3, which Jira Cloud offers; Jira Data Center
@@ -468,7 +507,7 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 	}
 
 	if status != http.StatusCreated {
-		return "", "", fmt.Errorf("github: issue creation returned status %d", status)
+		return "", "", &domain.TrackerError{Status: status, Message: fmt.Sprintf("github: issue creation returned status %d", status)}
 	}
 
 	var res struct {
@@ -481,6 +520,41 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 
 	ticketID := fmt.Sprintf("#%d", res.Number)
 	return ticketID, res.HTMLURL, nil
+}
+
+// FindIssueByLabel searches for an existing issue carrying the given finding label (D70 B2).
+func (g *GitHubTracker) FindIssueByLabel(ctx context.Context, label string) (string, string, error) {
+	if label == "" {
+		return "", "", errors.New("label is empty")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues?labels=%s&state=all&per_page=1", g.apiBaseURL, g.cfg.Owner, g.cfg.Repo, url.QueryEscape(label))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("github find issue: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	respBody, status, _, err := g.client.DoWithRetry(ctx, req, true)
+	if err != nil {
+		return "", "", fmt.Errorf("github find issue failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return "", "", &domain.TrackerError{Status: status, Message: fmt.Sprintf("github find issue returned status %d", status)}
+	}
+
+	var issues []struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(respBody, &issues); err != nil {
+		return "", "", fmt.Errorf("github find issue: unmarshaling response: %w", err)
+	}
+	if len(issues) == 0 {
+		return "", "", nil
+	}
+	return fmt.Sprintf("#%d", issues[0].Number), issues[0].HTMLURL, nil
 }
 
 // Check verifies GitHub repository write/push permissions (D60).
@@ -542,9 +616,8 @@ func NewDefaultTrackerResolver(st domainConnectorStore, secretResolver SecretRes
 	}
 }
 
-// ResolveTracker returns the tracker of the tenant: the first tracker connector that is not known to be failing.
-// A tracker whose secret cannot be read is an error, not a reason to use another connector: a ticket must not
-// go to a project the owner did not choose.
+// ResolveTracker returns the tracker of the tenant that has ticketing.onCritical enabled (D70 B3).
+// If multiple connectors have onCritical enabled, it returns an error; if none, it returns nil.
 func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uuid.UUID) (Tracker, error) {
 	if r.store == nil {
 		return nil, nil
@@ -573,41 +646,64 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 		return b, nil
 	}
 
-	for _, conn := range connectors {
+	var candidate *domain.Connector
+	var candidatesCount int
+	for i := range connectors {
+		conn := &connectors[i]
+		if conn.Type != domain.ConnectorTypeJira && conn.Type != domain.ConnectorTypeGitHub {
+			continue
+		}
 		if c := conn.GetCondition("Connected"); c != nil && c.Status == "False" {
 			continue
 		}
-		switch conn.Type {
-		case domain.ConnectorTypeJira:
-			if conn.Spec.Jira == nil {
-				continue
+		// D70 B3: Choose connector that has onCritical: true
+		if conn.Spec.Ticketing != nil && conn.Spec.Ticketing.OnCritical {
+			candidatesCount++
+			if candidate == nil {
+				candidate = conn
 			}
-			b, serr := secret(conn, conn.Spec.Jira.CredentialsSecretRef)
-			if serr != nil {
-				return nil, serr
-			}
-			t, terr := NewJiraTracker(*conn.Spec.Jira, r.client, b, r.publicURL)
-			if terr != nil {
-				return nil, terr
-			}
-			t.SetTenantSlug(slug)
-			return t, nil
-
-		case domain.ConnectorTypeGitHub:
-			if conn.Spec.GitHub == nil {
-				continue
-			}
-			b, serr := secret(conn, conn.Spec.GitHub.CredentialsSecretRef)
-			if serr != nil {
-				return nil, serr
-			}
-			t, terr := NewGitHubTracker(*conn.Spec.GitHub, r.client, b, r.publicURL)
-			if terr != nil {
-				return nil, terr
-			}
-			t.SetTenantSlug(slug)
-			return t, nil
 		}
+	}
+
+	if candidatesCount > 1 {
+		return nil, fmt.Errorf("multiple connectors have onCritical ticketing enabled; exactly one tracker must have onCritical: true")
+	}
+
+	if candidate == nil {
+		return nil, nil
+	}
+
+	conn := *candidate
+	switch conn.Type {
+	case domain.ConnectorTypeJira:
+		if conn.Spec.Jira == nil {
+			return nil, errors.New("jira config is nil")
+		}
+		b, serr := secret(conn, conn.Spec.Jira.CredentialsSecretRef)
+		if serr != nil {
+			return nil, serr
+		}
+		t, terr := NewJiraTracker(*conn.Spec.Jira, r.client, b, r.publicURL)
+		if terr != nil {
+			return nil, terr
+		}
+		t.SetTenantSlug(slug)
+		return t, nil
+
+	case domain.ConnectorTypeGitHub:
+		if conn.Spec.GitHub == nil {
+			return nil, errors.New("github config is nil")
+		}
+		b, serr := secret(conn, conn.Spec.GitHub.CredentialsSecretRef)
+		if serr != nil {
+			return nil, serr
+		}
+		t, terr := NewGitHubTracker(*conn.Spec.GitHub, r.client, b, r.publicURL)
+		if terr != nil {
+			return nil, terr
+		}
+		t.SetTenantSlug(slug)
+		return t, nil
 	}
 
 	return nil, nil

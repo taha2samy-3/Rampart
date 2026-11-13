@@ -2065,6 +2065,54 @@ func (m *MemoryStore) ReserveAction(ctx context.Context, tenantID, policyID, fin
 	return true, nil
 }
 
+func (m *MemoryStore) ListPendingTickets(ctx context.Context, now time.Time, limit int) ([]store.PendingTicket, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error {
+	return nil
+}
+
+func (m *MemoryStore) RetryTicket(ctx context.Context, tenantID, findingID uuid.UUID, errMsg string, next time.Time, giveUp bool) error {
+	return nil
+}
+
+func (m *MemoryStore) DeferTicket(ctx context.Context, tenantID, findingID uuid.UUID, next time.Time) error {
+	return nil
+}
+
+func (m *MemoryStore) SkipTicket(ctx context.Context, tenantID, findingID uuid.UUID, reason string) error {
+	return nil
+}
+
+func (m *MemoryStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error) {
+	return false, nil
+}
+
+func (m *MemoryStore) CreateTicket(ctx context.Context, tenantID uuid.UUID, t *domain.Ticket) (*domain.Ticket, error) {
+	return t, nil
+}
+
+func (m *MemoryStore) LinkFinding(ctx context.Context, tenantID, ticketID, findingID uuid.UUID) error {
+	return nil
+}
+
+func (m *MemoryStore) TicketsOfFinding(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Ticket, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) SetTicketState(ctx context.Context, tenantID, ticketID uuid.UUID, state string) error {
+	return nil
+}
+
+func (m *MemoryStore) CountTicketsCreatedSince(ctx context.Context, tenantID uuid.UUID, connector string, since time.Time) (int, error) {
+	return 0, nil
+}
+
+func (m *MemoryStore) RecordWebhookDelivery(ctx context.Context, tenantID uuid.UUID, connector, deliveryID string, expiresAt time.Time) (bool, error) {
+	return true, nil
+}
+
 func firstNonEmptyStr(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

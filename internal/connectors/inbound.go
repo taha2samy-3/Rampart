@@ -208,10 +208,21 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 3. Duplicates, now that the sender is known.
-	if deliveryID != "" && h.deliveries.seen(tenantID.String()+"|"+conn.Name+"|"+deliveryID, h.now()) {
-		reply(w, http.StatusOK, "duplicate_delivery")
-		return
+	// 3. Duplicates, now that the sender is known (D70 B8: in-memory cache + shared table).
+	if deliveryID != "" {
+		if h.deliveries.seen(tenantID.String()+"|"+conn.Name+"|"+deliveryID, h.now()) {
+			reply(w, http.StatusOK, "duplicate_delivery")
+			return
+		}
+		if rec, ok := h.verifier.(interface {
+			RecordWebhookDelivery(ctx context.Context, tenantID uuid.UUID, connector, deliveryID string, expiresAt time.Time) (bool, error)
+		}); ok {
+			recorded, err := rec.RecordWebhookDelivery(r.Context(), tenantID, conn.Name, deliveryID, h.now().Add(24*time.Hour))
+			if err == nil && !recorded {
+				reply(w, http.StatusOK, "duplicate_delivery")
+				return
+			}
+		}
 	}
 
 	// 4. The payload.
@@ -333,8 +344,12 @@ func (h *InboundWebhookHandler) handleJira(w http.ResponseWriter, r *http.Reques
 		reply(w, http.StatusOK, "ignored_no_resolution_change")
 		return
 	}
-	// A change made through the account Rampart itself uses is ours, not a decision (D69).
-	if own := conn.Spec.Jira; own != nil && own.AccountID != "" && event.User.AccountID == own.AccountID {
+	// A change made through the account Rampart itself uses is ours, not a decision (D69, D70 B6).
+	ownAccountID := conn.Status.AccountID
+	if ownAccountID == "" && conn.Spec.Jira != nil {
+		ownAccountID = conn.Spec.Jira.AccountID
+	}
+	if ownAccountID != "" && event.User.AccountID == ownAccountID {
 		reply(w, http.StatusOK, "ignored_own_change")
 		return
 	}
