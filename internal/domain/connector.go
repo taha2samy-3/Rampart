@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -9,6 +10,17 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// Tracker creates and manages external issues/tickets for findings (Milestone 3.2, D23, D66).
+type Tracker interface {
+	CreateIssue(ctx context.Context, finding *Finding, appName string) (ticketID string, ticketURL string, err error)
+	Check(ctx context.Context) error
+}
+
+// TrackerResolver resolves external issue trackers for a tenant (Milestone 3.2, D66).
+type TrackerResolver interface {
+	ResolveTracker(ctx context.Context, tenantID uuid.UUID) (Tracker, error)
+}
 
 var (
 	ErrConnectorInvalid      = errors.New("connector: invalid specification")

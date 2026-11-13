@@ -79,6 +79,9 @@ type ManagerConfig struct {
 
 	// ConnectorChecker performs active connectivity and authentication checks for connectors (D69).
 	ConnectorChecker ConnectorChecker
+
+	// PublicURL is the base URL used to construct inbound webhook endpoints in status.
+	PublicURL string
 }
 
 // NewManager builds a controller-runtime manager with the Rampart controllers.
@@ -119,6 +122,9 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	op := NewOperatorWithAllowlist(cfg.Store, secrets, cfg.SecretStore, cfg.SSRFAllowlist, logger)
 	if cfg.ConnectorChecker != nil {
 		op.SetConnectorChecker(cfg.ConnectorChecker)
+	}
+	if cfg.PublicURL != "" {
+		op.SetPublicURL(cfg.PublicURL)
 	}
 	k := &kube{c: mgr.GetClient(), reader: mgr.GetAPIReader(), cfg: cfg, logger: logger}
 

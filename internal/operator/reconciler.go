@@ -501,6 +501,7 @@ type ConnectorReconciler struct {
 	secretStore SecretMaterialStore
 	allowlist   *domain.PlatformSSRFAllowlist
 	checker     ConnectorChecker
+	publicURL   string
 }
 
 func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore, allowlist *domain.PlatformSSRFAllowlist) *ConnectorReconciler {
@@ -515,6 +516,11 @@ func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, sec
 // SetChecker configures an active connectivity checker for connector verification.
 func (r *ConnectorReconciler) SetChecker(checker ConnectorChecker) {
 	r.checker = checker
+}
+
+// SetPublicURL sets the base public URL for webhook endpoint generation.
+func (r *ConnectorReconciler) SetPublicURL(u string) {
+	r.publicURL = strings.TrimSuffix(u, "/")
 }
 
 func extractConnectorSecretRef(spec *domain.ConnectorSpec) *domain.SecretKeyRef {
@@ -651,8 +657,17 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 
 	now := time.Now().UTC()
 	status.ObservedGeneration = cr.Metadata.Generation
-	status.WebhookURL = "" // Inbound webhook URL design deferred to 3.2 per D23
 	status.LastSync = &now
+
+	// Webhook URL generation for inbound / bidirectional connectors (Milestone 3.2, D23, D69)
+	status.WebhookURL = ""
+	if r.publicURL != "" && (conn.Direction() == domain.DirectionInbound || conn.Direction() == domain.DirectionBidirectional || conn.Type == domain.ConnectorTypeWebhook) {
+		tSlug := tenant.Slug
+		if tSlug == "" {
+			tSlug = tenant.ID.String()
+		}
+		status.WebhookURL = fmt.Sprintf("%s/api/v1/t/%s/connectors/%s/webhook", r.publicURL, tSlug, cr.Metadata.Name)
+	}
 
 	// Connection verification (D69, docs/04, docs/20 Milestone 3.1)
 	if r.checker != nil {

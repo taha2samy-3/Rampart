@@ -38,14 +38,15 @@ const (
 
 // API provides HTTP handlers for the read path /api/v1 (docs/11, docs/16 D14, D16).
 type API struct {
-	store   store.Store
-	feeds   *enrich.FeedStore
-	authn   *auth.Authenticator
-	hmacKey []byte
-	objects objectstore.Store
-	intel   IntelSource
-	scorer  *scoring.Scorer
-	gw      *ingest.Gateway
+	store          store.Store
+	feeds          *enrich.FeedStore
+	authn          *auth.Authenticator
+	hmacKey        []byte
+	objects        objectstore.Store
+	intel          IntelSource
+	scorer         *scoring.Scorer
+	gw             *ingest.Gateway
+	webhookHandler http.Handler
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -108,6 +109,9 @@ func (a *API) SetObjectStore(o objectstore.Store) { a.objects = o }
 // SetCursorKey sets the key that signs pagination cursors (D16). Without one, each process uses a random
 // key, so a cursor never outlives the process that issued it.
 func (a *API) SetCursorKey(key []byte) { a.hmacKey = append([]byte(nil), key...) }
+
+// SetInboundWebhookHandler configures the handler for incoming tracker webhooks (D27, D69).
+func (a *API) SetInboundWebhookHandler(h http.Handler) { a.webhookHandler = h }
 
 // NewAPI creates an instance of API backed by an ingest store and threat intelligence feeds.
 func NewAPI(s store.Store, feeds *enrich.FeedStore) *API {
@@ -185,6 +189,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/uploads/direct", a.handleDirectUpload)
 	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
 	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
+	if a.webhookHandler != nil {
+		mux.Handle("POST /api/v1/t/{tenant}/connectors/{name}/webhook", a.webhookHandler)
+	}
 }
 
 // FindingResponse wraps a finding with its calculated risk and SLA details.

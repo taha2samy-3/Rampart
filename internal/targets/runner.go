@@ -222,6 +222,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	processor.SetNotificationRouter(notifRouter)
 	scorer.SetNotificationRouter(notifRouter)
 
+	// Issue tracking automation for critical findings (D66, Milestone 3.2)
+	trackerResolver := connectors.NewDefaultTrackerResolver(storeBackend, secretResolver, safeClient, r.cfg.Server.PublicURL)
+	processor.SetTrackerResolver(trackerResolver)
+
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
@@ -259,6 +263,12 @@ func (r *Runner) Run(ctx context.Context) error {
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
+
+	// Inbound signed webhooks for ticket updates & resolution requests (D27, Milestone 3.2)
+	wfService := workflow.New(storeBackend)
+	wfService.SetScorer(scorer)
+	inboundHandler := connectors.NewInboundWebhookHandler(storeBackend, wfService, secretResolver)
+	queryAPI.SetInboundWebhookHandler(inboundHandler)
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
 		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))
@@ -747,6 +757,7 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 			LeaderElectionNamespace: ns, SecretReaderClusterRole: r.cfg.Operator.SecretReaderClusterRole,
 			ServiceAccountName: r.cfg.Operator.ServiceAccount, ServiceAccountNamespace: ns,
 			SSRFAllowlist: allowlist, ConnectorChecker: checker,
+			PublicURL: r.cfg.Server.PublicURL,
 		})
 	}()
 	return nil

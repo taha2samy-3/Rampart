@@ -73,10 +73,17 @@ type CloseScopeResult struct {
 // Store abstracts the persistence layer for the merge engine.
 type Store = store.Store
 
+// TrackerResolver resolves external issue trackers for a tenant (Milestone 3.2, D66).
+type TrackerResolver = domain.TrackerResolver
+
+// Tracker opens issues in external tracking systems for findings.
+type Tracker = domain.Tracker
+
 // Engine implements the normative D13 deduplication and reimport merge algorithm.
 type Engine struct {
-	store  Store
-	scorer Scorer
+	store           Store
+	scorer          Scorer
+	trackerResolver TrackerResolver
 }
 
 // Scorer computes the risk score, band and SLA of findings before they are stored (internal/scoring).
@@ -88,6 +95,9 @@ type Scorer interface {
 
 // SetScorer makes the engine score the findings it creates, reactivates or updates.
 func (e *Engine) SetScorer(s Scorer) { e.scorer = s }
+
+// SetTrackerResolver configures external issue tracker resolution for ticket automation (D66).
+func (e *Engine) SetTrackerResolver(r TrackerResolver) { e.trackerResolver = r }
 
 // NewEngine creates a new merge engine.
 func NewEngine(store Store) *Engine {
@@ -380,21 +390,51 @@ func (e *Engine) mergeBatch(
 		}
 	}
 
-	// Ticket-on-critical placeholder automation (docs/09, docs/16 D25, D29):
+	// Ticket-on-critical automation (docs/09, docs/16 D25, D29, D66):
 	// A critical finding reserves ticket creation in action_ledger so duplicate tickets are prevented.
 	for _, f := range findingsToUpsert {
 		if f.Severity == domain.SeverityCritical || f.RiskBand == domain.SeverityCritical {
 			reserved, err := st.ReserveAction(ctx, scope.TenantID, domain.PolicyTicketOnCriticalID, f.ID, domain.ActionCreateTicket)
 			if err == nil && reserved {
-				events = append(events, &domain.FindingEvent{
-					ID:        domain.NewID(),
-					FindingID: f.ID,
-					At:        f.LastSeen,
-					Actor:     "system:policy",
-					Type:      "ticket_created",
-					Note:      "Ticket creation requested for critical finding (connector placeholder)",
-					To:        json.RawMessage(`{"action":"create_ticket","rule":"ticket-on-critical","status":"pending_connector"}`),
-				})
+				ticketID, ticketURL := "", ""
+				if e.trackerResolver != nil {
+					if tr, rerr := e.trackerResolver.ResolveTracker(ctx, scope.TenantID); rerr == nil && tr != nil {
+						appName := scope.AssetID.String()
+						if appStore, ok := e.store.(interface {
+							GetApplication(context.Context, uuid.UUID, uuid.UUID) (*domain.Application, error)
+						}); ok {
+							if app, aerr := appStore.GetApplication(ctx, scope.TenantID, applicationID); aerr == nil && app != nil && app.Name != "" {
+								appName = app.Name
+							}
+						}
+						tid, turl, terr := tr.CreateIssue(ctx, f, appName)
+						if terr == nil {
+							ticketID, ticketURL = tid, turl
+						}
+					}
+				}
+
+				if ticketID != "" {
+					events = append(events, &domain.FindingEvent{
+						ID:        domain.NewID(),
+						FindingID: f.ID,
+						At:        f.LastSeen,
+						Actor:     "system:policy",
+						Type:      "ticket_created",
+						Note:      fmt.Sprintf("Ticket %s created for critical finding", ticketID),
+						To:        json.RawMessage(fmt.Sprintf(`{"action":"create_ticket","rule":"ticket-on-critical","status":"created","ticket_id":%q,"url":%q}`, ticketID, ticketURL)),
+					})
+				} else {
+					events = append(events, &domain.FindingEvent{
+						ID:        domain.NewID(),
+						FindingID: f.ID,
+						At:        f.LastSeen,
+						Actor:     "system:policy",
+						Type:      "ticket_created",
+						Note:      "Ticket creation requested for critical finding (connector placeholder)",
+						To:        json.RawMessage(`{"action":"create_ticket","rule":"ticket-on-critical","status":"pending_connector"}`),
+					})
+				}
 			}
 		}
 	}

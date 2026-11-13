@@ -86,6 +86,13 @@ func (op *Operator) SetConnectorChecker(checker ConnectorChecker) {
 	}
 }
 
+// SetPublicURL configures the base public URL for connector webhook endpoints.
+func (op *Operator) SetPublicURL(u string) {
+	if op.connectors != nil {
+		op.connectors.SetPublicURL(u)
+	}
+}
+
 // ReconcileConnector reconciles a Connector CR.
 func (op *Operator) ReconcileConnector(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, error) {
 	op.logger.Debug("reconciling connector", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
