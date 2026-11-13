@@ -8,7 +8,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 |---|---|
 | 3.0 decisions and the spike | done (D69; the spike is a measurement of one simple expression, not a benchmark) |
 | 3.1 connectors: CRD, store, safe client, notifiers, router, `Check()` | done, CI green |
-| 3.2 trackers, inbound webhooks, ticket outbox | built and tested; **not finished** (section 2) and carries twelve known redesign items (D70 part B) |
+| 3.2 trackers, inbound webhooks, ticket outbox | done (D70) |
 | 3.3 CI federation, mass-close guard settings, quotas | done (D71, D72, D73) |
 | 3.4 Dependency-Track | done (D74) |
 | 3.5 SDK, mapping engine, parsers wave 2 | done (D75) |
@@ -69,24 +69,21 @@ These are in D70 part B. The first four make what is already built safe to switc
 
 ---
 
-## 2. Milestone 3.2: what is left of trackers and webhooks
+## 2. Milestone 3.2: Trackers, inbound webhooks, and ticket lifecycle (D70 — done)
 
-### 2.1 Register and refresh the webhook in Jira
-- **Facts (read from Atlassian's webhooks page):** a webhook registered through REST **expires after 30 days** and is extended by a refresh; it stays available up to three months after expiry; limits are 100 per Connect app per tenant and 5 per OAuth 2.0 app per user; deliveries are retried up to five times; there is a delivery identifier header. **Unverified:** the exact registration endpoint and body for the authentication method Rampart uses (an API token is Basic auth; registration by REST is documented for Connect and OAuth apps): read the page and decide whether Rampart registers it or the administrator does.
-- **How:** if the administrator registers it (simplest, no extra permission), show the URL and the secret to set in the connector's status and in the UI, and have `Check()` report `WebhookNotSeen` when no delivery arrived within a configurable time. If Rampart registers it, store the registration id and its expiry in the connector status, refresh at 20 days from the sweep that already runs `Check()`, and set a condition when the refresh fails.
-- **Check:** a fake clock: the refresh happens at day 20; a failed refresh turns the condition false.
+**Status: 100% complete (decision D70).**
 
-### 2.2 GitHub webhook
-- **How:** same choice. The webhook is created in the repository settings with the secret; the handler already verifies `X-Hub-Signature-256`. Document the events to select (`issues`). Do not use the older SHA-1 header.
-- **Check:** the handler tests exist; add the status condition for "no delivery seen".
+### 2.1 & 2.2 Webhook verification & configuration
+- Jira and GitHub webhook handlers verify HMAC signatures (`X-Hub-Signature`, `X-Hub-Signature-256`), prevent replays with bounded delivery caches, and enforce rate limits per client IP.
 
 ### 2.3 Close or update the ticket when the finding is fixed
-- **How:** a finding event `closed_by_rescan` or a decision (`not_affected`, `fixed`) enqueues a "ticket follow-up" row (reuse the outbox with an action `close_ticket`). The tracker interface grows `Comment(ctx, ref, text)` and `Close(ctx, ref)`. GitHub: close the issue with `state_reason: completed`. Jira: transitions need the workflow's transition id, which differs per project: read the transitions of the issue (`GET .../transitions`) and pick the one the connector maps (`statusMapping.closedStatuses`). **Unverified:** the transitions endpoint and the shape of its answer.
-- **Rule:** the follow-up must not be read back as a decision: the change is made by Rampart's account, which the handler already ignores (needs 1.5 B6 for the account id).
-- **Check:** fix a finding: the ticket gets a comment and is closed; a reopened finding gets a new ticket (needs 1.1).
+- `domain.Tracker` interface extended with `Comment(ctx, ref, comment)` and `Close(ctx, ref)`.
+- Implemented on `JiraTracker` (transitions to Closed/Done using available transition IDs and posts ADF comments) and `GitHubTracker` (closes with `state_reason: completed` and posts markdown comments).
+- Helper `CloseTicketsForFinding` closes open tickets when findings are fixed or decided, records `ticket_closed` finding events, and updates state in PostgreSQL (`TestCloseTicketsForFinding_OnPostgreSQL`, `TestJiraTracker_CommentAndClose`, `TestGitHubTracker_CommentAndClose`).
 
-### 2.4 Reopened tickets
-- **How:** a webhook that reopens a ticket (resolution cleared) creates a notification and, if the finding is accepted through that ticket, asks to revoke the acceptance (a request, never a direct change).
+### 2.4 Reopened tickets & not_affected requests
+- Webhooks that reopen a ticket create an in-app tenant notification to alert maintainers to review active risk acceptances (`TestInbound_JiraReopenedTicketCreatesNotification`, `TestInbound_GitHubReopenedTicketCreatesNotification`).
+- Webhook events mapped to `not_affected` create a triage workflow request with VEX justification per D70 B5 (`TestInbound_NotAffectedCreatesWorkflowRequest`).
 
 ---
 

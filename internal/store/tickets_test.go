@@ -14,8 +14,10 @@ import (
 )
 
 type fakeTracker struct {
-	calls int
-	err   error
+	calls       int
+	err         error
+	closedRefs  []string
+	commentedOn []string
 }
 
 func (f *fakeTracker) CreateIssue(context.Context, *domain.Finding, string) (string, string, error) {
@@ -28,6 +30,14 @@ func (f *fakeTracker) CreateIssue(context.Context, *domain.Finding, string) (str
 func (f *fakeTracker) Check(context.Context) error { return nil }
 func (f *fakeTracker) FindIssueByLabel(context.Context, string) (string, string, error) {
 	return "", "", nil
+}
+func (f *fakeTracker) Comment(_ context.Context, ref, comment string) error {
+	f.commentedOn = append(f.commentedOn, ref)
+	return nil
+}
+func (f *fakeTracker) Close(_ context.Context, ref string) error {
+	f.closedRefs = append(f.closedRefs, ref)
+	return nil
 }
 
 type fakeResolver struct{ t domain.Tracker }
@@ -366,7 +376,9 @@ func (a *ambiguousTracker) FindIssueByLabel(ctx context.Context, label string) (
 	return "", "", nil
 }
 
-func (a *ambiguousTracker) Check(ctx context.Context) error { return nil }
+func (a *ambiguousTracker) Check(ctx context.Context) error               { return nil }
+func (a *ambiguousTracker) Comment(context.Context, string, string) error { return nil }
+func (a *ambiguousTracker) Close(context.Context, string) error           { return nil }
 
 func TestProcessTickets_FatalErrorsGiveUp_OnPostgreSQL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -451,4 +463,62 @@ func (f *fatalTrackerStub) FindIssueByLabel(ctx context.Context, label string) (
 	return "", "", nil
 }
 
-func (f *fatalTrackerStub) Check(ctx context.Context) error { return nil }
+func (f *fatalTrackerStub) Check(ctx context.Context) error               { return nil }
+func (f *fatalTrackerStub) Comment(context.Context, string, string) error { return nil }
+func (f *fatalTrackerStub) Close(context.Context, string) error           { return nil }
+
+func TestCloseTicketsForFinding_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "tk-close-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &domain.Application{ID: uuid.New(), TenantID: tn.ID, Name: "App"}
+	if err := appStore.CreateApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	f := &domain.Finding{
+		ID: domain.NewID(), TenantID: tn.ID, ApplicationID: app.ID, FindingKey: "fk-close", RuleID: "R1",
+		Severity: domain.SeverityCritical, State: domain.StateFixed, FirstSeen: time.Now().UTC(), LastSeen: time.Now().UTC(),
+	}
+	if err := appStore.UpsertFindings(ctx, tn.ID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	ticketID := uuid.New()
+	tkt := &domain.Ticket{
+		ID:          ticketID,
+		TenantID:    tn.ID,
+		Connector:   "jira",
+		ExternalRef: "SEC-99",
+		URL:         "https://jira.example.com/browse/SEC-99",
+		State:       "open",
+	}
+	if _, err := appStore.CreateTicket(ctx, tn.ID, tkt); err != nil {
+		t.Fatal(err)
+	}
+	if err := appStore.LinkFinding(ctx, tn.ID, ticketID, f.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := &fakeTracker{}
+	if err := connectors.CloseTicketsForFinding(ctx, appStore, fakeResolver{tr}, tn.ID, f.ID, "fixed by rescan", log); err != nil {
+		t.Fatalf("CloseTicketsForFinding failed: %v", err)
+	}
+
+	if len(tr.closedRefs) != 1 || tr.closedRefs[0] != "SEC-99" {
+		t.Fatalf("expected SEC-99 closed, got %v", tr.closedRefs)
+	}
+
+	tickets, err := appStore.TicketsOfFinding(ctx, tn.ID, f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 1 || tickets[0].State != "closed" {
+		t.Fatalf("expected ticket state to be 'closed', got %+v", tickets)
+	}
+}

@@ -88,6 +88,7 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 		}
 		if !f.State.IsActive() { // fixed, accepted or decided since: nobody needs a ticket for it
 			_ = st.SkipTicket(ctx, p.TenantID, p.FindingID, "the finding is no longer open")
+			_ = CloseTicketsForFinding(ctx, st, tr, p.TenantID, p.FindingID, string(f.State), log)
 			continue
 		}
 		tracker, err := tr.ResolveTracker(ctx, p.TenantID)
@@ -265,4 +266,48 @@ type StoreTenantNotifier struct{ S notificationCreator }
 // NotifyTenant implements TenantNotifier.
 func (n StoreTenantNotifier) NotifyTenant(ctx context.Context, tenantID uuid.UUID, title, body, link string) error {
 	return n.S.CreateNotification(ctx, tenantID, &domain.Notification{Kind: "ticket_resolved", Title: title, Body: body, Link: link, CreatedAt: time.Now().UTC()})
+}
+
+// CloseTicketsForFinding closes any open tickets associated with a finding that has been fixed or marked not affected (docs/21 §2.3).
+func CloseTicketsForFinding(ctx context.Context, st TicketStore, tr domain.TrackerResolver, tenantID, findingID uuid.UUID, reason string, log *slog.Logger) error {
+	ticketGetter, ok := st.(interface {
+		TicketsOfFinding(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Ticket, error)
+		SetTicketState(ctx context.Context, tenantID, id uuid.UUID, state string) error
+	})
+	if !ok {
+		return nil
+	}
+
+	tickets, err := ticketGetter.TicketsOfFinding(ctx, tenantID, findingID)
+	if err != nil {
+		return err
+	}
+
+	tracker, err := tr.ResolveTracker(ctx, tenantID)
+	if err != nil || tracker == nil {
+		return err
+	}
+
+	for _, t := range tickets {
+		if t.State == "closed" {
+			continue
+		}
+		comment := fmt.Sprintf("Finding resolved in Rampart: %s", reason)
+		if cerr := tracker.Comment(ctx, t.ExternalRef, comment); cerr != nil {
+			log.Warn("tickets: comment on closing ticket failed", "ticket", t.ExternalRef, "error", cerr)
+		}
+		if cerr := tracker.Close(ctx, t.ExternalRef); cerr != nil {
+			log.Warn("tickets: closing ticket failed", "ticket", t.ExternalRef, "error", cerr)
+			continue
+		}
+		if serr := ticketGetter.SetTicketState(ctx, tenantID, t.ID, "closed"); serr != nil {
+			log.Warn("tickets: setting ticket state to closed failed", "ticket", t.ExternalRef, "error", serr)
+		}
+		to, _ := json.Marshal(map[string]string{"action": "close_ticket", "status": "closed", "ticket_id": t.ExternalRef, "reason": reason})
+		_ = st.RecordFindingEvents(ctx, tenantID, []*domain.FindingEvent{{
+			ID: domain.NewID(), FindingID: findingID, At: time.Now().UTC(), Actor: "system:policy", Type: "ticket_closed",
+			Note: fmt.Sprintf("Ticket %s closed in external tracker: %s", t.ExternalRef, reason), To: to,
+		}})
+	}
+	return nil
 }

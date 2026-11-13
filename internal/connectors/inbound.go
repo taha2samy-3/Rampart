@@ -315,10 +315,28 @@ func (h *InboundWebhookHandler) decide(ctx context.Context, w http.ResponseWrite
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "request_created", "acceptance_status": out.Acceptance.Status, "acceptance_id": out.Acceptance.ID})
-	case "false_positive", "not_affected":
+	case "false_positive":
 		if h.notifier != nil {
 			_ = h.notifier.NotifyTenant(ctx, tenantID, "A ticket says a finding is a false positive",
 				fmt.Sprintf("Ticket %s was resolved as %q by %s. Review the finding and decide.", ticket, truncateString(resolution, 80), truncateString(actor, 80)),
+				"/findings?sel="+findingID.String())
+		}
+		reply(w, http.StatusOK, "review_requested")
+	case "not_affected":
+		// D70 B5: request a not_affected workflow decision with VEX justification
+		if h.workflow != nil {
+			_, err := h.workflow.Request(ctx, tenantID, "connector:"+conn.Name, domain.RiskAcceptanceRequest{
+				FindingIDs:    []uuid.UUID{findingID},
+				Justification: fmt.Sprintf("Ticket %s marked not affected by %s (VEX justification)", ticket, truncateString(actor, 80)),
+				ExpiresAt:     h.expiry(ctx, tenantID),
+			})
+			if err != nil {
+				h.logger.Warn("inbound webhook: not_affected request refused", "error", err)
+			}
+		}
+		if h.notifier != nil {
+			_ = h.notifier.NotifyTenant(ctx, tenantID, "Ticket marked finding not affected",
+				fmt.Sprintf("Ticket %s was marked as %q by %s. Approver review requested.", ticket, truncateString(resolution, 80), truncateString(actor, 80)),
 				"/findings?sel="+findingID.String())
 		}
 		reply(w, http.StatusOK, "review_requested")
@@ -405,9 +423,20 @@ func (h *InboundWebhookHandler) handleJira(w http.ResponseWriter, r *http.Reques
 			mapped = "risk_accepted"
 		case "false positive":
 			mapped = "false_positive"
+		case "not affected", "not_affected":
+			mapped = "not_affected"
 		}
 	}
 	actor := firstNonEmptyConn(event.User.DisplayName, event.User.AccountID, "a Jira user")
+	if event.Issue.Fields.Resolution == nil && changedResolution {
+		if h.notifier != nil {
+			_ = h.notifier.NotifyTenant(r.Context(), tenantID, "Ticket reopened in Jira",
+				fmt.Sprintf("Ticket %s was reopened by %s. Review finding risk acceptance if active.", event.Issue.Key, truncateString(actor, 80)),
+				"/findings?sel="+findingID.String())
+		}
+		reply(w, http.StatusOK, "ticket_reopened")
+		return
+	}
 	h.decide(r.Context(), w, tenantID, conn, findingID, event.Issue.Key, resolution, mapped, actor)
 }
 
@@ -437,10 +466,7 @@ func (h *InboundWebhookHandler) handleGitHub(w http.ResponseWriter, r *http.Requ
 		reply(w, http.StatusOK, "ignored_other_repository")
 		return
 	}
-	if event.Action != "closed" || event.Issue.StateReason != "not_planned" {
-		reply(w, http.StatusOK, "ok")
-		return
-	}
+
 	var labels []string
 	for _, l := range event.Issue.Labels {
 		labels = append(labels, l.Name)
@@ -449,6 +475,22 @@ func (h *InboundWebhookHandler) handleGitHub(w http.ResponseWriter, r *http.Requ
 	ref := fmt.Sprintf("#%d", event.Issue.Number)
 	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, ref) {
 		reply(w, http.StatusOK, "ignored_unknown_ticket")
+		return
+	}
+
+	if event.Action == "reopened" {
+		actor := firstNonEmptyConn(event.Sender.Login, "a GitHub user")
+		if h.notifier != nil {
+			_ = h.notifier.NotifyTenant(r.Context(), tenantID, "Ticket reopened in GitHub",
+				fmt.Sprintf("GitHub issue %s was reopened by %s. Review finding risk acceptance if active.", ref, truncateString(actor, 80)),
+				"/findings?sel="+findingID.String())
+		}
+		reply(w, http.StatusOK, "ticket_reopened")
+		return
+	}
+
+	if event.Action != "closed" || event.Issue.StateReason != "not_planned" {
+		reply(w, http.StatusOK, "ok")
 		return
 	}
 	h.decide(r.Context(), w, tenantID, conn, findingID, ref, "not_planned", "risk_accepted", firstNonEmptyConn(event.Sender.Login, "a GitHub user"))

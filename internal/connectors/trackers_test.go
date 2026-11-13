@@ -418,3 +418,114 @@ func TestResolver_ASecretThatCannotBeReadIsAnErrorNotAReasonToUseAnotherConnecto
 		}
 	}
 }
+
+func TestJiraTracker_CommentAndClose(t *testing.T) {
+	ctx := context.Background()
+	var commentBody map[string]any
+	var transitionBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue/SEC-42/comment" && r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&commentBody)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": "1002"}`))
+			return
+		}
+		if r.URL.Path == "/rest/api/3/issue/SEC-42/transitions" {
+			if r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"transitions": [{"id": "31", "name": "Done", "to": {"name": "Closed"}}]}`))
+				return
+			}
+			if r.Method == http.MethodPost {
+				_ = json.NewDecoder(r.Body).Decode(&transitionBody)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{
+		Allowlist:     &domain.PlatformSSRFAllowlist{AllowLoopback: true},
+		AllowLoopback: true,
+	})
+
+	cfg := domain.JiraConnectorConfig{
+		URL:            srv.URL,
+		DefaultProject: "SEC",
+	}
+
+	tracker, err := connectors.NewJiraTracker(cfg, client, []byte("user:token"), "https://rampart.example.com")
+	if err != nil {
+		t.Fatalf("failed to create JiraTracker: %v", err)
+	}
+
+	if err := tracker.Comment(ctx, "SEC-42", "Finding fixed in main branch"); err != nil {
+		t.Fatalf("Comment failed: %v", err)
+	}
+	if commentBody == nil {
+		t.Fatal("expected comment body to be received")
+	}
+
+	if err := tracker.Close(ctx, "SEC-42"); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if transitionBody == nil || transitionBody["transition"].(map[string]any)["id"] != "31" {
+		t.Fatalf("expected transition id 31, got %v", transitionBody)
+	}
+}
+
+func TestGitHubTracker_CommentAndClose(t *testing.T) {
+	ctx := context.Background()
+	var commentBody map[string]any
+	var patchBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/org/repo/issues/42/comments" && r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&commentBody)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 101}`))
+			return
+		}
+		if r.URL.Path == "/repos/org/repo/issues/42" && r.Method == http.MethodPatch {
+			_ = json.NewDecoder(r.Body).Decode(&patchBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"number": 42, "state": "closed"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{
+		Allowlist:     &domain.PlatformSSRFAllowlist{AllowLoopback: true},
+		AllowLoopback: true,
+	})
+
+	cfg := domain.GitHubConnectorConfig{
+		Owner: "org",
+		Repo:  "repo",
+	}
+
+	tracker, err := connectors.NewGitHubTracker(cfg, client, []byte("token"), "https://rampart.example.com")
+	if err != nil {
+		t.Fatalf("failed to create GitHubTracker: %v", err)
+	}
+	tracker.SetAPIBaseURL(srv.URL)
+
+	if err := tracker.Comment(ctx, "#42", "Remediated in commit abc"); err != nil {
+		t.Fatalf("Comment failed: %v", err)
+	}
+	if commentBody == nil || commentBody["body"] != "Remediated in commit abc" {
+		t.Fatalf("expected comment body 'Remediated in commit abc', got %v", commentBody)
+	}
+
+	if err := tracker.Close(ctx, "#42"); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if patchBody == nil || patchBody["state"] != "closed" || patchBody["state_reason"] != "completed" {
+		t.Fatalf("expected state closed and state_reason completed, got %v", patchBody)
+	}
+}

@@ -278,6 +278,126 @@ func (j *JiraTracker) FindIssueByLabel(ctx context.Context, label string) (strin
 	return key, ticketURL, nil
 }
 
+// Comment posts a comment on an existing Jira issue using ADF format (docs/21 §2.3).
+func (j *JiraTracker) Comment(ctx context.Context, ticketRef, comment string) error {
+	if ticketRef == "" {
+		return errors.New("ticketRef is empty")
+	}
+	endpoint := fmt.Sprintf("%s/rest/api/3/issue/%s/comment", strings.TrimSuffix(j.cfg.URL, "/"), ticketRef)
+	bodyMap := map[string]any{
+		"body": map[string]any{
+			"type":    "doc",
+			"version": 1,
+			"content": []map[string]any{
+				{
+					"type": "paragraph",
+					"content": []map[string]any{
+						{
+							"type": "text",
+							"text": comment,
+						},
+					},
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(bodyMap)
+	if err != nil {
+		return fmt.Errorf("jira comment marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("jira comment request: %w", err)
+	}
+	req.Header.Set("Authorization", j.authHeader)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	_, status, _, err := j.client.DoWithRetry(ctx, req, false)
+	if err != nil {
+		return fmt.Errorf("jira comment failed: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return &domain.TrackerError{Status: status, Message: fmt.Sprintf("jira comment returned status %d", status)}
+	}
+	return nil
+}
+
+// Close transitions a Jira issue to a closed or resolved state (docs/21 §2.3).
+func (j *JiraTracker) Close(ctx context.Context, ticketRef string) error {
+	if ticketRef == "" {
+		return errors.New("ticketRef is empty")
+	}
+	transEndpoint := fmt.Sprintf("%s/rest/api/3/issue/%s/transitions", strings.TrimSuffix(j.cfg.URL, "/"), ticketRef)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, transEndpoint, nil)
+	if err != nil {
+		return fmt.Errorf("jira transitions request: %w", err)
+	}
+	req.Header.Set("Authorization", j.authHeader)
+	req.Header.Set("Accept", "application/json")
+
+	respBody, status, _, err := j.client.DoWithRetry(ctx, req, true)
+	if err != nil {
+		return fmt.Errorf("jira list transitions failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return &domain.TrackerError{Status: status, Message: fmt.Sprintf("jira list transitions returned status %d", status)}
+	}
+
+	var transResp struct {
+		Transitions []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			To   struct {
+				Name string `json:"name"`
+			} `json:"to"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(respBody, &transResp); err != nil {
+		return fmt.Errorf("jira unmarshal transitions: %w", err)
+	}
+
+	targetID := ""
+	for _, t := range transResp.Transitions {
+		lowerName := strings.ToLower(t.Name)
+		lowerTo := strings.ToLower(t.To.Name)
+		if lowerName == "done" || lowerName == "closed" || lowerName == "resolve issue" || lowerName == "resolved" ||
+			lowerTo == "done" || lowerTo == "closed" || lowerTo == "resolved" {
+			targetID = t.ID
+			break
+		}
+	}
+	if targetID == "" && len(transResp.Transitions) > 0 {
+		targetID = transResp.Transitions[0].ID
+	}
+	if targetID == "" {
+		return errors.New("no valid close transition found for jira issue")
+	}
+
+	execBody := map[string]any{
+		"transition": map[string]string{"id": targetID},
+	}
+	raw, err := json.Marshal(execBody)
+	if err != nil {
+		return err
+	}
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, transEndpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Authorization", j.authHeader)
+	postReq.Header.Set("Content-Type", "application/json")
+
+	_, postStatus, _, err := j.client.DoWithRetry(ctx, postReq, false)
+	if err != nil {
+		return fmt.Errorf("jira execute transition failed: %w", err)
+	}
+	if postStatus < 200 || postStatus >= 300 {
+		return &domain.TrackerError{Status: postStatus, Message: fmt.Sprintf("jira close transition returned status %d", postStatus)}
+	}
+	return nil
+}
+
 // Check verifies Jira connectivity and credentials. It speaks REST v3, which Jira Cloud offers; Jira Data Center
 // speaks v2 and is not supported yet (D70).
 func (j *JiraTracker) Check(ctx context.Context) error {
@@ -555,6 +675,71 @@ func (g *GitHubTracker) FindIssueByLabel(ctx context.Context, label string) (str
 		return "", "", nil
 	}
 	return fmt.Sprintf("#%d", issues[0].Number), issues[0].HTMLURL, nil
+}
+
+// Comment posts a comment on an existing GitHub issue (docs/21 §2.3).
+func (g *GitHubTracker) Comment(ctx context.Context, ticketRef, comment string) error {
+	issueNum := strings.TrimPrefix(ticketRef, "#")
+	if issueNum == "" {
+		return errors.New("ticketRef is empty")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%s/comments", g.apiBaseURL, g.cfg.Owner, g.cfg.Repo, issueNum)
+	bodyMap := map[string]string{"body": comment}
+	raw, err := json.Marshal(bodyMap)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	_, status, _, err := g.client.DoWithRetry(ctx, req, false)
+	if err != nil {
+		return fmt.Errorf("github comment failed: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return &domain.TrackerError{Status: status, Message: fmt.Sprintf("github comment returned status %d", status)}
+	}
+	return nil
+}
+
+// Close closes an existing GitHub issue with state_reason: completed (docs/21 §2.3).
+func (g *GitHubTracker) Close(ctx context.Context, ticketRef string) error {
+	issueNum := strings.TrimPrefix(ticketRef, "#")
+	if issueNum == "" {
+		return errors.New("ticketRef is empty")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%s", g.apiBaseURL, g.cfg.Owner, g.cfg.Repo, issueNum)
+	bodyMap := map[string]string{
+		"state":        "closed",
+		"state_reason": "completed",
+	}
+	raw, err := json.Marshal(bodyMap)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+g.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	_, status, _, err := g.client.DoWithRetry(ctx, req, false)
+	if err != nil {
+		return fmt.Errorf("github close issue failed: %w", err)
+	}
+	if status < 200 || status >= 300 {
+		return &domain.TrackerError{Status: status, Message: fmt.Sprintf("github close issue returned status %d", status)}
+	}
+	return nil
 }
 
 // Check verifies GitHub repository write/push permissions (D60).

@@ -371,3 +371,76 @@ func TestInbound_WebhookRateLimitedPerAddress(t *testing.T) {
 		t.Fatalf("different client IP should not be rate limited by address 1")
 	}
 }
+
+func TestInbound_JiraReopenedTicketCreatesNotification(t *testing.T) {
+	h := newInbound(t, true, 30)
+	body := fmt.Sprintf(`{
+		"webhookEvent": "jira:issue_updated",
+		"changelog": {"items": [{"field": "resolution"}]},
+		"issue": {
+			"key": "SEC-77",
+			"fields": {
+				"labels": ["%s"],
+				"status": {"name": "In Progress"}
+			}
+		},
+		"user": {"accountId": "engineer-1", "displayName": "Security Engineer"}
+	}`, connectors.FindingLabel(h.finding))
+
+	w := h.jira([]byte(body), "d-reopen-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(h.notifier.titles) != 1 || h.notifier.titles[0] != "Ticket reopened in Jira" {
+		t.Fatalf("expected 'Ticket reopened in Jira' notification, got: %v", h.notifier.titles)
+	}
+}
+
+func TestInbound_GitHubReopenedTicketCreatesNotification(t *testing.T) {
+	h := newInbound(t, true, 30)
+	body := fmt.Sprintf(`{
+		"action": "reopened",
+		"issue": {
+			"number": 12,
+			"labels": [{"name": "%s"}]
+		},
+		"repository": {"full_name": "acme/shop"},
+		"sender": {"login": "octocat"}
+	}`, connectors.FindingLabel(h.finding))
+
+	sig := sign(h.secret, []byte(body))
+	w := h.send(h.githubURL, []byte(body), map[string]string{"X-Hub-Signature-256": "sha256=" + sig, "X-GitHub-Delivery": "gh-reopen-1"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(h.notifier.titles) != 1 || h.notifier.titles[0] != "Ticket reopened in GitHub" {
+		t.Fatalf("expected 'Ticket reopened in GitHub' notification, got: %v", h.notifier.titles)
+	}
+}
+
+func TestInbound_NotAffectedCreatesWorkflowRequest(t *testing.T) {
+	h := newInbound(t, true, 30)
+	body := fmt.Sprintf(`{
+		"webhookEvent": "jira:issue_updated",
+		"changelog": {"items": [{"field": "resolution"}]},
+		"issue": {
+			"key": "SEC-77",
+			"fields": {
+				"labels": ["%s"],
+				"resolution": {"name": "Not Affected"}
+			}
+		},
+		"user": {"accountId": "engineer-1", "displayName": "Security Engineer"}
+	}`, connectors.FindingLabel(h.finding))
+
+	w := h.jira([]byte(body), "d-not-aff-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(h.wf.requests) != 1 {
+		t.Fatalf("expected 1 workflow request, got %d", len(h.wf.requests))
+	}
+	if !strings.Contains(h.wf.requests[0].Justification, "VEX justification") {
+		t.Errorf("justification should reference VEX justification: %s", h.wf.requests[0].Justification)
+	}
+}

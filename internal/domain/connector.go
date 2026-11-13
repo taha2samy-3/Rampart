@@ -15,6 +15,8 @@ import (
 type Tracker interface {
 	CreateIssue(ctx context.Context, finding *Finding, appName string) (ticketID string, ticketURL string, err error)
 	FindIssueByLabel(ctx context.Context, label string) (ticketID string, ticketURL string, err error)
+	Comment(ctx context.Context, ticketRef, comment string) error
+	Close(ctx context.Context, ticketRef string) error
 	Check(ctx context.Context) error
 }
 
