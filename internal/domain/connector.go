@@ -14,7 +14,7 @@ var (
 	ErrConnectorInvalid      = errors.New("connector: invalid specification")
 	ErrConnectorNotSupported = errors.New("connector: type not supported in Phase 3")
 
-	headerNameRegex  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	headerNameRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	forbiddenHeaders = map[string]bool{
 		"host":                    true,
 		"authorization":           true,
@@ -142,7 +142,7 @@ type ConnectorSpec struct {
 
 // ConnectorCondition describes the state of a connector at a point in time.
 type ConnectorCondition struct {
-	Type               string    `json:"type"`   // e.g. "Connected"
+	Type               string    `json:"type"` // e.g. "Connected"
 	Status             string    `json:"status"` // "True" | "False" | "Unknown"
 	Reason             string    `json:"reason,omitempty"`
 	Message            string    `json:"message,omitempty"`
