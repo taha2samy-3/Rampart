@@ -2232,6 +2232,41 @@ func (m *MemoryStore) GetQuotaUsage(ctx context.Context, tenantID uuid.UUID, key
 	return m.quotaUsage[mapKey], nil
 }
 
+func (m *MemoryStore) EnqueueDTrackSync(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string) (bool, error) {
+	return true, nil
+}
+
+func (m *MemoryStore) CompleteDTrackSync(ctx context.Context, tenantID uuid.UUID, projectUUID string, syncErr error) (bool, error) {
+	return false, nil
+}
+
+func (m *MemoryStore) GetDTrackSync(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackSync, error) {
+	return nil, store.ErrNotFound
+}
+
+func (m *MemoryStore) UpsertDTrackProject(ctx context.Context, proj domain.DTrackProjectRecord) error {
+	return nil
+}
+
+func (m *MemoryStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) (uuid.UUID, string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, id := range m.scanSources {
+		if id == sourceID {
+			parts := strings.SplitN(k, ":", 2)
+			if len(parts) == 2 {
+				tID, _ := uuid.Parse(parts[0])
+				return tID, parts[1], nil
+			}
+		}
+	}
+	return uuid.Nil, "", store.ErrNotFound
+}
+
 func firstNonEmptyStr(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

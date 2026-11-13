@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rampart/internal/domain"
+	dtclient "rampart/internal/upstream/dependencytrack/client"
 )
 
 // Checker verifies credentials and connectivity of a connector without side effects (docs/04, docs/20 Milestone 3.1).
@@ -62,6 +63,8 @@ func (c *DefaultChecker) Check(ctx context.Context, conn domain.Connector, secre
 		return c.checkWebhook(ctx, conn, secret)
 	case domain.ConnectorTypeJira:
 		return c.checkJira(ctx, conn, secret)
+	case domain.ConnectorTypeDependencyTrack:
+		return c.checkDependencyTrack(ctx, conn, secret)
 	default:
 		return fmt.Errorf("unsupported connector type for check: %s", conn.Type)
 	}
@@ -231,6 +234,33 @@ func (c *DefaultChecker) checkJira(ctx context.Context, conn domain.Connector, s
 		if err := domain.ValidateConnectorURLWithAllowlist(conn.Spec.Jira.URL, c.allowlist); err != nil {
 			return fmt.Errorf("jira url blocked by SSRF policy: %w", err)
 		}
+	}
+	return nil
+}
+
+// checkDependencyTrack validates Dependency-Track API URL and probes required permissions.
+func (c *DefaultChecker) checkDependencyTrack(ctx context.Context, conn domain.Connector, secret []byte) error {
+	if conn.Spec.DependencyTrack == nil || conn.Spec.DependencyTrack.URL == "" {
+		return errors.New("dependencyTrack url is empty")
+	}
+	apiKey := strings.TrimSpace(string(secret))
+	if apiKey == "" {
+		return errors.New("dependencyTrack apiKey secret is empty")
+	}
+
+	dtClient := dtclient.NewClient(dtclient.Config{
+		BaseURL:   conn.Spec.DependencyTrack.URL,
+		APIKey:    apiKey,
+		Client:    c.client,
+		Allowlist: c.allowlist,
+	})
+
+	_, missing, err := dtClient.ProbePermissions(ctx)
+	if err != nil {
+		return fmt.Errorf("dependencyTrack check failed: %w", err)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("dependencyTrack apiKey lacks required permissions: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

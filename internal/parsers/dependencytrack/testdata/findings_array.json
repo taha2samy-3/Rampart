@@ -1,0 +1,23 @@
+[
+  {
+    "component": {
+      "uuid": "4c278fb1-e214-43ff-90a6-1215b2e3a1f8",
+      "name": "log4j-core",
+      "version": "2.14.1",
+      "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+    },
+    "vulnerability": {
+      "uuid": "f5835b3d-b452-4a00-bca4-d13ebbf00f40",
+      "vulnId": "CVE-2021-44228",
+      "source": "NVD",
+      "severity": "CRITICAL",
+      "cvssV3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+      "cwes": [
+        {
+          "cweId": 502
+        }
+      ]
+    },
+    "matrix": "project-uuid:4c278fb1-e214-43ff-90a6-1215b2e3a1f8:f5835b3d-b452-4a00-bca4-d13ebbf00f40"
+  }
+]

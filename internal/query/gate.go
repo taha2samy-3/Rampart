@@ -154,6 +154,26 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 		default:
 			resp.Runs = append(resp.Runs, run.ID.String())
 			a.gateRun(ctx, tenantID, run, failOn, &resp)
+			// When the pipeline uploads an SBOM and has a linked Dependency-Track sync, wait for that sync as well (D23, docs/21 §4.6).
+			if want == "sbom" {
+				for _, other := range runs {
+					if other.ID != run.ID && (strings.EqualFold(other.ScannerFamily, "dependency-track") || strings.EqualFold(other.Format, "dependency-track/api")) {
+						switch {
+						case !other.Status.IsTerminal():
+							resp.Pass = false
+							resp.Reasons = append(resp.Reasons, fmt.Sprintf("waiting for dependency-track: the linked sync run is %s", other.Status))
+						case other.Status == domain.RunFailed, other.Status == domain.RunStale:
+							resp.Pass = false
+							resp.Runs = append(resp.Runs, other.ID.String())
+							resp.Reasons = append(resp.Reasons, fmt.Sprintf("dependency-track: the linked sync run %s (%s)", other.Status, other.Error))
+						default:
+							resp.Runs = append(resp.Runs, other.ID.String())
+							a.gateRun(ctx, tenantID, other, failOn, &resp)
+						}
+						break
+					}
+				}
+			}
 		}
 	}
 	if len(resp.Blocking) > 0 {
@@ -176,6 +196,11 @@ func (a *API) runMatches(ctx context.Context, tenantID uuid.UUID, r *domain.Inge
 	if want == "sbom" {
 		switch strings.ToLower(r.Format) {
 		case "cyclonedx", "spdx", "syft":
+			return true
+		}
+	}
+	if want == "dependency-track" || want == "dtrack" {
+		if strings.EqualFold(r.ScannerFamily, "dependency-track") || strings.EqualFold(r.Format, "dependency-track/api") {
 			return true
 		}
 	}

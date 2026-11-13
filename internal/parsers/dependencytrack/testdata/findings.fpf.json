@@ -1,0 +1,109 @@
+{
+  "version": "1.4",
+  "meta": {
+    "baseUrl": "https://dtrack.example.com",
+    "timestamp": "2026-11-13T12:00:00Z"
+  },
+  "project": {
+    "uuid": "320e8a71-6a2c-4903-8d07-2a6c117b34b6",
+    "name": "payments-api",
+    "version": "2.14.0"
+  },
+  "findings": [
+    {
+      "component": {
+        "uuid": "4c278fb1-e214-43ff-90a6-1215b2e3a1f8",
+        "name": "log4j-core",
+        "group": "org.apache.logging.log4j",
+        "version": "2.14.1",
+        "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1",
+        "latestVersion": "2.17.1",
+        "project": "320e8a71-6a2c-4903-8d07-2a6c117b34b6"
+      },
+      "vulnerability": {
+        "uuid": "f5835b3d-b452-4a00-bca4-d13ebbf00f40",
+        "vulnId": "CVE-2021-44228",
+        "source": "NVD",
+        "aliases": [
+          {
+            "vulnId": "GHSA-jfh8-c2jp-5v3q",
+            "source": "GITHUB"
+          }
+        ],
+        "title": "Apache Log4j2 JNDI Remote Code Execution",
+        "subTitle": "Log4Shell",
+        "description": "Apache Log4j2 JNDI features do not protect against attacker controlled LDAP endpoints.",
+        "recommendation": "Upgrade to version 2.15.0 or later.",
+        "severity": "CRITICAL",
+        "severityRank": 1,
+        "cvssV2Vector": "(AV:N/AC:M/Au:N/C:C/I:C/A:C)",
+        "cvssV3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+        "cvssV4Vector": "",
+        "cwes": [
+          {
+            "cweId": 502,
+            "name": "Deserialization of Untrusted Data"
+          }
+        ]
+      },
+      "analysis": {
+        "state": "NOT_AFFECTED",
+        "isSuppressed": false,
+        "justification": "CODE_NOT_PRESENT",
+        "response": "WILL_NOT_FIX",
+        "details": "Component is not reachable at runtime."
+      },
+      "attribution": {
+        "analyzerIdentity": "INTERNAL_ANALYZER",
+        "attributedOn": 1639140000000
+      },
+      "matrix": "320e8a71-6a2c-4903-8d07-2a6c117b34b6:4c278fb1-e214-43ff-90a6-1215b2e3a1f8:f5835b3d-b452-4a00-bca4-d13ebbf00f40"
+    },
+    {
+      "component": {
+        "uuid": "7a128cd3-f111-44aa-9901-bb11cc22dd33",
+        "name": "lodash",
+        "version": "4.17.20",
+        "purl": "pkg:npm/lodash@4.17.20",
+        "project": "320e8a71-6a2c-4903-8d07-2a6c117b34b6"
+      },
+      "vulnerability": {
+        "uuid": "e9914c44-b001-4433-a123-ffff00001111",
+        "vulnId": "CVE-2021-23337",
+        "source": "NVD",
+        "description": "Command injection in lodash template.",
+        "recommendation": "Upgrade to 4.17.21",
+        "severity": "HIGH",
+        "cvssV3Vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+        "cwes": [
+          {
+            "cweId": 78,
+            "name": "Command Injection"
+          }
+        ]
+      },
+      "analysis": {
+        "state": "EXPLOITABLE",
+        "isSuppressed": false
+      },
+      "matrix": "320e8a71-6a2c-4903-8d07-2a6c117b34b6:7a128cd3-f111-44aa-9901-bb11cc22dd33:e9914c44-b001-4433-a123-ffff00001111"
+    },
+    {
+      "component": {
+        "uuid": "11112222-3333-4444-5555-666677778888",
+        "name": "unassigned-lib",
+        "version": "1.0.0",
+        "purl": "pkg:generic/unassigned-lib@1.0.0"
+      },
+      "vulnerability": {
+        "uuid": "22223333-4444-5555-6666-777788889999",
+        "vulnId": "CUSTOM-VULN-001",
+        "source": "INTERNAL",
+        "severity": "UNASSIGNED"
+      },
+      "analysis": {
+        "isSuppressed": true
+      }
+    }
+  ]
+}

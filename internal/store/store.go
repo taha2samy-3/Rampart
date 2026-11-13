@@ -31,6 +31,7 @@ type Store interface {
 	HeldCloses
 	Federation
 	QuotaStore
+	DTrackStore
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error

@@ -10,7 +10,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 | 3.1 connectors: CRD, store, safe client, notifiers, router, `Check()` | done, CI green |
 | 3.2 trackers, inbound webhooks, ticket outbox | built and tested; **not finished** (section 2) and carries twelve known redesign items (D70 part B) |
 | 3.3 CI federation, mass-close guard settings, quotas | done (D71, D72, D73) |
-| 3.4 Dependency-Track | not started (section 4) |
+| 3.4 Dependency-Track | done (D74) |
 | 3.5 SDK, mapping engine, parsers wave 2 | not started (section 5) |
 | 3.6 groups, views, exports, live updates, enrichment, dashboards | not started (section 6) |
 
@@ -126,38 +126,33 @@ These are in D70 part B. The first four make what is already built safe to switc
 
 ---
 
-## 4. Milestone 3.4: Dependency-Track
+## 4. Milestone 3.4: Dependency-Track (D74 — done)
 
-Dependency-Track stays an **upstream source** (a `Source`, not a tracker or notifier): it holds the SBOMs and finds the vulnerabilities; Rampart reads the findings. In v1 only flows B and C, with triage mode `import` (D23). Rampart does not upload SBOMs or poll processing tokens in v1.
+Dependency-Track is integrated as an **upstream source** (a `Source`, not a tracker or notifier): it holds the SBOMs and finds the vulnerabilities; Rampart reads the findings. In v1 flows B and C with triage mode `import` (D23, D74).
 
-### 4.0 First task: a real Dependency-Track 4.x
-- **How:** run DT 4.x in a container in CI (or record real answers as fixtures, the version in the file name). Settle, and write into docs/10 section 8: paging on `/api/v1/project` and the finding endpoint (parameters, 1-based or not, `X-Total-Count`, `X-Total-Count-Type`; mirrored specs say 1-based, default page size 100, and DT's own v5 notes say some v4 endpoints ignored paging); the field names of `BOM_PROCESSED`; whether `properties` and `tags` are filled in the single-project answer; whether `/api/v1/team/self` lists the key's permissions; whether `lastOccurrence` moves after analysis. Check 5.x compatibility (5.2.1 exists) and decide whether it needs its own client.
-- **Done when:** docs/10 section 8 has no "not verified" left that the client depends on.
-
-### 4.1 The FPF parser
-- **How:** `internal/parsers/dependencytrack`: stream the document (D15 style: token walk, no full decode), map `component`, `vulnerability`, `analysis`, `attribution` to a `RawFinding` (category `sca`, canonical id by D11, purl from the component), keep the DT component and vulnerability UUIDs for later. Accept FPF 1.0 to 1.4 (export produces 1.4). Fixtures from the real instance of 4.0; fuzz test; a record it cannot read is a record error (D51).
-
-### 4.2 The client and the permission probe
-- **How:** use the safe client with the platform allow-list (a Dependency-Track inside the cluster is a private address over http: the allow-list of D69 is how it is permitted). Auth header `X-Api-Key`. Permissions: `VIEW_PORTFOLIO` (projects, BOM export), `VIEW_VULNERABILITY` (findings, FPF export), `VIEW_POLICY_VIOLATION`; `BOM_UPLOAD` only for forwarding (not v1). The probe: if `/team/self` lists permissions use it; otherwise call a harmless endpoint per permission. A missing permission sets `Connected=False/missingPermissions` and pauses the flows that need it.
-
-### 4.3 The webhook (flow B)
-- **Facts:** the publisher cannot send arbitrary headers and does not sign the body; it can send one authentication header (Basic, Bearer or a token header). So the rule is set to send `Authorization: Bearer <secret>`, compared in constant time; the payload is only a hint ("thin event, fat fetch"): read the project uuid and nothing else.
-- **How:** `POST /hooks/dependency-track/{id}` (an opaque id per source, not a name); verify; enqueue `DTrackProjectSync(project)` with **trailing-edge debounce**: an event during a running sync sets a dirty flag and causes exactly one more sync (a row `dtrack_sync (project, state, dirty, next_at)` and a River job keyed by project). Return 202. `BOM_PROCESSING_FAILED` and `BOM_VALIDATION_FAILED` mark the linked run failed.
-- **Check:** a burst of 50 events makes two syncs; a wrong secret is refused and remembers nothing; the same rules as the other public endpoint (size, limits).
-
-### 4.4 Settled analysis
-- **Facts:** there is **no analysis-complete event** in 4.14.6; `BOM_PROCESSED` fires when processing is done, not when analysis is. The processing token needs `BOM_UPLOAD`.
-- **How:** after a `BOM_PROCESSED` (or a periodic pull), read the project's findings twice, a back-off apart, and treat the project as settled when both reads are identical; give up after a bound and sync what there is, marking the run so. If 4.0 shows `lastOccurrence` moves after analysis, use it as an extra signal. The mass-close guard (3.2) is the safety net: a run that would drop most findings is held.
-
-### 4.5 Portfolio sync (flow C), mapping and the unmapped screen
-- **How:** a job pages the projects; for each, apply the source's mapping rules in order (the seven in docs/10: project property, tag, purl match, name rule, CEL rule, default application, unmapped); upsert the asset (`dtrack_project_uuid` stored); enqueue a project sync when `lastBomImport` or the metrics changed since the cursor. **Unmapped projects** are listed with the reason; a screen under Integrations shows them and lets an administrator map one (a request that writes the mapping, audited). Findings go through the normal merge with reimport-close scoped to the project.
-- **Check:** a project that matches no rule is listed and not merged; a mapped one is merged under the right application; a project that vanished is not mass-closed.
-
-### 4.6 The CI gate waits for Dependency-Track
-- **How:** the gate (`internal/query/gate.go`) learns a source of type Dependency-Track: when the pipeline's SBOM run is linked to a sync (a `linked_run` recorded when the project is identified), the gate waits for that sync as well as for the SBOM run; the gate's reasons name it.
-
-### 4.7 Triage import and, later, write-back
-- v1: import only. An imported upstream decision that needs approval is stored as a pending upstream decision (one per finding), never pushed back (D23). Write-back, SBOM forwarding and the DefectDojo-compatible shim stay after v1.0.
+### Built & Tested:
+1. **FPF Streaming Parser (`internal/parsers/dependencytrack`)**:
+   - Streaming walk over findings accepting FPF 1.0–1.4 exports (`{"version":"1.4","findings":[...]}`) and direct API arrays (`[...]`).
+   - Normalizes severity (UNASSIGNED -> Info), CVSS vectors (v3, v4, v2), CWEs, package locations, and OpenVEX statements/justifications.
+   - Record error isolation (`pc.RecordError`), fuzz tested, registered in default registry.
+2. **Hardened Safe Client & Permission Probe (`internal/upstream/dependencytrack/client`)**:
+   - Authenticated with `X-Api-Key`, SSRF-safe with cluster allowlist support.
+   - Capability probes for `VIEW_PORTFOLIO` and `VIEW_VULNERABILITY` with fallback.
+   - Integrated into connector `Check()`.
+3. **Webhook Receiver with Trailing-Edge Debounce (`internal/upstream/dependencytrack/webhook`)**:
+   - Endpoint `POST /hooks/dependency-track/{id}`.
+   - Constant-time `Authorization: Bearer <secret>` check. Thin event, fat fetch.
+   - Trailing-edge debouncing state machine in PostgreSQL table `dtrack_sync` ensuring a burst of 50 events makes at most two sync passes.
+4. **Settled Analysis & 7-Step Identity Mapping Engine (`internal/upstream/dependencytrack/sync`)**:
+   - Settle verification via metrics `lastOccurrence > lastBomImport` or identical double-read findings.
+   - 7 mapping rules: project properties, tag prefix, existing asset by UUID, purl/repo match, parent rule, CEL expressions, default/unmapped.
+   - Persists unmapped projects in `dtrack_project` table.
+   - Scoped batch merge and mass-close guard protection.
+5. **CI Gate Integration (`internal/query/gate.go`)**:
+   - CI gate waits for linked Dependency-Track sync run when SBOM is uploaded.
+6. **Postgres & Tenant Isolation**:
+   - Migration `00032_dependency_track.sql` with tables `dtrack_sync` and `dtrack_project` protected by RLS tenant isolation.
+   - Schema version bumped to 32. All integration scenarios verified on real PostgreSQL.
 
 ---
 

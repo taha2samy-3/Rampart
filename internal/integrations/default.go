@@ -7,6 +7,7 @@ import (
 
 	"rampart/internal/domain"
 	"rampart/internal/parsers/cyclonedx"
+	"rampart/internal/parsers/dependencytrack"
 	"rampart/internal/parsers/gitleaks"
 	"rampart/internal/parsers/grype"
 	"rampart/internal/parsers/openvex"
@@ -121,6 +122,7 @@ func DefaultRegistry() *Registry {
 		{"builtin:semgrep", "Semgrep Parser (JSON)", "1", "Semgrep JSON: code findings with CWE, location and code snippet hash", semgrep.NewParser()},
 		{"builtin:trufflehog", "TruffleHog Parser (JSON lines)", "3", "TruffleHog JSON lines: secrets, with whether the credential is live; the secret is hashed and never stored", trufflehog.NewParser()},
 		{"builtin:gitleaks", "Gitleaks Parser (JSON)", "1", "Gitleaks JSON: secrets found in a repository; the secret is hashed and never stored", gitleaks.NewParser()},
+		{"builtin:dependencytrack", "Dependency-Track Parser (FPF/JSON)", "1.4", "Dependency-Track FPF export and direct API finding response parser with VEX and attribution", dependencytrack.NewParser()},
 	} {
 		_ = reg.RegisterParser(&parserAdapter{
 			desc:   Descriptor{ID: p.id, Name: p.name, Kind: KindParser, Version: p.version, SupportLevel: SupportBuiltin, Description: p.desc},

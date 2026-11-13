@@ -203,6 +203,7 @@ const (
 	AssetPackage       AssetType = "package"
 	AssetCloudResource AssetType = "cloud_resource"
 	AssetPipeline      AssetType = "pipeline"
+	AssetSBOMProject   AssetType = "sbom_project"
 )
 
 // FindingCategory identifies the security testing discipline (D17).

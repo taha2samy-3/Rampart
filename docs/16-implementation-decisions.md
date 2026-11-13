@@ -1188,4 +1188,56 @@ Milestone 3.3 Section 3.4 introduces systematic request rate limiting, payload s
   - `status: 429`, `title`, `detail`, and `retry_after`.
 
 
+## D74. Dependency-Track integration (Phase 3, milestone 3.4)
+
+Milestone 3.4 implements the production integration with OWASP Dependency-Track as an upstream SCA source (Flows B & C, triage mode `import`, FPF parser, trailing-edge debounce, and CI gate linking per docs/10 and D23).
+
+### 1. Division of Responsibility & Scoping
+- Dependency-Track manages SBOMs, component graphs, and continuous vulnerability matching against NVD, GHSA, and OSV.
+- Rampart correlates Dependency-Track SCA findings with SAST, DAST, secrets, and IaC, manages risk policies, SLAs, and gating.
+- v1.0 ships Flow B (webhooks) and Flow C (pull findings & portfolio) with triage mode `import`. Write-back and SBOM forwarding are deferred post-v1.0.
+
+### 2. Streaming FPF Parser (`internal/parsers/dependencytrack`)
+- Implements `parsers.Parser` contract streaming records one by one without buffering full reports in heap (D15).
+- Accepts both FPF export documents (FPF 1.0 to 1.4: `{"version": "1.4", "findings": [...]}`) and direct finding endpoints (`[...]`).
+- Maps `component`, `vulnerability`, `analysis`, `attribution`, and `matrix` to `domain.RawFinding`.
+- Normalizes severity (UNASSIGNED maps to `domain.SeverityInfo` per doc 10 §4 until enrichment), CVSS vectors (v3, v4, v2 fallback), and CWE IDs.
+- Maps Dependency-Track analysis states (`NOT_SET`, `IN_TRIAGE`, `EXPLOITABLE`, `NOT_AFFECTED`, `FALSE_POSITIVE`, `RESOLVED`, `isSuppressed`) to standard OpenVEX statements and justifications.
+- Tolerates malformed finding records via `pc.RecordError` without failing the surrounding report (D51).
+- Registered in the default integrations registry (`internal/integrations/default.go`).
+
+### 3. Hardened Safe REST Client & Capability Probe (`internal/upstream/dependencytrack/client`)
+- Authenticates using `X-Api-Key` header.
+- SSRF-safe: supports private network / in-cluster Dependency-Track installations (e.g. `http://dtrack.dtrack.svc:8080`) through platform SSRF allowlists (`domain.PlatformSSRFAllowlist`).
+- Probes required capabilities (`VIEW_PORTFOLIO`, `VIEW_VULNERABILITY`) via `/api/v1/team/self`, with automatic fallback to endpoint probing if team self is unavailable.
+- Integrated into `DefaultChecker.Check` in `internal/connectors/checker.go`.
+
+### 4. Webhook Receiver with Trailing-Edge Debounce (`internal/upstream/dependencytrack/webhook`)
+- Mounted at `POST /hooks/dependency-track/{id}` where `{id}` is the opaque `ScanSource` UUID.
+- Authentication verifies `Authorization: Bearer <secret>` in constant time against stored credentials (`scansource:<name>:webhook` or `scansource:<id>:webhook`).
+- **Thin event, fat fetch**: treated as an untrusted hint, extracting only project UUIDs from `notification.subject.project.uuid` or `affectedProjects[].uuid`. Acknowledges immediately with HTTP 202 Accepted.
+- **Trailing-edge debounce**: Persisted in PostgreSQL table `dtrack_sync (tenant_id, project_uuid, state, dirty, last_sync_at)`. An event during a running sync sets `dirty = true`. Upon completion, if dirty, exactly one trailing sync pass is executed. A burst of 50 events triggers at most two sync runs.
+- `BOM_PROCESSING_FAILED` and `BOM_VALIDATION_FAILED` are logged and mark associated ingest runs failed.
+
+### 5. Settle Verification & Identity Mapping Engine (`internal/upstream/dependencytrack/sync`)
+- **Settled analysis check**: Reads findings twice separated by backoff or verifies `ProjectMetrics.lastOccurrence > lastBomImport`. If identical or newer, analysis is treated as settled.
+- **7-step identity mapping engine**:
+  1. Project property: `group=integrations`, `name=rampart.application`.
+  2. Project tag prefix: `rampart-app:<slug>`.
+  3. Existing asset link: `dtrack_project_uuid` on asset.
+  4. purl or repository match against known asset keys.
+  5. Parent rule: root parent project name is the application.
+  6. CEL rule: expression over project (`name`, `tags`, `classifier`, `purl`).
+  7. Fallback: default application, or listed as unmapped in `dtrack_project` table with reason.
+- Mapped projects create or link an asset of type `sbom_project` (`dtrack://<sourceID>/<projectUUID>`) and merge findings using `ingest.Merge` under tenant RLS transaction.
+- Mass-close guard (D22/D71) prevents dropping findings when zero vulnerabilities are returned.
+
+### 6. CI Gate Integration (`internal/query/gate.go`)
+- The CI gate matches `dependency-track` and `dtrack` scanner families.
+- When a pipeline uploads an SBOM with `expect: ["sbom"]`, the gate automatically detects any linked Dependency-Track sync run for that build.
+- If the sync is still in progress, the gate returns waiting (`"waiting for dependency-track: the linked sync run is <status>"`).
+- Once terminal, the findings from the sync run are evaluated against `failOn`, and the run ID is appended to `resp.Runs`.
+
+
+
 

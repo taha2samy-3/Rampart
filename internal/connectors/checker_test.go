@@ -89,3 +89,73 @@ func TestDefaultChecker_Slack(t *testing.T) {
 		t.Fatalf("expected SSRF error for loopback webhook")
 	}
 }
+
+func TestDefaultChecker_DependencyTrack(t *testing.T) {
+	ctx := context.Background()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "valid-api-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/api/v1/team/self" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"uuid": "team-1",
+				"permissions": []map[string]string{
+					{"name": "VIEW_PORTFOLIO"},
+					{"name": "VIEW_VULNERABILITY"},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	allowlist := &domain.PlatformSSRFAllowlist{AllowLoopback: true}
+	checker := connectors.NewDefaultChecker(nil, allowlist)
+
+	conn := domain.Connector{
+		Name: "dt-test",
+		Type: domain.ConnectorTypeDependencyTrack,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeDependencyTrack,
+			DependencyTrack: &domain.DependencyTrackConnectorConfig{
+				URL: srv.URL,
+				CredentialsSecretRef: domain.SecretKeyRef{
+					Name: "dt-sec",
+					Key:  "apiKey",
+				},
+			},
+		},
+	}
+
+	// Empty key fails
+	if err := checker.Check(ctx, conn, nil); err == nil {
+		t.Fatal("expected error for empty apiKey")
+	}
+
+	// Valid key succeeds
+	if err := checker.Check(ctx, conn, []byte("valid-api-key")); err != nil {
+		t.Fatalf("expected check to succeed, got: %v", err)
+	}
+
+	// Missing permissions
+	srvMissing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"uuid": "team-1",
+			"permissions": []map[string]string{
+				{"name": "VIEW_PORTFOLIO"}, // Missing VIEW_VULNERABILITY
+			},
+		})
+	}))
+	defer srvMissing.Close()
+
+	connMissing := conn
+	connMissing.Spec.DependencyTrack = &domain.DependencyTrackConnectorConfig{
+		URL: srvMissing.URL,
+	}
+	if err := checker.Check(ctx, connMissing, []byte("valid-api-key")); err == nil {
+		t.Fatal("expected error for missing VIEW_VULNERABILITY")
+	}
+}
