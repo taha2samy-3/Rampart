@@ -557,7 +557,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		if errors.Is(err, domain.ErrConnectorNotSupported) {
 			reason = "NotSupported"
 		} else if errors.Is(err, domain.ErrSSRFBlocked) {
-			reason = "SSRFBlocked"
+			reason = "UnsafeAddress"
 		}
 		status.SetCondition("Connected", "False", reason, err.Error())
 		status.SetCondition("Ready", "False", reason, err.Error())

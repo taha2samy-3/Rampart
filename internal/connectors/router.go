@@ -114,6 +114,7 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		summary := fmt.Sprintf("Ingest run produced %d findings for %s:\n• Critical: %d\n• High: %d\n• Medium: %d\n• Low: %d\n• Info: %d",
 			len(findings), appName, critCount, highCount, medCount, lowCount, infoCount)
 
+		digestURL := fmt.Sprintf("/applications/%s/runs", appName)
 		digestMsg := NotificationMessage{
 			ID:          uuid.New().String(),
 			TenantID:    tenantID.String(),
@@ -121,6 +122,7 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			Title:       fmt.Sprintf("%d findings detected in %s (Digest)", len(findings), appName),
 			Summary:     summary,
 			Severity:    highestSev,
+			URL:         digestURL,
 			Timestamp:   time.Now().UTC(),
 			IsDigest:    true,
 			DigestCount: len(findings),
@@ -129,8 +131,28 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		return r.RouteNotification(ctx, tenantID, digestMsg)
 	}
 
-	// Below 20 findings: send per-finding notifications
+	// Below 20 findings: load active notifiers once for the batch instead of N database queries (D69)
+	connectors, err := r.store.ListConnectors(ctx, tenantID)
+	if err != nil {
+		return []error{fmt.Errorf("router: failed to list connectors: %w", err)}
+	}
+
 	var allErrs []error
+	var notifiers []Notifier
+	for _, conn := range connectors {
+		if !conn.IsConnected() && conn.GetCondition("Connected") != nil && conn.GetCondition("Connected").Status == "False" {
+			continue
+		}
+		notifier, err := r.buildNotifier(ctx, tenantID, conn)
+		if err != nil {
+			allErrs = append(allErrs, fmt.Errorf("connector %q build error: %w", conn.Name, err))
+			continue
+		}
+		if notifier != nil {
+			notifiers = append(notifiers, notifier)
+		}
+	}
+
 	for _, f := range findings {
 		msg := NotificationMessage{
 			ID:        uuid.New().String(),
@@ -140,10 +162,13 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 			Summary:   f.Description,
 			Severity:  strings.ToLower(string(f.Severity)),
 			FindingID: f.ID.String(),
+			URL:       fmt.Sprintf("/findings/%s", f.ID.String()),
 			Timestamp: time.Now().UTC(),
 		}
-		if errs := r.RouteNotification(ctx, tenantID, msg); len(errs) > 0 {
-			allErrs = append(allErrs, errs...)
+		for _, n := range notifiers {
+			if err := n.Send(ctx, msg); err != nil {
+				allErrs = append(allErrs, err)
+			}
 		}
 	}
 	return allErrs
@@ -156,11 +181,16 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			return nil, nil
 		}
 		token := ""
-		if r.secretResolver != nil && conn.Spec.Slack.TokenSecretRef.Name != "" {
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Slack.TokenSecretRef.Key)
-			if b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey); err == nil {
-				token = string(b)
+		if conn.Spec.Slack.TokenSecretRef.Name != "" {
+			if r.secretResolver == nil {
+				return nil, fmt.Errorf("connector %q requires secretResolver for token %q", conn.Name, conn.Spec.Slack.TokenSecretRef.Name)
 			}
+			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Slack.TokenSecretRef.Key)
+			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			if err != nil || len(b) == 0 {
+				return nil, fmt.Errorf("connector %q failed to resolve token secret %q: %w", conn.Name, conn.Spec.Slack.TokenSecretRef.Name, err)
+			}
+			token = string(b)
 		}
 		return NewSlackNotifier(r.client, token, conn.Spec.Slack.DefaultChannel), nil
 
@@ -169,11 +199,16 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			return nil, nil
 		}
 		webhookURL := ""
-		if r.secretResolver != nil && conn.Spec.Teams.WebhookSecretRef.Name != "" {
-			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Teams.WebhookSecretRef.Key)
-			if b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey); err == nil {
-				webhookURL = string(b)
+		if conn.Spec.Teams.WebhookSecretRef.Name != "" {
+			if r.secretResolver == nil {
+				return nil, fmt.Errorf("connector %q requires secretResolver for webhook %q", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name)
 			}
+			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Teams.WebhookSecretRef.Key)
+			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			if err != nil || len(b) == 0 {
+				return nil, fmt.Errorf("connector %q failed to resolve webhook URL secret %q: %w", conn.Name, conn.Spec.Teams.WebhookSecretRef.Name, err)
+			}
+			webhookURL = string(b)
 		}
 		return NewTeamsNotifier(r.client, webhookURL), nil
 
@@ -182,9 +217,16 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			return nil, nil
 		}
 		var secret []byte
-		if r.secretResolver != nil && conn.Spec.Webhook.SecretRef.Name != "" {
+		if conn.Spec.Webhook.SecretRef.Name != "" {
+			if r.secretResolver == nil {
+				return nil, fmt.Errorf("connector %q requires secretResolver for secretRef %q", conn.Name, conn.Spec.Webhook.SecretRef.Name)
+			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Webhook.SecretRef.Key)
-			secret, _ = r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			if err != nil || len(b) == 0 {
+				return nil, fmt.Errorf("connector %q failed to resolve HMAC secret %q: %w", conn.Name, conn.Spec.Webhook.SecretRef.Name, err)
+			}
+			secret = b
 		}
 		return NewWebhookNotifier(r.client, conn.Spec.Webhook.URL, secret, conn.Spec.Webhook.Format, conn.Spec.Webhook.Headers), nil
 
@@ -193,13 +235,18 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			return nil, nil
 		}
 		username, password := "", ""
-		if r.secretResolver != nil && conn.Spec.Email.SMTP.CredentialsSecretRef.Name != "" {
+		if conn.Spec.Email.SMTP.CredentialsSecretRef.Name != "" {
+			if r.secretResolver == nil {
+				return nil, fmt.Errorf("connector %q requires secretResolver for SMTP credentials %q", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name)
+			}
 			secKey := fmt.Sprintf("connector:%s:%s", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Key)
-			if b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey); err == nil {
-				parts := strings.SplitN(string(b), ":", 2)
-				if len(parts) == 2 {
-					username, password = parts[0], parts[1]
-				}
+			b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, secKey)
+			if err != nil || len(b) == 0 {
+				return nil, fmt.Errorf("connector %q failed to resolve SMTP credentials %q: %w", conn.Name, conn.Spec.Email.SMTP.CredentialsSecretRef.Name, err)
+			}
+			parts := strings.SplitN(string(b), ":", 2)
+			if len(parts) == 2 {
+				username, password = parts[0], parts[1]
 			}
 		}
 		return NewEmailNotifier(conn.Spec.Email.SMTP, conn.Spec.Email.From, conn.Spec.Email.To, username, password), nil

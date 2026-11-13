@@ -466,6 +466,35 @@ func TestConnectorReconciler(t *testing.T) {
 		t.Fatalf("expected SecretNotFound, got err: %v, cond: %+v", err, stMissing.GetCondition("Connected"))
 	}
 
+	// 2b. Unsafe address (loopback/private IP) should set Connected=False, reason UnsafeAddress (D69)
+	crUnsafe := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "ssrf-conn", Namespace: "acme-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeJira,
+			Jira: &domain.JiraConnectorConfig{
+				URL:                  "https://127.0.0.1:8080",
+				CredentialsSecretRef: domain.SecretKeyRef{Name: "jira-secret", Key: "apiToken"},
+				DefaultProject:       "SEC",
+			},
+		},
+	}
+	stUnsafe, err := op.ReconcileConnector(ctx, crUnsafe)
+	if err != nil || stUnsafe.GetCondition("Ready") == nil || stUnsafe.GetCondition("Ready").Reason != "UnsafeAddress" {
+		t.Fatalf("expected UnsafeAddress, got err: %v, cond: %+v", err, stUnsafe.GetCondition("Ready"))
+	}
+
+	// 2c. Unsupported post-phase 3 type should set Ready=False, reason NotSupported
+	crNotSupported := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "gitlab-conn", Namespace: "acme-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeGitLab,
+		},
+	}
+	stNotSupported, err := op.ReconcileConnector(ctx, crNotSupported)
+	if err != nil || stNotSupported.GetCondition("Ready") == nil || stNotSupported.GetCondition("Ready").Reason != "NotSupported" {
+		t.Fatalf("expected NotSupported, got err: %v, cond: %+v", err, stNotSupported.GetCondition("Ready"))
+	}
+
 	// 3. Finalize
 	_, done, err := op.FinalizeConnector(ctx, cr)
 	if err != nil || !done {

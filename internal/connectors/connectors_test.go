@@ -93,10 +93,12 @@ func TestSlackNotifier_BlockKit(t *testing.T) {
 func TestWebhookNotifier_HMACSignature(t *testing.T) {
 	secret := []byte("webhook-secret-key-42")
 	var receivedSig string
+	var receivedTimestamp string
 	var receivedBody []byte
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSig = r.Header.Get("X-Rampart-Signature-256")
+		receivedTimestamp = r.Header.Get("X-Rampart-Timestamp")
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -115,14 +117,111 @@ func TestWebhookNotifier_HMACSignature(t *testing.T) {
 	if receivedSig == "" {
 		t.Fatal("expected X-Rampart-Signature-256 header, got empty")
 	}
+	if receivedTimestamp == "" {
+		t.Fatal("expected X-Rampart-Timestamp header for replay attack protection, got empty")
+	}
 
-	// Verify HMAC signature
+	// Verify HMAC signature over timestamp + "." + body (D69 replay protection)
 	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(receivedTimestamp + "."))
 	mac.Write(receivedBody)
 	expectedSig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 
 	if receivedSig != expectedSig {
 		t.Errorf("signature mismatch: got %s, expected %s", receivedSig, expectedSig)
+	}
+}
+
+func TestSafeClient_ExcessiveRetryAfterCapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "86400") // 24 hours
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+
+	_, status, _, err := client.DoWithRetry(context.Background(), req, true)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", status)
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceeding limit of 1m0s") {
+		t.Fatalf("expected error rejecting excessive Retry-After, got %v", err)
+	}
+}
+
+func TestSafeClient_RedirectBlocksAuthLeakage(t *testing.T) {
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL, http.StatusFound)
+	}))
+	defer originSrv.Close()
+
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, originSrv.URL, nil)
+	req.Header.Set("Authorization", "Bearer sensitive-token")
+
+	_, _, _, err := client.Do(req)
+	if err == nil || !strings.Contains(err.Error(), "cross-host redirect blocked for authenticated request") {
+		t.Fatalf("expected cross-host redirect error for authenticated request, got %v", err)
+	}
+}
+
+func TestTeamsNotifier_ErrorSanitizesToken(t *testing.T) {
+	// Secret token embedded in query param of webhook URL
+	rawWebhookURL := "https://example.com/webhook/workflows/12345?secret_token=super-secret-key-9999"
+
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{AllowLoopback: true})
+	notifier := connectors.NewTeamsNotifier(client, rawWebhookURL)
+
+	msg := connectors.NewNotificationMessage("tenant-1", "App", "Title", "Summary", "critical", "https://rampart.example.com", "f1")
+	err := notifier.Send(context.Background(), msg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	errStr := err.Error()
+	if strings.Contains(errStr, "super-secret-key-9999") {
+		t.Fatalf("SECURITY VIOLATION: secret token leaked in error message: %s", errStr)
+	}
+	if !strings.Contains(errStr, "https://example.com/webhook/workflows/12345") {
+		t.Errorf("expected sanitized URL in error, got %s", errStr)
+	}
+}
+
+func TestNotificationRouter_SecretResolutionFailure(t *testing.T) {
+	ctx := context.Background()
+	mStore := ingest.NewMemoryStore()
+	tenantID := uuid.New()
+
+	// Connector specifies token secret, but resolver has empty map
+	conn := domain.Connector{
+		Name: "slack-sec",
+		Type: domain.ConnectorTypeSlack,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeSlack,
+			Slack: &domain.SlackConnectorConfig{
+				TokenSecretRef: domain.SecretKeyRef{Name: "slack-secret", Key: "token"},
+				DefaultChannel: "#sec",
+			},
+		},
+	}
+	_ = mStore.SaveConnector(ctx, tenantID, conn)
+
+	router := connectors.NewNotificationRouter(mStore, &mockSecretResolver{secrets: map[string][]byte{}}, connectors.NewSafeClient())
+	msg := connectors.NewNotificationMessage(tenantID.String(), "App", "Title", "Summary", "critical", "https://rampart.example.com", "f1")
+
+	errs := router.RouteNotification(ctx, tenantID, msg)
+	if len(errs) == 0 {
+		t.Fatal("expected router error when secret resolution fails, got 0 errors")
+	}
+	if !strings.Contains(errs[0].Error(), "failed to resolve token secret") {
+		t.Errorf("unexpected error message: %v", errs[0])
 	}
 }
 

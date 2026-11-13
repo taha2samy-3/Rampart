@@ -11,21 +11,19 @@ import (
 var (
 	ErrSSRFBlocked = errors.New("ssrf: blocked destination address")
 
-	// Blocked IP networks per D69 (private, loopback, link-local metadata)
+	// Additional blocked IP networks per D69 (CGNAT/Alibaba metadata, benchmarking, reserved, translation)
 	blockedCIDRs []*net.IPNet
 )
 
 func init() {
 	cidrs := []string{
-		"127.0.0.0/8",    // IPv4 loopback
-		"10.0.0.0/8",     // RFC 1918 private
-		"172.16.0.0/12",  // RFC 1918 private
-		"192.168.0.0/16", // RFC 1918 private
-		"169.254.0.0/16", // RFC 3927 link-local / cloud metadata (169.254.169.254)
-		"0.0.0.0/8",      // RFC 1122 broadcast
-		"::1/128",        // IPv6 loopback
-		"fc00::/7",       // IPv6 unique local (ULA)
-		"fe80::/10",      // IPv6 link-local
+		"100.64.0.0/10", // RFC 6598 Shared Address Space / CGNAT (Alibaba Cloud metadata on 100.100.100.200)
+		"198.18.0.0/15", // RFC 2544 Benchmarking inter-network communication
+		"240.0.0.0/4",   // RFC 1112 Reserved / Future use
+		"0.0.0.0/8",     // RFC 1122 Broadcast / this host
+		"64:ff9b::/96",  // RFC 6052 IPv4-IPv6 translation
+		"2001:db8::/32", // RFC 3849 Documentation IPv6
+		"2002::/16",     // RFC 3056 6to4 relay
 	}
 	for _, cidr := range cidrs {
 		_, ipNet, err := net.ParseCIDR(cidr)
@@ -35,9 +33,16 @@ func init() {
 	}
 }
 
-// IsBlockedIP checks whether an IP falls into private, loopback, or link-local ranges (D69).
+// IsBlockedIP checks whether an IP falls into private, loopback, link-local, multicast,
+// CGNAT, or cloud metadata ranges (D69).
 func IsBlockedIP(ip net.IP) bool {
 	if ip == nil {
+		return true
+	}
+	// Use standard library classification for private, loopback, link-local, multicast, unspecified
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
 		return true
 	}
 	for _, block := range blockedCIDRs {
@@ -49,8 +54,13 @@ func IsBlockedIP(ip net.IP) bool {
 }
 
 // ValidateConnectorURL checks destination URL scheme and validates that the resolved host
-// does not target loopback, private RFC 1918, or cloud metadata endpoints (SSRF guard D69).
+// does not target loopback, private RFC 1918, CGNAT, or cloud metadata endpoints (SSRF guard D69).
 func ValidateConnectorURL(rawURL string) error {
+	return ValidateConnectorURLWithPolicy(rawURL, false)
+}
+
+// ValidateConnectorURLWithPolicy validates connector URL, with optional allowance for insecure HTTP (testing only).
+func ValidateConnectorURLWithPolicy(rawURL string, allowInsecureHTTP bool) error {
 	trimmed := strings.TrimSpace(rawURL)
 	if trimmed == "" {
 		return fmt.Errorf("%w: url cannot be empty", ErrSSRFBlocked)
@@ -62,8 +72,10 @@ func ValidateConnectorURL(rawURL string) error {
 	}
 
 	scheme := strings.ToLower(u.Scheme)
-	if scheme != "https" && scheme != "http" {
-		return fmt.Errorf("%w: unsupported scheme %q (must be https)", ErrSSRFBlocked, scheme)
+	if scheme != "https" {
+		if !allowInsecureHTTP || scheme != "http" {
+			return fmt.Errorf("%w: unsupported scheme %q (must be https)", ErrSSRFBlocked, scheme)
+		}
 	}
 
 	hostname := u.Hostname()
@@ -71,9 +83,10 @@ func ValidateConnectorURL(rawURL string) error {
 		return fmt.Errorf("%w: empty host in url", ErrSSRFBlocked)
 	}
 
-	// In test environments, allow simulated domain names without live DNS
-	if strings.HasSuffix(hostname, ".test") || strings.HasSuffix(hostname, ".example.com") || hostname == "example.com" {
-		return nil
+	hostnameLower := strings.ToLower(hostname)
+	if hostnameLower == "localhost" || strings.HasSuffix(hostnameLower, ".localhost") ||
+		strings.HasSuffix(hostnameLower, ".local") || strings.HasSuffix(hostnameLower, ".internal") {
+		return fmt.Errorf("%w: local or internal destination %q is forbidden (D69)", ErrSSRFBlocked, hostname)
 	}
 
 	// Check if hostname is an explicit IP literal
@@ -87,11 +100,7 @@ func ValidateConnectorURL(rawURL string) error {
 	// Resolve hostname to IP addresses
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		// If DNS resolution fails, allow it if it's a domain name that will resolve at runtime,
-		// but flag if it's explicitly localhost or a known metadata host
-		if strings.EqualFold(hostname, "localhost") || strings.HasSuffix(hostname, ".localhost") {
-			return fmt.Errorf("%w: localhost destinations are forbidden (D69)", ErrSSRFBlocked)
-		}
+		// If DNS resolution fails, allow it only if it is a plausible external domain name
 		return nil
 	}
 

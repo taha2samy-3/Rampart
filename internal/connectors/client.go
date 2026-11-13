@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ const (
 	DefaultTimeout         = 10 * time.Second
 	MaxResponseBytes int64 = 2 * 1024 * 1024 // 2 MiB max response size per D69
 	MaxRetries             = 4
+	MaxRetryAfter          = 60 * time.Second // Cap Retry-After to 60 seconds
 )
 
 // SafeClient is the hardened outbound HTTP client enforcing SSRF guards, timeouts, and response limits (D69).
@@ -81,6 +83,17 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 			if len(via) >= 3 {
 				return errors.New("stopped after 3 redirects (D69)")
 			}
+			// Security guard: Prevent forwarding credentials to different host on redirect
+			if len(via) > 0 {
+				initialReq := via[0]
+				if initialReq.URL.Host != req.URL.Host {
+					if initialReq.Header.Get("Authorization") != "" ||
+						initialReq.Header.Get("X-Api-Key") != "" ||
+						initialReq.Header.Get("X-Rampart-Signature-256") != "" {
+						return errors.New("cross-host redirect blocked for authenticated request (D69 credential guard)")
+					}
+				}
+			}
 			// Verify redirect target URL scheme and host against SSRF
 			if !cfg.AllowLoopback {
 				if err := domain.ValidateConnectorURL(req.URL.String()); err != nil {
@@ -92,6 +105,50 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 	}
 
 	return &SafeClient{httpClient: client}
+}
+
+// SanitizeURL removes sensitive query parameters and credentials from URLs for safe logging and error reporting.
+func SanitizeURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "[malformed url]"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	return u.String()
+}
+
+func parseRetryAfter(headerVal string) (time.Duration, error) {
+	if headerVal == "" {
+		return 0, nil
+	}
+	// 1. Integer seconds format
+	if s, err := strconv.Atoi(headerVal); err == nil && s >= 0 {
+		return time.Duration(s) * time.Second, nil
+	}
+	// 2. HTTP-date format (RFC 1123, RFC 850, ANSIC)
+	formats := []string{time.RFC1123, time.RFC850, time.ANSIC}
+	for _, f := range formats {
+		if t, err := time.Parse(f, headerVal); err == nil {
+			d := time.Until(t)
+			if d < 0 {
+				d = 0
+			}
+			return d, nil
+		}
+	}
+	return 0, fmt.Errorf("invalid Retry-After value %q", headerVal)
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Do executes an HTTP request with bounded response size and returns the read body.
@@ -142,31 +199,26 @@ func (c *SafeClient) DoWithRetry(ctx context.Context, req *http.Request, idempot
 
 			// Handle 429 Too Many Requests (Rate limit per D69)
 			if status == http.StatusTooManyRequests {
-				retryAfterSec := 0
-				if ra := headers.Get("Retry-After"); ra != "" {
-					if s, parseErr := strconv.Atoi(ra); parseErr == nil && s > 0 {
-						retryAfterSec = s
-					}
-				}
-
 				waitTime := backoff
-				if retryAfterSec > 0 {
-					waitTime = time.Duration(retryAfterSec) * time.Second
+				if ra := headers.Get("Retry-After"); ra != "" {
+					parsedWait, parseErr := parseRetryAfter(ra)
+					if parseErr == nil && parsedWait > 0 {
+						if parsedWait > MaxRetryAfter {
+							return body, status, headers, fmt.Errorf("server requested excessive Retry-After (%v), exceeding limit of %v", parsedWait, MaxRetryAfter)
+						}
+						waitTime = parsedWait
+					}
 				}
 				// Add jitter
 				jitter := time.Duration(rand.Intn(200)) * time.Millisecond
 				waitTime += jitter
 
 				if attempt < maxAttempts-1 {
-					timer := time.NewTimer(waitTime)
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						return nil, status, headers, ctx.Err()
-					case <-timer.C:
-						backoff *= 2
-						continue
+					if err := sleepWithContext(ctx, waitTime); err != nil {
+						return nil, status, headers, err
 					}
+					backoff *= 2
+					continue
 				}
 				return body, status, headers, fmt.Errorf("rate limited (429) after %d attempts", attempt+1)
 			}
@@ -174,7 +226,9 @@ func (c *SafeClient) DoWithRetry(ctx context.Context, req *http.Request, idempot
 			// 5xx server error on idempotent request
 			if idempotent && attempt < maxAttempts-1 {
 				jitter := time.Duration(rand.Intn(100)) * time.Millisecond
-				time.Sleep(backoff + jitter)
+				if err := sleepWithContext(ctx, backoff+jitter); err != nil {
+					return nil, status, headers, err
+				}
 				backoff *= 2
 				continue
 			}
@@ -190,7 +244,9 @@ func (c *SafeClient) DoWithRetry(ctx context.Context, req *http.Request, idempot
 
 		if idempotent && attempt < maxAttempts-1 {
 			jitter := time.Duration(rand.Intn(100)) * time.Millisecond
-			time.Sleep(backoff + jitter)
+			if err := sleepWithContext(ctx, backoff+jitter); err != nil {
+				return nil, 0, nil, err
+			}
 			backoff *= 2
 			continue
 		}

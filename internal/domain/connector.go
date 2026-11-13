@@ -14,7 +14,7 @@ var (
 	ErrConnectorInvalid      = errors.New("connector: invalid specification")
 	ErrConnectorNotSupported = errors.New("connector: type not supported in Phase 3")
 
-	headerNameRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	headerNameRegex  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	forbiddenHeaders = map[string]bool{
 		"host":                    true,
 		"authorization":           true,
@@ -26,6 +26,7 @@ var (
 		"content-type":            true,
 		"connection":              true,
 		"upgrade":                 true,
+		"transfer-encoding":       true,
 	}
 )
 
@@ -142,7 +143,7 @@ type ConnectorSpec struct {
 
 // ConnectorCondition describes the state of a connector at a point in time.
 type ConnectorCondition struct {
-	Type               string    `json:"type"` // e.g. "Connected"
+	Type               string    `json:"type"`   // e.g. "Connected"
 	Status             string    `json:"status"` // "True" | "False" | "Unknown"
 	Reason             string    `json:"reason,omitempty"`
 	Message            string    `json:"message,omitempty"`
@@ -202,6 +203,26 @@ func (c *Connector) Validate() error {
 		return fmt.Errorf("%w: connector type is required", ErrConnectorInvalid)
 	}
 
+	// Default direction if empty, or validate that explicit direction does not contradict connector type (D69)
+	if c.Spec.Direction == "" {
+		c.Spec.Direction = c.Direction()
+	} else {
+		switch c.Type {
+		case ConnectorTypeSlack, ConnectorTypeTeams, ConnectorTypeEmail, ConnectorTypeWebhook:
+			if c.Spec.Direction != DirectionOutbound {
+				return fmt.Errorf("%w: connector type %q only supports outbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
+			}
+		case ConnectorTypeDependencyTrack, ConnectorTypeSonarQube:
+			if c.Spec.Direction != DirectionInbound {
+				return fmt.Errorf("%w: connector type %q only supports inbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
+			}
+		case ConnectorTypeJira, ConnectorTypeGitHub:
+			if c.Spec.Direction != DirectionOutbound && c.Spec.Direction != DirectionBidirectional {
+				return fmt.Errorf("%w: tracker connector %q must be outbound or bidirectional, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
+			}
+		}
+	}
+
 	// Reject unimplemented types per user requirement
 	switch c.Type {
 	case ConnectorTypeGitLab, ConnectorTypeAzureBoards, ConnectorTypeServiceNow, ConnectorTypeSonarQube:
@@ -214,7 +235,7 @@ func (c *Connector) Validate() error {
 			return fmt.Errorf("%w: jira config is required for jira connector", ErrConnectorInvalid)
 		}
 		if err := ValidateConnectorURL(c.Spec.Jira.URL); err != nil {
-			return fmt.Errorf("%w: invalid jira url: %v", ErrConnectorInvalid, err)
+			return fmt.Errorf("%w: invalid jira url: %w", ErrConnectorInvalid, err)
 		}
 		if strings.TrimSpace(c.Spec.Jira.CredentialsSecretRef.Name) == "" {
 			return fmt.Errorf("%w: jira credentialsSecretRef is required", ErrConnectorInvalid)
@@ -252,19 +273,22 @@ func (c *Connector) Validate() error {
 			return fmt.Errorf("%w: webhook config is required for webhook connector", ErrConnectorInvalid)
 		}
 		if err := ValidateConnectorURL(c.Spec.Webhook.URL); err != nil {
-			return fmt.Errorf("%w: invalid webhook url: %v", ErrConnectorInvalid, err)
+			return fmt.Errorf("%w: invalid webhook url: %w", ErrConnectorInvalid, err)
 		}
 		// Validate headers: check forbidden names and valid token syntax
 		for k, v := range c.Spec.Webhook.Headers {
+			if strings.ContainsAny(k, "\r\n") || strings.ContainsAny(v, "\r\n") {
+				return fmt.Errorf("%w: header key or value contains CRLF (header injection attempt)", ErrConnectorInvalid)
+			}
 			kLower := strings.ToLower(strings.TrimSpace(k))
-			if forbiddenHeaders[kLower] {
+			if forbiddenHeaders[kLower] || strings.HasPrefix(kLower, "x-hub-signature") || strings.HasPrefix(kLower, "x-rampart-signature") {
 				return fmt.Errorf("%w: header %q is forbidden in webhook headers (D69); use secretRef for authentication", ErrConnectorInvalid, k)
 			}
 			if !headerNameRegex.MatchString(k) {
 				return fmt.Errorf("%w: invalid header name %q", ErrConnectorInvalid, k)
 			}
 			vLower := strings.ToLower(v)
-			if strings.Contains(vLower, "bearer ") || strings.Contains(vLower, "basic ") || strings.Contains(vLower, "token ") {
+			if strings.Contains(vLower, "bearer ") || strings.Contains(vLower, "basic ") || strings.Contains(vLower, "token ") || strings.Contains(vLower, "apikey") || strings.Contains(vLower, "secret") {
 				return fmt.Errorf("%w: plaintext credentials or tokens in headers are prohibited; use secretRef", ErrConnectorInvalid)
 			}
 		}
@@ -273,7 +297,7 @@ func (c *Connector) Validate() error {
 			return fmt.Errorf("%w: dependencyTrack config is required for dependencyTrack connector", ErrConnectorInvalid)
 		}
 		if err := ValidateConnectorURL(c.Spec.DependencyTrack.URL); err != nil {
-			return fmt.Errorf("%w: invalid dependencyTrack url: %v", ErrConnectorInvalid, err)
+			return fmt.Errorf("%w: invalid dependencyTrack url: %w", ErrConnectorInvalid, err)
 		}
 	default:
 		return fmt.Errorf("%w: unrecognized connector type %q", ErrConnectorInvalid, c.Type)

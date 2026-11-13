@@ -80,6 +80,44 @@ func TestConnector_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "jira connector with alibaba cloud metadata ip rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "jira-alibaba-metadata",
+				Type:     domain.ConnectorTypeJira,
+				Spec: domain.ConnectorSpec{
+					Type: domain.ConnectorTypeJira,
+					Jira: &domain.JiraConnectorConfig{
+						URL: "https://100.100.100.200/latest",
+						CredentialsSecretRef: domain.SecretKeyRef{
+							Name: "jira-creds",
+							Key:  "apiToken",
+						},
+						DefaultProject: "SEC",
+						IssueType:      "Bug",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "webhook with multicast ip rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "webhook-multicast",
+				Type:     domain.ConnectorTypeWebhook,
+				Spec: domain.ConnectorSpec{
+					Type: domain.ConnectorTypeWebhook,
+					Webhook: &domain.WebhookConnectorConfig{
+						URL: "https://224.0.0.1/notify",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "unsupported post-phase 3 connector type rejected",
 			conn: domain.Connector{
 				ID:       uuid.New(),
@@ -145,6 +183,79 @@ func TestConnector_Validate(t *testing.T) {
 						Headers: map[string]string{
 							"Host": "evil.internal",
 						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "webhook with header crlf injection rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "crlf-webhook",
+				Type:     domain.ConnectorTypeWebhook,
+				Spec: domain.ConnectorSpec{
+					Type: domain.ConnectorTypeWebhook,
+					Webhook: &domain.WebhookConnectorConfig{
+						URL: "https://example.com/events",
+						Headers: map[string]string{
+							"X-Env": "prod\r\nInjected-Header: evil",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "webhook with plaintext apikey rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "secret-webhook",
+				Type:     domain.ConnectorTypeWebhook,
+				Spec: domain.ConnectorSpec{
+					Type: domain.ConnectorTypeWebhook,
+					Webhook: &domain.WebhookConnectorConfig{
+						URL: "https://example.com/events",
+						Headers: map[string]string{
+							"X-API-Key": "apikey-12345",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "slack with contradictory inbound direction rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "slack-inbound",
+				Type:     domain.ConnectorTypeSlack,
+				Spec: domain.ConnectorSpec{
+					Type:      domain.ConnectorTypeSlack,
+					Direction: domain.DirectionInbound,
+					Slack: &domain.SlackConnectorConfig{
+						TokenSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"},
+						DefaultChannel: "#alerts",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "dependency-track with contradictory outbound direction rejected",
+			conn: domain.Connector{
+				ID:       uuid.New(),
+				TenantID: uuid.New(),
+				Name:     "dt-outbound",
+				Type:     domain.ConnectorTypeDependencyTrack,
+				Spec: domain.ConnectorSpec{
+					Type:      domain.ConnectorTypeDependencyTrack,
+					Direction: domain.DirectionOutbound,
+					DependencyTrack: &domain.DependencyTrackConnectorConfig{
+						URL: "https://example.com",
 					},
 				},
 			},
