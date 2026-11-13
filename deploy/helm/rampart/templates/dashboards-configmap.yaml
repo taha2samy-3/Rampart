@@ -1,0 +1,153 @@
+{{- if .Values.metrics.grafanaDashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rampart.fullname" . }}-overview-dashboard
+  {{- with .Values.metrics.grafanaDashboards.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+    {{- with .Values.metrics.grafanaDashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  rampart-overview.json: |-
+    {
+      "annotations": { "list": [] },
+      "editable": false,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "title": "Ingest Runs (Throughput & Status)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (status) (rate(rampart_ingest_runs_total[5m]))",
+              "legendFormat": "{{`{{ status }}`}}"
+            }
+          ]
+        },
+        {
+          "title": "Ingest Findings Outcomes",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (rate(rampart_ingest_findings_total[5m]))",
+              "legendFormat": "{{`{{ outcome }}`}}"
+            }
+          ]
+        },
+        {
+          "title": "Authentication Logins",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum by (result) (rate(rampart_auth_logins_total[5m]))",
+              "legendFormat": "{{`{{ result }}`}}"
+            }
+          ]
+        },
+        {
+          "title": "Held Closes Awaiting Review",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "rampart_held_close_pending",
+              "legendFormat": "Held Close Batches"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["rampart", "security", "aspm"],
+      "time": { "from": "now-6h", "to": "now" },
+      "title": "Rampart / Ingest & Security Overview"
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rampart.fullname" . }}-operations-dashboard
+  {{- with .Values.metrics.grafanaDashboards.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+    {{- with .Values.metrics.grafanaDashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  rampart-operations.json: |-
+    {
+      "annotations": { "list": [] },
+      "editable": false,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "title": "Ticket Outbox Depth",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "rampart_ticket_outbox_depth",
+              "legendFormat": "Pending Tickets"
+            }
+          ]
+        },
+        {
+          "title": "Ticket Dispatch Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 16, "x": 8, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (status) (rate(rampart_ticket_dispatches_total[5m]))",
+              "legendFormat": "{{`{{ status }}`}}"
+            }
+          ]
+        },
+        {
+          "title": "Connector Health Status (1=Connected, 0=Unhealthy)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "rampart_connector_status",
+              "legendFormat": "{{`{{ connector_name }} ({{ connector_type }})`}}"
+            }
+          ]
+        },
+        {
+          "title": "Feed Sync Attempts",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "sum by (feed, status) (rate(rampart_feed_syncs_total[5m]))",
+              "legendFormat": "{{`{{ feed }}: {{ status }}`}}"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["rampart", "operations", "telemetry"],
+      "time": { "from": "now-6h", "to": "now" },
+      "title": "Rampart / Operations & Connectors"
+    }
+{{- end }}

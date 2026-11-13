@@ -1278,6 +1278,51 @@ Milestone 3.5 implements the Integration SDK extension framework, declarative pa
   8. **Prowler** (`internal/parsers/prowler`): Cloud security and compliance scanner mapping to `domain.CategoryCSPM`.
 - Added scanner families to `compliance.FamilyCategories` (`bandit`, `dependency-check`, `snyk`, `kube-bench`) for compliance matrix evaluation.
 
+## D76. Groups, saved views, streaming exports, live updates SSE, and operational dashboards (Phase 3, milestone 3.6)
+
+Milestone 3.6 implements finding groups, saved views, streaming exports, live updates via Server-Sent Events, threat intelligence & CODEOWNERS ownership, and operational monitoring per docs/20, docs/21 §6, and D16/D59.
+
+### 1. Finding Groups & Correlation Group Ticketing (`internal/domain`, `internal/store`)
+- **Finding Groups**: User-defined campaign groups (e.g. "Log4j remediation", "Q4 compliance drive").
+  - Table `finding_group` (`id`, `tenant_id`, `name`, `description`, `owner`, `created_at`, `updated_at`) and `finding_group_member` (`tenant_id`, `group_id`, `finding_id`) with strict PostgreSQL Row-Level Security (RLS) tenant isolation.
+  - API endpoints: `GET /api/v1/groups`, `POST /api/v1/groups`, `GET /api/v1/groups/{id}`, `DELETE /api/v1/groups/{id}`, `POST /api/v1/groups/{id}/members`, `DELETE /api/v1/groups/{id}/members`.
+  - Links to ticketing: a finding group or correlation group (`correlation_key`, D24, D37) can be tracked by a single outbound ticket in `ticket_finding` instead of opening N redundant tickets.
+
+### 2. Saved Views with EBNF Grammar Validation (`internal/query/groups_views.go`)
+- Table `saved_view` (`id`, `tenant_id`, `owner`, `name`, `query`, `sort`, `scope`, `created_at`, `updated_at`).
+- **Scope protection**: Supports `user` (visible only to the owner) and `tenant` (shared across the tenant). A view never widens what the caller is authorized to view.
+- **Strict Grammar Re-Validation (D16, D59)**: Stored query text is parsed and validated using `grammar.Parse` on creation and retrieval. Queries containing unknown fields or malformed expressions are rejected with 400 Bad Request to prevent inadvertent broad matches during bulk operations.
+
+### 3. Streaming Query Exports (`internal/query/exports.go`)
+- `GET /api/v1/findings/export?format=csv|json|ocsf&q=<query>`:
+  - **Memory-bounded streaming**: Writes findings directly to the response writer without holding the complete dataset in memory; capped at 50,000 records.
+  - **Proxy Buffering Disabled**: Emits `X-Accel-Buffering: no` so reverse proxies (Nginx, Envoy) flush records immediately.
+  - **CSV Export**: Standardized headers (`id`, `rule_id`, `scanner_family`, `title`, `severity`, `category`, `state`, `location`, `risk_score`, `first_seen`, `last_seen`).
+  - **JSON Export**: Full JSON array of domain findings.
+  - **OCSF Export**: Conforms to OCSF Class 2001 (Security Finding) with normalized `activity_id`, `category_uid`, `class_uid: 2001`, `severity_id` (1–5), and vendor metadata.
+
+### 4. Live Updates via Server-Sent Events (`internal/query/events_sse.go`)
+- `GET /api/v1/events`:
+  - Real-time event stream for tenant notifications (`run_finished`, `finding_changed`, `held_close_pending`, `ticket_dispatched`).
+  - **15-second Keep-Alive**: Emits periodic `: ping\n\n` comments to prevent intermediary proxies, load balancers, and browser timeouts from dropping idle connections.
+  - Web client invalidates TanStack Query cache keys on incoming events, eliminating aggressive polling.
+
+### 5. Threat Intelligence (NVD) & CODEOWNERS (`internal/enrich/nvd.go`, `internal/domain/codeowners.go`)
+- **NVD API 2.0 Feed Parser (`internal/enrich/nvd.go`)**: Ingests CVE vulnerabilities, CVSS v3.1/v4.0 metrics, and CWE mappings into the persistent `feed_state` store.
+- **CODEOWNERS Resolver (`internal/domain/codeowners.go`)**: Parses GitHub/GitLab `CODEOWNERS` rules; matches finding source file paths against glob patterns with last-rule-wins semantics. Only tenant members can be assigned as finding owners (D59).
+
+### 6. Operational Dashboards & Prometheus Alerts (`deploy/helm/rampart`)
+- **Prometheus Metrics (`internal/telemetry/metrics.go`)**:
+  - `rampart_ticket_outbox_depth` & `rampart_ticket_dispatches_total`: Outbox lag and dispatch success/retry rates.
+  - `rampart_connector_status`: Health probe state per connector (1=healthy, 0=disconnected).
+  - `rampart_held_close_pending`: Count of held mass-close batches awaiting maintainer review.
+  - `rampart_feed_syncs_total`: Threat feed synchronization outcomes.
+- **Grafana Sidecar ConfigMaps (`deploy/helm/rampart/templates/dashboards-configmap.yaml`)**:
+  - Curated dashboards for "Ingest & Security Overview" and "Operations & Connectors".
+- **PrometheusRule (`deploy/helm/rampart/templates/prometheusrule.yaml`)**:
+  - Alert rules for stalled ticket outbox (>1 hour), disconnected connectors (>15m), pending held closes (>1h), failing feed syncs, and elevated ingest error rates (>10%).
+
+
 
 
 

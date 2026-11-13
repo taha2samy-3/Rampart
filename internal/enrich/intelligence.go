@@ -37,6 +37,7 @@ type FeedStore struct {
 	mu   sync.RWMutex
 	kev  map[string]KEVEntry
 	epss map[string]EPSSScore
+	nvd  map[string]NVDEntry
 }
 
 // NewFeedStore creates a new threat intelligence store.
@@ -44,6 +45,7 @@ func NewFeedStore() *FeedStore {
 	return &FeedStore{
 		kev:  make(map[string]KEVEntry),
 		epss: make(map[string]EPSSScore),
+		nvd:  make(map[string]NVDEntry),
 	}
 }
 

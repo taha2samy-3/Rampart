@@ -1,0 +1,62 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "rampart.fullname" . }}-alerts
+  {{- with .Values.metrics.prometheusRule.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: rampart.rules
+      rules:
+        - alert: RampartTicketOutboxStalled
+          expr: rampart_ticket_outbox_depth > 0 and (time() - rampart_ticket_outbox_oldest_timestamp_seconds > 3600)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Rampart ticket outbox has pending tickets older than 1 hour"
+            description: "There are tickets waiting in the Rampart outbox that have not been delivered to external trackers for over 1 hour."
+
+        - alert: RampartConnectorDisconnected
+          expr: rampart_connector_status == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Rampart connector is disconnected"
+            description: "Connector {{`{{ $labels.connector_name }}`}} of type {{`{{ $labels.connector_type }}`}} has been failing health checks for 15 minutes."
+
+        - alert: RampartHeldCloseWaiting
+          expr: rampart_held_close_pending > 0
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: "Rampart mass-close guard holds findings awaiting review"
+            description: "There are {{`{{ $value }}`}} held close batches waiting for security team review and decision."
+
+        - alert: RampartFeedSyncFailing
+          expr: rate(rampart_feed_syncs_total{status="failure"}[1h]) > 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Vulnerability feed synchronization is failing"
+            description: "Intelligence feed {{`{{ $labels.feed }}`}} has encountered sync errors in the past hour."
+
+        - alert: RampartIngestErrorRateHigh
+          expr: sum(rate(rampart_ingest_runs_total{status="failed"}[15m])) / sum(rate(rampart_ingest_runs_total[15m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High ingest run failure rate in Rampart"
+            description: "Over 10% of ingest runs failed in the last 15 minutes."
+{{- end }}

@@ -190,6 +190,22 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/held-closes", a.handleListHeldCloses)
 	mux.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
 	mux.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
+
+	// Saved views & finding groups (docs/21 §6.1, §6.2)
+	mux.HandleFunc("GET /api/v1/views", a.handleListViews)
+	mux.HandleFunc("POST /api/v1/views", a.handleCreateView)
+	mux.HandleFunc("DELETE /api/v1/views/{id}", a.handleDeleteView)
+	mux.HandleFunc("GET /api/v1/groups", a.handleListGroups)
+	mux.HandleFunc("POST /api/v1/groups", a.handleCreateGroup)
+	mux.HandleFunc("GET /api/v1/groups/{id}", a.handleGetGroup)
+	mux.HandleFunc("DELETE /api/v1/groups/{id}", a.handleDeleteGroup)
+	mux.HandleFunc("POST /api/v1/groups/{id}/members", a.handleAddGroupMembers)
+	mux.HandleFunc("DELETE /api/v1/groups/{id}/members", a.handleRemoveGroupMembers)
+
+	// Exports & Live SSE (docs/21 §6.3, §6.4)
+	mux.HandleFunc("GET /api/v1/findings/export", a.handleExportFindings)
+	mux.HandleFunc("GET /api/v1/events", a.handleEventsSSE)
+
 	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
 	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
 	if a.webhookHandler != nil {

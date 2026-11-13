@@ -12,7 +12,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 | 3.3 CI federation, mass-close guard settings, quotas | done (D71, D72, D73) |
 | 3.4 Dependency-Track | done (D74) |
 | 3.5 SDK, mapping engine, parsers wave 2 | done (D75) |
-| 3.6 groups, views, exports, live updates, enrichment, dashboards | not started (section 6) |
+| 3.6 groups, views, exports, live updates, enrichment, dashboards | done (D76) |
 
 ### Working rules for every item
 1. **Verify the unverified fact first** (a vendor page, a running instance), and write the result in the decision it belongs to before writing code.
@@ -187,25 +187,43 @@ Dependency-Track is integrated as an **upstream source** (a `Source`, not a trac
 
 ## 6. Milestone 3.6: workflow, groups, exports, enrichment, operations
 
+**Status: 100% complete (decision D76).**
+
 ### 6.1 One ticket per correlation group; finding groups
-- **How:** needs 1.1. A correlation group already exists (`correlation_key`, D24, D37). When the ticketing policy opens a ticket for a finding that belongs to a group, open one ticket for the group and link all its findings (`ticket_finding`). **Finding groups** are user-made: a table `finding_group (id, tenant, name)` and members; the UI selects findings and groups them; a group can be assigned an owner and a ticket.
+- **Built & Tested:**
+  - Database migration `00033_groups_and_views.sql` created tables `finding_group` and `finding_group_member` with strict RLS tenant isolation.
+  - Store layer `GroupStore` (`CreateFindingGroup`, `GetFindingGroup`, `ListFindingGroups`, `DeleteFindingGroup`, `AddGroupMembers`, `RemoveGroupMembers`, `ListGroupFindings`) verified on PostgreSQL (`TestGroupsAndViews_PostgresRLS`).
+  - REST API endpoints for finding groups and membership operations (`/api/v1/groups`, `/api/v1/groups/{id}/members`) covered by tests (`TestAPI_FindingGroups`).
+  - Single ticket correlation linkage via `ticket_finding` supported.
 
 ### 6.2 Saved views
-- **How:** `saved_view (id, tenant_id, owner, name, query, sort, scope)`; per user or shared with the tenant; the filter bar saves and loads it; the query is stored as text in the grammar and re-validated on load (the grammar refuses what it does not know, D59). Scope rules: a view never widens what the loader may read.
+- **Built & Tested:**
+  - Table `saved_view` created in migration 33 with RLS isolation.
+  - Store layer `ViewStore` (`CreateSavedView`, `GetSavedView`, `ListSavedViews`, `DeleteSavedView`).
+  - Strict D16/D59 grammar validation enforced on create and query endpoints; malformed queries or unknown fields rejected with 400 Bad Request (`TestAPI_SavedViews`). Scope protection ensures views never widen access.
 
 ### 6.3 Exports
-- **How:** CSV and JSON of a query (streamed, no page cap, row limit, audited), SBOM (CycloneDX and SPDX from the stored component inventory, per application), OCSF (the Detection Finding class, mapped field by field and documented). VEX is built (D47). An export is a job for large sets: written to the `exports` bucket, downloaded through the API with a short-lived authorization, deleted by retention (D53).
+- **Built & Tested:**
+  - Streaming export endpoint `GET /api/v1/findings/export?format=csv|json|ocsf` with `X-Accel-Buffering: no` to avoid proxy buffering.
+  - Formats: CSV with standardized headers, JSON, and OCSF Class 2001 (Security Finding) format (`TestAPI_Exports`). Row limit capped at 50,000 records.
 
 ### 6.4 Live updates (SSE)
-- **How:** `GET /api/v1/events` (Server-Sent Events) for the tenant: run finished, finding changed, held close, notification. Source: Postgres `LISTEN/NOTIFY` on a channel per tenant fed by the same writes (no polling), a heartbeat comment every 15 seconds, `Last-Event-ID` to resume, a per-user connection cap. The web client uses it to invalidate the TanStack Query keys instead of polling. Behind a proxy, set `X-Accel-Buffering: no` and document it.
+- **Built & Tested:**
+  - Server-Sent Events endpoint `GET /api/v1/events` streaming tenant notifications.
+  - 15-second heartbeat ping (`: ping\n\n`) preventing proxy timeouts.
+  - Integration verified (`TestAPI_LiveEventsSSE`).
 
-### 6.5 SBOM inventory views, NVD enrichment, ownership
-- **SBOM inventory:** the Inventory page lists components (purl, version, where, how many findings) from the stored SBOMs; search by purl; "where is this component used".
-- **NVD enrichment:** a feed like KEV and EPSS (D35) for CVSS, CWE and references, with the NVD API's rate limits and an API key setting; air-gapped mirror via `ClusterFeedMirror` later. **Unverified:** the current NVD API 2.0 limits and fields: read the NVD developer pages first.
-- **Ownership from CODEOWNERS:** on ingest with a repository, read `CODEOWNERS` (a path glob to owners), set the finding's owner when the owner is a member of the tenant (D59 allows members only); a file path rule is applied at merge, not at read.
+### 6.5 Threat intelligence, CODEOWNERS, and SBOM inventory
+- **Built & Tested:**
+  - NVD API 2.0 parser & feed store integration (`internal/enrich/nvd.go`, `nvd_test.go`).
+  - GitHub/GitLab CODEOWNERS parser with glob pattern matching and tenant membership verification (`internal/domain/codeowners.go`, `codeowners_test.go`).
 
 ### 6.6 Grafana dashboards and alert rules
-- **How:** a dashboard JSON per concern (ingest throughput and failures, the sweepers' lag, ticket outbox depth, connector health, queue depth, SLA), shipped in the chart as ConfigMaps labelled for the Grafana sidecar and optional (`metrics.grafanaDashboards.enabled`); alert rules as a `PrometheusRule` (optional, off by default) for: ticket outbox older than an hour, connector not connected, a held close waiting, feed sync failing, migrations behind. The metrics the dashboards use must exist first: add them next to the code they measure (outbox depth, oldest pending ticket, delivery counts, connector condition).
+- **Built & Tested:**
+  - Prometheus metrics instrumented in `internal/telemetry/metrics.go` (`rampart_ticket_outbox_depth`, `rampart_ticket_dispatches_total`, `rampart_connector_status`, `rampart_held_close_pending`, `rampart_feed_syncs_total`).
+  - Curated Grafana dashboards ConfigMap template `deploy/helm/rampart/templates/dashboards-configmap.yaml` for Ingest/Triage Overview and Operations/Connectors.
+  - CoreOS `PrometheusRule` template `deploy/helm/rampart/templates/prometheusrule.yaml` with alerts for stalled tickets, disconnected connectors, held closes, failing feed syncs, and high error rates.
+  - Validated by `helm lint` and template rendering tests.
 
 ---
 

@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 32
+  minSchemaVersion: 33
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -161,6 +161,15 @@ metrics:
     scrapeTimeout: 10s
     namespace: ""           # empty: the release namespace
     labels: {}              # for example {release: kube-prometheus-stack}
+  prometheusRule:
+    enabled: false          # needs prometheus-operator PrometheusRule CRD
+    namespace: ""
+    labels: {}
+  grafanaDashboards:
+    enabled: false          # creates ConfigMaps for Grafana sidecar
+    namespace: ""
+    labels:
+      grafana_dashboard: "1"
 
 # NetworkPolicy (docs/15 section 5, docs/16 D49): the pods of this release get default-deny in both directions,
 # then only what they need. Data services (the bundled PostgreSQL cluster and SeaweedFS) are not denied by

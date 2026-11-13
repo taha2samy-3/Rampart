@@ -2267,6 +2267,50 @@ func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) 
 	return uuid.Nil, "", store.ErrNotFound
 }
 
+func (m *MemoryStore) CreateFindingGroup(ctx context.Context, g *domain.FindingGroup) error {
+	return nil
+}
+
+func (m *MemoryStore) GetFindingGroup(ctx context.Context, tenantID, id uuid.UUID) (*domain.FindingGroup, error) {
+	return &domain.FindingGroup{ID: id, TenantID: tenantID, Name: "default-group"}, nil
+}
+
+func (m *MemoryStore) ListFindingGroups(ctx context.Context, tenantID uuid.UUID) ([]domain.FindingGroup, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) DeleteFindingGroup(ctx context.Context, tenantID, id uuid.UUID) error {
+	return nil
+}
+
+func (m *MemoryStore) AddGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
+	return nil
+}
+
+func (m *MemoryStore) RemoveGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
+	return nil
+}
+
+func (m *MemoryStore) ListGroupFindings(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) CreateSavedView(ctx context.Context, v *domain.SavedView) error {
+	return nil
+}
+
+func (m *MemoryStore) GetSavedView(ctx context.Context, tenantID, id uuid.UUID) (*domain.SavedView, error) {
+	return &domain.SavedView{ID: id, TenantID: tenantID, Name: "default-view", Query: "is:open"}, nil
+}
+
+func (m *MemoryStore) ListSavedViews(ctx context.Context, tenantID uuid.UUID, owner string) ([]domain.SavedView, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) DeleteSavedView(ctx context.Context, tenantID, id uuid.UUID) error {
+	return nil
+}
+
 func firstNonEmptyStr(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
