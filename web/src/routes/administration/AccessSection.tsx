@@ -52,7 +52,7 @@ export function AccessSection() {
         {bindings.data && rows.length === 0 && <EmptyState className="p-0 text-left" title={t('admin.accessEmpty')} />}
         {rows.length > 0 && (
           <Table aria-label={t('admin.accessTable')}>
-            <colgroup><col /><col className="w-[120px]" /><col className="w-[200px]" /><col className="w-[90px]" /></colgroup>
+            <colgroup><col /><col className="w-[120px]" /><col className="w-[200px]" /><col className="w-[110px]" /></colgroup>
             <THead>
               <tr>
                 <Th>{t('admin.accessWho')}</Th>

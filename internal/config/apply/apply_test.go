@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"rampart/internal/config/apply"
+	"rampart/internal/domain"
 )
 
 func TestApplyDeclarativeResources(t *testing.T) {
@@ -259,5 +260,50 @@ func TestApplyIdentityProvider_PreservesApprovedDomains(t *testing.T) {
 		if d.Domain == "subsidiary.com" && d.Approved {
 			t.Errorf("new domain subsidiary.com must start as unapproved")
 		}
+	}
+}
+
+func TestApply_Connector(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["acme-ns"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+
+	// 1. Apply Jira connector
+	jiraYAML := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "Connector",
+		"metadata": {"name": "jira-sec", "namespace": "acme-ns"},
+		"spec": {
+			"type": "jira",
+			"jira": {
+				"url": "https://acme.atlassian.net",
+				"credentialsSecretRef": {"name": "jira-creds", "key": "token"},
+				"defaultProject": "SEC",
+				"issueType": "Bug"
+			}
+		}
+	}`)
+	msg, err := applier.ApplyDocument(ctx, jiraYAML)
+	if err != nil {
+		t.Fatalf("unexpected error applying connector: %v", err)
+	}
+	if !strings.Contains(msg, "connector.rampart.aspm.dev/jira-sec configured") {
+		t.Errorf("unexpected success message: %s", msg)
+	}
+
+	conn, err := store.GetConnector(ctx, tn.ID, "jira-sec")
+	if err != nil || conn == nil {
+		t.Fatalf("expected connector in store, got err: %v, conn: %v", err, conn)
+	}
+	if conn.Type != domain.ConnectorTypeJira || conn.Spec.Jira.DefaultProject != "SEC" {
+		t.Errorf("unexpected connector in store: %+v", conn)
+	}
+	if conn.Status.WebhookURL != "/hooks/jira/jira-sec" {
+		t.Errorf("unexpected status webhook URL: %s", conn.Status.WebhookURL)
 	}
 }

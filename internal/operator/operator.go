@@ -17,6 +17,7 @@ type Operator struct {
 	slaPolicies *SLAPolicyReconciler
 	idps        *IdentityProviderReconciler
 	clusterIdps *ClusterIdentityProviderReconciler
+	connectors  *ConnectorReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -32,6 +33,7 @@ func NewOperator(store apply.ConfigStore, secrets SecretProvider, secretStore Se
 		slaPolicies: NewSLAPolicyReconciler(store),
 		idps:        NewIdentityProviderReconciler(store),
 		clusterIdps: NewClusterIdentityProviderReconciler(store),
+		connectors:  NewConnectorReconciler(store, secrets, secretStore),
 	}
 }
 
@@ -69,6 +71,18 @@ func (op *Operator) ReconcileIdentityProvider(ctx context.Context, cr *IdentityP
 func (op *Operator) ReconcileClusterIdentityProvider(ctx context.Context, cr *ClusterIdentityProviderCR) (*IdentityProviderStatus, error) {
 	op.logger.Debug("reconciling cluster identity provider", "name", cr.Metadata.Name)
 	return op.clusterIdps.Reconcile(ctx, cr)
+}
+
+// ReconcileConnector reconciles a Connector CR.
+func (op *Operator) ReconcileConnector(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, error) {
+	op.logger.Debug("reconciling connector", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.connectors.Reconcile(ctx, cr)
+}
+
+// FinalizeConnector finalizes a Connector CR upon deletion.
+func (op *Operator) FinalizeConnector(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, bool, error) {
+	op.logger.Debug("finalizing connector", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.connectors.Finalize(ctx, cr)
 }
 
 // Start runs background watchers or loops if enabled (D6 operator.mode).

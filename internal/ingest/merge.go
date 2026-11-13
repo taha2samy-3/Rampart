@@ -618,6 +618,7 @@ type MemoryStore struct {
 	actionLedger          map[string]bool
 	bindings              map[uuid.UUID]memBinding
 	idps                  map[string]*domain.IdentityProvider
+	connectors            map[string]*domain.Connector
 }
 
 type memBinding struct {
@@ -653,6 +654,7 @@ func NewMemoryStore() *MemoryStore {
 		actionLedger:          make(map[string]bool),
 		bindings:              make(map[uuid.UUID]memBinding),
 		idps:                  make(map[string]*domain.IdentityProvider),
+		connectors:            make(map[string]*domain.Connector),
 	}
 }
 
@@ -840,6 +842,80 @@ func (m *MemoryStore) ApproveDomainClaim(ctx context.Context, tenantID *uuid.UUI
 			VerifiedAt: &now,
 		})
 	}
+	return nil
+}
+
+func connKey(tenantID uuid.UUID, name string) string {
+	return tenantID.String() + ":" + name
+}
+
+func (m *MemoryStore) SaveConnector(ctx context.Context, tenantID uuid.UUID, conn domain.Connector) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if conn.ID == uuid.Nil {
+		conn.ID = domain.NewID()
+	}
+	conn.TenantID = tenantID
+	now := time.Now().UTC()
+	if conn.CreatedAt.IsZero() {
+		conn.CreatedAt = now
+	}
+	conn.UpdatedAt = now
+	cp := conn
+	m.connectors[connKey(tenantID, conn.Name)] = &cp
+	return nil
+}
+
+func (m *MemoryStore) GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	conn, ok := m.connectors[connKey(tenantID, name)]
+	if !ok {
+		return nil, store.ErrConnectorNotFound
+	}
+	cp := *conn
+	return &cp, nil
+}
+
+func (m *MemoryStore) ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	prefix := tenantID.String() + ":"
+	var res []domain.Connector
+	targetType := ""
+	if len(connType) > 0 && connType[0] != "" {
+		targetType = string(connType[0])
+	}
+	for k, c := range m.connectors {
+		if strings.HasPrefix(k, prefix) {
+			if targetType == "" || string(c.Type) == targetType {
+				res = append(res, *c)
+			}
+		}
+	}
+	return res, nil
+}
+
+func (m *MemoryStore) DeleteConnector(ctx context.Context, tenantID uuid.UUID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := connKey(tenantID, name)
+	if _, ok := m.connectors[key]; !ok {
+		return store.ErrConnectorNotFound
+	}
+	delete(m.connectors, key)
+	return nil
+}
+
+func (m *MemoryStore) UpdateConnectorStatus(ctx context.Context, tenantID uuid.UUID, name string, status domain.ConnectorStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	conn, ok := m.connectors[connKey(tenantID, name)]
+	if !ok {
+		return store.ErrConnectorNotFound
+	}
+	conn.Status = status
+	conn.UpdatedAt = time.Now().UTC()
 	return nil
 }
 

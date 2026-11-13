@@ -49,18 +49,18 @@ CI uploads the SBOM once, to Rampart. If the `ScanSource` has `sbomForwarding.en
 
 - `POST {url}/api/v1/bom`, `multipart/form-data`, header `X-Api-Key`. Fields: `project` (UUID) when the mapping is known, otherwise `autoCreate=true`, `projectName`, `projectVersion`, and optionally `parentName` + `parentVersion` or `parentUUID`.
 - `PUT {url}/api/v1/bom` with JSON `{project, bom: <base64>}` is the alternative for small BOMs.
-- The response carries a processing token **(confirm)**. The job polls the token status endpoint **(confirm: `GET /api/v1/event/token/{token}`)** with backoff, bounded to 10 minutes. It does not wait if the webhook flow is enabled, because `BOM_PROCESSED` will trigger the pull.
+- The response carries a processing token. The job polls `GET /api/v1/event/token/{uuid}` (`{processing: true|false}`; the older `GET /api/v1/bom/token/{uuid}` is deprecated since 4.11.0) with backoff, bounded to 10 minutes. Both need `BOM_UPLOAD`; a `false` answer does not prove the token is valid (read from the 4.14.6 sources, 2026-11-13, docs/20 section 5). It does not wait if the webhook flow is enabled, because `BOM_PROCESSED` will trigger the pull.
 - Rampart stores `dtrack_project_uuid` on the asset so later uploads use the UUID.
 - When forwarding is on, Rampart does **not** create SCA findings from the SBOM by itself. Findings come back through flow C. This avoids two SCA engines disagreeing on the same asset.
 
 ### Flow B — Events (DT → Rampart)
-DT admin creates one notification rule with the **Webhook** publisher, scope `PORTFOLIO`, destination `https://<rampart>/hooks/dependency-track/<sourceId>/<secret>`, groups:
+DT admin creates one notification rule with the **Webhook** publisher, scope `PORTFOLIO`, destination `https://<rampart>/hooks/dependency-track/<sourceId>`, groups (the secret is **not** in the path: the publisher can send one authentication header, Basic, Bearer or a token header named `X-Api-Key` by default and configurable, so the rule is set to send `Authorization: Bearer <secret>`; it cannot send arbitrary headers and does not sign the body, 4.14.6 sources, D23):
 
-`NEW_VULNERABILITY`, `NEW_VULNERABLE_DEPENDENCY`, `PROJECT_AUDIT_CHANGE`, `BOM_PROCESSED`, `BOM_PROCESSING_FAILED`, `BOM_VALIDATION_FAILED`, `POLICY_VIOLATION`.
+`NEW_VULNERABILITY`, `NEW_VULNERABLE_DEPENDENCY`, `PROJECT_AUDIT_CHANGE`, `BOM_PROCESSED`, `BOM_PROCESSING_FAILED`, `BOM_VALIDATION_FAILED`, `POLICY_VIOLATION`. (`BOM_CONSUMED` also exists; `PROJECT_VULN_ANALYSIS_COMPLETE` does **not** exist in 4.14.6, so "analysis finished" has no event: see the open item in §8.)
 
 Rule: **thin event, fat fetch.** DT's webhook publisher has no documented signing, so the payload is treated as an untrusted hint. The handler:
 
-1. Checks the URL secret in constant time, and the source's optional IP allow-list.
+1. Checks the bearer secret in constant time, and the source's optional IP allow-list.
 2. Reads only project UUIDs from `notification.subject.project.uuid` or `notification.subject.affectedProjects[].uuid`.
 3. Enqueues a `DTrackProjectSync(project_uuid)` job with trailing-edge debounce: an event that arrives during a running sync sets a dirty flag and causes exactly one more sync.
 4. Returns `202`. Nothing from the payload is written to findings.
@@ -74,19 +74,19 @@ A `DTrackProjectSync` job is the unit of work. It is triggered by flow B, by the
 
 Per project:
 1. `GET /api/v1/project/{uuid}`: name, version, parent, tags, classifier, active, `lastBomImport`, properties.
-2. `GET /api/v1/finding/project/{uuid}?suppressed=true` **(confirm parameters)**: all findings including suppressed ones, with `component`, `vulnerability`, `analysis`, `attribution`, `matrix`.
+2. `GET /api/v1/finding/project/{uuid}?suppressed=true` (`suppressed` is a boolean, default false; `source` filters by vulnerability source; `Accept: application/sarif+json` returns SARIF; `X-Total-Count` is the number of findings): all findings including suppressed ones, with `component`, `vulnerability`, `analysis`, `attribution`, `matrix`.
 3. `GET /api/v1/violation/project/{uuid}?suppressed=true` **(confirm)**: policy violations, if `pull.policyViolations`.
-4. `GET /api/v1/bom/cyclonedx/project/{uuid}?variant=inventory` **(confirm)**: only when `lastBomImport` changed and SBOM inventory is not already held from flow A.
+4. `GET /api/v1/bom/cyclonedx/project/{uuid}?variant=inventory` (`variant` is `inventory`, the default, or `withVulnerabilities`; also `format`, `download`, `version`; needs `VIEW_PORTFOLIO`): only when `lastBomImport` changed and SBOM inventory is not already held from flow A.
 5. Convert to `RawFinding`s (§4), then the normal staging and merge pipeline with reimport-close scoped to this project.
 
-Discovery: a `DTrackPortfolioSync` job pages `GET /api/v1/project` (`pageNumber`, `pageSize`, total in `X-Total-Count` **(confirm)**), applies the source's project filter, upserts assets, and enqueues project syncs for projects whose `lastBomImport` or metrics changed since the last cursor.
+Discovery: a `DTrackPortfolioSync` job pages `GET /api/v1/project` (total in `X-Total-Count`, verified on `/project`; `pageNumber` and `pageSize` come from the framework's request handling and were **not verified**: confirm against a running 4.x before relying on them; other filters: `name`, `excludeInactive`, `onlyRoot`), applies the source's project filter, upserts assets, and enqueues project syncs for projects whose `lastBomImport` or metrics changed since the last cursor.
 
 Rate and load: per-connector concurrency limit (default 4), token bucket (default 10 req/s), `ETag`/`If-None-Match` when DT supports it, exponential backoff on `429` and `5xx`, circuit breaker that sets `Connector` condition `Connected=False`.
 
 ### Flow D — Triage and VEX write-back (Rampart → DT)
 When a finding that originated from DT changes state in Rampart, and the source's `triageSync.mode` allows it, a `DTrackAnalysisPush` job calls `PUT /api/v1/analysis` **(confirm)** with `project`, `component`, `vulnerability` UUIDs (taken from the occurrence's `matrix`), `analysisState`, `analysisJustification`, `analysisResponse`, `analysisDetails`, `comment`, `isSuppressed`.
 
-Optional bulk path: export an application's VEX as CycloneDX and `POST /api/v1/vex` **(confirm)** for the mapped project.
+Optional bulk path: export an application's VEX as CycloneDX and `POST /api/v1/vex` (multipart; needs `VULNERABILITY_ANALYSIS`; `PUT` also exists) for the mapped project.
 
 ## 3. Identity mapping: DT project to Rampart inventory
 
@@ -359,3 +359,17 @@ River queues: `dtrack-sync` (project and portfolio syncs), `dtrack-push` (BOM fo
 6. SBOM forwarding.
 7. Policy violations.
 8. DefectDojo-compatible shim.
+
+## 8. Verified against Dependency-Track 4.14.6 (2026-11-13) and still open
+
+Read from the Java sources of the `4.14.6` tag (`src/main/java/org/dependencytrack/`); the live OpenAPI document at `/api/openapi.json` was not fetched. Dependency-Track **5.x exists** (5.2.1 at that date): this document and the plan target 4.x, and compatibility with 5.x is checked before milestone 3.4 starts.
+
+| Item | Result |
+|---|---|
+| Finding export (FPF) | `GET /api/v1/finding/project/{uuid}/export`, `VIEW_VULNERABILITY`, produces FPF **1.4** (`Content-Disposition: inline; filename=findings-{uuid}.fpf`). The parser still accepts 1.0 to 1.4 |
+| Project | `lastBomImport` (epoch ms), `lastBomImportFormat`, `properties`, `tags` are in the model and not hidden from JSON; that the single-project response fills `properties` and `tags` is **not verified**. Lookup: `GET /api/v1/project/lookup?name=&version=` (`VIEW_PORTFOLIO`) and `/project/latest/{name}` |
+| Permissions | read projects and BOM: `VIEW_PORTFOLIO`; read findings and the FPF export: `VIEW_VULNERABILITY`; policy violations: `VIEW_POLICY_VIOLATION`; upload a BOM and poll its token: `BOM_UPLOAD`; create a project on upload: `PROJECT_CREATION_UPLOAD`; upload or read VEX and change analysis: `VULNERABILITY_ANALYSIS`. Names `SYSTEM_CONFIGURATION`, `PORTFOLIO_MANAGEMENT` exist; that a notification rule needs the first is **not verified** |
+| Permission probe | `GET /api/v1/team/self` answers for the key's team (404 if the key has no team, 400 if the principal is not an API key). That its response **lists the permissions** is **not verified** |
+| Webhook publisher | no arbitrary headers, no HMAC; one authentication header (Basic, Bearer or a token header). `BOM_PROCESSED` carries `subject.project` (uuid, name, version); `PROJECT_AUDIT_CHANGE` carries `subject.affectedProjects[]` with one entry. The `BOM_PROCESSED` field names are inferred from the documented `BOM_CONSUMED` example |
+| "Analysis settled" | **Open.** There is no analysis-complete event. The processing token needs `BOM_UPLOAD`, which a read-only pull key does not have. `ProjectMetrics.lastOccurrence` (`GET /api/v1/metrics/project/{uuid}/current`) is the signal D23 names, but whether it moves after each analysis is **not verified**. Until tested against a running DT, the sync treats a project as settled when two reads of its findings, spaced by a back-off, are identical, and D23's mass-close guard stays the safety net |
+

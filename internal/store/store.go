@@ -25,6 +25,7 @@ type Store interface {
 	auth.LocalAdminStore // break-glass local administrator (D3)
 	auth.AuditStore
 	IdentityProviders
+	Connectors
 
 	// Transactions and locks (D13). The Store passed to fn joins one transaction.
 	InTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(Store) error) error

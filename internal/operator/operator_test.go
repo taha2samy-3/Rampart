@@ -397,3 +397,83 @@ func TestClusterIdentityProviderReconciler(t *testing.T) {
 		t.Errorf("allowedTenants enforcement failed: %+v", saved.Spec.AllowedTenants)
 	}
 }
+
+func TestConnectorReconciler(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	mockSecrets := operator.NewMockSecretProvider()
+	secStore := newMemorySecretStore()
+	op := operator.NewOperator(store, mockSecrets, secStore, nil)
+
+	tenantCR := &operator.TenantCR{
+		Metadata: operator.Metadata{Name: "acme"},
+		Spec:     operator.TenantSpec{DisplayName: "Acme", Namespaces: []string{"acme-ns"}},
+	}
+	tStatus, err := op.ReconcileTenant(ctx, tenantCR)
+	if err != nil {
+		t.Fatalf("ReconcileTenant failed: %v", err)
+	}
+
+	// 1. Reconcile Jira connector with secret
+	mockSecrets.Secrets["acme-ns/jira-secret:apiToken"] = []byte("secret-token-123")
+
+	cr := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "jira-sec", Namespace: "acme-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeJira,
+			Jira: &domain.JiraConnectorConfig{
+				URL: "https://acme.atlassian.net",
+				CredentialsSecretRef: domain.SecretKeyRef{
+					Name: "jira-secret",
+					Key:  "apiToken",
+				},
+				DefaultProject: "SEC",
+				IssueType:      "Bug",
+			},
+		},
+	}
+
+	st, err := op.ReconcileConnector(ctx, cr)
+	if err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+	if st.GetCondition("Connected") == nil || st.GetCondition("Connected").Status != "True" {
+		t.Fatalf("expected Connected=True, got %+v", st.GetCondition("Connected"))
+	}
+	if st.WebhookURL != "/hooks/jira/jira-sec" {
+		t.Errorf("expected webhook url /hooks/jira/jira-sec, got %s", st.WebhookURL)
+	}
+
+	// Verify secret was synced to SecretStore
+	storageKey := tStatus.TenantID + ":connector:jira-sec:apiToken"
+	if string(secStore.secrets[storageKey]) != "secret-token-123" {
+		t.Errorf("expected secret synced to storageKey %s, got %s", storageKey, secStore.secrets[storageKey])
+	}
+
+	// 2. Secret missing should set Connected=False, reason SecretNotFound
+	crMissingSec := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "slack-alert", Namespace: "acme-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeSlack,
+			Slack: &domain.SlackConnectorConfig{
+				TokenSecretRef: domain.SecretKeyRef{Name: "non-existent-secret", Key: "token"},
+				DefaultChannel: "#alerts",
+			},
+		},
+	}
+	stMissing, err := op.ReconcileConnector(ctx, crMissingSec)
+	if err != nil || stMissing.GetCondition("Connected") == nil || stMissing.GetCondition("Connected").Reason != "SecretNotFound" {
+		t.Fatalf("expected SecretNotFound, got err: %v, cond: %+v", err, stMissing.GetCondition("Connected"))
+	}
+
+	// 3. Finalize
+	_, done, err := op.FinalizeConnector(ctx, cr)
+	if err != nil || !done {
+		t.Fatalf("finalize failed: %v", err)
+	}
+	tenantID, _ := uuid.Parse(tStatus.TenantID)
+	deleted, err := store.GetConnector(ctx, tenantID, "jira-sec")
+	if err != nil || deleted != nil {
+		t.Errorf("expected connector to be deleted from store, got %+v", deleted)
+	}
+}

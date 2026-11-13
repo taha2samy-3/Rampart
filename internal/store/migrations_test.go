@@ -51,4 +51,19 @@ func TestMigrationsEmbedded(t *testing.T) {
 	if !strings.Contains(contentIdPStr, "CREATE POLICY tenant_isolation ON identity_provider") {
 		t.Error("expected 00025_identity_provider.sql to define tenant_isolation policy")
 	}
+
+	contentConn, err := store.MigrationsFS.ReadFile("migrations/00026_connector.sql")
+	if err != nil {
+		t.Fatalf("failed to read 00026_connector.sql: %v", err)
+	}
+	contentConnStr := string(contentConn)
+	if !strings.Contains(contentConnStr, "CREATE TABLE connector") {
+		t.Error("expected 00026_connector.sql to create connector table")
+	}
+	if !strings.Contains(contentConnStr, "ENABLE ROW LEVEL SECURITY") {
+		t.Error("expected 00026_connector.sql to enable RLS")
+	}
+	if !strings.Contains(contentConnStr, "CREATE POLICY tenant_isolation ON connector") {
+		t.Error("expected 00026_connector.sql to define tenant_isolation policy")
+	}
 }

@@ -130,6 +130,14 @@ func (h *Handlers) getOrInitOIDCClient(idpObj *domain.IdentityProvider, redirect
 		})
 
 		h.oidcMu.Lock()
+		// Drop this IdP's other cached entries (an older secret/UpdatedAt) so a rotation doesn't
+		// leak one stale *OIDCClient per rotation for the life of the process.
+		prefix := idpObj.Name + "|"
+		for k := range h.oidcPool {
+			if k != cacheKey && strings.HasPrefix(k, prefix) {
+				delete(h.oidcPool, k)
+			}
+		}
 		h.oidcPool[cacheKey] = newClient
 		h.oidcMu.Unlock()
 		return newClient, nil

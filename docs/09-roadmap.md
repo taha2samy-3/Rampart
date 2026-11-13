@@ -60,7 +60,7 @@ Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the
 | 2. Risk acceptance; VEX | — (D60) | |
 | 3. `RiskPolicy` and `SLAPolicy` with cluster defaults; scoring; deadlines; aggregate read models | — (D62, D63: CEL factors, `ClusterRiskPolicy`/`ClusterSLAPolicy` with the 06 section 4 presets, hierarchy tree/filter/roll-ups and a posture score now actually normalized by asset count) | D5, E1, B1, D8, G2 |
 | 4. Built-in automation | Ticket-on-critical placeholder (no connector yet, as designed — D66) | Phase 2 |
-| 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | `IdentityProvider`/`ClusterIdentityProvider`: the CRDs exist but `rampart apply` is a no-op that still reports success, with no reconciler, no store and no login wiring behind them (D64 — an open gap, not a placeholder) | H3, D8 |
+| 5. Scoped RBAC, `AccessBinding`, `IdentityProvider`, device login, audit | — (D64: `IdentityProvider`/`ClusterIdentityProvider` built — reconciler, store, dynamic multi-IdP OIDC login, domain-claim approval) | H3, D8 |
 | 6. Taxonomies and compliance views | — (OWASP Top 10 2025 built, D58) | |
 | 7. Native parsers; retention | — (D42, D53) | |
 | 8. Overview, application, risk acceptance and administration screens | — (D68: manual upload screen built; an inconsistency in its non-gateway fallback path is flagged for a decision, not blocking) | |
@@ -118,11 +118,13 @@ Every P0 row of [01](01-features.md) and every Phase 2 item, checked against the
 
 ## Phase 3 — Workflow and integrations (weeks 18–24)
 
+The working plan, with milestones 3.0 to 3.6, the facts read from the vendors' documentation and the corrections to the first draft, is [20-phase-3-plan.md](20-phase-3-plan.md); the decision for the connector model is D69. Built-in connectors run inside the existing binary (the `notify` and `sync` targets); gRPC plugins are Phase 5.
+
 - Connectors: Jira (two-way, transitions create requests not states), GitHub Issues, Slack, Microsoft Teams, email, signed webhooks; `Connector` CRD; notification routing with digests.
 - **Dependency-Track**: FPF parser, REST client and connector with permission probe, portfolio and project sync with mapping rules and the unmapped-projects screen, webhook trigger with trailing debounce, triage import, gate linking (D23).
 - **Integration SDK, part 1** ([19-integration-sdk.md](19-integration-sdk.md)): mapping engine and `IntegrationPackage` (`runtime: mapping`); unified `Tracker`, `Notifier` and `Source` contracts with a registry; declarative notifiers and trackers; conformance kit for parsers; connector forms generated from config schemas.
-- Parsers wave 2, written as mappings wherever the format allows: Checkov, Nuclei, ZAP, Bandit, Dependency-Check, kube-bench, Prowler (OCSF), Snyk, Syft, GitLab report schemas, SPDX, Generic JSON.
-- Correlation groups, finding groups and one ticket per group, saved views, exports (CSV, JSON, SBOM, VEX, OCSF), live updates (SSE).
+- Parsers wave 2, written as mappings wherever the format allows: Checkov, Nuclei, ZAP, Bandit, Dependency-Check, kube-bench, Prowler (OCSF), Snyk, GitLab report schemas, Generic JSON. (Syft and SPDX are already built as native parsers.)
+- Finding groups and one ticket per correlation group (correlation groups themselves are built, D24 and D37), saved views, exports (CSV, JSON, SBOM, OCSF; VEX is built, D47), live updates (SSE).
 - CI OIDC federation with token exchange and the mass-close guard (D22); rate limiting and per-token quotas; NVD enrichment; ownership from CODEOWNERS; SBOM inventory views.
 - Grafana dashboards and alert rules.
 - **Exit**: a team can run its CI ingestion and Jira workflow on Rampart and see Dependency-Track findings under the same score and deadlines.

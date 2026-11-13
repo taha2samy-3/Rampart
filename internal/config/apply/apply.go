@@ -60,6 +60,10 @@ type ConfigStore interface {
 	SaveIdentityProvider(ctx context.Context, tenantID *uuid.UUID, idp domain.IdentityProvider) error
 	GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error)
 	DeleteIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) error
+	SaveConnector(ctx context.Context, tenantID uuid.UUID, conn domain.Connector) error
+	GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error)
+	DeleteConnector(ctx context.Context, tenantID uuid.UUID, name string) error
+	UpdateConnectorStatus(ctx context.Context, tenantID uuid.UUID, name string, status domain.ConnectorStatus) error
 	Finalizer
 }
 
@@ -501,6 +505,44 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("clusteridentityprovider.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
+	case "connector":
+		tenant, err := a.store.GetTenantByNamespace(ctx, header.Metadata.Namespace)
+		if err != nil {
+			return "", err
+		}
+		if tenant == nil {
+			return "", fmt.Errorf("apply: no tenant lists namespace %q", header.Metadata.Namespace)
+		}
+		var spec domain.ConnectorSpec
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: invalid connector spec: %w", err)
+		}
+		conn := domain.Connector{
+			TenantID:  tenant.ID,
+			Namespace: header.Metadata.Namespace,
+			Name:      header.Metadata.Name,
+			Type:      spec.Type,
+			Spec:      spec,
+		}
+		if err := conn.Validate(); err != nil {
+			return "", fmt.Errorf("apply: connector validation failed: %w", err)
+		}
+
+		// Preserve existing status/conditions if already present
+		existing, _ := a.store.GetConnector(ctx, tenant.ID, header.Metadata.Name)
+		if existing != nil {
+			conn.Status = existing.Status
+		} else {
+			conn.Status = domain.ConnectorStatus{
+				WebhookURL: fmt.Sprintf("/hooks/%s/%s", spec.Type, header.Metadata.Name),
+			}
+		}
+
+		if err := a.store.SaveConnector(ctx, tenant.ID, conn); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("connector.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedKind, header.Kind)
 	}
@@ -561,6 +603,7 @@ type MemoryConfigStore struct {
 	namespaces   map[string]uuid.UUID
 	policies     map[string]PolicyObject
 	idps         map[string]domain.IdentityProvider
+	connectors   map[string]domain.Connector
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -572,6 +615,7 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		namespaces:   make(map[string]uuid.UUID),
 		policies:     make(map[string]PolicyObject),
 		idps:         make(map[string]domain.IdentityProvider),
+		connectors:   make(map[string]domain.Connector),
 		orphaned:     make(map[string]bool),
 		disabled:     make(map[string]bool),
 		withData:     make(map[uuid.UUID]bool),
@@ -648,6 +692,45 @@ func (m *MemoryConfigStore) GetIdentityProvider(ctx context.Context, tenantID *u
 		return &idp, nil
 	}
 	return nil, nil
+}
+
+// SaveConnector implements ConfigStore.
+func (m *MemoryConfigStore) SaveConnector(ctx context.Context, tenantID uuid.UUID, conn domain.Connector) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.connectors[tenantID.String()+":"+conn.Name] = conn
+	return nil
+}
+
+// GetConnector implements ConfigStore.
+func (m *MemoryConfigStore) GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if conn, ok := m.connectors[tenantID.String()+":"+name]; ok {
+		return &conn, nil
+	}
+	return nil, nil
+}
+
+// DeleteConnector implements ConfigStore.
+func (m *MemoryConfigStore) DeleteConnector(ctx context.Context, tenantID uuid.UUID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.connectors, tenantID.String()+":"+name)
+	return nil
+}
+
+// UpdateConnectorStatus implements ConfigStore.
+func (m *MemoryConfigStore) UpdateConnectorStatus(ctx context.Context, tenantID uuid.UUID, name string, status domain.ConnectorStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantID.String() + ":" + name
+	if conn, ok := m.connectors[key]; ok {
+		conn.Status = status
+		conn.UpdatedAt = time.Now().UTC()
+		m.connectors[key] = conn
+	}
+	return nil
 }
 
 // DeleteClusterPolicy implements Finalizer.

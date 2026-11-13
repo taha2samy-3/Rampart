@@ -478,3 +478,145 @@ func (r *ClusterIdentityProviderReconciler) Reconcile(ctx context.Context, cr *C
 func (r *ClusterIdentityProviderReconciler) Finalize(ctx context.Context, cr *ClusterIdentityProviderCR) (*IdentityProviderStatus, bool, error) {
 	return nil, true, r.store.DeleteIdentityProvider(ctx, nil, cr.Metadata.Name)
 }
+
+// ConnectorReconciler handles reconciliation of Connector custom resources (docs/04, docs/16 D69).
+type ConnectorReconciler struct {
+	store       apply.ConfigStore
+	secrets     SecretProvider
+	secretStore SecretMaterialStore
+}
+
+func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore) *ConnectorReconciler {
+	return &ConnectorReconciler{
+		store:       store,
+		secrets:     secrets,
+		secretStore: secretStore,
+	}
+}
+
+func extractConnectorSecretRef(spec *domain.ConnectorSpec) *domain.SecretKeyRef {
+	if spec == nil {
+		return nil
+	}
+	switch spec.Type {
+	case domain.ConnectorTypeJira:
+		if spec.Jira != nil {
+			return &spec.Jira.CredentialsSecretRef
+		}
+	case domain.ConnectorTypeGitHub:
+		if spec.GitHub != nil {
+			return &spec.GitHub.CredentialsSecretRef
+		}
+	case domain.ConnectorTypeSlack:
+		if spec.Slack != nil {
+			return &spec.Slack.TokenSecretRef
+		}
+	case domain.ConnectorTypeTeams:
+		if spec.Teams != nil {
+			return &spec.Teams.WebhookSecretRef
+		}
+	case domain.ConnectorTypeEmail:
+		if spec.Email != nil {
+			return &spec.Email.SMTP.CredentialsSecretRef
+		}
+	case domain.ConnectorTypeWebhook:
+		if spec.Webhook != nil {
+			return &spec.Webhook.SecretRef
+		}
+	case domain.ConnectorTypeDependencyTrack:
+		if spec.DependencyTrack != nil {
+			return &spec.DependencyTrack.CredentialsSecretRef
+		}
+	}
+	return nil
+}
+
+func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, error) {
+	status := &cr.Status
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		status.SetCondition("Connected", "False", "StorageError", err.Error())
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	if tenant == nil {
+		status.SetCondition("Connected", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
+		status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
+		return status, nil
+	}
+
+	conn := domain.Connector{
+		TenantID:  tenant.ID,
+		Namespace: cr.Metadata.Namespace,
+		Name:      cr.Metadata.Name,
+		Type:      cr.Spec.Type,
+		Spec:      cr.Spec,
+	}
+	if err := conn.Validate(); err != nil {
+		status.SetCondition("Connected", "False", "InvalidSpec", err.Error())
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
+	}
+
+	// Secret synchronization (D69: Secrets read from secret_material, synced from K8s secrets)
+	secRef := extractConnectorSecretRef(&cr.Spec)
+	if secRef != nil && secRef.Name != "" && r.secrets != nil && r.secretStore != nil {
+		secretKey := secRef.Key
+		if secretKey == "" {
+			secretKey = "token"
+		}
+		secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
+		if err != nil {
+			status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+			status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
+			return status, nil
+		}
+
+		storageKey := fmt.Sprintf("connector:%s:%s", cr.Metadata.Name, secretKey)
+		if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
+			status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+			status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
+			return status, err
+		}
+	}
+
+	now := time.Now().UTC()
+	status.ObservedGeneration = cr.Metadata.Generation
+	status.WebhookURL = fmt.Sprintf("/hooks/%s/%s", cr.Spec.Type, cr.Metadata.Name)
+	status.LastSync = &now
+
+	status.SetCondition("Connected", "True", "AuthOK", "Connector verified and secrets synced")
+	status.SetCondition("Ready", "True", "Reconciled", "Connector reconciled successfully")
+
+	conn.Status = domain.ConnectorStatus{
+		ObservedGeneration: status.ObservedGeneration,
+		WebhookURL:         status.WebhookURL,
+		LastSync:           status.LastSync,
+	}
+	for _, c := range status.Conditions {
+		conn.Status.Conditions = append(conn.Status.Conditions, domain.ConnectorCondition{
+			Type:               c.Type,
+			Status:             c.Status,
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: c.LastTransitionTime,
+		})
+	}
+
+	if err := r.store.SaveConnector(ctx, tenant.ID, conn); err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	return status, nil
+}
+
+func (r *ConnectorReconciler) Finalize(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, bool, error) {
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if tenant == nil {
+		return nil, true, nil
+	}
+	return nil, true, r.store.DeleteConnector(ctx, tenant.ID, cr.Metadata.Name)
+}

@@ -170,3 +170,18 @@ type PolicyCR = SLAPolicyCR
 
 // PolicyStatus is the status of a PolicyCR.
 type PolicyStatus = SLAPolicyStatus
+
+// ConnectorCR represents the Connector Custom Resource (docs/04, docs/16 D69, docs/20 Milestone 3.1).
+type ConnectorCR struct {
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Metadata   Metadata             `json:"metadata"`
+	Spec       domain.ConnectorSpec `json:"spec"`
+	Status     ConnectorStatus      `json:"status,omitempty"`
+}
+
+type ConnectorStatus struct {
+	CommonStatus `json:",inline"`
+	WebhookURL   string     `json:"webhookURL,omitempty"`
+	LastSync     *time.Time `json:"lastSync,omitempty"`
+}
