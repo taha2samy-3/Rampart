@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 	"rampart/internal/risk"
 	"rampart/internal/secrets"
+
+	"github.com/google/uuid"
 )
 
 // SecretProvider abstracts retrieving secrets from Kubernetes.
