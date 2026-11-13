@@ -56,7 +56,7 @@ func TestGate_WaitsForLinkedDependencyTrackSync(t *testing.T) {
 	token := authn.DefaultAdminToken(tenantID)
 	api := query.NewAPIWithAuth(st, nil, authn)
 
-	st.EnsureScanSource(context.Background(), tenantID, "ci")
+	_, _ = st.EnsureScanSource(context.Background(), tenantID, "ci")
 
 	// 1. Terminal SBOM run
 	sbomRunID := uuid.New()

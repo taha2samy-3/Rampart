@@ -40,7 +40,7 @@ func (d *defaultDoer) Do(req *http.Request) ([]byte, int, http.Header, error) {
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	return body, resp.StatusCode, resp.Header, err
 }
@@ -191,11 +191,12 @@ func (c *Client) ProbePermissions(ctx context.Context) (granted []string, missin
 	if projErr != nil {
 		return nil, nil, fmt.Errorf("probing VIEW_PORTFOLIO: %w", projErr)
 	}
-	if projCode == http.StatusOK {
+	switch projCode {
+	case http.StatusOK:
 		granted = append(granted, "VIEW_PORTFOLIO")
-	} else if projCode == http.StatusForbidden || projCode == http.StatusUnauthorized {
+	case http.StatusForbidden, http.StatusUnauthorized:
 		missing = append(missing, "VIEW_PORTFOLIO")
-	} else {
+	default:
 		return nil, nil, fmt.Errorf("unexpected status %d probing VIEW_PORTFOLIO", projCode)
 	}
 
@@ -205,9 +206,10 @@ func (c *Client) ProbePermissions(ctx context.Context) (granted []string, missin
 	if vulnErr != nil {
 		return granted, missing, fmt.Errorf("probing VIEW_VULNERABILITY: %w", vulnErr)
 	}
-	if vulnCode == http.StatusOK {
+	switch vulnCode {
+	case http.StatusOK:
 		granted = append(granted, "VIEW_VULNERABILITY")
-	} else if vulnCode == http.StatusForbidden || vulnCode == http.StatusUnauthorized {
+	case http.StatusForbidden, http.StatusUnauthorized:
 		missing = append(missing, "VIEW_VULNERABILITY")
 	}
 

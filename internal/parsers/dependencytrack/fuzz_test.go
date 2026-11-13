@@ -43,3 +43,4 @@ func FuzzDependencyTrackParse(f *testing.F) {
 		}
 	})
 }
+

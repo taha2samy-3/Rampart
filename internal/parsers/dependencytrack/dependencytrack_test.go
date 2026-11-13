@@ -185,3 +185,4 @@ func TestParse_RecordErrors(t *testing.T) {
 		t.Errorf("expected finding CVE-2026-0001, got %s", findings[0].RuleID)
 	}
 }
+
