@@ -24,11 +24,11 @@ import (
 )
 
 type fakeOIDCServer struct {
-	server  *httptest.Server
-	rsaKey  *rsa.PrivateKey
-	ecKey   *ecdsa.PrivateKey
-	rsaKid  string
-	ecKid   string
+	server *httptest.Server
+	rsaKey *rsa.PrivateKey
+	ecKey  *ecdsa.PrivateKey
+	rsaKid string
+	ecKid  string
 }
 
 func newFakeOIDCServer(tb testing.TB) *fakeOIDCServer {
