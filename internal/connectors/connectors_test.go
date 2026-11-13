@@ -20,6 +20,7 @@ import (
 	"rampart/internal/connectors"
 	"rampart/internal/domain"
 	"rampart/internal/ingest"
+	"rampart/internal/secrets"
 )
 
 type mockSecretResolver struct {
@@ -711,4 +712,118 @@ func TestNotificationRoutingRule_EventsAndAppSlugFilter(t *testing.T) {
 	// Call router routing matcher via RouteNotification or custom test
 	_ = msg1
 	_ = rule
+}
+
+func TestDecryptingSecretResolver(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	key := "connector:slack:token"
+	plaintext := []byte("xoxb-secret-token")
+
+	keyBytes := make([]byte, 32)
+	for i := range keyBytes {
+		keyBytes[i] = byte(i + 1)
+	}
+	cipher, err := secrets.NewCipher(keyBytes)
+	if err != nil {
+		t.Fatalf("failed to create cipher: %v", err)
+	}
+
+	ciphertext, err := cipher.Encrypt(tenantID, key, plaintext)
+	if err != nil {
+		t.Fatalf("failed to encrypt secret: %v", err)
+	}
+
+	inner := &mockSecretResolver{
+		secrets: map[string][]byte{
+			tenantID.String() + ":" + key: ciphertext,
+		},
+	}
+
+	resolver := connectors.NewDecryptingSecretResolver(inner, cipher)
+	decrypted, err := resolver.GetSecretMaterial(ctx, tenantID, key)
+	if err != nil {
+		t.Fatalf("GetSecretMaterial failed: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Fatalf("expected decrypted value %q, got %q", string(plaintext), string(decrypted))
+	}
+
+	// Plaintext fallback if ciphertext decryption fails (e.g. unencrypted in tests/dev)
+	plainKey := "connector:slack:plain"
+	inner.secrets[tenantID.String()+":"+plainKey] = []byte("plain-token")
+	gotPlain, err := resolver.GetSecretMaterial(ctx, tenantID, plainKey)
+	if err != nil {
+		t.Fatalf("GetSecretMaterial failed for plaintext: %v", err)
+	}
+	if string(gotPlain) != "plain-token" {
+		t.Fatalf("expected fallback to plaintext 'plain-token', got %q", string(gotPlain))
+	}
+}
+
+func TestNotificationRouter_RouteInAppNotification(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	defer srv.Close()
+
+	mStore := ingest.NewMemoryStore()
+	testConn := domain.Connector{
+		Name:     "webhook-notif",
+		TenantID: tenantID,
+		Type:     domain.ConnectorTypeWebhook,
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeWebhook,
+			Webhook: &domain.WebhookConnectorConfig{
+				URL: srv.URL,
+			},
+			Routing: &domain.NotificationRoutingRule{
+				Events: []string{domain.NotifySLABreached},
+			},
+		},
+	}
+	condTrue := domain.ConnectorCondition{Type: "Connected", Status: "True"}
+	testConn.Status.Conditions = []domain.ConnectorCondition{condTrue}
+	_ = mStore.SaveConnector(ctx, tenantID, testConn)
+
+	allowlist := &domain.PlatformSSRFAllowlist{AllowLoopback: true}
+	client := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{
+		Allowlist:     allowlist,
+		AllowLoopback: true,
+	})
+
+	router := connectors.NewNotificationRouterWithConfig(mStore, nil, client, connectors.RouterConfig{
+		PublicURL: "https://rampart.example.com",
+	})
+
+	// 1. SLA breached notification matches rule
+	notif := &domain.Notification{
+		ID:        uuid.New(),
+		Kind:      domain.NotifySLABreached,
+		Title:     "3 findings passed deadline",
+		Body:      "Immediate remediation required",
+		Link:      "/findings?q=sla:breached",
+		CreatedAt: time.Now().UTC(),
+	}
+	errs := router.RouteInAppNotification(ctx, tenantID, notif)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected routing errors: %v", errs)
+	}
+
+	// 2. Non-matching event (due soon) is filtered out
+	dueNotif := &domain.Notification{
+		ID:        uuid.New(),
+		Kind:      domain.NotifySLADueSoon,
+		Title:     "Findings due soon",
+		Link:      "/findings?q=sla:due:1d",
+		CreatedAt: time.Now().UTC(),
+	}
+	errsDue := router.RouteInAppNotification(ctx, tenantID, dueNotif)
+	if len(errsDue) > 0 {
+		t.Fatalf("unexpected errors for filtered notification: %v", errsDue)
+	}
 }

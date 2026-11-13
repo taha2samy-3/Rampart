@@ -23,6 +23,7 @@ import (
 	"rampart/internal/auth"
 	"rampart/internal/config"
 	"rampart/internal/config/apply"
+	"rampart/internal/connectors"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/ingest"
@@ -195,6 +196,31 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	scorer := scoring.New(storeBackend, intel, scoring.NewDBPolicy(storeBackend)) // the tenant's SLAPolicy, else the built-in one
 	processor.SetScorer(scorer)
+
+	// Ingest & In-App notifications routing to connectors (D25, D45, D69, Milestone 3.1)
+	allowlist, _ := r.cfg.Connectors.SSRFAllowlist.ToPlatformSSRFAllowlist()
+	var secretResolver connectors.SecretResolver
+	if sysStore != nil {
+		secretResolver = sysStore
+	} else if pgStore != nil {
+		secretResolver = pgStore
+	}
+	if secretResolver != nil {
+		if key, kerr := readSecretFile(r.cfg.Auth.Session.KeyFile); kerr == nil {
+			if cipher, cerr := secrets.NewCipher(key); cerr == nil {
+				secretResolver = connectors.NewDecryptingSecretResolver(secretResolver, cipher)
+			}
+		}
+	}
+	safeClient := connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{
+		Allowlist:     allowlist,
+		AllowLoopback: allowlist != nil && allowlist.AllowLoopback,
+	})
+	notifRouter := connectors.NewNotificationRouterWithConfig(storeBackend, secretResolver, safeClient, connectors.RouterConfig{
+		PublicURL: r.cfg.Server.PublicURL,
+	})
+	processor.SetNotificationRouter(notifRouter)
+	scorer.SetNotificationRouter(notifRouter)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	if pgStore != nil {
@@ -710,13 +736,17 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 	ns := firstNonEmpty(r.cfg.Operator.Namespace, os.Getenv("POD_NAMESPACE"))
 	// Error is ignored here because cfg.Connectors.SSRFAllowlist is strictly validated during config loading on startup.
 	allowlist, _ := r.cfg.Connectors.SSRFAllowlist.ToPlatformSSRFAllowlist()
+	checker := connectors.NewDefaultChecker(connectors.NewSafeClientWithConfig(connectors.SafeClientConfig{
+		Allowlist:     allowlist,
+		AllowLoopback: allowlist != nil && allowlist.AllowLoopback,
+	}), allowlist)
 	r.logger.Info("operator starting", "cluster", source, "leaderElectionNamespace", ns)
 	go func() {
 		errCh <- operator.Run(ctx, operator.ManagerConfig{
 			REST: rc, Store: configStore, SecretStore: secretStore, Logger: r.logger,
 			LeaderElectionNamespace: ns, SecretReaderClusterRole: r.cfg.Operator.SecretReaderClusterRole,
 			ServiceAccountName: r.cfg.Operator.ServiceAccount, ServiceAccountNamespace: ns,
-			SSRFAllowlist: allowlist,
+			SSRFAllowlist: allowlist, ConnectorChecker: checker,
 		})
 	}()
 	return nil

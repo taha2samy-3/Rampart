@@ -3,6 +3,7 @@ package operator_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -565,5 +566,69 @@ func TestConnectorReconciler(t *testing.T) {
 	}
 	if _, ok := secStore.secrets[passKey]; ok {
 		t.Errorf("expected pass secret to be deleted by prefix, still present")
+	}
+}
+
+type mockChecker struct {
+	err error
+}
+
+func (m *mockChecker) Check(_ context.Context, _ domain.Connector, _ []byte) error {
+	return m.err
+}
+
+func TestConnectorReconciler_WithChecker(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	mockSecrets := operator.NewMockSecretProvider()
+	secStore := newMemorySecretStore()
+	op := operator.NewOperator(store, mockSecrets, secStore, nil)
+
+	tenantCR := &operator.TenantCR{
+		Metadata: operator.Metadata{Name: "tenant-check", Namespace: "default", Generation: 1},
+		Spec: operator.TenantSpec{
+			DisplayName: "Tenant Check",
+			Namespaces:  []string{"check-ns"},
+		},
+	}
+	_, err := op.ReconcileTenant(ctx, tenantCR)
+	if err != nil {
+		t.Fatalf("ReconcileTenant failed: %v", err)
+	}
+
+	cr := &operator.ConnectorCR{
+		Metadata: operator.Metadata{Name: "slack-chk", Namespace: "check-ns", Generation: 1},
+		Spec: domain.ConnectorSpec{
+			Type: domain.ConnectorTypeSlack,
+			Slack: &domain.SlackConnectorConfig{
+				TokenSecretRef: domain.SecretKeyRef{Name: "slack-sec", Key: "token"},
+				DefaultChannel: "#general",
+			},
+		},
+	}
+	mockSecrets.Secrets["check-ns/slack-sec:token"] = []byte("xoxb-valid")
+
+	// 1. Successful check sets Connected=True, Reason=AuthOK
+	chkSuccess := &mockChecker{err: nil}
+	op.SetConnectorChecker(chkSuccess)
+	st1, err := op.ReconcileConnector(ctx, cr)
+	if err != nil {
+		t.Fatalf("ReconcileConnector failed: %v", err)
+	}
+	cond1 := st1.GetCondition("Connected")
+	if cond1 == nil || cond1.Status != "True" || cond1.Reason != "AuthOK" {
+		t.Fatalf("expected Connected=True (AuthOK), got %+v", cond1)
+	}
+
+	// 2. Failed check sets Connected=False, Reason=AuthFailed
+	chkFail := &mockChecker{err: errors.New("invalid_auth")}
+	op.SetConnectorChecker(chkFail)
+	st2, err := op.ReconcileConnector(ctx, cr)
+	if err != nil {
+		t.Fatalf("ReconcileConnector failed: %v", err)
+	}
+	cond2 := st2.GetCondition("Connected")
+	if cond2 == nil || cond2.Status != "False" || cond2.Reason != "AuthFailed" {
+		t.Fatalf("expected Connected=False (AuthFailed), got %+v", cond2)
 	}
 }

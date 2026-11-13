@@ -40,6 +40,11 @@ const (
 	ErrCodeObjectMissing    = "object_missing"
 )
 
+// IngestNotificationRouter routes findings from an ingest run to configured tenant connectors (Milestone 3.1, D25).
+type IngestNotificationRouter interface {
+	RouteIngestRunFindings(ctx context.Context, tenantID uuid.UUID, appName string, findings []*domain.Finding) []error
+}
+
 // Processor turns one uploaded report into findings: verify, stream-parse, merge in batches, close
 // (D2, D9, D13, D15). The ingest worker and the direct-upload endpoint share it, so both follow
 // exactly the same rules.
@@ -49,6 +54,7 @@ type Processor struct {
 	registry     *integrations.Registry
 	objects      objectstore.Store
 	logger       *slog.Logger
+	router       IngestNotificationRouter
 	batchRows    int
 	maxReport    int64
 	maxSBOMBytes int64
@@ -69,6 +75,9 @@ func NewProcessor(store Store, registry *integrations.Registry, objects objectst
 
 // SetScorer makes the processor store each finding's risk score, band and SLA (internal/scoring).
 func (p *Processor) SetScorer(s Scorer) { p.engine.SetScorer(s) }
+
+// SetNotificationRouter configures the router to dispatch findings notifications upon run completion (D25, Milestone 3.1).
+func (p *Processor) SetNotificationRouter(r IngestNotificationRouter) { p.router = r }
 
 // SetLimits overrides the batch size and the size caps (ingest.batchRows, ingest.maxReportBytes).
 func (p *Processor) SetLimits(batchRows int, maxReport int64) {
@@ -270,7 +279,56 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 		}
 		res.Components = n
 	}
+	if p.router != nil && len(fresh) > 0 && (status == domain.RunCompleted || status == domain.RunCompletedWithErrors) {
+		p.routeRunFindings(ctx, run, fresh)
+	}
 	return res, nil
+}
+
+func (p *Processor) routeRunFindings(ctx context.Context, run *domain.IngestRun, fresh []*domain.IngestRunResult) {
+	appName := run.ApplicationID.String()
+	if appStore, ok := p.store.(interface {
+		GetApplication(context.Context, uuid.UUID, uuid.UUID) (*domain.Application, error)
+	}); ok {
+		if app, err := appStore.GetApplication(ctx, run.TenantID, run.ApplicationID); err == nil && app != nil && app.Name != "" {
+			appName = app.Name
+		}
+	}
+
+	keys := make([]string, 0, len(fresh))
+	for _, res := range fresh {
+		keys = append(keys, res.FindingKey)
+	}
+
+	var findingsList []*domain.Finding
+	if finder, ok := p.store.(interface {
+		GetFindingsByKeys(context.Context, uuid.UUID, []string) (map[string]*domain.Finding, error)
+	}); ok {
+		if fMap, err := finder.GetFindingsByKeys(ctx, run.TenantID, keys); err == nil && len(fMap) > 0 {
+			for _, res := range fresh {
+				if f, found := fMap[res.FindingKey]; found {
+					findingsList = append(findingsList, f)
+				}
+			}
+		}
+	}
+
+	if len(findingsList) == 0 {
+		for _, res := range fresh {
+			findingsList = append(findingsList, &domain.Finding{
+				ID:            uuid.New(),
+				TenantID:      run.TenantID,
+				ApplicationID: run.ApplicationID,
+				Severity:      res.Severity,
+				Title:         fmt.Sprintf("%s finding (%s)", res.Severity, res.FindingKey),
+			})
+		}
+	}
+
+	if errs := p.router.RouteIngestRunFindings(ctx, run.TenantID, appName, findingsList); len(errs) > 0 {
+		p.logger.Warn("routing ingest run findings encountered errors",
+			"run", run.ID, "tenant", run.TenantID, "errors", len(errs))
+	}
 }
 
 // maxRecordErrors is how many unreadable records a run keeps; the count is of all of them.

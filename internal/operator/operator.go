@@ -79,6 +79,13 @@ func (op *Operator) ReconcileClusterIdentityProvider(ctx context.Context, cr *Cl
 	return op.clusterIdps.Reconcile(ctx, cr)
 }
 
+// SetConnectorChecker configures an active connectivity checker for connector verification.
+func (op *Operator) SetConnectorChecker(checker ConnectorChecker) {
+	if op.connectors != nil {
+		op.connectors.SetChecker(checker)
+	}
+}
+
 // ReconcileConnector reconciles a Connector CR.
 func (op *Operator) ReconcileConnector(ctx context.Context, cr *ConnectorCR) (*ConnectorStatus, error) {
 	op.logger.Debug("reconciling connector", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)

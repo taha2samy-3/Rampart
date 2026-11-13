@@ -489,12 +489,18 @@ func (r *ClusterIdentityProviderReconciler) Finalize(ctx context.Context, cr *Cl
 	return nil, true, r.store.DeleteIdentityProvider(ctx, nil, cr.Metadata.Name)
 }
 
+// ConnectorChecker verifies connectivity and authentication of a connector.
+type ConnectorChecker interface {
+	Check(ctx context.Context, conn domain.Connector, secret []byte) error
+}
+
 // ConnectorReconciler handles reconciliation of Connector custom resources (docs/04, docs/16 D69).
 type ConnectorReconciler struct {
 	store       apply.ConfigStore
 	secrets     SecretProvider
 	secretStore SecretMaterialStore
 	allowlist   *domain.PlatformSSRFAllowlist
+	checker     ConnectorChecker
 }
 
 func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, secretStore SecretMaterialStore, allowlist *domain.PlatformSSRFAllowlist) *ConnectorReconciler {
@@ -504,6 +510,11 @@ func NewConnectorReconciler(store apply.ConfigStore, secrets SecretProvider, sec
 		secretStore: secretStore,
 		allowlist:   allowlist,
 	}
+}
+
+// SetChecker configures an active connectivity checker for connector verification.
+func (r *ConnectorReconciler) SetChecker(checker ConnectorChecker) {
+	r.checker = checker
 }
 
 func extractConnectorSecretRef(spec *domain.ConnectorSpec) *domain.SecretKeyRef {
@@ -577,6 +588,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 	}
 
 	// Secret synchronization (D69: Secrets read from secret_material, synced from K8s secrets)
+	var secretBytes []byte
 	secRef := extractConnectorSecretRef(&cr.Spec)
 	if secRef != nil && secRef.Name != "" && r.secrets != nil && r.secretStore != nil {
 		if cr.Spec.Type == domain.ConnectorTypeEmail {
@@ -584,6 +596,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 			userBytes, errUser := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, "username")
 			passBytes, errPass := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, "password")
 			if errUser == nil && errPass == nil {
+				secretBytes = passBytes
 				userKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, "username")
 				if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, userKey, userBytes); err != nil {
 					status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync email username: %v", err))
@@ -601,12 +614,13 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 				if secretKey == "" {
 					secretKey = "token"
 				}
-				secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
+				rawBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
 				if err != nil {
 					status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
 					status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
 					return status, nil
 				}
+				secretBytes = rawBytes
 				storageKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, secretKey)
 				if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
 					status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
@@ -619,13 +633,13 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 			if secretKey == "" {
 				secretKey = "token"
 			}
-			secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
+			rawBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secRef.Name, secretKey)
 			if err != nil {
 				status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
 				status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s: %v", secRef.Name, secretKey, err))
 				return status, nil
 			}
-
+			secretBytes = rawBytes
 			storageKey := domain.ConnectorSecretStorageKey(cr.Metadata.Name, secretKey)
 			if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, storageKey, secretBytes); err != nil {
 				status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
@@ -640,8 +654,17 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 	status.WebhookURL = "" // Inbound webhook URL design deferred to 3.2 per D23
 	status.LastSync = &now
 
-	// Honest state: configuration valid and secrets synced, but connection not yet tested externally
-	status.SetCondition("Connected", "Unknown", "PendingVerification", "Connector registered, connection not yet tested")
+	// Connection verification (D69, docs/04, docs/20 Milestone 3.1)
+	if r.checker != nil {
+		if err := r.checker.Check(ctx, conn, secretBytes); err != nil {
+			status.SetCondition("Connected", "False", "AuthFailed", err.Error())
+		} else {
+			status.SetCondition("Connected", "True", "AuthOK", "Connector verified successfully")
+		}
+	} else {
+		// Honest state: configuration valid and secrets synced, but connection not yet tested externally
+		status.SetCondition("Connected", "Unknown", "PendingVerification", "Connector registered, connection not yet tested")
+	}
 	status.SetCondition("Ready", "True", "Reconciled", "Connector reconciled successfully")
 
 	conn.Status = domain.ConnectorStatus{

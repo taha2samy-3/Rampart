@@ -76,6 +76,9 @@ type ManagerConfig struct {
 
 	// SSRFAllowlist defines administrator-configured network ranges and hosts allowed for in-cluster/on-prem connectors (D69).
 	SSRFAllowlist *domain.PlatformSSRFAllowlist
+
+	// ConnectorChecker performs active connectivity and authentication checks for connectors (D69).
+	ConnectorChecker ConnectorChecker
 }
 
 // NewManager builds a controller-runtime manager with the Rampart controllers.
@@ -114,6 +117,9 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		secrets = &apiSecretProvider{reader: mgr.GetAPIReader()}
 	}
 	op := NewOperatorWithAllowlist(cfg.Store, secrets, cfg.SecretStore, cfg.SSRFAllowlist, logger)
+	if cfg.ConnectorChecker != nil {
+		op.SetConnectorChecker(cfg.ConnectorChecker)
+	}
 	k := &kube{c: mgr.GetClient(), reader: mgr.GetAPIReader(), cfg: cfg, logger: logger}
 
 	tenants := &cr[TenantCR, TenantStatus]{k: k, gvk: gvkTenant, reconcile: func(ctx context.Context, c *TenantCR) (*TenantStatus, error) {
@@ -138,7 +144,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 
 	connectors := &cr[ConnectorCR, ConnectorStatus]{k: k, gvk: gvkConnector, reconcile: func(ctx context.Context, c *ConnectorCR) (*ConnectorStatus, error) {
 		return op.ReconcileConnector(ctx, c)
-	}, status: func(c *ConnectorCR) *ConnectorStatus { return &c.Status }, finalize: op.FinalizeConnector}
+	}, status: func(c *ConnectorCR) *ConnectorStatus { return &c.Status }, finalize: op.FinalizeConnector,
+		periodicRequeue: 15 * time.Minute}
 
 	policyCR := func(gvk schema.GroupVersionKind, r *PolicyReconciler) *cr[PolicyCR, PolicyStatus] {
 		return &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvk, reconcile: r.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: r.Finalize}
@@ -270,7 +277,8 @@ type cr[T any, S any] struct {
 	status    func(*T) *S
 	// finalize runs when the resource is deleted. It returns done=false to keep the resource (and the status to
 	// write, if any) and try again later. A kind without one has no finalizer.
-	finalize func(context.Context, *T) (*S, bool, error)
+	finalize        func(context.Context, *T) (*S, bool, error)
+	periodicRequeue time.Duration
 }
 
 func (r *cr[T, S]) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -308,6 +316,9 @@ func (r *cr[T, S]) Reconcile(ctx context.Context, req reconcile.Request) (reconc
 	// recovers without anyone touching it.
 	if readyFalse(st) {
 		return reconcile.Result{RequeueAfter: r.k.retryInterval()}, nil
+	}
+	if r.periodicRequeue > 0 {
+		return reconcile.Result{RequeueAfter: r.periodicRequeue}, nil
 	}
 	return reconcile.Result{}, nil
 }

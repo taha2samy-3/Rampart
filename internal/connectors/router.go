@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,12 +10,43 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/domain"
+	"rampart/internal/secrets"
 	"rampart/internal/store"
 )
 
 // SecretResolver resolves stored secret material for a connector.
 type SecretResolver interface {
 	GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error)
+}
+
+// DecryptingSecretResolver wraps a SecretResolver and transparently decrypts ciphertext
+// using the provided secrets.Cipher when configured (D4, D49, D69).
+type DecryptingSecretResolver struct {
+	Inner  SecretResolver
+	Cipher *secrets.Cipher
+}
+
+// NewDecryptingSecretResolver creates a new DecryptingSecretResolver.
+func NewDecryptingSecretResolver(inner SecretResolver, cipher *secrets.Cipher) *DecryptingSecretResolver {
+	return &DecryptingSecretResolver{Inner: inner, Cipher: cipher}
+}
+
+// GetSecretMaterial retrieves and decrypts the secret material for key.
+func (d *DecryptingSecretResolver) GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error) {
+	if d.Inner == nil {
+		return nil, errors.New("inner secret resolver is nil")
+	}
+	raw, err := d.Inner.GetSecretMaterial(ctx, tenantID, key)
+	if err != nil {
+		return nil, err
+	}
+	if d.Cipher != nil && len(raw) > 0 {
+		decrypted, err := d.Cipher.Decrypt(tenantID, key, raw)
+		if err == nil {
+			return decrypted, nil
+		}
+	}
+	return raw, nil
 }
 
 // RouterConfig configures the notification router options.
@@ -95,6 +127,39 @@ func (r *NotificationRouter) RouteNotification(ctx context.Context, tenantID uui
 
 	wg.Wait()
 	return errs
+}
+
+// RouteInAppNotification dispatches an in-app notification (D45) to all active connectors.
+func (r *NotificationRouter) RouteInAppNotification(ctx context.Context, tenantID uuid.UUID, n *domain.Notification) []error {
+	if n == nil {
+		return nil
+	}
+	url := ""
+	if r.publicURL != "" && n.Link != "" {
+		if strings.HasPrefix(n.Link, "/") {
+			url = r.publicURL + n.Link
+		} else {
+			url = r.publicURL + "/" + n.Link
+		}
+	}
+	sev := "medium"
+	switch n.Kind {
+	case domain.NotifySLABreached:
+		sev = "high"
+	case domain.NotifyAcceptanceEnding:
+		sev = "low"
+	}
+	msg := NotificationMessage{
+		ID:        n.ID.String(),
+		TenantID:  tenantID.String(),
+		Title:     n.Title,
+		Summary:   n.Body,
+		Severity:  sev,
+		URL:       url,
+		Timestamp: n.CreatedAt,
+		Fields:    map[string]string{"event": n.Kind},
+	}
+	return r.RouteNotification(ctx, tenantID, msg)
 }
 
 // RouteIngestRunFindings processes findings from an ingest run, enforcing the D25 digest threshold (>20 findings).
@@ -381,10 +446,17 @@ func matchesRouting(rule *domain.NotificationRoutingRule, msg NotificationMessag
 		}
 	}
 	// 3. Events filter
-	if len(rule.Events) > 0 && msg.Fields != nil && msg.Fields["event"] != "" {
+	if len(rule.Events) > 0 {
+		event := ""
+		if msg.Fields != nil {
+			event = msg.Fields["event"]
+		}
+		if event == "" {
+			return false
+		}
 		matched := false
 		for _, ev := range rule.Events {
-			if strings.EqualFold(ev, msg.Fields["event"]) {
+			if strings.EqualFold(ev, event) {
 				matched = true
 				break
 			}

@@ -105,12 +105,23 @@ func (d *DBPolicy) Invalidate(tenantID uuid.UUID) {
 	d.mu.Unlock()
 }
 
+// NotificationRouter routes in-app notifications to external connectors (Milestone 3.1, D45).
+type NotificationRouter interface {
+	RouteInAppNotification(ctx context.Context, tenantID uuid.UUID, n *domain.Notification) []error
+}
+
 // Scorer fills the score, band, KEV, EPSS bucket and SLA of findings.
 type Scorer struct {
 	store  store.Store
 	intel  Intel
 	policy PolicySource
+	router NotificationRouter
 	now    func() time.Time
+}
+
+// SetNotificationRouter configures an external notification router for in-app events.
+func (s *Scorer) SetNotificationRouter(r NotificationRouter) {
+	s.router = r
 }
 
 // New returns a Scorer. intel may be nil (no threat intelligence: the score has its severity and context only).

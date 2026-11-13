@@ -35,7 +35,11 @@ func (s *Scorer) notifyBreaches(ctx context.Context, tenantID uuid.UUID, n int, 
 	if n == 1 {
 		title = "A finding passed its deadline"
 	}
-	_ = nt.CreateNotification(ctx, tenantID, &domain.Notification{Kind: domain.NotifySLABreached, Title: title, Link: findingsLink("sla:breached"), CreatedAt: now})
+	notif := &domain.Notification{Kind: domain.NotifySLABreached, Title: title, Link: findingsLink("sla:breached"), CreatedAt: now}
+	_ = nt.CreateNotification(ctx, tenantID, notif)
+	if s.router != nil {
+		_ = s.router.RouteInAppNotification(ctx, tenantID, notif)
+	}
 }
 
 // WarnDueSoon announces the findings whose deadline falls within WarnWindow, once each. It returns how many.
@@ -63,7 +67,11 @@ func (s *Scorer) WarnDueSoon(ctx context.Context, tenantID uuid.UUID, now time.T
 		}
 		body = strings.Join(names, "; ")
 	}
-	err = nt.CreateNotification(ctx, tenantID, &domain.Notification{Kind: domain.NotifySLADueSoon, Title: title, Body: body, Link: findingsLink("sla:due:1d"), CreatedAt: now})
+	notif := &domain.Notification{Kind: domain.NotifySLADueSoon, Title: title, Body: body, Link: findingsLink("sla:due:1d"), CreatedAt: now}
+	err = nt.CreateNotification(ctx, tenantID, notif)
+	if s.router != nil {
+		_ = s.router.RouteInAppNotification(ctx, tenantID, notif)
+	}
 	return len(due), err
 }
 
@@ -77,8 +85,12 @@ func (s *Scorer) WarnExpiringAcceptances(ctx context.Context, tenantID uuid.UUID
 	for _, e := range list {
 		title := fmt.Sprintf("A risk acceptance ends in %d %s", e.DaysLeft, plural(e.DaysLeft, "day", "days"))
 		body := fmt.Sprintf("%s. Owner: %s. %d %s will return to the queue.", e.Justification, strings.TrimPrefix(e.Owner, "user:"), e.Findings, plural(e.Findings, "finding", "findings"))
-		if cerr := nt.CreateNotification(ctx, tenantID, &domain.Notification{Kind: domain.NotifyAcceptanceEnding, Title: title, Body: body, Link: "/workflow", CreatedAt: now}); cerr != nil && err == nil {
+		notif := &domain.Notification{Kind: domain.NotifyAcceptanceEnding, Title: title, Body: body, Link: "/workflow", CreatedAt: now}
+		if cerr := nt.CreateNotification(ctx, tenantID, notif); cerr != nil && err == nil {
 			err = cerr
+		}
+		if s.router != nil {
+			_ = s.router.RouteInAppNotification(ctx, tenantID, notif)
 		}
 	}
 	return len(list), err
