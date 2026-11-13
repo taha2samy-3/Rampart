@@ -3,10 +3,23 @@ kind: ClusterSLAPolicy
 metadata:
   name: fedramp-vdr
 spec:
-  # FedRAMP Vulnerability Detection and Response (VDR) & VER standard (mandatory from 2026-12-07 per
-  # FedRAMP Notice NTC-0014 and CISA BOD 26-04): critical 4d matches PAIN-5 (highest potential agency impact)
-  # remediation mandate for Class A & B systems; high 14d matches the Class A evaluation window (VER-TFR-EVU)
-  # and CISA KEV timeline; medium 30d and low 90d are accelerated tiers replacing legacy 90d/180d ConMon windows.
+  # FedRAMP Consolidated Rules for 2026, Vulnerability Detection and Response (VDR) and Vulnerability
+  # Evaluation and Reporting (VER) rulesets (FedRAMP Notice NTC-0014, responding to CISA BOD 26-04; required
+  # from 2026-12-07, grace until 2027-03-07). Verified against the primary machine-readable rules dataset
+  # (github.com/FedRAMP/rules, fedramp-consolidated-rules.json):
+  #   - critical 4d: rule VDR-TFR-PVR, Class A/B, PAIN N5 (highest Potential Agency Impact rating, VER-EVA-EPA),
+  #     internet-reachable + likely-exploitable column.
+  #   - high 14d: rule VER-TFR-EVU, Class A's "evaluate within" window (not a VDR-TFR-PVR remediation cell).
+  #   - medium 30d / low 90d: not a specific rule cell; Rampart's own accelerated approximation of VDR-TFR-PVR's
+  #     lower-PAIN, slower-timeframe cells (which range from 8 to 192 days depending on class/PAIN/exploitability),
+  #     chosen to replace the legacy 90d/180d ConMon tiers with something faster.
+  # VDR-TFR-PVR and VER-TFR-EVU are both "SHOULD" (recommended) rules, not "MUST": the real standard is a single
+  # multi-axis matrix per class (A/B/C/D) x PAIN rating (N2-N5) x exploitability/reachability, which this preset
+  # collapses into one flat per-severity matrix as a simplification. The only separately mandatory ("MUST")
+  # number from this standard is the 192-day point at which an unmitigated vulnerability must be categorized
+  # as an accepted vulnerability (rule VER-TFR-MAV). caps.maxDays is set to 90, tighter than that 192-day
+  # mandatory ceiling, because this preset is deliberately the accelerated profile (see the medium/low tiers
+  # above); a maxDays of 192 would be the literal VER-TFR-MAV ceiling if that tighter cap is ever relaxed.
   matrix:
     critical: {critical: 4,  high: 4,   medium: 4,  low: 4}
     high:     {critical: 14, high: 14,  medium: 14, low: 14}
@@ -18,3 +31,4 @@ spec:
   startFrom: firstSeen
   restartOnReactivation: true
   pauseDuringRiskAcceptance: true
+
