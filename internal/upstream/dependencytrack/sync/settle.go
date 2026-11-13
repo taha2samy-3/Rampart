@@ -72,4 +72,3 @@ func (s *SettleChecker) CheckSettled(ctx context.Context, projectUUID string, la
 		firstRead = secondRead
 	}
 }
-

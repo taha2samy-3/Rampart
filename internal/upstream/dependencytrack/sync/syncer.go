@@ -279,4 +279,3 @@ func (s *Syncer) SyncPortfolio(ctx context.Context, tenantID, sourceID uuid.UUID
 	}
 	return nil
 }
-
