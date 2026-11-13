@@ -92,7 +92,7 @@ func newEnv(t *testing.T, policy auth.RolePolicy) *env {
 	authn.SetSessions(sm)
 	h := auth.NewHandlers(auth.HandlerDeps{
 		OIDC:     auth.NewOIDCClient(auth.OIDCConfig{Issuer: idp.srv.URL, ClientID: "rampart", ClientSecret: "s", RedirectURL: "http://rampart.test/auth/oidc/default/callback", RequireEmailVerified: true}),
-		Sessions: sm, Identity: st, Tenants: st, Authn: authn, Policy: policy, Version: "9.9.9",
+		Sessions: sm, Identity: st, Tenants: st, IdPs: st, Authn: authn, Policy: policy, Version: "9.9.9",
 	})
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -349,5 +349,159 @@ func TestUIConfigIsPublicAndReportsTheSignInMethod(t *testing.T) {
 	mux.ServeHTTP(r3, httptest.NewRequest("GET", "/auth/login", nil))
 	if r3.Code != http.StatusServiceUnavailable || r3.Header().Get("Content-Type") != "application/problem+json" {
 		t.Errorf("login without an IdP: %d %s", r3.Code, r3.Header().Get("Content-Type"))
+	}
+}
+
+func TestDynamicIdentityProvider_UIConfig(t *testing.T) {
+	e := newEnv(t, auth.RolePolicy{DefaultRole: auth.RoleViewer})
+	ctx := context.Background()
+
+	// Add dynamic IdentityProvider to tenant
+	idp := domain.IdentityProvider{
+		TenantID:    &e.tenant,
+		Name:        "okta-tenant",
+		DisplayName: "Corporate Okta",
+		Type:        domain.IdPOIDC,
+		Spec: domain.IdentityProviderSpec{
+			Type: "oidc",
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:   "https://okta.corp.example.com",
+				ClientID: "client-id-okta",
+			},
+		},
+	}
+	if err := e.store.SaveIdentityProvider(ctx, &e.tenant, idp); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := e.do("GET", "/api/v1/ui-config?tenant=default", nil, nil)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var c struct {
+		Login struct {
+			Methods []struct {
+				ID, Name, Type string
+			}
+		}
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &c)
+	if len(c.Login.Methods) != 2 {
+		t.Fatalf("expected 2 methods (default + okta-tenant), got %d: %+v", len(c.Login.Methods), c.Login.Methods)
+	}
+	found := false
+	for _, m := range c.Login.Methods {
+		if m.ID == "okta-tenant" && m.Name == "Corporate Okta" && m.Type == "oidc" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("okta-tenant not found in ui-config methods: %+v", c.Login.Methods)
+	}
+}
+
+func TestDynamicIdentityProvider_DomainClaimsEnforcement_D27(t *testing.T) {
+	e := newEnv(t, auth.RolePolicy{DefaultRole: auth.RoleViewer})
+	ctx := context.Background()
+
+	// Provider with email domain claim (acme.org)
+	idp := domain.IdentityProvider{
+		TenantID:    &e.tenant,
+		Name:        "acme-idp",
+		DisplayName: "Acme SSO",
+		Type:        domain.IdPOIDC,
+		Spec: domain.IdentityProviderSpec{
+			Type: "oidc",
+			Login: domain.IdPLoginConfig{
+				EmailDomains: []string{"acme.org"},
+			},
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:   e.idp.srv.URL,
+				ClientID: "rampart",
+			},
+		},
+		Status: domain.IdentityProviderStatus{
+			Domains: []domain.DomainClaimStatus{
+				{Domain: "acme.org", Approved: false}, // unapproved!
+			},
+		},
+	}
+	if err := e.store.SaveIdentityProvider(ctx, &e.tenant, idp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake IdP returns email from acme.org
+	e.idp.claims["email"] = "bob@acme.org"
+
+	// 1. Login with unapproved domain claim
+	rec := e.do("GET", "/auth/login?tenant=default&idp=acme-idp", nil, nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	q := loc.Query()
+	e.idp.challenge, e.idp.nonce = q.Get("code_challenge"), q.Get("nonce")
+
+	// Callback should be rejected with domain_unverified
+	cb := e.do("GET", "/auth/oidc/acme-idp/callback?code=abc&state="+url.QueryEscape(q.Get("state")), rec.Result().Cookies(), nil)
+	if cb.Code != http.StatusFound || !strings.Contains(cb.Header().Get("Location"), "error=domain_unverified") {
+		t.Fatalf("expected redirect with error=domain_unverified, got %d loc=%q", cb.Code, cb.Header().Get("Location"))
+	}
+
+	// 2. Platform approves domain claim (D27)
+	if err := e.store.ApproveDomainClaim(ctx, &e.tenant, "acme-idp", "acme.org"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Login again
+	rec2 := e.do("GET", "/auth/login?tenant=default&idp=acme-idp", nil, nil)
+	loc2, _ := url.Parse(rec2.Header().Get("Location"))
+	q2 := loc2.Query()
+	e.idp.challenge, e.idp.nonce = q2.Get("code_challenge"), q2.Get("nonce")
+
+	cb2 := e.do("GET", "/auth/oidc/acme-idp/callback?code=abc&state="+url.QueryEscape(q2.Get("state")), rec2.Result().Cookies(), nil)
+	if cb2.Code != http.StatusFound || strings.Contains(cb2.Header().Get("Location"), "error=") {
+		t.Fatalf("expected successful login after domain approval, got %d loc=%q", cb2.Code, cb2.Header().Get("Location"))
+	}
+}
+
+func TestClusterIdentityProvider_AllowedTenantsEnforcement_D27(t *testing.T) {
+	e := newEnv(t, auth.RolePolicy{DefaultRole: auth.RoleViewer})
+	ctx := context.Background()
+
+	// Cluster-wide IdP restricted to "default" tenant
+	clusterIdp := domain.IdentityProvider{
+		TenantID:    nil,
+		Name:        "shared-idp",
+		DisplayName: "Shared Platform IdP",
+		Type:        domain.IdPOIDC,
+		Spec: domain.IdentityProviderSpec{
+			Type:           "oidc",
+			AllowedTenants: []string{"default"},
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:   e.idp.srv.URL,
+				ClientID: "rampart",
+			},
+		},
+	}
+	if err := e.store.SaveIdentityProvider(ctx, nil, clusterIdp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Allowed tenant "default" succeeds in initiating login
+	rec := e.do("GET", "/auth/login?tenant=default&idp=shared-idp", nil, nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("allowed tenant login: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Create another tenant "unauthorized-tenant"
+	unauthID := domain.NewID()
+	_ = e.store.CreateTenant(ctx, &domain.Tenant{ID: unauthID, Slug: "unauthorized-tenant", DisplayName: "Unauthorized"})
+
+	// Unauthorized tenant is refused with 403 Forbidden
+	rec2 := e.do("GET", "/auth/login?tenant=unauthorized-tenant&idp=shared-idp", nil, nil)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized tenant must be 403, got %d: %s", rec2.Code, rec2.Body.String())
 	}
 }

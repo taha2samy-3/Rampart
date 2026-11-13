@@ -140,6 +140,30 @@ type SLAPolicyStatus struct {
 	CommonStatus `json:",inline"`
 }
 
+// IdentityProviderCR represents the IdentityProvider Custom Resource (docs/04, docs/14, docs/16 D64).
+type IdentityProviderCR struct {
+	APIVersion string                      `json:"apiVersion"`
+	Kind       string                      `json:"kind"`
+	Metadata   Metadata                    `json:"metadata"`
+	Spec       domain.IdentityProviderSpec `json:"spec"`
+	Status     IdentityProviderStatus      `json:"status,omitempty"`
+}
+
+type IdentityProviderStatus struct {
+	CommonStatus `json:",inline"`
+	RedirectURI  string                     `json:"redirectURI,omitempty"`
+	Domains      []domain.DomainClaimStatus `json:"domains,omitempty"`
+}
+
+// ClusterIdentityProviderCR represents the ClusterIdentityProvider Custom Resource (docs/04, docs/14, docs/16 D64).
+type ClusterIdentityProviderCR struct {
+	APIVersion string                      `json:"apiVersion"`
+	Kind       string                      `json:"kind"`
+	Metadata   Metadata                    `json:"metadata"`
+	Spec       domain.IdentityProviderSpec `json:"spec"`
+	Status     IdentityProviderStatus      `json:"status,omitempty"`
+}
+
 // PolicyCR is every policy resource: SLAPolicy, RiskPolicy, ClusterRiskPolicy and ClusterSLAPolicy share the shape
 // (a spec the domain validates, and conditions), so one reconciler serves them (D62).
 type PolicyCR = SLAPolicyCR

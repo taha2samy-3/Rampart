@@ -15,6 +15,8 @@ type Operator struct {
 	apps        *ApplicationReconciler
 	scanSources *ScanSourceReconciler
 	slaPolicies *SLAPolicyReconciler
+	idps        *IdentityProviderReconciler
+	clusterIdps *ClusterIdentityProviderReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -28,6 +30,8 @@ func NewOperator(store apply.ConfigStore, secrets SecretProvider, secretStore Se
 		apps:        NewApplicationReconciler(store),
 		scanSources: NewScanSourceReconciler(store, secrets, secretStore),
 		slaPolicies: NewSLAPolicyReconciler(store),
+		idps:        NewIdentityProviderReconciler(store),
+		clusterIdps: NewClusterIdentityProviderReconciler(store),
 	}
 }
 
@@ -53,6 +57,18 @@ func (op *Operator) ReconcileScanSource(ctx context.Context, cr *ScanSourceCR) (
 func (op *Operator) ReconcileSLAPolicy(ctx context.Context, cr *SLAPolicyCR) (*SLAPolicyStatus, error) {
 	op.logger.Debug("reconciling sla policy", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
 	return op.slaPolicies.Reconcile(ctx, cr)
+}
+
+// ReconcileIdentityProvider reconciles an IdentityProvider CR.
+func (op *Operator) ReconcileIdentityProvider(ctx context.Context, cr *IdentityProviderCR) (*IdentityProviderStatus, error) {
+	op.logger.Debug("reconciling identity provider", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.idps.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterIdentityProvider reconciles a ClusterIdentityProvider CR.
+func (op *Operator) ReconcileClusterIdentityProvider(ctx context.Context, cr *ClusterIdentityProviderCR) (*IdentityProviderStatus, error) {
+	op.logger.Debug("reconciling cluster identity provider", "name", cr.Metadata.Name)
+	return op.clusterIdps.Reconcile(ctx, cr)
 }
 
 // Start runs background watchers or loops if enabled (D6 operator.mode).

@@ -110,3 +110,84 @@ func TestApplySLAPolicy(t *testing.T) {
 		t.Fatalf("no tenant: %v", err)
 	}
 }
+
+func TestApplyIdentityProvider(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+
+	// Create tenant
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["acme-ns"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+
+	// Apply IdentityProvider
+	idpYAML := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "IdentityProvider",
+		"metadata": {
+			"name": "okta-corp",
+			"namespace": "acme-ns"
+		},
+		"spec": {
+			"displayName": "Okta Corporate",
+			"type": "oidc",
+			"login": {
+				"emailDomains": ["acme.org"]
+			},
+			"oidc": {
+				"issuer": "https://auth.acme.org",
+				"clientId": "client-id-xyz"
+			}
+		}
+	}`)
+	msg, err := applier.ApplyDocument(ctx, idpYAML)
+	if err != nil {
+		t.Fatalf("failed to apply identity provider: %v", err)
+	}
+	if !strings.Contains(msg, "identityprovider.rampart.aspm.dev/okta-corp configured") {
+		t.Errorf("unexpected idp response: %s", msg)
+	}
+
+	saved, err := store.GetIdentityProvider(ctx, &tn.ID, "okta-corp")
+	if err != nil || saved == nil {
+		t.Fatalf("idp not found in store: %v", err)
+	}
+	if saved.DisplayName != "Okta Corporate" || saved.Spec.OIDC.Issuer != "https://auth.acme.org" {
+		t.Errorf("mismatched idp fields: %+v", saved)
+	}
+
+	// Apply ClusterIdentityProvider
+	clusterIdpYAML := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "ClusterIdentityProvider",
+		"metadata": {
+			"name": "cluster-github"
+		},
+		"spec": {
+			"displayName": "GitHub Enterprise",
+			"type": "oidc",
+			"allowedTenants": ["acme"],
+			"oidc": {
+				"issuer": "https://github.com/login/oauth",
+				"clientId": "gh-client-id"
+			}
+		}
+	}`)
+	msgCluster, err := applier.ApplyDocument(ctx, clusterIdpYAML)
+	if err != nil {
+		t.Fatalf("failed to apply cluster identity provider: %v", err)
+	}
+	if !strings.Contains(msgCluster, "clusteridentityprovider.rampart.aspm.dev/cluster-github configured") {
+		t.Errorf("unexpected cluster idp response: %s", msgCluster)
+	}
+
+	savedCluster, err := store.GetIdentityProvider(ctx, nil, "cluster-github")
+	if err != nil || savedCluster == nil {
+		t.Fatalf("cluster idp not found in store: %v", err)
+	}
+	if !savedCluster.IsTenantAllowed("acme") {
+		t.Errorf("acme tenant should be allowed")
+	}
+}

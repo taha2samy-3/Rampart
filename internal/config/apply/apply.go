@@ -56,6 +56,10 @@ type ConfigStore interface {
 	SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
 	// SaveClusterPolicy stores a ClusterRiskPolicy (kind "risk") or ClusterSLAPolicy (kind "sla") (D62).
 	SaveClusterPolicy(ctx context.Context, kind string, p PolicyObject) error
+	// SaveIdentityProvider stores a tenant-scoped or cluster-scoped (tenantID == nil) IdentityProvider (D8, D27, D64).
+	SaveIdentityProvider(ctx context.Context, tenantID *uuid.UUID, idp domain.IdentityProvider) error
+	GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error)
+	DeleteIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) error
 	Finalizer
 }
 
@@ -411,8 +415,73 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("clusteraccessbinding.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "identityprovider", "clusteridentityprovider":
-		return fmt.Sprintf("%s.rampart.aspm.dev/%s configured", lk, header.Metadata.Name), nil
+	case "identityprovider":
+		tenant, err := a.store.GetTenantByNamespace(ctx, header.Metadata.Namespace)
+		if err != nil {
+			return "", err
+		}
+		if tenant == nil {
+			return "", fmt.Errorf("apply: no tenant lists namespace %q", header.Metadata.Namespace)
+		}
+		var spec domain.IdentityProviderSpec
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: invalid identityprovider spec: %w", err)
+		}
+		displayName := spec.DisplayName
+		if displayName == "" {
+			displayName = header.Metadata.Name
+		}
+		idp := domain.IdentityProvider{
+			TenantID:    &tenant.ID,
+			Namespace:   header.Metadata.Namespace,
+			Name:        header.Metadata.Name,
+			DisplayName: displayName,
+			Type:        spec.Type,
+			Spec:        spec,
+			Status: domain.IdentityProviderStatus{
+				RedirectURI: fmt.Sprintf("/auth/oidc/%s/callback", header.Metadata.Name),
+			},
+		}
+		if err := idp.Validate(); err != nil {
+			return "", fmt.Errorf("apply: identityprovider validation failed: %w", err)
+		}
+		for _, d := range spec.Login.EmailDomains {
+			idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
+				Domain:   d,
+				Approved: false, // Requires platform admin approval per D27
+			})
+		}
+		if err := a.store.SaveIdentityProvider(ctx, &tenant.ID, idp); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("identityprovider.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "clusteridentityprovider":
+		var spec domain.IdentityProviderSpec
+		if err := json.Unmarshal(header.Spec, &spec); err != nil {
+			return "", fmt.Errorf("apply: invalid clusteridentityprovider spec: %w", err)
+		}
+		displayName := spec.DisplayName
+		if displayName == "" {
+			displayName = header.Metadata.Name
+		}
+		idp := domain.IdentityProvider{
+			TenantID:    nil,
+			Name:        header.Metadata.Name,
+			DisplayName: displayName,
+			Type:        spec.Type,
+			Spec:        spec,
+			Status: domain.IdentityProviderStatus{
+				RedirectURI: fmt.Sprintf("/auth/oidc/%s/callback", header.Metadata.Name),
+			},
+		}
+		if err := idp.Validate(); err != nil {
+			return "", fmt.Errorf("apply: clusteridentityprovider validation failed: %w", err)
+		}
+		if err := a.store.SaveIdentityProvider(ctx, nil, idp); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("clusteridentityprovider.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedKind, header.Kind)
@@ -473,6 +542,7 @@ type MemoryConfigStore struct {
 	scanSources  map[string]uuid.UUID
 	namespaces   map[string]uuid.UUID
 	policies     map[string]PolicyObject
+	idps         map[string]domain.IdentityProvider
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -483,6 +553,7 @@ func NewMemoryConfigStore() *MemoryConfigStore {
 		scanSources:  make(map[string]uuid.UUID),
 		namespaces:   make(map[string]uuid.UUID),
 		policies:     make(map[string]PolicyObject),
+		idps:         make(map[string]domain.IdentityProvider),
 		orphaned:     make(map[string]bool),
 		disabled:     make(map[string]bool),
 		withData:     make(map[uuid.UUID]bool),
@@ -520,6 +591,45 @@ func (m *MemoryConfigStore) DeleteRiskPolicy(ctx context.Context, tenantID uuid.
 	defer m.mu.Unlock()
 	delete(m.policies, "risk:"+tenantID.String()+":"+namespace+":"+name)
 	return nil
+}
+
+// DeleteIdentityProvider implements ConfigStore and Finalizer.
+func (m *MemoryConfigStore) DeleteIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := "cluster:" + name
+	if tenantID != nil {
+		key = "tenant:" + tenantID.String() + ":" + name
+	}
+	delete(m.idps, key)
+	return nil
+}
+
+// SaveIdentityProvider implements ConfigStore.
+func (m *MemoryConfigStore) SaveIdentityProvider(ctx context.Context, tenantID *uuid.UUID, idp domain.IdentityProvider) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := "cluster:" + idp.Name
+	if tenantID != nil {
+		key = "tenant:" + tenantID.String() + ":" + idp.Name
+	}
+	m.idps[key] = idp
+	return nil
+}
+
+// GetIdentityProvider implements ConfigStore.
+func (m *MemoryConfigStore) GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if tenantID != nil {
+		if idp, ok := m.idps["tenant:"+tenantID.String()+":"+name]; ok {
+			return &idp, nil
+		}
+	}
+	if idp, ok := m.idps["cluster:"+name]; ok {
+		return &idp, nil
+	}
+	return nil, nil
 }
 
 // DeleteClusterPolicy implements Finalizer.

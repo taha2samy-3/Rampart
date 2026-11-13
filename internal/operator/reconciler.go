@@ -341,3 +341,116 @@ func (r *PolicyReconciler) Finalize(ctx context.Context, cr *PolicyCR) (*PolicyS
 	}
 	return nil, true, r.store.DeleteRiskPolicy(ctx, tenant.ID, cr.Metadata.Namespace, cr.Metadata.Name)
 }
+
+// IdentityProviderReconciler reconciles tenant-scoped IdentityProvider custom resources (docs/04, docs/14, docs/16 D64).
+type IdentityProviderReconciler struct {
+	store apply.ConfigStore
+}
+
+func NewIdentityProviderReconciler(store apply.ConfigStore) *IdentityProviderReconciler {
+	return &IdentityProviderReconciler{store: store}
+}
+
+func (r *IdentityProviderReconciler) Reconcile(ctx context.Context, cr *IdentityProviderCR) (*IdentityProviderStatus, error) {
+	status := &cr.Status
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	if tenant == nil {
+		status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
+		return status, nil
+	}
+
+	displayName := cr.Spec.DisplayName
+	if displayName == "" {
+		displayName = cr.Metadata.Name
+	}
+	idp := domain.IdentityProvider{
+		TenantID:    &tenant.ID,
+		Namespace:   cr.Metadata.Namespace,
+		Name:        cr.Metadata.Name,
+		DisplayName: displayName,
+		Type:        cr.Spec.Type,
+		Spec:        cr.Spec,
+		Status: domain.IdentityProviderStatus{
+			ObservedGeneration: cr.Metadata.Generation,
+			RedirectURI:        fmt.Sprintf("/auth/oidc/%s/callback", cr.Metadata.Name),
+		},
+	}
+	if err := idp.Validate(); err != nil {
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
+	}
+	for _, d := range cr.Spec.Login.EmailDomains {
+		idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
+			Domain:   d,
+			Approved: false, // Default unapproved until platform admin approval or DNS verification per D27
+		})
+	}
+	if err := r.store.SaveIdentityProvider(ctx, &tenant.ID, idp); err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	status.ObservedGeneration = cr.Metadata.Generation
+	status.RedirectURI = idp.Status.RedirectURI
+	status.Domains = idp.Status.Domains
+	status.SetCondition("Ready", "True", "Reconciled", "IdentityProvider reconciled successfully")
+	return status, nil
+}
+
+func (r *IdentityProviderReconciler) Finalize(ctx context.Context, cr *IdentityProviderCR) (*IdentityProviderStatus, bool, error) {
+	tenant, err := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if tenant == nil {
+		return nil, true, nil
+	}
+	return nil, true, r.store.DeleteIdentityProvider(ctx, &tenant.ID, cr.Metadata.Name)
+}
+
+// ClusterIdentityProviderReconciler reconciles platform-wide ClusterIdentityProvider custom resources (docs/04, docs/14, docs/16 D64).
+type ClusterIdentityProviderReconciler struct {
+	store apply.ConfigStore
+}
+
+func NewClusterIdentityProviderReconciler(store apply.ConfigStore) *ClusterIdentityProviderReconciler {
+	return &ClusterIdentityProviderReconciler{store: store}
+}
+
+func (r *ClusterIdentityProviderReconciler) Reconcile(ctx context.Context, cr *ClusterIdentityProviderCR) (*IdentityProviderStatus, error) {
+	status := &cr.Status
+	displayName := cr.Spec.DisplayName
+	if displayName == "" {
+		displayName = cr.Metadata.Name
+	}
+	idp := domain.IdentityProvider{
+		TenantID:    nil, // Cluster-wide
+		Name:        cr.Metadata.Name,
+		DisplayName: displayName,
+		Type:        cr.Spec.Type,
+		Spec:        cr.Spec,
+		Status: domain.IdentityProviderStatus{
+			ObservedGeneration: cr.Metadata.Generation,
+			RedirectURI:        fmt.Sprintf("/auth/oidc/%s/callback", cr.Metadata.Name),
+		},
+	}
+	if err := idp.Validate(); err != nil {
+		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
+		return status, nil
+	}
+	if err := r.store.SaveIdentityProvider(ctx, nil, idp); err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	status.ObservedGeneration = cr.Metadata.Generation
+	status.RedirectURI = idp.Status.RedirectURI
+	status.SetCondition("Ready", "True", "Reconciled", "ClusterIdentityProvider reconciled successfully")
+	return status, nil
+}
+
+func (r *ClusterIdentityProviderReconciler) Finalize(ctx context.Context, cr *ClusterIdentityProviderCR) (*IdentityProviderStatus, bool, error) {
+	return nil, true, r.store.DeleteIdentityProvider(ctx, nil, cr.Metadata.Name)
+}

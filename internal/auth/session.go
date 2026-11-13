@@ -174,6 +174,7 @@ type loginState struct {
 	Tenant   string    `json:"t"`
 	ReturnTo string    `json:"r"`
 	Expires  time.Time `json:"e"`
+	IdP      string    `json:"idp,omitempty"`
 }
 
 func (m *SessionManager) sealer() (cipher.AEAD, error) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/config/apply"
+	"rampart/internal/domain"
 	"rampart/internal/operator"
 	"rampart/internal/secrets"
 )
@@ -269,5 +270,107 @@ func TestSLAPolicyReconciler(t *testing.T) {
 	}
 	if got, _ := store.SLAPolicy(owner.ID, "team-payments", "default"); got.Error == "" {
 		t.Fatal("the reason must be stored with the spec")
+	}
+}
+
+func TestIdentityProviderReconciler(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, nil, nil, nil)
+
+	// Missing tenant namespace
+	cr := &operator.IdentityProviderCR{
+		Metadata: operator.Metadata{Name: "okta", Namespace: "nobody", Generation: 1},
+		Spec: domain.IdentityProviderSpec{
+			Type: "oidc",
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:   "https://okta.example.com",
+				ClientID: "client-123",
+			},
+		},
+	}
+	st, err := op.ReconcileIdentityProvider(ctx, cr)
+	if err != nil || st.GetCondition("Ready") == nil || st.GetCondition("Ready").Reason != "TenantNotFound" {
+		t.Fatalf("expected TenantNotFound, got: %v %+v", err, st.GetCondition("Ready"))
+	}
+
+	// Create tenant owning payments namespace
+	tn := &operator.TenantCR{Metadata: operator.Metadata{Name: "fintech"}, Spec: operator.TenantSpec{Namespaces: []string{"payments"}}}
+	if _, err := op.ReconcileTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := store.GetTenantBySlug(ctx, "fintech")
+
+	// Valid IdentityProvider
+	cr.Metadata.Namespace = "payments"
+	cr.Spec.DisplayName = "Okta SSO"
+	cr.Spec.Login.EmailDomains = []string{"fintech.com"}
+	st, err = op.ReconcileIdentityProvider(ctx, cr)
+	if err != nil || st.GetCondition("Ready") == nil || st.GetCondition("Ready").Status != "True" {
+		t.Fatalf("expected Ready=True, got: %v %+v", err, st.GetCondition("Ready"))
+	}
+	if st.RedirectURI != "/auth/oidc/okta/callback" {
+		t.Errorf("expected redirect uri /auth/oidc/okta/callback, got %s", st.RedirectURI)
+	}
+	if len(st.Domains) != 1 || st.Domains[0].Domain != "fintech.com" || st.Domains[0].Approved {
+		t.Errorf("expected unapproved domain claim fintech.com, got %+v", st.Domains)
+	}
+
+	// Verify saved in store
+	saved, err := store.GetIdentityProvider(ctx, &tenant.ID, "okta")
+	if err != nil || saved == nil {
+		t.Fatalf("expected saved idp in store, got err=%v idp=%+v", err, saved)
+	}
+	if saved.DisplayName != "Okta SSO" || saved.Type != "oidc" {
+		t.Errorf("saved idp fields mismatch: %+v", saved)
+	}
+
+	// Invalid IdentityProvider (missing issuer)
+	crInvalid := &operator.IdentityProviderCR{
+		Metadata: operator.Metadata{Name: "bad-idp", Namespace: "payments"},
+		Spec: domain.IdentityProviderSpec{
+			Type: "oidc",
+			OIDC: &domain.IdPOIDCConfig{ClientID: "xyz"},
+		},
+	}
+	stInvalid, err := op.ReconcileIdentityProvider(ctx, crInvalid)
+	if err != nil || stInvalid.GetCondition("Ready") == nil || stInvalid.GetCondition("Ready").Reason != "InvalidSpec" {
+		t.Fatalf("expected InvalidSpec, got %v %+v", err, stInvalid.GetCondition("Ready"))
+	}
+}
+
+func TestClusterIdentityProviderReconciler(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, nil, nil, nil)
+
+	cr := &operator.ClusterIdentityProviderCR{
+		Metadata: operator.Metadata{Name: "google-workspace", Generation: 2},
+		Spec: domain.IdentityProviderSpec{
+			DisplayName:    "Google Workspace",
+			Type:           "oidc",
+			AllowedTenants: []string{"acme", "fintech"},
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:   "https://accounts.google.com",
+				ClientID: "google-client-id",
+			},
+		},
+	}
+
+	st, err := op.ReconcileClusterIdentityProvider(ctx, cr)
+	if err != nil || st.GetCondition("Ready") == nil || st.GetCondition("Ready").Status != "True" {
+		t.Fatalf("expected Ready=True, got %v %+v", err, st.GetCondition("Ready"))
+	}
+	if st.RedirectURI != "/auth/oidc/google-workspace/callback" {
+		t.Errorf("expected redirect uri /auth/oidc/google-workspace/callback, got %s", st.RedirectURI)
+	}
+
+	// Check store
+	saved, err := store.GetIdentityProvider(ctx, nil, "google-workspace")
+	if err != nil || saved == nil {
+		t.Fatalf("expected cluster idp saved in store: %v", err)
+	}
+	if !saved.IsTenantAllowed("acme") || saved.IsTenantAllowed("evilcorp") {
+		t.Errorf("allowedTenants enforcement failed: %+v", saved.Spec.AllowedTenants)
 	}
 }

@@ -27,12 +27,19 @@ type TenantLookup interface {
 	GetTenant(ctx context.Context, id uuid.UUID) (*domain.Tenant, error)
 }
 
+// IdPStore resolves dynamic IdentityProvider resources (D8, D27, D64).
+type IdPStore interface {
+	GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error)
+	ListIdentityProviders(ctx context.Context, tenantID *uuid.UUID) ([]domain.IdentityProvider, error)
+}
+
 // HandlerDeps are the collaborators of the browser-facing auth endpoints.
 type HandlerDeps struct {
 	OIDC     *OIDCClient // nil: no sign-in method configured
 	Sessions *SessionManager
 	Identity IdentityStore
 	Tenants  TenantLookup
+	IdPs     IdPStore
 	Authn    *Authenticator
 	Policy   RolePolicy
 
@@ -117,6 +124,34 @@ func (h *Handlers) uiConfig(w http.ResponseWriter, r *http.Request) {
 	if h.LocalLoginEnabled && h.Sessions != nil && h.Local != nil {
 		methods = append(methods, map[string]string{"id": "local", "name": "Username and password", "type": "password"})
 	}
+	if h.IdPs != nil && h.Sessions != nil {
+		var tenantID *uuid.UUID
+		tenantSlug := r.URL.Query().Get("tenant")
+		if tenantSlug != "" && h.Tenants != nil {
+			if t, err := h.Tenants.GetTenantBySlug(r.Context(), tenantSlug); err == nil && t != nil {
+				tenantID = &t.ID
+			}
+		}
+		if idps, err := h.IdPs.ListIdentityProviders(r.Context(), tenantID); err == nil {
+			for _, idp := range idps {
+				if idp.TenantID == nil && tenantSlug != "" && !idp.IsTenantAllowed(tenantSlug) {
+					continue
+				}
+				if idp.Name == "default" && h.OIDC != nil {
+					continue
+				}
+				name := idp.DisplayName
+				if name == "" {
+					name = idp.Name
+				}
+				methods = append(methods, map[string]string{
+					"id":   idp.Name,
+					"name": name,
+					"type": string(idp.Type),
+				})
+			}
+		}
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -136,20 +171,72 @@ func randomToken() (string, error) {
 
 // login starts the authorization code flow with PKCE (doc 14 section 2, step 1).
 func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
-	if h.OIDC == nil || h.Sessions == nil {
+	if h.Sessions == nil {
 		problem(w, r, http.StatusServiceUnavailable, "upstream-unavailable", "No sign-in method is configured",
-			"Set auth.oidc.* and auth.session.keyFile, then restart.")
+			"Set auth.oidc.* or configure an IdentityProvider, and set auth.session.keyFile, then restart.")
 		return
 	}
-	// The UI adds idp=<id> when several sign-in methods exist (doc 14 section 4). Phase 1 has one.
-	if idp := r.URL.Query().Get("idp"); idp != "" && idp != "default" {
-		problem(w, r, http.StatusNotFound, "not-found", "Unknown sign-in method", "")
-		return
+	idp := r.URL.Query().Get("idp")
+	if idp == "" {
+		idp = "default"
 	}
 	tenant := r.URL.Query().Get("tenant")
 	if tenant == "" {
 		tenant = "default"
 	}
+
+	var oidcClient *OIDCClient
+	if idp == "default" && h.OIDC != nil {
+		oidcClient = h.OIDC
+	} else if h.IdPs != nil {
+		var tenantID *uuid.UUID
+		if h.Tenants != nil {
+			if t, err := h.Tenants.GetTenantBySlug(r.Context(), tenant); err == nil && t != nil {
+				tenantID = &t.ID
+			}
+		}
+		idpObj, err := h.IdPs.GetIdentityProvider(r.Context(), tenantID, idp)
+		if err != nil || idpObj == nil {
+			problem(w, r, http.StatusNotFound, "not-found", "Unknown sign-in method", "")
+			return
+		}
+		if idpObj.TenantID == nil && tenant != "" && !idpObj.IsTenantAllowed(tenant) {
+			problem(w, r, http.StatusForbidden, "forbidden", "Tenant not permitted to use this identity provider", "")
+			return
+		}
+		if idpObj.Type != "oidc" && idpObj.Type != "" {
+			problem(w, r, http.StatusNotImplemented, "not-implemented", "Identity provider type not supported", "")
+			return
+		}
+		if idpObj.Spec.OIDC == nil || idpObj.Spec.OIDC.Issuer == "" {
+			problem(w, r, http.StatusBadRequest, "bad-request", "Identity provider OIDC configuration is incomplete", "")
+			return
+		}
+		scheme := "http"
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+		host := r.Host
+		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+			host = fwd
+		}
+		redirectURL := fmt.Sprintf("%s://%s/auth/oidc/%s/callback", scheme, host, idp)
+		groupsClaim := idpObj.Spec.OIDC.Claims.Groups
+		requireEmail := idpObj.Spec.OIDC.RequireEmailVerified
+		oidcClient = NewOIDCClient(OIDCConfig{
+			Issuer:               idpObj.Spec.OIDC.Issuer,
+			ClientID:             idpObj.Spec.OIDC.ClientID,
+			ClientSecret:         idpObj.Spec.OIDC.ClientSecret,
+			RedirectURL:          redirectURL,
+			Scopes:               idpObj.Spec.OIDC.Scopes,
+			GroupsClaim:          groupsClaim,
+			RequireEmailVerified: requireEmail,
+		})
+	} else {
+		problem(w, r, http.StatusNotFound, "not-found", "Unknown sign-in method", "")
+		return
+	}
+
 	state, err1 := randomToken()
 	nonce, err2 := randomToken()
 	verifier, err3 := randomToken()
@@ -157,7 +244,7 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 		problem(w, r, http.StatusInternalServerError, "internal", "Cannot start sign-in", "")
 		return
 	}
-	authURL, err := h.OIDC.AuthCodeURL(r.Context(), state, nonce, verifier)
+	authURL, err := oidcClient.AuthCodeURL(r.Context(), state, nonce, verifier)
 	if err != nil {
 		h.Logger.Error("oidc login", "err", err)
 		problem(w, r, http.StatusBadGateway, "upstream-unavailable", "The identity provider is not reachable",
@@ -167,6 +254,7 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 	st := loginState{
 		State: state, Nonce: nonce, Verifier: verifier, Tenant: tenant,
 		ReturnTo: SafeReturnTo(r.URL.Query().Get("return_to")), Expires: h.Sessions.now().Add(10 * 60e9),
+		IdP: idp,
 	}
 	if err := h.Sessions.setLoginState(w, st); err != nil {
 		problem(w, r, http.StatusInternalServerError, "internal", "Cannot start sign-in", "")
@@ -182,9 +270,13 @@ func loginError(w http.ResponseWriter, r *http.Request, code string) {
 }
 
 func (h *Handlers) callback(w http.ResponseWriter, r *http.Request) {
-	if h.OIDC == nil || h.Sessions == nil || r.PathValue("idp") != "default" {
+	if h.Sessions == nil {
 		http.NotFound(w, r)
 		return
+	}
+	idpParam := r.PathValue("idp")
+	if idpParam == "" {
+		idpParam = "default"
 	}
 	st, err := h.Sessions.takeLoginState(w, r)
 	q := r.URL.Query()
@@ -196,7 +288,55 @@ func (h *Handlers) callback(w http.ResponseWriter, r *http.Request) {
 		loginError(w, r, "idp_error")
 		return
 	}
-	claims, err := h.OIDC.Exchange(r.Context(), q.Get("code"), st.Verifier, st.Nonce)
+	if st.IdP != "" && st.IdP != idpParam {
+		loginError(w, r, "invalid_state")
+		return
+	}
+
+	var oidcClient *OIDCClient
+	var idpObj *domain.IdentityProvider
+
+	if idpParam == "default" && h.OIDC != nil {
+		oidcClient = h.OIDC
+	} else if h.IdPs != nil {
+		var tenantID *uuid.UUID
+		if h.Tenants != nil {
+			if t, err := h.Tenants.GetTenantBySlug(r.Context(), st.Tenant); err == nil && t != nil {
+				tenantID = &t.ID
+			}
+		}
+		var err error
+		idpObj, err = h.IdPs.GetIdentityProvider(r.Context(), tenantID, idpParam)
+		if err != nil || idpObj == nil {
+			loginError(w, r, "idp_not_found")
+			return
+		}
+		scheme := "http"
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+		host := r.Host
+		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+			host = fwd
+		}
+		redirectURL := fmt.Sprintf("%s://%s/auth/oidc/%s/callback", scheme, host, idpParam)
+		groupsClaim := idpObj.Spec.OIDC.Claims.Groups
+		requireEmail := idpObj.Spec.OIDC.RequireEmailVerified
+		oidcClient = NewOIDCClient(OIDCConfig{
+			Issuer:               idpObj.Spec.OIDC.Issuer,
+			ClientID:             idpObj.Spec.OIDC.ClientID,
+			ClientSecret:         idpObj.Spec.OIDC.ClientSecret,
+			RedirectURL:          redirectURL,
+			Scopes:               idpObj.Spec.OIDC.Scopes,
+			GroupsClaim:          groupsClaim,
+			RequireEmailVerified: requireEmail,
+		})
+	} else {
+		http.NotFound(w, r)
+		return
+	}
+
+	claims, err := oidcClient.Exchange(r.Context(), q.Get("code"), st.Verifier, st.Nonce)
 	if err != nil {
 		h.Logger.Warn("oidc callback", "err", err)
 		if errors.Is(err, ErrEmailUnverified) {
@@ -206,6 +346,16 @@ func (h *Handlers) callback(w http.ResponseWriter, r *http.Request) {
 		loginError(w, r, "idp_error")
 		return
 	}
+
+	// D27: domain claim verification
+	if idpObj != nil && len(idpObj.Status.Domains) > 0 {
+		if !idpObj.IsDomainApproved(claims.Email) {
+			h.Logger.Warn("oidc login domain claim not approved", "email", claims.Email, "idp", idpObj.Name)
+			loginError(w, r, "domain_unverified")
+			return
+		}
+	}
+
 	tenant, err := h.Tenants.GetTenantBySlug(r.Context(), st.Tenant)
 	if err != nil || tenant == nil {
 		loginError(w, r, "tenant_not_found")

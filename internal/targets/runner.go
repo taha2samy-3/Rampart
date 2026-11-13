@@ -475,6 +475,7 @@ func (r *Runner) buildAuthHandlers(st store.Store, authn *auth.Authenticator) (*
 	deps := auth.HandlerDeps{
 		Identity: st, Tenants: tenants, Authn: authn, Logger: r.logger,
 		Product: "Rampart", Version: version.Version, Local: st, Audit: st,
+		IdPs: st,
 	}
 	oc := r.cfg.Auth.OIDC
 	ba := r.cfg.Auth.BootstrapAdmin

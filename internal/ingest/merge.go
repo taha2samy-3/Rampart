@@ -617,6 +617,7 @@ type MemoryStore struct {
 	uploads               map[string]*domain.Upload
 	actionLedger          map[string]bool
 	bindings              map[uuid.UUID]memBinding
+	idps                  map[string]*domain.IdentityProvider
 }
 
 type memBinding struct {
@@ -651,6 +652,7 @@ func NewMemoryStore() *MemoryStore {
 		uploads:               make(map[string]*domain.Upload),
 		actionLedger:          make(map[string]bool),
 		bindings:              make(map[uuid.UUID]memBinding),
+		idps:                  make(map[string]*domain.IdentityProvider),
 	}
 }
 
@@ -744,6 +746,101 @@ func (m *MemoryStore) BindingsFor(ctx context.Context, tenantID uuid.UUID, subje
 		}
 	}
 	return out, nil
+}
+
+func idpKey(tenantID *uuid.UUID, name string) string {
+	if tenantID == nil {
+		return "cluster:" + name
+	}
+	return tenantID.String() + ":" + name
+}
+
+func (m *MemoryStore) SaveIdentityProvider(ctx context.Context, tenantID *uuid.UUID, idp domain.IdentityProvider) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if idp.ID == uuid.Nil {
+		idp.ID = domain.NewID()
+	}
+	idp.TenantID = tenantID
+	now := time.Now().UTC()
+	if idp.CreatedAt.IsZero() {
+		idp.CreatedAt = now
+	}
+	idp.UpdatedAt = now
+	cp := idp
+	m.idps[idpKey(tenantID, idp.Name)] = &cp
+	return nil
+}
+
+func (m *MemoryStore) GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if idp, ok := m.idps[idpKey(tenantID, name)]; ok {
+		cp := *idp
+		return &cp, nil
+	}
+	if tenantID != nil {
+		if idp, ok := m.idps[idpKey(nil, name)]; ok {
+			cp := *idp
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MemoryStore) ListIdentityProviders(ctx context.Context, tenantID *uuid.UUID) ([]domain.IdentityProvider, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var res []domain.IdentityProvider
+	if tenantID != nil {
+		prefix := tenantID.String() + ":"
+		for k, idp := range m.idps {
+			if strings.HasPrefix(k, prefix) || strings.HasPrefix(k, "cluster:") {
+				res = append(res, *idp)
+			}
+		}
+	} else {
+		for k, idp := range m.idps {
+			if strings.HasPrefix(k, "cluster:") {
+				res = append(res, *idp)
+			}
+		}
+	}
+	return res, nil
+}
+
+func (m *MemoryStore) DeleteIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.idps, idpKey(tenantID, name))
+	return nil
+}
+
+func (m *MemoryStore) ApproveDomainClaim(ctx context.Context, tenantID *uuid.UUID, name, domainName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idp, ok := m.idps[idpKey(tenantID, name)]
+	if !ok {
+		return store.ErrNotFound
+	}
+	now := time.Now().UTC()
+	found := false
+	for i := range idp.Status.Domains {
+		if idp.Status.Domains[i].Domain == domainName {
+			idp.Status.Domains[i].Approved = true
+			idp.Status.Domains[i].VerifiedAt = &now
+			found = true
+			break
+		}
+	}
+	if !found {
+		idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
+			Domain:     domainName,
+			Approved:   true,
+			VerifiedAt: &now,
+		})
+	}
+	return nil
 }
 
 // CheckScopeOrdering checks whether the incoming scanFinished time is older than the last applied scan for this scope (D13 line 204).
