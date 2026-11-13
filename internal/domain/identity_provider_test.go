@@ -131,10 +131,28 @@ func TestDomainClaimVerification(t *testing.T) {
 	if !idp.IsDomainApproved("acme.com") {
 		t.Errorf("expected acme.com to be approved")
 	}
+	if !idp.IsDomainApproved("alice@acme.com") {
+		t.Errorf("expected alice@acme.com full email to be approved")
+	}
+	if !idp.IsDomainApproved("BOB@ACME.COM") {
+		t.Errorf("expected BOB@ACME.COM uppercase email to be approved")
+	}
+	if !idp.IsDomainApproved("@acme.com") {
+		t.Errorf("expected @acme.com to be approved")
+	}
+	if idp.IsDomainApproved("bob@subsidiary.org") {
+		t.Errorf("expected unapproved subsidiary.org email to be rejected")
+	}
 	if idp.IsDomainApproved("subsidiary.org") {
 		t.Errorf("expected unapproved subsidiary.org to be rejected")
 	}
 	if idp.IsDomainApproved("unclaimed.com") {
 		t.Errorf("expected undeclared unclaimed.com to be rejected")
+	}
+	if idp.IsDomainApproved("") {
+		t.Errorf("expected empty email to be rejected")
+	}
+	if idp.IsDomainApproved("   ") {
+		t.Errorf("expected whitespace email to be rejected")
 	}
 }

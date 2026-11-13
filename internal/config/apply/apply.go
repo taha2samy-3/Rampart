@@ -445,11 +445,29 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		if err := idp.Validate(); err != nil {
 			return "", fmt.Errorf("apply: identityprovider validation failed: %w", err)
 		}
+
+		// Preserve existing domain approvals if already present (D27)
+		existing, _ := a.store.GetIdentityProvider(ctx, &tenant.ID, header.Metadata.Name)
+		existingApproved := make(map[string]domain.DomainClaimStatus)
+		if existing != nil {
+			for _, d := range existing.Status.Domains {
+				clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d.Domain), "@"))
+				if d.Approved {
+					existingApproved[clean] = d
+				}
+			}
+		}
+
 		for _, d := range spec.Login.EmailDomains {
-			idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
-				Domain:   d,
-				Approved: false, // Requires platform admin approval per D27
-			})
+			clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), "@"))
+			if prev, ok := existingApproved[clean]; ok {
+				idp.Status.Domains = append(idp.Status.Domains, prev)
+			} else {
+				idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
+					Domain:   clean,
+					Approved: false, // Requires platform admin approval per D27
+				})
+			}
 		}
 		if err := a.store.SaveIdentityProvider(ctx, &tenant.ID, idp); err != nil {
 			return "", err

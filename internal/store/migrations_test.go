@@ -39,4 +39,16 @@ func TestMigrationsEmbedded(t *testing.T) {
 	if !foundInitial {
 		t.Error("00001_initial_schema.sql not found in embedded filesystem")
 	}
+
+	contentIdP, err := store.MigrationsFS.ReadFile("migrations/00025_identity_provider.sql")
+	if err != nil {
+		t.Fatalf("failed to read 00025_identity_provider.sql: %v", err)
+	}
+	contentIdPStr := string(contentIdP)
+	if !strings.Contains(contentIdPStr, "ENABLE ROW LEVEL SECURITY") {
+		t.Error("expected 00025_identity_provider.sql to enable RLS")
+	}
+	if !strings.Contains(contentIdPStr, "CREATE POLICY tenant_isolation ON identity_provider") {
+		t.Error("expected 00025_identity_provider.sql to define tenant_isolation policy")
+	}
 }

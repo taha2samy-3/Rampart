@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -383,11 +384,34 @@ func (r *IdentityProviderReconciler) Reconcile(ctx context.Context, cr *Identity
 		status.SetCondition("Ready", "False", "InvalidSpec", err.Error())
 		return status, nil
 	}
+
+	// Preserve existing domain approvals if already present (D27)
+	existingApproved := make(map[string]domain.DomainClaimStatus)
+	if existing, _ := r.store.GetIdentityProvider(ctx, &tenant.ID, cr.Metadata.Name); existing != nil {
+		for _, d := range existing.Status.Domains {
+			clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d.Domain), "@"))
+			if d.Approved {
+				existingApproved[clean] = d
+			}
+		}
+	}
+	for _, d := range cr.Status.Domains {
+		clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d.Domain), "@"))
+		if d.Approved {
+			existingApproved[clean] = d
+		}
+	}
+
 	for _, d := range cr.Spec.Login.EmailDomains {
-		idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
-			Domain:   d,
-			Approved: false, // Default unapproved until platform admin approval or DNS verification per D27
-		})
+		clean := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), "@"))
+		if prev, ok := existingApproved[clean]; ok {
+			idp.Status.Domains = append(idp.Status.Domains, prev)
+		} else {
+			idp.Status.Domains = append(idp.Status.Domains, domain.DomainClaimStatus{
+				Domain:   clean,
+				Approved: false, // Default unapproved until platform admin approval or DNS verification per D27
+			})
+		}
 	}
 	if err := r.store.SaveIdentityProvider(ctx, &tenant.ID, idp); err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())

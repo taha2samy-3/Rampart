@@ -325,6 +325,29 @@ func TestIdentityProviderReconciler(t *testing.T) {
 		t.Errorf("saved idp fields mismatch: %+v", saved)
 	}
 
+	// Approve domain in store (D27)
+	saved.Status.Domains[0].Approved = true
+	_ = store.SaveIdentityProvider(ctx, &tenant.ID, *saved)
+
+	// Reconcile again with an added domain
+	cr.Metadata.Generation = 2
+	cr.Spec.Login.EmailDomains = []string{"fintech.com", "fintech.co.uk"}
+	st2, err := op.ReconcileIdentityProvider(ctx, cr)
+	if err != nil || st2.GetCondition("Ready") == nil || st2.GetCondition("Ready").Status != "True" {
+		t.Fatalf("expected Ready=True on re-reconcile, got %v %+v", err, st2)
+	}
+	if len(st2.Domains) != 2 {
+		t.Fatalf("expected 2 domains, got %+v", st2.Domains)
+	}
+	for _, d := range st2.Domains {
+		if d.Domain == "fintech.com" && !d.Approved {
+			t.Errorf("fintech.com approval must be preserved across reconcile (D27)")
+		}
+		if d.Domain == "fintech.co.uk" && d.Approved {
+			t.Errorf("newly added domain fintech.co.uk must start unapproved")
+		}
+	}
+
 	// Invalid IdentityProvider (missing issuer)
 	crInvalid := &operator.IdentityProviderCR{
 		Metadata: operator.Metadata{Name: "bad-idp", Namespace: "payments"},

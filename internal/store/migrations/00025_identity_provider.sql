@@ -20,6 +20,13 @@ CREATE UNIQUE INDEX idx_identity_provider_tenant_name ON identity_provider (tena
 -- Unique by name for cluster-wide ClusterIdentityProvider
 CREATE UNIQUE INDEX idx_cluster_identity_provider_name ON identity_provider (name) WHERE tenant_id IS NULL;
 
+-- Multi-tenant isolation (docs/04, docs/14, docs/16 D8, D27)
+ALTER TABLE identity_provider ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity_provider FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON identity_provider
+    USING (tenant_id = current_tenant_id() OR tenant_id IS NULL)
+    WITH CHECK (tenant_id = current_tenant_id() OR tenant_id IS NULL);
+
 -- Grants
 -- +goose StatementBegin
 DO $$
@@ -32,4 +39,6 @@ END $$;
 -- +goose StatementEnd
 
 -- +goose Down
+DROP POLICY IF EXISTS tenant_isolation ON identity_provider;
 DROP TABLE IF EXISTS identity_provider;
+

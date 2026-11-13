@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"rampart/internal/domain"
 	"rampart/internal/telemetry"
 )
@@ -58,7 +61,12 @@ type HandlerDeps struct {
 }
 
 // Handlers serves /auth/*, /api/v1/ui-config and /api/v1/me* (doc 11, doc 13 section 3, doc 14 section 2).
-type Handlers struct{ HandlerDeps }
+type Handlers struct {
+	HandlerDeps
+	oidcMu    sync.RWMutex
+	oidcPool  map[string]*OIDCClient
+	oidcGroup singleflight.Group
+}
 
 // NewHandlers applies defaults.
 func NewHandlers(d HandlerDeps) *Handlers {
@@ -74,7 +82,60 @@ func NewHandlers(d HandlerDeps) *Handlers {
 	if d.DeviceAuth == nil && d.Authn != nil {
 		d.DeviceAuth = NewDeviceAuthManager(d.Authn.store)
 	}
-	return &Handlers{d}
+	return &Handlers{
+		HandlerDeps: d,
+		oidcPool:    make(map[string]*OIDCClient),
+	}
+}
+
+// getOrInitOIDCClient returns a cached OIDCClient or safely discovers and constructs one.
+// Caches per IdP configuration with automatic invalidation on secret rotation / update (D8, D27).
+// Concurrency is coalesced with singleflight to avoid duplicate discovery stampedes.
+func (h *Handlers) getOrInitOIDCClient(idpObj *domain.IdentityProvider, redirectURL string) *OIDCClient {
+	secretHash := sha256.Sum256([]byte(idpObj.Spec.OIDC.ClientSecret))
+	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%x|%d",
+		idpObj.Name,
+		idpObj.Spec.OIDC.Issuer,
+		idpObj.Spec.OIDC.ClientID,
+		redirectURL,
+		secretHash[:8],
+		idpObj.UpdatedAt.UnixNano(),
+	)
+
+	h.oidcMu.RLock()
+	client, ok := h.oidcPool[cacheKey]
+	h.oidcMu.RUnlock()
+	if ok {
+		return client
+	}
+
+	v, _, _ := h.oidcGroup.Do(cacheKey, func() (any, error) {
+		h.oidcMu.RLock()
+		if c, exists := h.oidcPool[cacheKey]; exists {
+			h.oidcMu.RUnlock()
+			return c, nil
+		}
+		h.oidcMu.RUnlock()
+
+		groupsClaim := idpObj.Spec.OIDC.Claims.Groups
+		requireEmail := idpObj.Spec.OIDC.RequireEmailVerified
+		newClient := NewOIDCClient(OIDCConfig{
+			Issuer:               idpObj.Spec.OIDC.Issuer,
+			ClientID:             idpObj.Spec.OIDC.ClientID,
+			ClientSecret:         idpObj.Spec.OIDC.ClientSecret,
+			RedirectURL:          redirectURL,
+			Scopes:               idpObj.Spec.OIDC.Scopes,
+			GroupsClaim:          groupsClaim,
+			RequireEmailVerified: requireEmail,
+		})
+
+		h.oidcMu.Lock()
+		h.oidcPool[cacheKey] = newClient
+		h.oidcMu.Unlock()
+		return newClient, nil
+	})
+
+	return v.(*OIDCClient)
 }
 
 // RegisterRoutes mounts the routes. The IdP segment is part of the path (doc 11); only "default" exists in Phase 1.
@@ -221,17 +282,7 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 			host = fwd
 		}
 		redirectURL := fmt.Sprintf("%s://%s/auth/oidc/%s/callback", scheme, host, idp)
-		groupsClaim := idpObj.Spec.OIDC.Claims.Groups
-		requireEmail := idpObj.Spec.OIDC.RequireEmailVerified
-		oidcClient = NewOIDCClient(OIDCConfig{
-			Issuer:               idpObj.Spec.OIDC.Issuer,
-			ClientID:             idpObj.Spec.OIDC.ClientID,
-			ClientSecret:         idpObj.Spec.OIDC.ClientSecret,
-			RedirectURL:          redirectURL,
-			Scopes:               idpObj.Spec.OIDC.Scopes,
-			GroupsClaim:          groupsClaim,
-			RequireEmailVerified: requireEmail,
-		})
+		oidcClient = h.getOrInitOIDCClient(idpObj, redirectURL)
 	} else {
 		problem(w, r, http.StatusNotFound, "not-found", "Unknown sign-in method", "")
 		return
@@ -320,17 +371,7 @@ func (h *Handlers) callback(w http.ResponseWriter, r *http.Request) {
 			host = fwd
 		}
 		redirectURL := fmt.Sprintf("%s://%s/auth/oidc/%s/callback", scheme, host, idpParam)
-		groupsClaim := idpObj.Spec.OIDC.Claims.Groups
-		requireEmail := idpObj.Spec.OIDC.RequireEmailVerified
-		oidcClient = NewOIDCClient(OIDCConfig{
-			Issuer:               idpObj.Spec.OIDC.Issuer,
-			ClientID:             idpObj.Spec.OIDC.ClientID,
-			ClientSecret:         idpObj.Spec.OIDC.ClientSecret,
-			RedirectURL:          redirectURL,
-			Scopes:               idpObj.Spec.OIDC.Scopes,
-			GroupsClaim:          groupsClaim,
-			RequireEmailVerified: requireEmail,
-		})
+		oidcClient = h.getOrInitOIDCClient(idpObj, redirectURL)
 	} else {
 		http.NotFound(w, r)
 		return

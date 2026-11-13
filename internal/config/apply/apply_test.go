@@ -191,3 +191,73 @@ func TestApplyIdentityProvider(t *testing.T) {
 		t.Errorf("acme tenant should be allowed")
 	}
 }
+
+func TestApplyIdentityProvider_PreservesApprovedDomains(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["acme-ns"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+
+	// 1. Initial apply
+	initialYAML := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "IdentityProvider",
+		"metadata": {"name": "okta", "namespace": "acme-ns"},
+		"spec": {
+			"type": "oidc",
+			"login": {"emailDomains": ["acme.org"]},
+			"oidc": {"issuer": "https://auth.acme.org", "clientId": "id1"}
+		}
+	}`)
+	if _, err := applier.ApplyDocument(ctx, initialYAML); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Approve acme.org domain
+	idp, err := store.GetIdentityProvider(ctx, &tn.ID, "okta")
+	if err != nil || idp == nil {
+		t.Fatal(err)
+	}
+	idp.Status.Domains[0].Approved = true
+	_ = store.SaveIdentityProvider(ctx, &tn.ID, *idp)
+
+	// 3. Re-apply with additional domain "subsidiary.com"
+	updateYAML := []byte(`{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind": "IdentityProvider",
+		"metadata": {"name": "okta", "namespace": "acme-ns"},
+		"spec": {
+			"displayName": "Okta v2",
+			"type": "oidc",
+			"login": {"emailDomains": ["acme.org", "subsidiary.com"]},
+			"oidc": {"issuer": "https://auth.acme.org", "clientId": "id1"}
+		}
+	}`)
+	if _, err := applier.ApplyDocument(ctx, updateYAML); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Verify acme.org is still approved, and subsidiary.com is unapproved
+	updated, err := store.GetIdentityProvider(ctx, &tn.ID, "okta")
+	if err != nil || updated == nil {
+		t.Fatal(err)
+	}
+	if updated.DisplayName != "Okta v2" {
+		t.Errorf("expected updated display name, got %s", updated.DisplayName)
+	}
+	if len(updated.Status.Domains) != 2 {
+		t.Fatalf("expected 2 domains, got %+v", updated.Status.Domains)
+	}
+	for _, d := range updated.Status.Domains {
+		if d.Domain == "acme.org" && !d.Approved {
+			t.Errorf("acme.org approval must NOT be overwritten on re-apply (D27)")
+		}
+		if d.Domain == "subsidiary.com" && d.Approved {
+			t.Errorf("new domain subsidiary.com must start as unapproved")
+		}
+	}
+}

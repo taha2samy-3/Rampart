@@ -505,3 +505,51 @@ func TestClusterIdentityProvider_AllowedTenantsEnforcement_D27(t *testing.T) {
 		t.Fatalf("unauthorized tenant must be 403, got %d: %s", rec2.Code, rec2.Body.String())
 	}
 }
+
+func TestDynamicIdentityProvider_OIDCCacheReuseAndRotation(t *testing.T) {
+	e := newEnv(t, auth.RolePolicy{DefaultRole: auth.RoleViewer})
+	ctx := context.Background()
+
+	idp := domain.IdentityProvider{
+		TenantID:    &e.tenant,
+		Name:        "cached-idp",
+		DisplayName: "Cached IdP",
+		Type:        domain.IdPOIDC,
+		Spec: domain.IdentityProviderSpec{
+			Type: "oidc",
+			OIDC: &domain.IdPOIDCConfig{
+				Issuer:       e.idp.srv.URL,
+				ClientID:     "rampart",
+				ClientSecret: "secret-v1",
+			},
+		},
+	}
+	if err := e.store.SaveIdentityProvider(ctx, &e.tenant, idp); err != nil {
+		t.Fatal(err)
+	}
+
+	// First login initiates discovery and populates cache
+	rec1 := e.do("GET", "/auth/login?tenant=default&idp=cached-idp", nil, nil)
+	if rec1.Code != http.StatusFound {
+		t.Fatalf("initial login failed: %d %s", rec1.Code, rec1.Body.String())
+	}
+
+	// Second login reuses cached client
+	rec2 := e.do("GET", "/auth/login?tenant=default&idp=cached-idp", nil, nil)
+	if rec2.Code != http.StatusFound {
+		t.Fatalf("second login failed: %d %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Rotate secret: save updated provider
+	idp.Spec.OIDC.ClientSecret = "secret-v2"
+	idp.UpdatedAt = time.Now().UTC()
+	if err := e.store.SaveIdentityProvider(ctx, &e.tenant, idp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Login with rotated secret uses newly keyed cache entry
+	rec3 := e.do("GET", "/auth/login?tenant=default&idp=cached-idp", nil, nil)
+	if rec3.Code != http.StatusFound {
+		t.Fatalf("login after secret rotation failed: %d %s", rec3.Code, rec3.Body.String())
+	}
+}

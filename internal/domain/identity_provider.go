@@ -9,10 +9,10 @@ import (
 )
 
 var (
-	ErrInvalidIdPType  = errors.New("identity provider: type must be 'oidc' or 'saml'")
-	ErrMissingIssuer   = errors.New("identity provider: oidc.issuer is required")
-	ErrMissingClientID = errors.New("identity provider: oidc.clientId is required")
-	ErrTenantNotAllowed = errors.New("identity provider: tenant not permitted by cluster allowlist")
+	ErrInvalidIdPType    = errors.New("identity provider: type must be 'oidc' or 'saml'")
+	ErrMissingIssuer     = errors.New("identity provider: oidc.issuer is required")
+	ErrMissingClientID   = errors.New("identity provider: oidc.clientId is required")
+	ErrTenantNotAllowed  = errors.New("identity provider: tenant not permitted by cluster allowlist")
 	ErrDomainNotApproved = errors.New("identity provider: email domain claim is not approved")
 )
 
@@ -174,6 +174,11 @@ func (idp *IdentityProvider) IsDomainApproved(emailOrDomain string) bool {
 	if at := strings.LastIndex(clean, "@"); at >= 0 {
 		clean = clean[at+1:]
 	}
+	clean = strings.TrimPrefix(clean, "@")
+	if clean == "" {
+		return false
+	}
+
 	// If no emailDomains specified in spec, domain approval restriction is not triggered
 	if len(idp.Spec.Login.EmailDomains) == 0 {
 		return true
@@ -181,7 +186,8 @@ func (idp *IdentityProvider) IsDomainApproved(emailOrDomain string) bool {
 	// Check if this domain is declared
 	declared := false
 	for _, d := range idp.Spec.Login.EmailDomains {
-		if strings.EqualFold(strings.TrimSpace(d), clean) {
+		normD := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d), "@"))
+		if strings.EqualFold(normD, clean) {
 			declared = true
 			break
 		}
@@ -191,7 +197,8 @@ func (idp *IdentityProvider) IsDomainApproved(emailOrDomain string) bool {
 	}
 	// Must be in status.domains with approved == true (D27)
 	for _, d := range idp.Status.Domains {
-		if strings.EqualFold(strings.TrimSpace(d.Domain), clean) && d.Approved {
+		normStatusD := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(d.Domain), "@"))
+		if strings.EqualFold(normStatusD, clean) && d.Approved {
 			return true
 		}
 	}
