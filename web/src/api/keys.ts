@@ -38,4 +38,29 @@ export const qk = {
     sources: (id: string) => ['findings', 'sources', id] as const,
     list: (q: string, sort: string) => ['findings', 'list', { q, sort }] as const,
   },
+  views: {
+    all: () => ['views'] as const,
+    list: () => ['views', 'list'] as const,
+  },
+  groups: {
+    all: () => ['groups'] as const,
+    list: () => ['groups', 'list'] as const,
+    one: (id: string) => ['groups', 'one', id] as const,
+  },
+  connectors: {
+    all: () => ['connectors'] as const,
+    list: () => ['connectors', 'list'] as const,
+  },
+  inventory: {
+    all: () => ['inventory'] as const,
+    list: () => ['inventory', 'list'] as const,
+  },
+  vulnerabilities: {
+    all: () => ['vulnerabilities'] as const,
+    list: () => ['vulnerabilities', 'list'] as const,
+  },
+  dtrack: {
+    all: () => ['dtrack'] as const,
+    unmapped: () => ['dtrack', 'unmapped'] as const,
+  },
 };

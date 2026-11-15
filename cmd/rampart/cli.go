@@ -91,19 +91,21 @@ func handleCLI(args []string) (bool, error) {
 
 func runLogin(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
+	server := fs.String("server", "", "Rampart server URL")
 	token := fs.String("token", "", "API token for authentication")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	targetServer := resolveServer(*server)
+
 	if *token != "" {
-		return saveCredentials(*server, *token)
+		return saveCredentials(targetServer, *token)
 	}
 
 	// RFC 8628 Device Authorization Flow (Phase 2, D8, D54)
-	return runDeviceLogin(*server)
+	return runDeviceLogin(targetServer)
 }
 
 func saveCredentials(server, token string) error {
@@ -228,7 +230,7 @@ func runDeviceLogin(server string) error {
 
 func runUpload(args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
+	server := fs.String("server", "", "Rampart server URL")
 	source := fs.String("source", "", "Scan source ID")
 	ci := detectCI()
 	track := fs.String("track", "", "Track or branch (default: the CI branch, else main)")
@@ -282,7 +284,8 @@ func runUpload(args []string) error {
 	}
 	_ = w.Close()
 
-	uploadURL := strings.TrimRight(*server, "/") + "/ingest/v1/reports"
+	targetServer := resolveServer(*server)
+	uploadURL := strings.TrimRight(targetServer, "/") + "/ingest/v1/reports"
 	req, err := http.NewRequest("POST", uploadURL, &b)
 	if err != nil {
 		return err
@@ -339,7 +342,7 @@ func runSBOM(args []string) error {
 
 func runSBOMUpload(args []string) error {
 	fs := flag.NewFlagSet("sbom upload", flag.ContinueOnError)
-	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
+	server := fs.String("server", "", "Rampart server URL")
 	source := fs.String("source", "", "Scan source ID")
 	token := fs.String("token", "", "API token")
 
@@ -358,12 +361,13 @@ func runSBOMUpload(args []string) error {
 		return fmt.Errorf("failed to read SBOM file: %w", err)
 	}
 
-	url := strings.TrimRight(*server, "/") + "/ingest/v1/sbom"
+	targetServer := resolveServer(*server)
+	reqURL := strings.TrimRight(targetServer, "/") + "/ingest/v1/sbom"
 	if *source != "" {
-		url += "?source=" + *source
+		reqURL += "?source=" + url.QueryEscape(*source)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+	req, err := http.NewRequest("POST", reqURL, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -660,7 +664,7 @@ func runMigrate(args []string) error {
 func runGate(args []string) error {
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
 	ci := detectCI()
-	server := fs.String("server", "http://localhost:8080", "Rampart server URL")
+	server := fs.String("server", "", "Rampart server URL")
 	source := fs.String("source", "", "Scan source (default: the tenant's default source)")
 	token := fs.String("token", "", "API token")
 	commit := fs.String("commit", ci.Commit, "Commit whose runs the gate evaluates (default: from the CI environment)")
@@ -686,11 +690,13 @@ func runGate(args []string) error {
 		return fmt.Errorf("--expect is required: declare what the pipeline uploads, for example --expect semgrep,trivy")
 	}
 
+	targetServer := resolveServer(*server)
+
 	body, _ := json.Marshal(map[string]any{
 		"source": *source, "context": map[string]string{"commit": *commit, "imageDigest": *imageDigest},
 		"expect": want, "wait": *wait, "timeoutSeconds": int(timeout.Seconds()), "failOn": *failOn,
 	})
-	req, err := http.NewRequest("POST", strings.TrimRight(*server, "/")+"/api/v1/gate", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", strings.TrimRight(targetServer, "/")+"/api/v1/gate", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

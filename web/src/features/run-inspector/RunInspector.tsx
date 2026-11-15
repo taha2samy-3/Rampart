@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getRun, qk } from '@/api';
 import type { RunRow, RunStatus } from '@/api/types';
@@ -55,9 +56,9 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <p className="m-0 mt-1 font-mono text-12 text-ink-2">{run.error}</p>
           {run.error === 'close_held' && (
             <p className="m-0 mt-2 text-13">
-              <a href={`/workflow?tab=held_closes&run_id=${encodeURIComponent(run.id)}`} className="font-medium text-accent hover:underline">
+              <Link to="/workflow" search={{ tab: 'held_closes', run_id: run.id }} className="font-medium text-accent hover:underline">
                 {t('ingestion.viewHeldClose', { defaultValue: 'Review held close in Workflow →' })}
-              </a>
+              </Link>
             </p>
           )}
         </section>

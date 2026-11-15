@@ -250,8 +250,31 @@ func mapSecret(s secret, raw json.RawMessage, res result) domain.RawFinding {
 		RuleID: s.RuleID, Title: normalize.NFC(s.Title), ToolSeverity: s.Severity, Severity: parseutil.Severity(s.Severity, 0),
 		SecretValue: s.Match,
 		Location:    domain.Location{Code: &domain.CodeLocation{FilePath: normalize.CleanPath(res.target), StartLine: s.StartLine, EndLine: s.EndLine}},
-		RawPayload:  raw,
+		RawPayload:  redactTrivySecret(raw),
 	}
+}
+
+func redactTrivySecret(raw json.RawMessage) json.RawMessage {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	if code, ok := m["Code"].(map[string]any); ok {
+		if lines, ok := code["Lines"].([]any); ok {
+			for _, line := range lines {
+				if lmap, ok := line.(map[string]any); ok {
+					if _, has := lmap["Content"]; has {
+						lmap["Content"] = "[redacted]"
+					}
+				}
+			}
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 func mapMisconfig(m misconfig, raw json.RawMessage, res result) domain.RawFinding {

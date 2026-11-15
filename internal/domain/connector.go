@@ -13,6 +13,7 @@ import (
 
 // Tracker creates and manages external issues/tickets for findings (Milestone 3.2, D23, D66, D70).
 type Tracker interface {
+	Name() string
 	CreateIssue(ctx context.Context, finding *Finding, appName string) (ticketID string, ticketURL string, err error)
 	FindIssueByLabel(ctx context.Context, label string) (ticketID string, ticketURL string, err error)
 	Comment(ctx context.Context, ticketRef, comment string) error

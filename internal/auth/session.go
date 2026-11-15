@@ -144,10 +144,18 @@ func (m *SessionManager) CSRFToken(sessionID uuid.UUID) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// CheckCSRF reports whether the request carries the CSRF token of the session.
+// CheckCSRFToken reports whether token is valid for sessionID.
+func (m *SessionManager) CheckCSRFToken(token string, sessionID uuid.UUID) bool {
+	return token != "" && hmac.Equal([]byte(token), []byte(m.CSRFToken(sessionID)))
+}
+
+// CheckCSRF reports whether the request carries the CSRF token of the session (via header or form value).
 func (m *SessionManager) CheckCSRF(r *http.Request, sessionID uuid.UUID) bool {
 	got := r.Header.Get("X-CSRF-Token")
-	return got != "" && hmac.Equal([]byte(got), []byte(m.CSRFToken(sessionID)))
+	if got == "" {
+		got = r.PostFormValue("csrf_token")
+	}
+	return m.CheckCSRFToken(got, sessionID)
 }
 
 // SetCookie sets the session cookie: HttpOnly, SameSite=Lax, Path=/ (and Secure over https).

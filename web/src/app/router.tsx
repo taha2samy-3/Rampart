@@ -14,6 +14,9 @@ import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/Ingesti
 import { OverviewRoute } from '@/routes/overview/OverviewRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
 import { WorkflowRoute, type WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
+import { IntegrationsRoute } from '@/routes/integrations/IntegrationsRoute';
+import { InventoryRoute } from '@/routes/inventory/InventoryRoute';
+import { VulnerabilitiesRoute } from '@/routes/vulnerabilities/VulnerabilitiesRoute';
 import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
 import { Bootstrap } from './Bootstrap';
@@ -129,7 +132,7 @@ const workflowRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/workflow',
   validateSearch: (s: Record<string, unknown>): WorkflowSearch => ({
-    tab: s.tab === 'held_closes' ? 'held_closes' : undefined,
+    tab: s.tab === 'held_closes' || s.tab === 'groups' ? s.tab : undefined,
     sel: str(s.sel),
     status: ['pending', 'approved', 'rejected', 'expired', 'revoked'].includes(s.status as string) ? (s.status as AcceptanceStatus) : undefined,
     run_id: str(s.run_id),
@@ -153,7 +156,13 @@ const administrationRoute = createRoute({ getParentRoute: () => appRoute, path: 
 
 const complianceRoute = createRoute({ getParentRoute: () => appRoute, path: '/compliance', component: ComplianceRoute });
 
-const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance']);
+const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/integrations', component: IntegrationsRoute });
+
+const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inventory', component: InventoryRoute });
+
+const vulnerabilitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/vulnerabilities', component: VulnerabilitiesRoute });
+
+const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'integrations', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -166,7 +175,22 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   ...(import.meta.env.DEV ? [styleguideRoute] : []),
   tenantLoginRoute,
-  appRoute.addChildren([indexRoute, findingsRoute, deepFindingRoute, ingestionRoute, workflowRoute, overviewRoute, applicationsRoute, applicationRoute, administrationRoute, complianceRoute, ...placeholderRoutes]),
+  appRoute.addChildren([
+    indexRoute,
+    findingsRoute,
+    deepFindingRoute,
+    ingestionRoute,
+    workflowRoute,
+    overviewRoute,
+    applicationsRoute,
+    applicationRoute,
+    administrationRoute,
+    complianceRoute,
+    integrationsRoute,
+    inventoryRoute,
+    vulnerabilitiesRoute,
+    ...placeholderRoutes,
+  ]),
 ]);
 
 export function makeRouter(history?: RouterHistory) {

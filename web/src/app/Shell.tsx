@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { IconButton, IconSidebar, Tooltip } from '@/components';
 import { cn } from '@/lib/cn';
 import { useMedia } from '@/lib/useMedia';
+import { useLiveEvents } from './useLiveEvents';
 import { ErrorBoundary } from './ErrorBoundary';
 import { NAV_GROUPS } from './nav';
 import { TopBar } from './TopBar';
@@ -49,6 +50,7 @@ function Nav({ collapsed }: { collapsed: boolean }) {
 
 export function Shell() {
   const { t } = useTranslation();
+  useLiveEvents();
   const narrow = useMedia('(max-width: 899px)');
   const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
   const collapsed = narrow || (userCollapsed ?? false);

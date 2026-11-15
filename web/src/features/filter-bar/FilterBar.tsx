@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, IconFilter, IconX, Input } from '@/components';
 import { describeTerm, parseQuery, removeTerm } from '@/lib/grammar';
+import { SavedViewsBar } from '@/features/views/SavedViewsBar';
 
 /**
  * The typed filter. The input is the source of truth; chips are a read-out of
@@ -11,11 +12,15 @@ import { describeTerm, parseQuery, removeTerm } from '@/lib/grammar';
 export function FilterBar({
   q,
   onQueryChange,
+  sort,
+  onSortChange,
   total,
   onOpenFilters,
 }: {
   q: string;
   onQueryChange: (q: string) => void;
+  sort?: string;
+  onSortChange?: (sort: string) => void;
   total: number | undefined;
   onOpenFilters?: () => void;
 }) {
@@ -67,6 +72,7 @@ export function FilterBar({
           onKeyDown={(e) => e.key === 'Enter' && commit(draft)}
           className="min-w-0 flex-1"
         />
+        <SavedViewsBar q={draft} onQueryChange={commit} sort={sort} onSortChange={onSortChange} />
         <p className="shrink-0 text-13 text-ink-2 tnum" aria-live="polite">
           {total === undefined ? '' : t('findings.count', { count: total })}
         </p>

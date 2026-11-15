@@ -264,7 +264,7 @@ func (s *PostgresStore) GetFindingsByKeys(ctx context.Context, tenantID uuid.UUI
 		return results, nil
 	}
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding WHERE tenant_id = $1 AND finding_key = ANY($2) FOR UPDATE`, tenantID, keys)
+		rows, err := tx.Query(ctx, `SELECT `+findingCols+` FROM finding WHERE tenant_id = $1 AND finding_key = ANY($2) ORDER BY finding_key FOR UPDATE`, tenantID, keys)
 		if err != nil {
 			return err
 		}
@@ -2477,7 +2477,7 @@ func (s *PostgresStore) MoveAssetToApplication(ctx context.Context, tenantID, as
 			return err
 		}
 		moved = true
-		tag, err = tx.Exec(ctx, `UPDATE finding SET application_id = $3, updated_at = NOW() WHERE tenant_id = $1 AND asset_id = $2 AND application_id <> $3`,
+		tag, err = tx.Exec(ctx, `UPDATE finding SET application_id = $3, updated_at = NOW() WHERE tenant_id = $1 AND asset_id = $2 AND application_id IS DISTINCT FROM $3`,
 			tenantID, assetID, appID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err

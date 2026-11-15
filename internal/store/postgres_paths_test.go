@@ -190,3 +190,80 @@ func TestPostgresStore_ConfigStoreAndSecrets(t *testing.T) {
 		t.Errorf("secret mismatch: got %q, want %q", string(gotSecret), string(secretVal))
 	}
 }
+
+func TestPostgresStore_MoveAssetToApplication_NullAppFinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s, sys := setupStores(t, ctx)
+
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "move-app-" + uuid.NewString()[:8], DisplayName: "MoveApp"}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Create an asset without an application (application_id is nil)
+	asset := &domain.Asset{
+		ID:            uuid.New(),
+		TenantID:      tn.ID,
+		ApplicationID: nil,
+		Type:          domain.AssetRepository,
+		Key:           "repo-unassigned",
+		Active:        true,
+	}
+	if err := s.CreateAsset(ctx, asset); err != nil {
+		t.Fatalf("CreateAsset failed: %v", err)
+	}
+
+	// 2. Insert a finding on this asset with application_id = nil (uuid.Nil)
+	findingID := uuid.New()
+	f := &domain.Finding{
+		ID:                findingID,
+		TenantID:          tn.ID,
+		AssetID:           asset.ID,
+		ApplicationID:     uuid.Nil,
+		FindingKey:        "key-" + uuid.NewString(),
+		RuleScannerFamily: "sast",
+		Severity:          domain.SeverityHigh,
+		Title:             "Unassigned Finding",
+		State:             domain.StateOpen,
+	}
+	if err := s.UpsertFindings(ctx, tn.ID, []*domain.Finding{f}); err != nil {
+		t.Fatalf("UpsertFindings failed: %v", err)
+	}
+
+	// 3. Create target application
+	app := &domain.Application{
+		ID:                  uuid.New(),
+		TenantID:            tn.ID,
+		Slug:                "target-app",
+		Name:                "Target App",
+		BusinessCriticality: "high",
+		Lifecycle:           "production",
+	}
+	if err := s.CreateApplication(ctx, app); err != nil {
+		t.Fatalf("CreateApplication failed: %v", err)
+	}
+
+	// 4. Move asset to application
+	moved, err := s.MoveAssetToApplication(ctx, tn.ID, asset.ID, app.ID)
+	if err != nil {
+		t.Fatalf("MoveAssetToApplication failed: %v", err)
+	}
+	if !moved {
+		t.Fatalf("expected moved = true, got false")
+	}
+
+	// 5. Verify the finding's application_id was updated from NULL to app.ID
+	findingsMap, err := s.GetFindingsByKeys(ctx, tn.ID, []string{f.FindingKey})
+	if err != nil {
+		t.Fatalf("GetFindingsByKeys failed: %v", err)
+	}
+	updatedF, ok := findingsMap[f.FindingKey]
+	if !ok {
+		t.Fatalf("finding not found by key")
+	}
+	if updatedF.ApplicationID != app.ID {
+		t.Fatalf("finding ApplicationID = %v, want %v", updatedF.ApplicationID, app.ID)
+	}
+}
+

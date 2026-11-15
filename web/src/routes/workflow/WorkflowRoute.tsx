@@ -1,37 +1,42 @@
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { confirmHeldClose, decideAcceptance, discardHeldClose, listAcceptances, listHeldCloses, listProofs, proofHref, qk, toProblem, uploadProof } from '@/api';
 import type { AcceptanceStatus, HeldClose, RiskAcceptance } from '@/api/types';
 import { Button, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
 import { useSession } from '@/app/session';
 import { useAccess } from '@/app/useAccess';
+import { GroupsView } from './GroupsView';
 import { cn } from '@/lib/cn';
 import { absoluteDate } from '@/lib/format';
 
 export interface WorkflowSearch {
-  tab?: 'acceptances' | 'held_closes';
+  tab?: 'acceptances' | 'held_closes' | 'groups';
   sel?: string;
   status?: AcceptanceStatus;
   run_id?: string;
 }
 const STATUSES: (AcceptanceStatus | '')[] = ['', 'pending', 'approved', 'rejected', 'expired', 'revoked'];
 
-/** Risk acceptances and held mass-closes: what is waiting for approval or confirmation (docs/13, docs/21 Section 3.2). */
+/** Risk acceptances, held mass-closes, and finding groups (docs/13, docs/21 Section 3.2 & Section 6.1). */
 export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const tab = search.tab ?? 'acceptances';
 
   useEffect(() => {
-    document.title = `${tab === 'held_closes' ? 'Held Closes' : t('acceptance.workflow')} - Rampart`;
+    const title = tab === 'held_closes' ? 'Held Closes' : tab === 'groups' ? 'Finding Groups' : t('acceptance.workflow');
+    document.title = `${title} - Rampart`;
   }, [t, tab]);
 
   const set = (patch: Partial<WorkflowSearch>) => void navigate({ to: '/workflow', search: (p: WorkflowSearch) => ({ ...p, ...patch }), replace: true });
 
   if (tab === 'held_closes') {
     return <HeldClosesView search={search} set={set} />;
+  }
+  if (tab === 'groups') {
+    return <GroupsView search={search} set={set} />;
   }
 
   return <AcceptancesView search={search} set={set} />;
@@ -121,6 +126,13 @@ function AcceptancesView({ search, set }: { search: WorkflowSearch; set: (patch:
               className="rounded-ctl px-2.5 py-1 text-13 font-medium text-ink-2 transition-colors hover:text-ink"
             >
               {t('acceptance.tabHeldCloses', { defaultValue: 'Held Closes' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => set({ tab: 'groups', sel: undefined })}
+              className="rounded-ctl px-2.5 py-1 text-13 font-medium text-ink-2 transition-colors hover:text-ink"
+            >
+              Finding Groups
             </button>
           </div>
           <Select
@@ -233,6 +245,13 @@ function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: 
             >
               {t('acceptance.tabHeldCloses', { defaultValue: 'Held Closes' })}
             </button>
+            <button
+              type="button"
+              onClick={() => set({ tab: 'groups', sel: undefined })}
+              className="rounded-ctl px-2.5 py-1 text-13 font-medium text-ink-2 transition-colors hover:text-ink"
+            >
+              Finding Groups
+            </button>
           </div>
         </div>
         {list}
@@ -278,9 +297,9 @@ function HeldCloseDetail({ hc }: { hc: HeldClose }) {
       <dl className="m-0 mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
         <dt className="text-ink-2">Scan Run</dt>
         <dd className="m-0">
-          <a href={`/ingestion?run=${encodeURIComponent(hc.ingest_run_id)}`} className="font-mono text-12 text-accent hover:underline">
+          <Link to="/ingestion" search={{ sel: hc.ingest_run_id }} className="font-mono text-12 text-accent hover:underline">
             {hc.ingest_run_id}
-          </a>
+          </Link>
         </dd>
         <dt className="text-ink-2">Scanner</dt><dd className="m-0">{hc.scope.scanner_family || '—'}</dd>
         <dt className="text-ink-2">Track</dt><dd className="m-0 font-mono text-12">{hc.scope.track || '—'}</dd>

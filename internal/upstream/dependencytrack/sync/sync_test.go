@@ -246,6 +246,18 @@ func (m *mockSyncerStore) ListUnmappedDTrackProjects(ctx context.Context, tenant
 	return out, nil
 }
 
+func (m *mockSyncerStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.projects[projectUUID]; ok {
+		p.ApplicationID = &appID
+		p.MappingRule = "manual_ui_mapping"
+		p.UnmappedReason = ""
+		return nil
+	}
+	return store.ErrNotFound
+}
+
 func (m *mockSyncerStore) LookupAsset(ctx context.Context, tenantID uuid.UUID, assetType domain.AssetType, key string) (*domain.Asset, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

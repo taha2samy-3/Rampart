@@ -195,3 +195,49 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+func TestTrivySecretRedaction(t *testing.T) {
+	reportWithSecretCode := `{
+		"SchemaVersion": 2,
+		"Results": [
+			{
+				"Target": "config.env",
+				"Class": "secret",
+				"Secrets": [
+					{
+						"RuleID": "generic-secret",
+						"Category": "General",
+						"Severity": "CRITICAL",
+						"Title": "Secret in config",
+						"StartLine": 5,
+						"EndLine": 5,
+						"Match": "SECRET_KEY=*****",
+						"Code": {
+							"Lines": [
+								{
+									"Number": 5,
+									"Content": "SECRET_KEY=super_sensitive_unmasked_token_12345",
+									"IsCause": true
+								}
+							]
+						}
+					}
+				]
+			}
+		]
+	}`
+	findings, err := parse(t, reportWithSecretCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	raw := string(findings[0].RawPayload)
+	if strings.Contains(raw, "super_sensitive_unmasked_token_12345") {
+		t.Fatalf("unmasked secret was leaked in RawPayload: %s", raw)
+	}
+	if !strings.Contains(raw, "[redacted]") {
+		t.Fatalf("expected [redacted] in RawPayload: %s", raw)
+	}
+}

@@ -220,14 +220,6 @@ func (g *Gateway) resolveCaller(r *http.Request) (*auth.ContextUser, error) {
 	return nil, auth.ErrUnauthorized
 }
 
-func (g *Gateway) resolveTenant(r *http.Request) (uuid.UUID, error) {
-	caller, err := g.resolveCaller(r)
-	if err != nil {
-		return domain.NilID, err
-	}
-	return caller.TenantID, nil
-}
-
 func problemJSON(w http.ResponseWriter, status int, typ, title, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
@@ -247,6 +239,10 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 	caller, err := g.resolveCaller(r)
 	if err != nil {
 		problemJSON(w, http.StatusUnauthorized, "unauthorized", "Authentication required", "")
+		return
+	}
+	if caller.Role == auth.RoleViewer || caller.Role == "" {
+		problemJSON(w, http.StatusForbidden, "forbidden", "Viewer role cannot create uploads", "")
 		return
 	}
 	tenantID := caller.TenantID
@@ -354,11 +350,16 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 // the upload completed, creates the ingest run and inserts the parse job (D2). It is idempotent: a
 // repeated call returns the same run.
 func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := g.resolveTenant(r)
+	caller, err := g.resolveCaller(r)
 	if err != nil {
 		problemJSON(w, http.StatusUnauthorized, "unauthorized", "Authentication required", "")
 		return
 	}
+	if caller.Role == auth.RoleViewer || caller.Role == "" {
+		problemJSON(w, http.StatusForbidden, "forbidden", "Viewer role cannot complete uploads", "")
+		return
+	}
+	tenantID := caller.TenantID
 	if g.objects == nil {
 		problemJSON(w, http.StatusNotImplemented, "unsupported-format", "Presigned uploads are not available", "Object storage is not configured.")
 		return
@@ -378,6 +379,10 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	upload, err := g.store.GetUpload(r.Context(), tenantID, uploadID)
 	if err != nil {
 		problemJSON(w, http.StatusNotFound, "not-found", "Upload not found", "")
+		return
+	}
+	if caller.ScanSourceID != nil && *caller.ScanSourceID != domain.NilID && upload.ScanSourceID != *caller.ScanSourceID {
+		problemJSON(w, http.StatusForbidden, "forbidden", "Token is bound to another scan source", "Federated token cannot complete upload for a different scan source.")
 		return
 	}
 	respondRun := func(runID uuid.UUID) {
@@ -480,6 +485,12 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/unauthorized","title":"Authentication required"}`))
+		return
+	}
+	if caller.Role == auth.RoleViewer || caller.Role == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/forbidden","title":"Viewer role cannot upload reports"}`))
 		return
 	}
 	tenantID := caller.TenantID

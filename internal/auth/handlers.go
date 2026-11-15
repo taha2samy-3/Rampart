@@ -18,10 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/sync/singleflight"
 	"rampart/internal/domain"
 	"rampart/internal/telemetry"
+
+	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 // TenantLookup resolves tenants by slug or id. Tenant rows are global (no RLS).
@@ -738,35 +739,53 @@ func (h *Handlers) deviceCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (h *Handlers) currentUser(r *http.Request) *ContextUser {
+func (h *Handlers) currentUser(r *http.Request) (*ContextUser, error) {
 	if u, ok := FromContext(r.Context()); ok && u != nil {
-		return u
+		return u, nil
 	}
 	if h.Authn != nil {
-		if u, err := h.Authn.AuthenticateRequest(r); err == nil && u != nil {
-			return u
+		u, err := h.Authn.AuthenticateRequest(r)
+		if err != nil {
+			return nil, err
 		}
+		return u, nil
 	}
 	if h.Sessions != nil {
-		if p, err := h.Sessions.Principal(r); err == nil && p != nil {
-			return &ContextUser{
-				UserID:   p.Session.UserID,
-				Email:    p.Email,
-				Name:     p.Name,
-				TenantID: p.Session.TenantID,
-				Role:     p.Role,
+		p, err := h.Sessions.Principal(r)
+		if err != nil {
+			return nil, err
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			if !h.Sessions.CheckCSRF(r, p.Session.ID) {
+				return nil, ErrCSRF
 			}
 		}
+		return &ContextUser{
+			UserID:   p.Session.UserID,
+			Email:    p.Email,
+			Name:     p.Name,
+			TenantID: p.Session.TenantID,
+			Role:     p.Role,
+		}, nil
 	}
-	return nil
+	return nil, ErrUnauthorized
 }
 
 func (h *Handlers) devicePage(w http.ResponseWriter, r *http.Request) {
-	user := h.currentUser(r)
-	if user == nil {
+	user, err := h.currentUser(r)
+	if err != nil || user == nil {
 		loginURL := "/auth/login?return_to=" + url.QueryEscape(r.URL.RequestURI())
 		http.Redirect(w, r, loginURL, http.StatusFound)
 		return
+	}
+
+	var csrfToken string
+	if h.Sessions != nil {
+		if p, err := h.Sessions.Principal(r); err == nil && p != nil {
+			csrfToken = h.Sessions.CSRFToken(p.Session.ID)
+		}
 	}
 
 	// The user_code is reflected into the page from an untrusted query parameter (a link the CLI prints or a
@@ -777,13 +796,14 @@ func (h *Handlers) devicePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'")
-	_ = devicePageTmpl.Execute(w, devicePageData{Email: user.Email, UserCode: userCode})
+	_ = devicePageTmpl.Execute(w, devicePageData{Email: user.Email, UserCode: userCode, CSRFToken: csrfToken})
 }
 
 // devicePageData is what devicePageTmpl renders; html/template escapes both fields for their HTML context.
 type devicePageData struct {
-	Email    string
-	UserCode string
+	Email     string
+	UserCode  string
+	CSRFToken string
 }
 
 var devicePageTmpl = template.Must(template.New("device").Parse(`<!DOCTYPE html>
@@ -799,6 +819,7 @@ button { background: #0066cc; color: #fff; border: 0; padding: 12px 24px; font-s
 <h2>Authorize Rampart CLI</h2>
 <p>Signed in as <strong>{{.Email}}</strong></p>
 <form method="POST" action="/auth/device/verify">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
 <label for="user_code">Enter user code:</label>
 <input type="text" id="user_code" name="user_code" value="{{.UserCode}}" required autofocus placeholder="XXXX-XXXX" />
 <button type="submit">Authorize</button>
@@ -828,8 +849,13 @@ func (h *Handlers) deviceVerify(w http.ResponseWriter, r *http.Request) {
 		problem(w, r, http.StatusNotImplemented, "unsupported", "Device authorization is not configured", "")
 		return
 	}
-	user := h.currentUser(r)
-	if user == nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10) // 16 KB max form size
+	user, err := h.currentUser(r)
+	if errors.Is(err, ErrCSRF) {
+		problem(w, r, http.StatusForbidden, "forbidden", "Missing or invalid CSRF token", "Reload the page and try again.")
+		return
+	}
+	if err != nil || user == nil {
 		problem(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required", "")
 		return
 	}

@@ -19,6 +19,7 @@ type DTrackStore interface {
 	GetDTrackSync(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackSync, error)
 	UpsertDTrackProject(ctx context.Context, proj domain.DTrackProjectRecord) error
 	ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error)
+	MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error
 	LookupScanSource(ctx context.Context, sourceID uuid.UUID) (tenantID uuid.UUID, name string, err error)
 }
 
@@ -185,13 +186,14 @@ func (s *PostgresStore) UpsertDTrackProject(ctx context.Context, proj domain.DTr
 }
 
 // ListUnmappedDTrackProjects lists portfolio projects that did not match any mapping rule.
+// If sourceID is uuid.Nil, it lists all unmapped projects for the tenant across all sources.
 func (s *PostgresStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
 	var results []domain.DTrackProjectRecord
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		query := `SELECT tenant_id, source_id, project_uuid, name, version, purl, active,
 		                 last_bom_import, application_id, mapping_rule, unmapped_reason, created_at, updated_at
 		          FROM dtrack_project
-		          WHERE tenant_id = $1 AND source_id = $2 AND application_id IS NULL
+		          WHERE tenant_id = $1 AND ($2 = '00000000-0000-0000-0000-000000000000'::uuid OR source_id = $2) AND application_id IS NULL
 		          ORDER BY name ASC`
 		rows, err := tx.Query(ctx, query, tenantID, sourceID)
 		if err != nil {
@@ -225,4 +227,21 @@ func (s *PostgresStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID
 		return rows.Err()
 	})
 	return results, err
+}
+
+// MapDTrackProject manually assigns an unmapped Dependency-Track project to an application (docs/10 §3).
+func (s *PostgresStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
+	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		query := `UPDATE dtrack_project
+		          SET application_id = $3, mapping_rule = 'manual_ui_mapping', unmapped_reason = NULL, updated_at = NOW()
+		          WHERE tenant_id = $1 AND project_uuid = $2`
+		tag, err := tx.Exec(ctx, query, tenantID, projectUUID, appID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }

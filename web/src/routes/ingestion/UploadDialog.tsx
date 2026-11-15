@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { qk, toProblem, uploadReport } from '@/api';
-import { Button, Dialog, DialogClose, DialogContent, Input, ProblemMessage, Spinner, useToast } from '@/components';
+import { Button, Dialog, DialogClose, DialogContent, Input, ProblemMessage, useToast } from '@/components';
 import { cn } from '@/lib/cn';
 
 export interface UploadDialogProps {
@@ -69,7 +69,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
         e.preventDefault();
         if (file) mutation.mutate();
       }}
-      className="flex flex-col gap-4 p-4"
+      className="flex flex-col gap-4"
     >
       <div>
         <label htmlFor={ids.file} className="mb-1 block text-12 font-medium text-ink">
@@ -146,8 +146,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             {t('common.cancel')}
           </Button>
         </DialogClose>
-        <Button type="submit" variant="primary" disabled={!file || mutation.isPending}>
-          {mutation.isPending && <Spinner size={14} />}
+        <Button type="submit" variant="primary" loading={mutation.isPending} disabled={!file || mutation.isPending}>
           {mutation.isPending ? t('ingestion.uploadUploading') : t('ingestion.uploadSubmit')}
         </Button>
       </div>

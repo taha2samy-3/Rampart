@@ -20,6 +20,7 @@ type fakeTracker struct {
 	commentedOn []string
 }
 
+func (f *fakeTracker) Name() string { return "tracker" }
 func (f *fakeTracker) CreateIssue(context.Context, *domain.Finding, string) (string, string, error) {
 	f.calls++
 	if f.err != nil {
@@ -364,6 +365,8 @@ type ambiguousTracker struct {
 	createdURL  string
 }
 
+func (a *ambiguousTracker) Name() string { return "tracker" }
+
 func (a *ambiguousTracker) CreateIssue(ctx context.Context, f *domain.Finding, app string) (string, string, error) {
 	a.createCalls++
 	return "", "", errors.New("gateway timeout 504")
@@ -454,6 +457,8 @@ func TestProcessTickets_FatalErrorsGiveUp_OnPostgreSQL(t *testing.T) {
 type fatalTrackerStub struct {
 	err error
 }
+
+func (f *fatalTrackerStub) Name() string { return "jira-prod" }
 
 func (f *fatalTrackerStub) CreateIssue(ctx context.Context, finding *domain.Finding, app string) (string, string, error) {
 	return "", "", f.err

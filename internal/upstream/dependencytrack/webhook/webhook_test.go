@@ -108,6 +108,10 @@ func (m *mockDTrackStore) ListUnmappedDTrackProjects(ctx context.Context, tenant
 	return nil, nil
 }
 
+func (m *mockDTrackStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
+	return nil
+}
+
 type mockSecretResolver struct {
 	secrets map[string][]byte
 }

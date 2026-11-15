@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, HeldClose, Reporter, Role } from '@/api/types';
+import type { CorrelatedRef, FindingGroup, HeldClose, Reporter, Role } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -48,6 +48,8 @@ export interface Scenario {
   sources?: { reported_by?: Reporter[]; also_reported_by?: CorrelatedRef[] } | 'error';
   /** Pages of GET /api/v1/audit; each call returns the next page. 'error' answers 500. */
   audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
+  groups?: FindingGroup[] | 'error';
+  groupFindings?: Record<string, string[]>;
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
   taxonomies?: { id: string; name: string; version: string }[];
   taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error';
@@ -112,6 +114,20 @@ export function overviewData(over: Record<string, unknown> = {}) {
     sla: { within: 30, late: 5, breached: 5, adherence: 0.75 },
     top_apps: [app(1), app(2, { risk_score: 400, open: { critical: 0, high: 1, medium: 0, low: 0 } })],
     coverage_gaps: [app(3, { last_scan: undefined })],
+    ...over,
+  };
+}
+
+export function findingGroup(i: number, over: Partial<FindingGroup> = {}): FindingGroup {
+  return {
+    id: `grp-${i}`,
+    tenant_id: 't1',
+    name: `Remediation Sprint ${i}`,
+    description: `Track critical findings for sprint ${i}`,
+    owner: 'sara@acme.example',
+    member_count: 3,
+    created_at: '2026-11-10T10:00:00Z',
+    updated_at: '2026-11-10T10:00:00Z',
     ...over,
   };
 }
@@ -203,6 +219,28 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/dashboards/overview') {
       if (sc.overview === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed', status: 500, request_id: 'req_ov' }, 500);
       return json(sc.overview ?? overviewData());
+    }
+    if (path === '/api/v1/views') return json({ views: [] });
+    if (path === '/api/v1/groups') {
+      if (sc.groups === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if (init?.method === 'POST') {
+        const b = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+        return json(findingGroup(9, { name: b.name, description: b.description }), 201);
+      }
+      return json({ groups: sc.groups ?? [] });
+    }
+    if (path.startsWith('/api/v1/groups/')) {
+      const parts = path.split('/');
+      const grpId = decodeURIComponent(parts[4] ?? '');
+      if (parts.length === 6 && parts[5] === 'members') {
+        return json(null, 204);
+      }
+      if (init?.method === 'DELETE') {
+        return json(null, 204);
+      }
+      const grp = (Array.isArray(sc.groups) ? sc.groups : []).find((g) => g.id === grpId) ?? findingGroup(1, { id: grpId });
+      const fIds = sc.groupFindings?.[grpId] ?? ['f-1', 'f-2'];
+      return json({ group: grp, findings_ids: fIds });
     }
     if (path === '/api/v1/metrics/trend') return json({ metric: 'open', points: sc.trend ?? [] });
     if (path === '/api/v1/settings') return json({ riskAcceptanceApproval: false, riskAcceptanceMaxDays: 90 });

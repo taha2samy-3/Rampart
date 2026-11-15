@@ -4,9 +4,26 @@ import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getRun, listRuns, qk, toProblem } from '@/api';
 import type { RunRow } from '@/api/types';
-import { Button, CommandLine, EmptyState, ProblemMessage, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
+import {
+  Button,
+  CommandLine,
+  EmptyState,
+  ProblemMessage,
+  Skeleton,
+  Table,
+  TBody,
+  Td,
+  Th,
+  THead,
+  Tr,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from '@/components';
 import { RunInspector } from '@/features/run-inspector/RunInspector';
 import { UploadDialog } from './UploadDialog';
+import { DependencyTrackView } from './DependencyTrackView';
 import { cn } from '@/lib/cn';
 import { absoluteDate, shortAge, shortId } from '@/lib/format';
 
@@ -32,6 +49,7 @@ function foundText(r: RunRow): string {
 export function IngestionRoute({ search }: { search: IngestionSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [tab, setTab] = useState<'runs' | 'dtrack'>('runs');
   const [uploadOpen, setUploadOpen] = useState(false);
   useEffect(() => {
     document.title = `${t('ingestion.title')} - Rampart`;
@@ -124,6 +142,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
                   aria-rowindex={i + 2}
                   selected={selectedRow}
                   tabIndex={r.id === tabbable ? 0 : -1}
+                  className="h-[46px] cursor-default align-middle focus-visible:outline-offset-[-2px]"
                   onClick={() => select(r.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -131,7 +150,6 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
                       select(r.id);
                     }
                   }}
-                  className="h-[46px] cursor-default align-middle focus-visible:outline-offset-[-2px]"
                 >
                   <Td className={cn('py-0 font-mono text-12', selectedRow && 'shadow-[inset_3px_0_0_var(--accent)]')} title={r.id}>
                     {shortId(r.id)}
@@ -168,22 +186,38 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col tablet:flex-row">
-      <section aria-label={t('ingestion.title')} className="@container/list flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
-        <div className="flex items-center justify-between border-b border-rule px-3 py-2">
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'runs' | 'dtrack')} className="flex h-full min-h-0 flex-col">
+      {/* Header with View Tabs */}
+      <div className="flex items-center justify-between border-b border-rule px-4 py-2">
+        <div className="flex items-center gap-4">
           <h1 className="display text-16">{t('ingestion.title')}</h1>
+          <TabsList label="Ingestion Views">
+            <TabsTrigger value="runs">{t('ingestion.runsTab', { defaultValue: 'Ingest Runs' })}</TabsTrigger>
+            <TabsTrigger value="dtrack">{t('ingestion.dtrackTab', { defaultValue: 'Dependency-Track' })}</TabsTrigger>
+          </TabsList>
+        </div>
+        {tab === 'runs' && (
           <Button variant="secondary" onClick={() => setUploadOpen(true)}>
             {t('ingestion.uploadButton')}
           </Button>
-        </div>
-        {list}
-      </section>
-      <div className="relative min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
-        <aside aria-label={t('ingestion.inspector')} className="h-full overflow-y-auto">
-          <RunInspector run={selected} selectedId={selectedId} />
-        </aside>
+        )}
       </div>
-      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
-    </div>
+
+      <TabsContent value="runs" className="flex min-h-0 flex-1 flex-col tablet:flex-row data-[state=inactive]:hidden">
+        <section aria-label={t('ingestion.title')} className="@container/list flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
+          {list}
+        </section>
+        <div className="relative min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
+          <aside aria-label={t('ingestion.inspector')} className="h-full overflow-y-auto">
+            <RunInspector run={selected} selectedId={selectedId} />
+          </aside>
+        </div>
+        <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      </TabsContent>
+
+      <TabsContent value="dtrack" className="min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden">
+        <DependencyTrackView />
+      </TabsContent>
+    </Tabs>
   );
 }

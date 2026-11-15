@@ -176,6 +176,7 @@ func (e *Engine) mergeBatch(
 	for k := range dedupMap {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 
 	// 2. Fetch existing findings for update
 	existingFindings, err := st.GetFindingsByKeys(ctx, scope.TenantID, keys)
@@ -199,7 +200,8 @@ func (e *Engine) mergeBatch(
 		return outcome, fmt.Errorf("ingest: failed to resolve aliases: %w", err)
 	}
 
-	for _, rec := range dedupMap {
+	for _, key := range keys {
+		rec := dedupMap[key]
 		existing, exists := existingFindings[rec.FindingKey]
 
 		var targetFinding *domain.Finding
@@ -384,7 +386,7 @@ func (e *Engine) mergeBatch(
 	// Ticket-on-critical automation (docs/09, docs/16 D25, D29, D66):
 	// A critical finding reserves ticket creation in action_ledger so duplicate tickets are prevented.
 	for _, f := range findingsToUpsert {
-		if f.Severity == domain.SeverityCritical || f.RiskBand == domain.SeverityCritical {
+		if f.State.IsActive() && (f.Severity == domain.SeverityCritical || f.RiskBand == domain.SeverityCritical) {
 			reserved, err := st.ReserveAction(ctx, scope.TenantID, domain.PolicyTicketOnCriticalID, f.ID, domain.ActionCreateTicket)
 			if err == nil && reserved {
 				// The reservation is all that happens in the transaction. The call to the tracker is made afterwards by the
@@ -579,7 +581,17 @@ func (e *Engine) closeScope(
 		}
 	}
 
-	if enableMassCloseGuard && closedCount > minFindings && float64(closedCount)*100.0 > float64(len(activeFindings))*thresholdPercent {
+	scopeFamilyFindingsCount := 0
+	for _, f := range activeFindings {
+		if scope.ScannerFamily == "" || f.RuleScannerFamily == scope.ScannerFamily {
+			scopeFamilyFindingsCount++
+		}
+	}
+	if scopeFamilyFindingsCount == 0 {
+		scopeFamilyFindingsCount = len(activeFindings)
+	}
+
+	if enableMassCloseGuard && closedCount > minFindings && float64(closedCount)*100.0 > float64(scopeFamilyFindingsCount)*thresholdPercent {
 		heldIDs := make([]uuid.UUID, 0, len(fixedFindings))
 		for _, f := range fixedFindings {
 			heldIDs = append(heldIDs, f.ID)
@@ -2096,7 +2108,7 @@ func (m *MemoryStore) ListPendingTickets(ctx context.Context, now time.Time, lim
 	return nil, nil
 }
 
-func (m *MemoryStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error {
+func (m *MemoryStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef, url string) error {
 	return nil
 }
 
@@ -2263,6 +2275,10 @@ func (m *MemoryStore) UpsertDTrackProject(ctx context.Context, proj domain.DTrac
 
 func (m *MemoryStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
 	return nil, nil
+}
+
+func (m *MemoryStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
+	return nil
 }
 
 func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) (uuid.UUID, string, error) {

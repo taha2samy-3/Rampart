@@ -94,7 +94,7 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 		tracker, err := tr.ResolveTracker(ctx, p.TenantID)
 		if err != nil {
 			failed++
-			giveUpOrRetryTicket(ctx, st, p, now, log, fmt.Errorf("the tracker could not be resolved: %w", err), f)
+			giveUpOrRetryTicket(ctx, st, p, now, log, fmt.Errorf("the tracker could not be resolved: %w", err), f, "")
 			continue
 		}
 		if tracker == nil {
@@ -106,15 +106,27 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 			continue
 		}
 
+		connName := "tracker"
+		if n := tracker.Name(); n != "" {
+			connName = n
+		}
+
 		// D70 B2: Before any attempt after the first, search for an existing issue by label
 		if p.Attempts > 0 {
-			if existingRef, existingURL, findErr := tracker.FindIssueByLabel(ctx, FindingLabel(f.ID)); findErr == nil && existingRef != "" {
-				if err := st.CompleteTicket(ctx, p.TenantID, p.FindingID, existingRef, existingURL); err != nil {
+			existingRef, existingURL, findErr := tracker.FindIssueByLabel(ctx, FindingLabel(f.ID))
+			if findErr != nil {
+				failed++
+				log.Warn("tickets: finding existing issue by label failed during retry", "tenant", p.TenantID, "finding", p.FindingID, "error", findErr)
+				giveUpOrRetryTicket(ctx, st, p, now, log, fmt.Errorf("checking for existing issue failed: %w", findErr), f, connName)
+				continue
+			}
+			if existingRef != "" {
+				if err := st.CompleteTicket(ctx, p.TenantID, p.FindingID, connName, existingRef, existingURL); err != nil {
 					log.Error("tickets: existing ticket found but recording failed", "tenant", p.TenantID, "finding", p.FindingID, "ticket", existingRef, "error", err)
 					continue
 				}
 				opened++
-				to, _ := json.Marshal(map[string]string{"action": "create_ticket", "status": "linked_existing", "ticket_id": existingRef, "url": existingURL})
+				to, _ := json.Marshal(map[string]string{"action": "create_ticket", "status": "linked_existing", "ticket_id": existingRef, "url": existingURL, "connector": connName})
 				_ = st.RecordFindingEvents(ctx, p.TenantID, []*domain.FindingEvent{{
 					ID: domain.NewID(), FindingID: p.FindingID, At: now, Actor: "system:policy", Type: "ticket_created",
 					Note: fmt.Sprintf("Existing ticket %s linked for this finding", existingRef), To: to,
@@ -127,9 +139,13 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 		if tc, ok := st.(interface {
 			CountTicketsCreatedSince(ctx context.Context, tenantID uuid.UUID, connector string, since time.Time) (int, error)
 		}); ok {
-			count, _ := tc.CountTicketsCreatedSince(ctx, p.TenantID, "", now.Add(-1*time.Hour))
-			// Default maxPerHour is 100 unless configured lower
-			const maxPerHour = 100
+			count, _ := tc.CountTicketsCreatedSince(ctx, p.TenantID, connName, now.Add(-1*time.Hour))
+			maxPerHour := 100
+			if pt, ok := tracker.(interface{ MaxPerHour() int }); ok {
+				if m := pt.MaxPerHour(); m > 0 {
+					maxPerHour = m
+				}
+			}
 			if count >= maxPerHour {
 				_ = st.DeferTicket(ctx, p.TenantID, p.FindingID, now.Add(1*time.Hour))
 				continue
@@ -143,16 +159,16 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 		ref, url, err := tracker.CreateIssue(ctx, f, appName)
 		if err != nil {
 			failed++
-			giveUpOrRetryTicket(ctx, st, p, now, log, err, f)
+			giveUpOrRetryTicket(ctx, st, p, now, log, err, f, connName)
 			continue
 		}
-		if err := st.CompleteTicket(ctx, p.TenantID, p.FindingID, ref, url); err != nil {
+		if err := st.CompleteTicket(ctx, p.TenantID, p.FindingID, connName, ref, url); err != nil {
 			// The ticket exists and its record could not be written: say so loudly, a second ticket would be the next step.
 			log.Error("tickets: the ticket was opened but could not be recorded", "tenant", p.TenantID, "finding", p.FindingID, "ticket", ref, "error", err)
 			continue
 		}
 		opened++
-		to, _ := json.Marshal(map[string]string{"action": "create_ticket", "status": "created", "ticket_id": ref, "url": url})
+		to, _ := json.Marshal(map[string]string{"action": "create_ticket", "status": "created", "ticket_id": ref, "url": url, "connector": connName})
 		_ = st.RecordFindingEvents(ctx, p.TenantID, []*domain.FindingEvent{{
 			ID: domain.NewID(), FindingID: p.FindingID, At: now, Actor: "system:policy", Type: "ticket_created",
 			Note: fmt.Sprintf("Ticket %s opened for this critical finding", ref), To: to,
@@ -171,7 +187,7 @@ func SanitizeTrackerError(err error) string {
 
 type pendingTicket = store.PendingTicket
 
-func giveUpOrRetryTicket(ctx context.Context, st TicketStore, p pendingTicket, now time.Time, log *slog.Logger, err error, f *domain.Finding) {
+func giveUpOrRetryTicket(ctx context.Context, st TicketStore, p pendingTicket, now time.Time, log *slog.Logger, err error, f *domain.Finding, connName string) {
 	isFatal, statusCode := domain.IsFatalTrackerError(err)
 	giveUp := isFatal || (p.Attempts+1 >= MaxTicketAttempts)
 	next := now.Add(ticketBackoff(p.Attempts + 1))
@@ -203,19 +219,28 @@ func giveUpOrRetryTicket(ctx context.Context, st TicketStore, p pendingTicket, n
 		// If fatal error, update connector Connected condition to False (D70 B4)
 		if isFatal {
 			if cu, ok := st.(interface {
+				GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error)
 				ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error)
 				UpdateConnectorStatus(ctx context.Context, tenantID uuid.UUID, name string, status domain.ConnectorStatus) error
 			}); ok {
-				conns, _ := cu.ListConnectors(ctx, p.TenantID)
-				for _, conn := range conns {
-					if conn.Type == domain.ConnectorTypeJira || conn.Type == domain.ConnectorTypeGitHub {
-						connCopy := conn
-						reason := "ConfigurationError"
-						if statusCode == 401 || statusCode == 403 {
-							reason = "AuthFailed"
-						}
+				reason := "ConfigurationError"
+				if statusCode == 401 || statusCode == 403 {
+					reason = "AuthFailed"
+				}
+				if connName != "" && connName != "tracker" {
+					if conn, err := cu.GetConnector(ctx, p.TenantID, connName); err == nil && conn != nil {
+						connCopy := *conn
 						connCopy.SetCondition("Connected", "False", reason, msg)
 						_ = cu.UpdateConnectorStatus(ctx, p.TenantID, conn.Name, connCopy.Status)
+					}
+				} else {
+					conns, _ := cu.ListConnectors(ctx, p.TenantID)
+					for _, conn := range conns {
+						if conn.Type == domain.ConnectorTypeJira || conn.Type == domain.ConnectorTypeGitHub {
+							connCopy := conn
+							connCopy.SetCondition("Connected", "False", reason, msg)
+							_ = cu.UpdateConnectorStatus(ctx, p.TenantID, conn.Name, connCopy.Status)
+						}
 					}
 				}
 			}

@@ -84,12 +84,31 @@ type TrackerResolver = domain.TrackerResolver
 
 // JiraTracker creates issues in Jira Cloud or Jira Data Center (D66, D69).
 type JiraTracker struct {
-	cfg        domain.JiraConnectorConfig
-	client     *SafeClient
-	authHeader string
-	publicURL  string
-	tenantSlug string
+	connectorName string
+	policy        domain.ConnectorTicketingPolicy
+	cfg           domain.JiraConnectorConfig
+	client        *SafeClient
+	authHeader    string
+	publicURL     string
+	tenantSlug    string
 }
+
+// Name returns the connector name or default "jira".
+func (j *JiraTracker) Name() string {
+	if j.connectorName != "" {
+		return j.connectorName
+	}
+	return "jira"
+}
+
+// SetConnectorName sets the specific connector instance name.
+func (j *JiraTracker) SetConnectorName(name string) { j.connectorName = name }
+
+// SetTicketingPolicy configures the ticketing policy.
+func (j *JiraTracker) SetTicketingPolicy(p domain.ConnectorTicketingPolicy) { j.policy = p }
+
+// MaxPerHour returns the configured rate limit or 0 if unset.
+func (j *JiraTracker) MaxPerHour() int { return j.policy.MaxPerHour }
 
 // SetTenantSlug sets the tenant as the UI names it in links (/t/<slug>/...): the slug, not the id.
 func (j *JiraTracker) SetTenantSlug(s string) { j.tenantSlug = s }
@@ -490,12 +509,14 @@ func BuildJiraADF(finding *domain.Finding, appName, findingURL string) map[strin
 
 // GitHubTracker creates issues in GitHub repositories (D60, D66, D69).
 type GitHubTracker struct {
-	cfg        domain.GitHubConnectorConfig
-	client     *SafeClient
-	token      string
-	publicURL  string
-	tenantSlug string
-	apiBaseURL string
+	connectorName string
+	policy        domain.ConnectorTicketingPolicy
+	cfg           domain.GitHubConnectorConfig
+	client        *SafeClient
+	token         string
+	publicURL     string
+	tenantSlug    string
+	apiBaseURL    string
 }
 
 // SetTenantSlug sets the tenant as the UI names it in links.
@@ -542,6 +563,23 @@ func NewGitHubTracker(cfg domain.GitHubConnectorConfig, client *SafeClient, secr
 		apiBaseURL: "https://api.github.com",
 	}, nil
 }
+
+// Name returns the connector name or default "github".
+func (g *GitHubTracker) Name() string {
+	if g.connectorName != "" {
+		return g.connectorName
+	}
+	return "github"
+}
+
+// SetConnectorName sets the specific connector instance name.
+func (g *GitHubTracker) SetConnectorName(name string) { g.connectorName = name }
+
+// SetTicketingPolicy configures the ticketing policy.
+func (g *GitHubTracker) SetTicketingPolicy(p domain.ConnectorTicketingPolicy) { g.policy = p }
+
+// MaxPerHour returns the configured rate limit or 0 if unset.
+func (g *GitHubTracker) MaxPerHour() int { return g.policy.MaxPerHour }
 
 // SetAPIBaseURL overrides the GitHub API URL for GitHub Enterprise Server or tests.
 func (g *GitHubTracker) SetAPIBaseURL(u string) {
@@ -873,6 +911,10 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 			return nil, terr
 		}
 		t.SetTenantSlug(slug)
+		t.SetConnectorName(conn.Name)
+		if conn.Spec.Ticketing != nil {
+			t.SetTicketingPolicy(*conn.Spec.Ticketing)
+		}
 		return t, nil
 
 	case domain.ConnectorTypeGitHub:
@@ -888,6 +930,10 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 			return nil, terr
 		}
 		t.SetTenantSlug(slug)
+		t.SetConnectorName(conn.Name)
+		if conn.Spec.Ticketing != nil {
+			t.SetTicketingPolicy(*conn.Spec.Ticketing)
+		}
 		return t, nil
 	}
 

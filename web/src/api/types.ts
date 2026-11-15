@@ -373,3 +373,99 @@ export interface HeldClose {
   decision?: string;
   decided_at?: string;
 }
+
+/** Saved Explorer View (docs/21 §6.2) */
+export interface SavedView {
+  id: string;
+  tenant_id: string;
+  owner: string;
+  name: string;
+  query: string;
+  sort?: string;
+  scope: 'tenant' | 'user';
+  created_at?: string;
+}
+
+/** Finding Group (docs/21 §6.1) */
+export interface FindingGroup {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  member_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface FindingGroupDetail {
+  group: FindingGroup;
+  findings_ids: string[];
+}
+
+/** Connector status condition (docs/04, docs/20) */
+export interface ConnectorCondition {
+  type: string;
+  status: 'True' | 'False' | 'Unknown';
+  reason?: string;
+  message?: string;
+  last_transition_time?: string;
+}
+
+/** Connector summary for integrations (docs/20, docs/21) */
+export interface ConnectorSummary {
+  name: string;
+  type: string; // jira, github, slack, msteams, dependency-track, webhook, email
+  direction: 'outbound' | 'inbound' | 'bidirectional';
+  enabled: boolean;
+  status: {
+    conditions?: ConnectorCondition[];
+    last_check_time?: string;
+    account_id?: string;
+  };
+}
+
+/** Inventory asset summary (docs/13, docs/21) */
+export interface InventoryAsset {
+  id: string;
+  name: string;
+  kind: string; // repository, container, host, package
+  application_name?: string;
+  critical_findings: number;
+  high_findings: number;
+  medium_findings: number;
+  low_findings: number;
+  total_findings: number;
+  last_seen_at?: string;
+}
+
+/** Vulnerability by CVE (docs/13, docs/21) */
+export interface VulnerabilityRow {
+  cve_id: string;
+  title: string;
+  severity: string;
+  score: number;
+  epss?: number;
+  kev: boolean;
+  affected_assets: number;
+  affected_applications: number;
+  open_findings: number;
+}
+
+/** Dependency-Track project record (docs/10 §3, §13) */
+export interface DTrackProjectRecord {
+  tenant_id: string;
+  source_id: string;
+  project_uuid: string;
+  name: string;
+  version?: string;
+  purl?: string;
+  active: boolean;
+  last_bom_import?: string;
+  application_id?: string;
+  mapping_rule?: string;
+  unmapped_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+

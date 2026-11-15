@@ -35,7 +35,7 @@ type TicketOutbox interface {
 	// ListPendingTickets returns, across tenants, the reservations that are due. It reads across tenants: it needs rampart_system.
 	ListPendingTickets(ctx context.Context, now time.Time, limit int) ([]PendingTicket, error)
 	// CompleteTicket records the ticket that was opened.
-	CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error
+	CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef, url string) error
 	// RetryTicket schedules another attempt, or gives up (status failed) when giveUp is set.
 	RetryTicket(ctx context.Context, tenantID, findingID uuid.UUID, errMsg string, next time.Time, giveUp bool) error
 	// DeferTicket pushes the next attempt back without counting it (no tracker is configured yet).
@@ -67,8 +67,11 @@ func (s *PostgresStore) ListPendingTickets(ctx context.Context, now time.Time, l
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef, url string) error {
-	res, _ := json.Marshal(map[string]string{"ticket_id": ticketRef, "url": url})
+func (s *PostgresStore) CompleteTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef, url string) error {
+	if connector == "" {
+		connector = "tracker"
+	}
+	res, _ := json.Marshal(map[string]string{"ticket_id": ticketRef, "url": url, "connector": connector})
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		// 1. Insert/update ticket row (D70 B1)
 		ticketID := domain.NewID()
@@ -76,7 +79,7 @@ func (s *PostgresStore) CompleteTicket(ctx context.Context, tenantID, findingID 
 			VALUES ($1, $2, $3, $4, $5, 'open', NOW(), NOW())
 			ON CONFLICT (tenant_id, connector, external_ref)
 			DO UPDATE SET url = EXCLUDED.url, updated_at = NOW()
-			RETURNING id`, ticketID, tenantID, "tracker", ticketRef, url).Scan(&ticketID)
+			RETURNING id`, ticketID, tenantID, connector, ticketRef, url).Scan(&ticketID)
 		if err != nil {
 			return err
 		}

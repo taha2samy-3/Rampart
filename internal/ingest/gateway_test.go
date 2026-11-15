@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -302,5 +303,104 @@ func TestGatewaySBOMUploadSPDXTagValue(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&res)
 	if res.ComponentCount != 1 {
 		t.Errorf("expected 1 component from SPDX, got %d", res.ComponentCount)
+	}
+}
+
+func TestGateway_RoleAuthZEnforcement(t *testing.T) {
+	queue := jobs.NewInMemJobQueue()
+	gw := ingest.NewGateway(queue)
+	objects := objectstore.NewMemory()
+	gw.SetObjectStore(objects)
+
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	gw.SetAuthenticator(authn)
+
+	// Create tokens: viewer token and admin token
+	viewerToken, _, err := auth.GenerateToken(tenantID, auth.RoleViewer, "viewer@acme.com", []string{"tenant"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = gw.Store().(*ingest.MemoryStore).SaveToken(context.Background(), &auth.TokenRecord{
+		TokenHash: auth.HashToken(viewerToken), TenantID: tenantID, Role: auth.RoleViewer,
+	})
+
+	adminToken := authn.DefaultAdminToken(tenantID)
+
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	createReq := ingest.CreateUploadRequest{
+		ScanSourceID: "01931f6a-0000-7000-8000-000000000001",
+		FormatHint:   "sarif",
+		SizeBytes:    1024,
+	}
+	bodyBytes, _ := json.Marshal(createReq)
+
+	// 1. Viewer cannot create upload -> 403 Forbidden
+	reqViewerCreate := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(bodyBytes))
+	reqViewerCreate.Header.Set("Authorization", "Bearer "+viewerToken)
+	recViewerCreate := httptest.NewRecorder()
+	mux.ServeHTTP(recViewerCreate, reqViewerCreate)
+	if recViewerCreate.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for viewer creating upload, got %d", recViewerCreate.Code)
+	}
+
+	// 2. Viewer cannot directly upload reports -> 403 Forbidden
+	reqViewerDirect := httptest.NewRequest("POST", "/ingest/v1/reports", bytes.NewReader([]byte("{}")))
+	reqViewerDirect.Header.Set("Authorization", "Bearer "+viewerToken)
+	reqViewerDirect.Header.Set("Content-Type", "application/json")
+	recViewerDirect := httptest.NewRecorder()
+	mux.ServeHTTP(recViewerDirect, reqViewerDirect)
+	if recViewerDirect.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for viewer uploading report directly, got %d", recViewerDirect.Code)
+	}
+
+	// 3. Admin creates an upload
+	reqAdminCreate := httptest.NewRequest("POST", "/ingest/v1/uploads", bytes.NewReader(bodyBytes))
+	reqAdminCreate.Header.Set("Authorization", "Bearer "+adminToken)
+	recAdminCreate := httptest.NewRecorder()
+	mux.ServeHTTP(recAdminCreate, reqAdminCreate)
+	if recAdminCreate.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for admin creating upload, got %d", recAdminCreate.Code)
+	}
+	var createRes ingest.CreateUploadResponse
+	_ = json.NewDecoder(recAdminCreate.Body).Decode(&createRes)
+
+	// Put object so complete upload has something to find
+	objects.Put("tenants/"+tenantID.String()+"/uploads/"+createRes.UploadID, make([]byte, 1024))
+
+	completeReq := ingest.CompleteUploadRequest{
+		SHA256: strings.Repeat("a", 64),
+	}
+	compBytes, _ := json.Marshal(completeReq)
+
+	// 4. Viewer cannot complete upload -> 403 Forbidden
+	reqViewerComp := httptest.NewRequest("POST", "/ingest/v1/uploads/"+createRes.UploadID+"/complete", bytes.NewReader(compBytes))
+	reqViewerComp.Header.Set("Authorization", "Bearer "+viewerToken)
+	reqViewerComp.Header.Set("Content-Type", "application/json")
+	recViewerComp := httptest.NewRecorder()
+	mux.ServeHTTP(recViewerComp, reqViewerComp)
+	if recViewerComp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for viewer completing upload, got %d", recViewerComp.Code)
+	}
+
+	// 5. Scoped token bound to another ScanSource cannot complete this upload -> 403 Forbidden
+	otherSourceID := uuid.New()
+	boundToken, _, err := auth.GenerateToken(tenantID, auth.RoleIngest, "ci@acme.com", []string{"tenant"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = gw.Store().(*ingest.MemoryStore).SaveToken(context.Background(), &auth.TokenRecord{
+		TokenHash: auth.HashToken(boundToken), TenantID: tenantID, Role: auth.RoleIngest, ScanSourceID: &otherSourceID,
+	})
+
+	reqBoundComp := httptest.NewRequest("POST", "/ingest/v1/uploads/"+createRes.UploadID+"/complete", bytes.NewReader(compBytes))
+	reqBoundComp.Header.Set("Authorization", "Bearer "+boundToken)
+	reqBoundComp.Header.Set("Content-Type", "application/json")
+	recBoundComp := httptest.NewRecorder()
+	mux.ServeHTTP(recBoundComp, reqBoundComp)
+	if recBoundComp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for token bound to different scan source, got %d", recBoundComp.Code)
 	}
 }

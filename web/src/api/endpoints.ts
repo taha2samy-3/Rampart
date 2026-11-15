@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -185,3 +185,46 @@ export async function getTaxonomyStatus(id: string, application: string | undefi
 }
 export const taxonomyCsvUrl = (id: string, application: string | undefined) =>
   `/api/v1/taxonomies/${encodeURIComponent(id)}/status?format=csv${application ? `&application=${encodeURIComponent(application)}` : ''}`;
+
+// --- Phase 3: Saved Views & Groups (docs/21 §6.1, §6.2) ---
+export async function listSavedViews(signal?: AbortSignal): Promise<SavedView[]> {
+  const raw = await get<{ views?: SavedView[] | null }>('/api/v1/views', { signal });
+  return raw.views ?? [];
+}
+export const createSavedView = (body: { name: string; query: string; sort?: string; scope?: 'tenant' | 'user' }) =>
+  post<SavedView>('/api/v1/views', body);
+export const deleteSavedView = (id: string) => del<void>(`/api/v1/views/${encodeURIComponent(id)}`);
+
+export async function listFindingGroups(signal?: AbortSignal): Promise<FindingGroup[]> {
+  const raw = await get<{ groups?: FindingGroup[] | null }>('/api/v1/groups', { signal });
+  return raw.groups ?? [];
+}
+export const getFindingGroup = (id: string, signal?: AbortSignal) =>
+  get<FindingGroupDetail>(`/api/v1/groups/${encodeURIComponent(id)}`, { signal });
+export const createFindingGroup = (body: { name: string; description?: string }) =>
+  post<FindingGroup>('/api/v1/groups', body);
+export const deleteFindingGroup = (id: string) => del<void>(`/api/v1/groups/${encodeURIComponent(id)}`);
+export const addGroupMembers = (id: string, findingIds: string[]) =>
+  post<void>(`/api/v1/groups/${encodeURIComponent(id)}/members`, { finding_ids: findingIds });
+export const removeGroupMembers = (id: string, findingIds: string[]) =>
+  del<void>(`/api/v1/groups/${encodeURIComponent(id)}/members`, {
+    body: { finding_ids: findingIds },
+  });
+
+/** Export query findings in CSV, JSON, or OCSF formats (docs/21 §6.3) */
+export const findingsExportUrl = (format: 'csv' | 'json' | 'ocsf', q?: string) => {
+  const p = new URLSearchParams({ format });
+  if (q) p.set('q', q);
+  return `/api/v1/findings/export?${p.toString()}`;
+};
+
+// --- Dependency-Track Integration (docs/10 §3, §13) ---
+export async function listUnmappedDTrackProjects(signal?: AbortSignal): Promise<DTrackProjectRecord[]> {
+  const raw = await get<{ projects?: DTrackProjectRecord[] | null }>('/api/v1/dtrack/unmapped', { signal });
+  return raw.projects ?? [];
+}
+export const mapDTrackProject = (projectUuid: string, applicationId: string) =>
+  post<{ status: string; project_uuid: string; application_id: string }>(`/api/v1/dtrack/projects/${encodeURIComponent(projectUuid)}/map`, {
+    application_id: applicationId,
+  });
+

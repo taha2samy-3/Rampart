@@ -191,6 +191,10 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
 	mux.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
 
+	// Dependency-Track integration & unmapped projects (docs/10 §3, §13)
+	mux.HandleFunc("GET /api/v1/dtrack/unmapped", a.handleListUnmappedDTrackProjects)
+	mux.HandleFunc("POST /api/v1/dtrack/projects/{uuid}/map", a.handleMapDTrackProject)
+
 	// Saved views & finding groups (docs/21 §6.1, §6.2)
 	mux.HandleFunc("GET /api/v1/views", a.handleListViews)
 	mux.HandleFunc("POST /api/v1/views", a.handleCreateView)

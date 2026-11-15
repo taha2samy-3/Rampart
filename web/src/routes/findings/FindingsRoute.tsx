@@ -206,7 +206,14 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
         </aside>
       )}
       <section aria-label={t('findings.title')} className="flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
-        <FilterBar q={q} onQueryChange={setQ} total={total} onOpenFilters={tablet ? () => setSheetOpen(true) : undefined} />
+        <FilterBar
+          q={q}
+          onQueryChange={setQ}
+          sort={sort}
+          onSortChange={(s) => setSearch({ sort: s })}
+          total={total}
+          onOpenFilters={tablet ? () => setSheetOpen(true) : undefined}
+        />
         {list}
         {(checked.size > 0 || allMatching) && (
           <BulkBar
