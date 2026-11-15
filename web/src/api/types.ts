@@ -403,6 +403,17 @@ export interface FindingGroupDetail {
   findings_ids: string[];
 }
 
+/** Ingestion Parser Descriptor (docs/19 §2, docs/13 §9) */
+export interface ParserDescriptor {
+  id: string;
+  name: string;
+  kind: string;
+  version: string;
+  support_level: 'builtin' | 'certified' | 'community';
+  description: string;
+  capabilities?: string[];
+}
+
 /** Connector status condition (docs/04, docs/20) */
 export interface ConnectorCondition {
   type: string;

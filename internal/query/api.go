@@ -210,6 +210,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/findings/export", a.handleExportFindings)
 	mux.HandleFunc("GET /api/v1/events", a.handleEventsSSE)
 
+	// Parsers catalogue & descriptors (docs/19 §2, docs/13 §9)
+	mux.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
+
 	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
 	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
 	if a.webhookHandler != nil {

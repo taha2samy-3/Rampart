@@ -123,4 +123,49 @@ describe('ingest runs', () => {
     expect(screen.getByText('Drop a scanner report here, or click to browse')).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it('switches to Parsers & Formats tab and lists all engines with accessible details', async () => {
+    mockFetch({ loggedIn: true, runs: [] });
+    const { container } = renderApp('/ingestion');
+
+    const tab = await screen.findByRole('tab', { name: 'Parsers & Formats' });
+    await userEvent.click(tab);
+
+    expect(await screen.findByRole('heading', { name: 'Supported Parsers & Formats' })).toBeInTheDocument();
+    expect(screen.getByText('19 Built-in Engines')).toBeInTheDocument();
+
+    const table = screen.getByRole('table', { name: 'Supported parsers table' });
+    expect(within(table).getByText('SARIF 2.1.0 Parser')).toBeInTheDocument();
+    expect(within(table).getByText('CycloneDX Parser (JSON/XML)')).toBeInTheDocument();
+    expect(within(table).getByText('Trivy Parser (JSON)')).toBeInTheDocument();
+
+    // Category filtering
+    const sastFilter = screen.getByRole('button', { name: 'SAST' });
+    await userEvent.click(sastFilter);
+    expect(within(table).getByText('Semgrep Parser (JSON)')).toBeInTheDocument();
+    expect(within(table).queryByText('CycloneDX Parser (JSON/XML)')).toBeNull();
+
+    // Reset filter
+    await userEvent.click(screen.getByRole('button', { name: 'All Categories' }));
+    expect(within(table).getByText('CycloneDX Parser (JSON/XML)')).toBeInTheDocument();
+
+    // Click parser to view details
+    await userEvent.click(within(table).getByText('SARIF 2.1.0 Parser'));
+    const dialog = screen.getByRole('dialog', { name: 'SARIF 2.1.0 Parser' });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText('builtin:sarif')).toBeInTheDocument();
+    expect(within(dialog).getByText('rampart upload --source default report.json')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]!);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SARIF 2.1.0 Parser' })).toBeNull());
+
+    // Custom CEL Parser dialog
+    await userEvent.click(screen.getByRole('button', { name: '+ Custom CEL Parser' }));
+    const celDialog = await screen.findByRole('dialog', { name: 'Declarative CEL Mapping Engine' });
+    expect(celDialog).toBeInTheDocument();
+    expect(within(celDialog).getByText(/apiVersion: rampart.aspm.dev\/v1alpha1/)).toBeInTheDocument();
+    await userEvent.click(within(celDialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Declarative CEL Mapping Engine' })).toBeNull());
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

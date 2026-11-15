@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, FindingGroup, HeldClose, Reporter, Role } from '@/api/types';
+import type { CorrelatedRef, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -76,6 +76,7 @@ export interface Scenario {
   /** What POST .../approve|reject|revoke answers: 200 (default) or 400. */
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
+  parsers?: ParserDescriptor[] | 'error';
 }
 
 export function heldClose(i: number, over: Partial<HeldClose> = {}): HeldClose {
@@ -294,6 +295,10 @@ export function mockFetch(sc: Scenario): Calls {
       const id = decodeURIComponent(path.split('/').pop() ?? '');
       const found = (Array.isArray(sc.runs) ? sc.runs.flat() : []).find((r) => r.id === id);
       return found ? json(found) : json({ title: 'Run not found', status: 404 }, 404);
+    }
+    if (path === '/api/v1/parsers') {
+      if (sc.parsers === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list parsers', status: 500, request_id: 'req_parsers' }, 500);
+      return json({ parsers: sc.parsers ?? null });
     }
     if (path === '/api/v1/findings') {
       if (sc.findings === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list findings', status: 500, request_id: 'req_1' }, 500);

@@ -63,4 +63,8 @@ export const qk = {
     all: () => ['dtrack'] as const,
     unmapped: () => ['dtrack', 'unmapped'] as const,
   },
+  parsers: {
+    all: () => ['parsers'] as const,
+    list: () => ['parsers', 'list'] as const,
+  },
 };
