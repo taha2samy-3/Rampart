@@ -50,7 +50,7 @@ func (a *parserAdapter) Parse(ctx context.Context, r io.Reader, pc domain.ParseC
 	return a.parser.Parse(ctx, r, pc)
 }
 
-// DefaultRegistry creates an integration registry pre-loaded with all built-in Tier 1 & Tier 2 parsers.
+// DefaultRegistry creates an integration registry pre-loaded with the built-in parsers.
 func DefaultRegistry() *Registry {
 	reg := NewRegistry()
 
@@ -146,18 +146,11 @@ func DefaultRegistry() *Registry {
 		})
 	}
 
-	// 7. Built-in Trackers
-	_ = reg.RegisterTracker(NewJiraTrackerAdapter())
-	_ = reg.RegisterTracker(NewGitHubTrackerAdapter())
-
-	// 8. Built-in Notifiers
-	_ = reg.RegisterNotifier(NewSlackNotifierAdapter())
-	_ = reg.RegisterNotifier(NewTeamsNotifierAdapter())
-	_ = reg.RegisterNotifier(NewEmailNotifierAdapter())
-	_ = reg.RegisterNotifier(NewWebhookNotifierAdapter())
-
-	// 9. Built-in Sources
-	_ = reg.RegisterSource(NewDependencyTrackSourceAdapter())
+	// Trackers, notifiers and sources are not registered here yet. The placeholder adapters that were (a Jira
+	// "tracker" returning RAMPART-101, notifiers that sent nothing, a Dependency-Track "source" yielding an invented
+	// CVE) were removed: nothing called them and they made the registry claim what the product does not do (D82,
+	// docs/23 K1). The real connectors live in internal/connectors; the connector catalogue the UI reads is
+	// domain.ConnectorCatalogue. Registering the real implementations behind one contract is docs/23 section 6.
 
 	return reg
 }

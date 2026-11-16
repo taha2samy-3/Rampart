@@ -262,6 +262,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
+	queryAPI.SetSSRFAllowlist(allowlist) // the connector dry-run validation applies the same scoped allowlist (D77, D82)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
 

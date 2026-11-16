@@ -38,14 +38,15 @@ const (
 
 // API provides HTTP handlers for the read path /api/v1 (docs/11, docs/16 D14, D16).
 type API struct {
-	store   store.Store
-	feeds   *enrich.FeedStore
-	authn   *auth.Authenticator
-	hmacKey []byte
-	objects objectstore.Store
-	intel   IntelSource
-	scorer  *scoring.Scorer
-	gw      *ingest.Gateway
+	ssrfAllowlist *domain.PlatformSSRFAllowlist
+	store         store.Store
+	feeds         *enrich.FeedStore
+	authn         *auth.Authenticator
+	hmacKey       []byte
+	objects       objectstore.Store
+	intel         IntelSource
+	scorer        *scoring.Scorer
+	gw            *ingest.Gateway
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -210,6 +211,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// Parsers catalogue & descriptors (docs/19 §2, docs/13 §9)
 	routes.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
+
+	// Connectors are resources (D82): listed, described and validated here, never created.
+	routes.HandleFunc("GET /api/v1/connectors", a.handleListConnectors)
+	routes.HandleFunc("GET /api/v1/connectors/catalogue", a.handleConnectorCatalogue)
+	routes.HandleFunc("POST /api/v1/connectors/validate", a.handleValidateConnector)
 
 	routes.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
 	routes.HandleFunc("GET /openapi.json", a.handleOpenAPI)
