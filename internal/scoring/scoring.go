@@ -361,10 +361,40 @@ func (s *Scorer) MarkBreaches(ctx context.Context, tenantID uuid.UUID, now time.
 	return len(ids), nil
 }
 
-// RunSweeper marks breaches for every tenant every interval. One replica sweeps at a time (an advisory lock).
+// recomputeCheckEvery is how often the flag of a changed policy is looked for. The breach sweep stays on its own,
+// slower interval: it walks every finding of every tenant, while the flag is one indexed query. A policy change used
+// to wait for the next sweep (15 minutes), and for that time the list was sorted by the old scores while the
+// inspector explained the new ones.
+var recomputeCheckEvery = 30 * time.Second
+
+// RecomputeChanged recomputes the due dates and scores of every tenant whose SLA or risk policy changed, and clears
+// the flag. It returns how many tenants it recomputed.
+func RecomputeChanged(ctx context.Context, sc *Scorer, sys store.Store, log *slog.Logger) int {
+	changed, err := sys.TenantsNeedingSLARecompute(ctx)
+	if err != nil {
+		return 0
+	}
+	done := 0
+	for _, t := range changed {
+		n, err := sc.RecomputeSLA(ctx, t)
+		if err != nil {
+			log.Warn("sla recompute failed", "tenant", t, "error", err)
+			continue
+		}
+		if err := sc.store.ClearSLARecompute(ctx, t); err != nil {
+			log.Warn("sla recompute: clearing the flag failed", "tenant", t, "error", err)
+		}
+		log.Info("sla due dates recomputed after a policy change", "tenant", t, "findings", n)
+		done++
+	}
+	return done
+}
+
+// RunSweeper recomputes after a policy change every 30 seconds and marks breaches for every tenant every interval.
+// One replica works at a time (an advisory lock).
 func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.Pool, interval time.Duration, log *slog.Logger) {
 	const lockKey = int64(0x52414d50_534c4121) // "RAMPSLA!"
-	sweep := func() {
+	locked := func(fn func()) {
 		if pool != nil {
 			conn, err := pool.Acquire(ctx)
 			if err != nil {
@@ -377,26 +407,16 @@ func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.
 			}
 			defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockKey) }()
 		}
+		fn()
+	}
+	sweep := func() {
 		tenants, err := sys.ListTenantIDs(ctx)
 		if err != nil {
 			log.Warn("sla sweep: listing tenants failed", "error", err)
 			return
 		}
-		// A tenant whose SLAPolicy changed has every due date recomputed first, so the breaches below follow the
-		// new policy.
-		if changed, err := sys.TenantsNeedingSLARecompute(ctx); err == nil {
-			for _, t := range changed {
-				n, err := sc.RecomputeSLA(ctx, t)
-				if err != nil {
-					log.Warn("sla recompute failed", "tenant", t, "error", err)
-					continue
-				}
-				if err := sc.store.ClearSLARecompute(ctx, t); err != nil {
-					log.Warn("sla recompute: clearing the flag failed", "tenant", t, "error", err)
-				}
-				log.Info("sla due dates recomputed after a policy change", "tenant", t, "findings", n)
-			}
-		}
+		// A tenant whose policy changed has every due date recomputed first, so the breaches below follow it.
+		RecomputeChanged(ctx, sc, sys, log)
 		now := time.Now().UTC()
 		for _, t := range tenants {
 			if n, err := sc.MarkBreaches(ctx, t, now); err != nil {
@@ -412,15 +432,19 @@ func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.
 			}
 		}
 	}
-	sweep()
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
+	locked(sweep)
+	fast := time.NewTicker(min(recomputeCheckEvery, interval))
+	defer fast.Stop()
+	slow := time.NewTicker(interval)
+	defer slow.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
-			sweep()
+		case <-fast.C:
+			locked(func() { RecomputeChanged(ctx, sc, sys, log) })
+		case <-slow.C:
+			locked(sweep)
 		}
 	}
 }

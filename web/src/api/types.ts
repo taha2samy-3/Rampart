@@ -79,6 +79,8 @@ export interface Finding {
   title: string;
   description?: string;
   vulnerability_id?: string | null;
+  cwes?: number[];
+  cvss_vector?: string;
   location?: FindingLocation;
   severity: Severity;
   risk_score: number;
@@ -356,6 +358,50 @@ export interface Reporter {
 export interface CorrelatedRef { id: string; scanner: string; rule_id: string; state: string }
 export interface FindingSources { reported_by: Reporter[]; also_reported_by: CorrelatedRef[] }
 
+/** The package a scanner named for a finding: on the occurrence, not on the finding (GET /findings/{id}). */
+export interface PackageEvidence {
+  purl?: string;
+  component_name?: string;
+  installed_version?: string;
+  fixed_version?: string;
+  manifest_path?: string;
+}
+
+/** What the feeds know of a vulnerability, whatever scanner or parser reported it (docs/11). */
+export interface VulnerabilityRecord {
+  id: string;
+  aliases: string[];
+  summary?: string;
+  description?: string;
+  cwes: number[];
+  cvss_score?: number;
+  cvss_vector?: string;
+  epss_score?: number;
+  epss_percentile?: number;
+  kev: boolean;
+  kev_date_added?: string;
+  kev_due_date?: string;
+  kev_ransomware: boolean;
+  published?: string;
+  modified?: string;
+  links: string[];
+  exploited_by?: string[];
+}
+export interface VulnerabilityDetail { id: string; known: boolean; record?: VulnerabilityRecord; links: string[] }
+
+/** Where this tenant has a vulnerability: one row per application, with its assets. */
+export interface ImpactApplication {
+  id: string;
+  slug: string;
+  name: string;
+  findings: number;
+  open: number;
+  max_severity: Severity;
+  max_risk_score: number;
+  asset_ids: string[];
+}
+export interface VulnerabilityImpact { id: string; findings: number; open: number; applications: ImpactApplication[]; truncated?: boolean }
+
 /** An in-app message: what a deadline or expiry sweep found (docs/16 D45). */
 export interface AppNotification { id: string; kind: string; title: string; body?: string; link?: string; created_at: string; unread: boolean }
 export interface NotificationList { items: AppNotification[]; unread: number }
@@ -378,6 +424,8 @@ export interface Taxonomy {
   /** builtin: shipped with Rampart; cluster: installed by the platform; tenant: installed by this tenant (D102). */
   origin?: 'builtin' | 'cluster' | 'tenant';
   scope?: string;
+  /** The mark, served by this server (the address it came from stays on the server); absent: the screen draws one. */
+  logo?: string;
   window_days?: number;
   /** A resource that does not validate: listed so its owner sees why, never evaluated. */
   error?: string;
@@ -586,3 +634,21 @@ export interface DTrackProjectRecord {
   updated_at: string;
 }
 
+
+/** Where an application stands against one framework (GET /applications/{id}/compliance). */
+export interface AppFramework {
+  id: string;
+  name: string;
+  version: string;
+  origin?: 'builtin' | 'cluster' | 'tenant';
+  logo?: string;
+  verdict: 'meets' | 'gaps' | 'partial';
+  controls: number;
+  clear: number;
+  open: number;
+  not_assessed: number;
+  open_findings: number;
+  accepted_findings: number;
+  window_days: number;
+}
+export interface AppCompliance { application: string; evaluated_at: string; frameworks: AppFramework[]; not_in_scope: string[] }

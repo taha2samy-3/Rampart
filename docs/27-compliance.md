@@ -91,6 +91,7 @@ spec:
 |---|---|
 | `displayName`, `version` | Required. The version appears in every reading and export, so an auditor knows which edition was read. |
 | `source`, `note`, `description` | Optional. Where the framework comes from, and anything a reader must know. |
+| `logoUrl` | Optional. An `https` address of the framework's mark (PNG, JPEG, WebP or SVG, at most 256 KiB). The server reads it once, keeps it a day, and serves it from its own origin, so the browser never contacts that address and the page's security policy stays closed. An address that points into the cluster, to the host or to a metadata service is refused; so is an SVG with a script, an event handler, an external reference or an entity. When it cannot be read, or is absent, the screen draws a mark of its own (teal for a framework you installed, indigo for the built-in ones). Use only a logo you have the right to use: the logos of OWASP, PCI SSC, ISO, NIST and MITRE are trademarks. |
 | `appliesTo.complianceScope` | Optional. A label, such as `pci`. Only applications whose `complianceScope` lists it are read. |
 | `evidenceWindowDays` | Optional. How recent a scan must be to count. Default 30. |
 | `controls[].id`, `name` | Required. The id is unique in the framework. |

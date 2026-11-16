@@ -30,6 +30,13 @@ export function finding(i: number, band: 'critical' | 'high' | 'medium' | 'low' 
 }
 
 export interface Scenario {
+  /** The occurrences GET /findings/{id} returns (the package a scanner named), and the vulnerability record and impact. */
+  occurrences?: unknown[];
+  vuln?: { record?: unknown; impact?: unknown; error?: boolean };
+  /** GET /applications/{id}/compliance. */
+  appCompliance?: unknown | 'error';
+  /** GET /inventory and /inventory/components. error answers 500 (a missing endpoint is a 404 in production). */
+  inventory?: { assets?: unknown[]; components?: unknown[]; total?: number; truncated?: boolean; error?: boolean };
   loggedIn?: boolean;
   /** Sign-in methods ui-config reports (default: one OIDC provider). */
   methods?: { id: string; name: string; type: string }[];
@@ -174,7 +181,19 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/me/tenants') return json([{ id: 't1', slug: 'acme', name: 'Acme' }, { id: 't2', slug: 'globex', name: 'Globex' }]);
     if (/^\/api\/v1\/findings\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET') {
       if (sc.sources === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
-      return json({ finding: {}, reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
+      return json({ finding: {}, occurrences: sc.occurrences ?? [], reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
+    }
+    if (path === '/api/v1/inventory' || path === '/api/v1/inventory/components') {
+      if (sc.inventory?.error) return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if (path.endsWith('/components')) return json({ components: sc.inventory?.components ?? [], total: sc.inventory?.total ?? (sc.inventory?.components ?? []).length, truncated: sc.inventory?.truncated ?? false });
+      return json({ assets: sc.inventory?.assets ?? [] });
+    }
+    if (path.startsWith('/api/v1/vulnerabilities/')) {
+      if (sc.vuln?.error) return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      const id = decodeURIComponent(path.split('/')[4] ?? '');
+      if (path.endsWith('/impact')) return json(sc.vuln?.impact ?? { id, findings: 0, open: 0, applications: [] });
+      const record = sc.vuln?.record;
+      return json(record ? { id, known: true, record, links: (record as { links?: string[] }).links ?? [] } : { id, known: false, links: [`https://nvd.nist.gov/vuln/detail/${id}`] });
     }
     if (path.startsWith('/api/v1/findings/') && path.endsWith('/events')) return json({ items: sc.events?.length ? sc.events : null });
     if (path === '/api/v1/findings/bulk' && init?.method === 'POST') {
@@ -223,6 +242,10 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/applications') {
       if (sc.apps === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list applications', status: 500, request_id: 'req_apps' }, 500);
       return json({ items: sc.apps?.length ? sc.apps : null });
+    }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/compliance')) {
+      if (sc.appCompliance === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      return json(sc.appCompliance ?? { application: 'x', evaluated_at: '2026-11-17T00:00:00Z', frameworks: [], not_in_scope: [] });
     }
     if (path.startsWith('/api/v1/applications/') && path.endsWith('/trend')) {
       const points = Array.from({ length: 14 }, (_, i) => ({ day: `2026-11-${String(i + 1).padStart(2, '0')}`, critical: i % 3, high: 4 + (i % 2), medium: 6, low: 2, new: i % 4, fixed: 1 + (i % 3) }));

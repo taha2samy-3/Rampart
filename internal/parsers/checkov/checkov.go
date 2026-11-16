@@ -24,6 +24,9 @@ func (p *Parser) Name() string { return "checkov-json" }
 // Detect scores how likely head is a Checkov JSON report.
 func (p *Parser) Detect(head []byte, filename string, contentType string) int {
 	s := string(head)
+	if strings.Contains(s, `"runs"`) { // a SARIF file (Checkov can write one) is the SARIF parser's
+		return 0
+	}
 	score := 0
 	if strings.Contains(s, `"check_type"`) || strings.Contains(s, `"results"`) {
 		score += 35

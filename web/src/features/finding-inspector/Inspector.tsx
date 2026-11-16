@@ -6,6 +6,7 @@ import { getAcceptance, getFindingEvents, getFindingSources, qk, toProblem } fro
 import type { FindingEvent, FindingRow } from '@/api/types';
 import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
+import { VulnerabilitySection } from './VulnerabilitySection';
 import { absoluteDate, dueShort, relativeDays, shortAge } from '@/lib/format';
 import { factorKind, factorLabel, type SegmentKind } from '@/lib/score';
 
@@ -111,6 +112,8 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
         </dl>
       </section>
 
+      <VulnerabilitySection finding={f} />
+
       <ReportedBy findingId={f.id} version={f.version} />
 
       <Timeline findingId={f.id} version={f.version} />
@@ -165,7 +168,7 @@ function Timeline({ findingId, version }: { findingId: string; version?: number 
 function describe(e: FindingEvent, t: TFunction): string {
   const actor = e.actor.startsWith('user:') ? e.actor.slice(5) : e.actor.startsWith('system') ? t('triage.scanActor') : e.actor;
   const str = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(', ') : '');
-  const known = ['created', 'reactivated', 'closed_by_rescan', 'updated', 'recheck_needed', 'state_changed', 'severity_changed', 'tags_changed', 'note_added',
+  const known = ['created', 'reactivated', 'closed_by_rescan', 'updated', 'recheck_needed', 'state_changed', 'severity_changed', 'tags_changed', 'justification_changed', 'note_added',
     'risk_acceptance_requested', 'risk_acceptance_approved', 'risk_acceptance_rejected', 'risk_acceptance_revoked', 'risk_acceptance_expired', 'no_longer_detected'];
   const key = known.includes(e.type) ? e.type : 'default';
   const from = e.type === 'state_changed' ? t(`state.${str(e.from)}`, { defaultValue: str(e.from) }) : str(e.from);

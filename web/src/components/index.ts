@@ -2,6 +2,7 @@ export * from './BandShape';
 export * from './Button';
 export * from './Dialog';
 export * from './EmptyState';
+export * from './FrameworkMark';
 export * from './Input';
 export * from './Kbd';
 export * from './Logo';

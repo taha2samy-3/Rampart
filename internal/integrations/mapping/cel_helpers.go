@@ -168,6 +168,10 @@ type CompiledMapping struct {
 	pkgName      cel.Program
 	installedVer cel.Program
 	fixedVer     cel.Program
+	cwes         cel.Program
+	cvssVector   cel.Program
+	category     cel.Program
+	manifest     cel.Program
 }
 
 // Compile compiles all CEL expressions in the mapping package with cost limits.
@@ -249,6 +253,18 @@ func Compile(pkg *MappingPackage) (*CompiledMapping, error) {
 		return nil, err
 	}
 	if err := compileField(m.Location.Package.FixedVersion, &cm.fixedVer); err != nil {
+		return nil, err
+	}
+	if err := compileField(m.CWEs, &cm.cwes); err != nil {
+		return nil, err
+	}
+	if err := compileField(m.CVSSVector, &cm.cvssVector); err != nil {
+		return nil, err
+	}
+	if err := compileField(m.Category, &cm.category); err != nil {
+		return nil, err
+	}
+	if err := compileField(m.Location.Package.ManifestPath, &cm.manifest); err != nil {
 		return nil, err
 	}
 

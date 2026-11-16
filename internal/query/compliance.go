@@ -28,6 +28,7 @@ type TaxonomyInfo struct {
 	Version    string `json:"version"`
 	Source     string `json:"source"`
 	Kind       string `json:"kind"`
+	Logo       string `json:"logo,omitempty"` // the mark, on this server (GET /taxonomies/{id}/logo); empty: the screen draws one
 	Note       string `json:"note,omitempty"`
 	Origin     string `json:"origin"`          // builtin | cluster | tenant
 	Scope      string `json:"scope,omitempty"` // only applications whose complianceScope lists it
@@ -37,7 +38,7 @@ type TaxonomyInfo struct {
 }
 
 func infoOf(f compliance.Framework) TaxonomyInfo {
-	return TaxonomyInfo{ID: f.ID, Name: f.Name, Version: f.Version, Source: f.Source, Kind: f.Kind, Note: f.Note, Origin: f.Origin,
+	return TaxonomyInfo{ID: f.ID, Name: f.Name, Version: f.Version, Source: f.Source, Kind: f.Kind, Logo: logoPath(f.ID, f.LogoURL), Note: f.Note, Origin: f.Origin,
 		Scope: f.Scope, WindowDays: f.Window(), Controls: len(f.Controls)}
 }
 
@@ -627,4 +628,35 @@ func (a *API) handleAttest(w http.ResponseWriter, r *http.Request) {
 		Detail: map[string]any{"control": ctl.ID, "status": req.Status, "application": req.ApplicationID, "expires_at": expires}, RequestID: telemetry.RequestID(r.Context()),
 	})
 	writeJSON(w, http.StatusCreated, att)
+}
+
+// handleTaxonomyLogo is GET /api/v1/taxonomies/{id}/logo: the mark the framework's resource names, read once by the
+// server and served from here, so the page's security policy stays closed to other hosts and the viewer's address
+// is not sent to a third party.
+func (a *API) handleTaxonomyLogo(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	fw, err := a.framework(r.Context(), tenantID, r.PathValue("id"))
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "The frameworks could not be loaded")
+		return
+	}
+	if fw == nil || fw.LogoURL == "" {
+		problem(w, http.StatusNotFound, "not-found", "This framework has no logo")
+		return
+	}
+	body, ctype, err := a.logos.get(r.Context(), fw.LogoURL)
+	if err != nil {
+		problem(w, http.StatusBadGateway, "logo-unavailable", "The logo could not be read: "+err.Error())
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", ctype)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	h.Set("Cache-Control", "private, max-age=86400")
+	_, _ = w.Write(body)
 }

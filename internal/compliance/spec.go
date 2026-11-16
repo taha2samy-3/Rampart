@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -33,9 +34,12 @@ var ErrInvalidFramework = errors.New("compliance framework")
 //	      name: A threat model is reviewed for each release
 //	      manual: true
 type FrameworkSpec struct {
-	DisplayName        string        `json:"displayName"`
-	Version            string        `json:"version"`
-	Source             string        `json:"source,omitempty"`
+	DisplayName string `json:"displayName"`
+	Version     string `json:"version"`
+	Source      string `json:"source,omitempty"`
+	// LogoURL is an https address of the framework's mark (PNG, JPEG, WebP or SVG, at most 256 KiB). The server reads
+	// it once and serves it from its own origin, so the browser never contacts the address.
+	LogoURL            string        `json:"logoUrl,omitempty"`
 	Description        string        `json:"description,omitempty"`
 	Note               string        `json:"note,omitempty"`
 	AppliesTo          *AppliesTo    `json:"appliesTo,omitempty"`
@@ -113,6 +117,9 @@ func (s *FrameworkSpec) Validate() error {
 	if strings.TrimSpace(s.Version) == "" {
 		return bad("version is required, so a report says which version of the framework it read")
 	}
+	if err := ValidateLogoURL(s.LogoURL); err != nil {
+		return bad("logoUrl: %v", err)
+	}
 	if s.EvidenceWindowDays < 0 || s.EvidenceWindowDays > 366 {
 		return bad("evidenceWindowDays is between 1 and 366 (default 30)")
 	}
@@ -179,7 +186,7 @@ func (s *FrameworkSpec) Validate() error {
 
 // Framework turns a validated spec into the framework the evaluation reads. origin is "cluster" or "tenant".
 func (s *FrameworkSpec) Framework(id, origin string) Framework {
-	f := Framework{ID: id, Name: s.DisplayName, Version: s.Version, Source: s.Source, Note: s.Note, Kind: "custom", Origin: origin,
+	f := Framework{ID: id, Name: s.DisplayName, Version: s.Version, Source: s.Source, LogoURL: s.LogoURL, Note: s.Note, Kind: "custom", Origin: origin,
 		WindowDays: s.EvidenceWindowDays}
 	if s.AppliesTo != nil {
 		f.Scope = s.AppliesTo.ComplianceScope
@@ -214,4 +221,26 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateLogoURL accepts an empty value or an https URL of at most 2048 characters, with a host and no
+// credentials. Where the host points is checked again when the logo is fetched (a name can change its address).
+func ValidateLogoURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if len(raw) > 2048 {
+		return errors.New("longer than 2048 characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return errors.New("not a URL")
+	}
+	if u.Scheme != "https" {
+		return errors.New("must be an https address")
+	}
+	if u.User != nil {
+		return errors.New("must not carry a user name or password")
+	}
+	return nil
 }

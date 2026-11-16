@@ -2062,3 +2062,28 @@ Code:
 The guide for authors is docs/27.
 
 Sources: PCI DSS v4.0.1 requirement 6 and 12.5.2 (scope); SOC 2 Trust Services Criteria CC7.1, CC8.1 (evidence over a period); ISO/IEC 27001:2022 Annex A 8.25–8.29; NIST SP 800-218 (SSDF); Wiz, DefectDojo, Drata and Secureframe documentation on custom frameworks and controls.
+
+## D103 to D111: decisions of the QA session of 2026-11-17
+
+The test, the bugs and the evaluation of earlier decisions are in docs/28. These are the decisions it made.
+
+| # | Decision | Why |
+|---|---|---|
+| D103 | **A parser the client names must match the file.** When the named parser scores 0 on the first 64 KiB and another parser recognises it with confidence 40 or more, the upload is refused (HTTP 400 `format-mismatch`; for a presigned upload the permanent error `format_mismatch`). A parser that scores above 0, or no better parser, is not refused. Checkov's `Detect` refuses SARIF | A JSON parser reads a foreign file as an empty scan, and the close step then closes the real findings of the scope |
+| D104 | **NUL is replaced at ingest and refused at the API.** The ingest stream is scrubbed (0x00 to a space, `\u0000` to `�`, same length). The query API answers 400 for a NUL in a query parameter or a body that is not a file upload | PostgreSQL stores no NUL in text or jsonb; the result was HTTP 500 for a bad request |
+| D105 | **A CVE is described by the feeds, not only by its report.** `GET /api/v1/vulnerabilities/{id}` (record by id or alias; 200 with `known: false` and the public links when no feed has it) and `/{id}/impact` (applications and assets of the tenant, by id or alias, at most 5000 findings) | docs/11; a finding from a report that carried only an id was undescribed |
+| D106 | **Inventory is read from the database.** `GET /api/v1/inventory` (assets with open findings) and `/inventory/components?q=&limit=` (packages of the latest SBOM of each asset, default 500, at most 2000) | The page asked for routes that did not exist |
+| D107 | **SARIF carries what it can.** A rule id that is a vulnerability id becomes `VulnIDs`; Trivy's `Package:`, `Installed Version:` and `Fixed Version:` lines become the package, with a generic purl; Trivy's category follows the rule tags; a multi-line message does not become the title | KEV, EPSS, the CVE page, the impact and the fingerprint all need the id and the package |
+| D108 | **With `versions: latest`, a DT name that has no flagged version reads its newest BOM.** When DT flags one, that one wins | DT sets `isLatest` only on an upload with `isLatest=true`; the default skipped the whole portfolio |
+| D109 | **A policy change is recomputed within 30 seconds**, by its own ticker; the breach sweep keeps its interval | The list and the inspector disagreed for up to 15 minutes |
+| D110 | **`/readyz` is false until the runner says the server is ready** | Traffic reached a pod that was still migrating |
+| D111 | **The mapping runtime fills the fields the built-in parsers fill**: `map.cwes`, `map.cvssVector`, `map.category` (per record, validated), `location.package.manifestPath`, and `PurlBase` derived from the purl. A direct upload answers with the application it was filed under and a warning when it differs from the one named (D10 is unchanged). Triage: a change to the justification or impact statement alone is a decision (`justification_changed`) | See docs/28 §2 and §4 |
+
+Open, from the same session: the `kevDueDate` cap for non-federal use, `extends: default` for a tenant `RiskPolicy`, reads per application (D48, D90), the OpenAPI spec generated from the route table (D54), and the stored raw report of a direct upload. See docs/28 §3 and §5.
+
+## D112 and D113: compliance per application, and framework marks
+
+| # | Decision | Why |
+|---|---|---|
+| D112 | **An application page says what it meets today.** `GET /api/v1/applications/{id}/compliance` returns, for each framework that reads the application, its controls clear, open and not read, and a verdict (`meets`, `gaps`, `partial`). A framework with a scope reads only the applications that list it, and the others are named. It is the reading of the Compliance page, narrowed to one application: no second set of rules | docs/27 reads a framework for one application; nothing answered "which frameworks does this application meet" |
+| D113 | **A framework may carry a logo, read by the server.** `spec.logoUrl` (https, at most 2048 characters) is fetched once by the server with an SSRF-safe client, checked by its bytes (PNG, JPEG, WebP, plain SVG), kept a day, and served from `/api/v1/taxonomies/{id}/logo` with `nosniff` and a sandbox policy; the browser never contacts the address and the CSP stays `img-src 'self' data:`. **Official logos are not bundled**: they are trademarks and recolouring them is an alteration. Built-in frameworks get a mark of Rampart's own (indigo; teal for a framework the organisation installed) | See docs/28 §9 |

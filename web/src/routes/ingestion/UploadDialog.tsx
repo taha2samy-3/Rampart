@@ -46,13 +46,13 @@ function UploadForm({ onDone }: { onDone: () => void }) {
 
   const parsersQuery = useQuery({
     queryKey: qk.parsers.list(),
-    queryFn: ({ signal }) => listParsers(signal).catch(() => []),
+    queryFn: ({ signal }) => listParsers(signal),
   });
   const parsers = parsersQuery.data ?? [];
 
   const appsQuery = useQuery({
     queryKey: qk.applications.list(),
-    queryFn: ({ signal }) => listApplications(signal).catch(() => []),
+    queryFn: ({ signal }) => listApplications(signal),
     staleTime: 60_000,
   });
   const accessibleApps = (appsQuery.data ?? []).filter((a) => can(a.id, 'triager'));
@@ -146,7 +146,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             const isCustom = p.support_level !== 'builtin';
             return (
               <option key={p.id} value={cleanId}>
-                {p.name} {isCustom ? `[CRD: ${p.id}]` : ''}
+                {p.name}{isCustom ? ` (${p.support_level}: ${p.id})` : ''}
               </option>
             );
           })}
@@ -166,17 +166,18 @@ function UploadForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setApp(e.target.value)}
           className="h-8 w-full rounded-ctl border border-rule bg-surface px-2.5 text-13 text-ink focus:border-accent focus:outline-none"
         >
-          <option value="">{t('ingestion.uploadChooseApplication') || 'Choose an application...'}</option>
+          <option value="">{t('ingestion.uploadChooseApplication')}</option>
           {accessibleApps.map((a) => (
             <option key={a.id} value={a.slug || a.id}>
               {a.name} ({a.slug || a.id})
             </option>
           ))}
         </select>
-        {accessibleApps.length === 0 && !appsQuery.isLoading && (
-          <p className="mt-1 text-11 text-crimson">
-            {t('ingestion.noAccessibleApps') || 'No applications available with triager role in this tenant.'}
-          </p>
+        {(appsQuery.isError || parsersQuery.isError) && (
+          <p role="alert" className="mt-1 text-11 text-crimson">{t('ingestion.uploadListFailed')}</p>
+        )}
+        {accessibleApps.length === 0 && !appsQuery.isLoading && !appsQuery.isError && (
+          <p className="mt-1 text-11 text-crimson">{t('ingestion.noAccessibleApps')}</p>
         )}
       </div>
 

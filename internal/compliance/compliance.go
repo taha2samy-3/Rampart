@@ -35,6 +35,7 @@ type Framework struct {
 	Name       string    `json:"name"`
 	Version    string    `json:"version"`
 	Source     string    `json:"source"`
+	LogoURL    string    `json:"-"`    // read by the server only (GET /taxonomies/{id}/logo); never sent to the browser
 	Kind       string    `json:"kind"` // cwe: matched by weakness; category: by the kind of scan; custom: a resource (D102)
 	Note       string    `json:"note,omitempty"`
 	Origin     string    `json:"origin,omitempty"`      // builtin | cluster | tenant

@@ -27,7 +27,7 @@ func NewOpsServer(addr string, checkers ...ReadinessChecker) *OpsServer {
 		checkers:  checkers,
 		startTime: time.Now(),
 	}
-	ops.ready.Store(true)
+	ops.ready.Store(false) // ready only once the server has migrated, bootstrapped and mounted its routes (SetReady)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", ops.handleHealthz)

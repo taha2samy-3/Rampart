@@ -1,6 +1,9 @@
 package compliance
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFrameworksLoadAndAreWellFormed(t *testing.T) {
 	fs, err := All()
@@ -169,5 +172,37 @@ func TestOWASP2025(t *testing.T) {
 	}
 	if len(order) != 2 || order[0] != "2025" {
 		t.Errorf("the newer OWASP list should come first: %v", order)
+	}
+}
+
+func TestFrameworkSpec_LogoURL(t *testing.T) {
+	doc := func(logo string) []byte {
+		return []byte(`{"displayName":"Acme","version":"1","logoUrl":"` + logo + `","controls":[{"id":"A-1","name":"x","manual":true}]}`)
+	}
+	for _, ok := range []string{"", "https://logos.acme.example/mark.svg", "https://cdn.example.com/a/b.png?v=2"} {
+		spec, err := ParseFrameworkSpec(doc(ok))
+		if err != nil {
+			t.Errorf("%q must be accepted: %v", ok, err)
+			continue
+		}
+		if f := spec.Framework("acme", "tenant"); f.LogoURL != ok {
+			t.Errorf("the framework must carry the address to the server: %q", f.LogoURL)
+		}
+	}
+	long := "https://example.com/" + strings.Repeat("a", 2100)
+	for _, bad := range []string{"http://logos.acme.example/mark.png", "ftp://x/y.png", "data:image/png;base64,AAAA", "//logos.acme.example/m.png", "javascript:alert(1)", "https://user:pw@logos.acme.example/m.png", "https:///m.png", long} {
+		if _, err := ParseFrameworkSpec(doc(bad)); err == nil || !strings.Contains(err.Error(), "logoUrl") {
+			t.Errorf("%q must be refused, naming logoUrl: %v", bad[:min(len(bad), 30)], err)
+		}
+	}
+	// A built-in framework has no logoUrl: the screen draws its mark.
+	all, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range all {
+		if f.LogoURL != "" {
+			t.Errorf("built-in %s must not point at another site", f.ID)
+		}
 	}
 }

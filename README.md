@@ -69,6 +69,7 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [22 Phase 3 finalization](docs/22-phase-3-finalization-plan.md) | The UI and API left to close Phase 3 |
 | [23 Phase 3 design review](docs/23-phase-3-design-review.md) | Decisions to change, Dependency-Track checked against its sources, connectors as plugins |
 | [24 Business value](docs/24-business-value.md) | The problem, the market, how value is measured, how to talk about it |
+| [28 QA report](docs/28-qa-report-2026-11-17.md) | End-to-end test on the dev cluster: 17 bugs fixed with tests, open items, design decisions evaluated |
 | [ADRs](docs/adr/) | Six architecture decision records |
 | [Research](docs/research/) | DefectDojo, the ASPM market, standards, Kubernetes-native patterns |
 

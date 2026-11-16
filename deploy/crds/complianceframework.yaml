@@ -52,6 +52,13 @@ spec:
                   type: string
                   maxLength: 2048
                   description: Where the framework is published, for example a URL.
+                logoUrl:
+                  type: string
+                  maxLength: 2048
+                  pattern: '^https://[^\s@/]+(/[^\s]*)?$'
+                  description: >-
+                    An https address of the framework's mark (PNG, JPEG, WebP or SVG, at most 256 KiB). The server reads it once and
+                    serves it from its own origin; the browser never contacts the address.
                 description:
                   type: string
                   maxLength: 4096

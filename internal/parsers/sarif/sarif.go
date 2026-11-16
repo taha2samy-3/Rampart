@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -182,13 +184,18 @@ func mapResultToRawFinding(
 	ruleID := res.RuleID
 	ruleMeta, hasRule := rules[ruleID]
 
+	// The message is the instance ("Container 'app' should set readOnlyRootFilesystem"); the rule's short
+	// description is its name. A message of several lines is a record (Trivy: Artifact, Package, Installed
+	// Version, Link), not a title: the rule's name titles the finding and the record is kept as its description.
 	title := ""
-	if res.Message.Text != "" {
+	multiline := strings.Contains(strings.TrimSpace(res.Message.Text), "\n")
+	switch {
+	case res.Message.Text != "" && !(multiline && hasRule && ruleMeta.ShortDescription.Text != ""):
 		title = res.Message.Text
-	} else if hasRule && ruleMeta.ShortDescription.Text != "" {
+	case hasRule && ruleMeta.ShortDescription.Text != "":
 		title = ruleMeta.ShortDescription.Text
-	} else {
-		title = ruleID
+	default:
+		title = firstLine(res.Message.Text, ruleID)
 	}
 
 	description := ""
@@ -196,6 +203,9 @@ func mapResultToRawFinding(
 		description = ruleMeta.FullDescription.Text
 	} else if hasRule && ruleMeta.Help.Text != "" {
 		description = ruleMeta.Help.Text
+	}
+	if multiline && title != res.Message.Text {
+		description = strings.TrimSpace(description + "\n\n" + res.Message.Text)
 	}
 
 	// Normalize severity from level or security-severity
@@ -251,8 +261,25 @@ func mapResultToRawFinding(
 	// Extract CWEs from rule tags or relationships
 	cwes := extractCWEs(ruleMeta)
 
+	// A rule that is a vulnerability id (Trivy and Grype write CVE-... as the rule id) links the finding to the
+	// feeds: KEV, EPSS, the description and the applications that share it are all read by that id.
+	var vulnIDs []string
+	if vulnIDPattern.MatchString(ruleID) {
+		vulnIDs = []string{strings.ToUpper(ruleID)}
+	}
+
 	// Determine category based on scanner or rule
-	category := deriveCategory(scannerFamily, ruleMeta.Properties.Tags)
+	category := deriveCategory(scannerFamily, ruleMeta.Properties.Tags, len(vulnIDs) > 0)
+
+	// An SCA record names its package in the message; a finding that says which package is more than a rule id.
+	if category == domain.CategorySCA {
+		if pkg := packageOf(res.Message.Text); pkg != nil {
+			if loc.Code != nil {
+				pkg.ManifestPath = loc.Code.FilePath
+			}
+			loc.Package = pkg
+		}
+	}
 
 	// Keep raw record
 	rawBytes, _ := json.Marshal(res)
@@ -270,6 +297,7 @@ func mapResultToRawFinding(
 		Description:    normalize.NFC(description),
 		Location:       loc,
 		CWEs:           cwes,
+		VulnIDs:        vulnIDs,
 		Category:       category,
 		RawPayload:     rawBytes,
 	}
@@ -321,13 +349,26 @@ func mapSarifLevelToSeverity(level string, props map[string]any) domain.Severity
 	}
 }
 
-func deriveCategory(scannerFamily string, tags []string) domain.FindingCategory {
+func deriveCategory(scannerFamily string, tags []string, hasVulnID bool) domain.FindingCategory {
 	switch scannerFamily {
 	case "gitleaks", "trufflehog":
 		return domain.CategorySecret
 	case "checkov", "kics", "tfsec":
 		return domain.CategoryIaC
 	case "trivy", "grype":
+		// Trivy writes vulnerabilities, misconfigurations and secrets in one SARIF file: the rule says which.
+		// Reading every Trivy result as SCA made a Kubernetes setting look like a vulnerable package.
+		if hasVulnID {
+			return domain.CategorySCA
+		}
+		for _, tag := range tags {
+			switch strings.ToLower(tag) {
+			case "misconfiguration":
+				return domain.CategoryIaC
+			case "secret":
+				return domain.CategorySecret
+			}
+		}
 		return domain.CategorySCA
 	case "zap", "nuclei":
 		return domain.CategoryDAST
@@ -341,7 +382,7 @@ func deriveCategory(scannerFamily string, tags []string) domain.FindingCategory 
 		if strings.Contains(lower, "secret") {
 			return domain.CategorySecret
 		}
-		if strings.Contains(lower, "iac") || strings.Contains(lower, "terraform") {
+		if strings.Contains(lower, "iac") || strings.Contains(lower, "terraform") || lower == "misconfiguration" {
 			return domain.CategoryIaC
 		}
 		if strings.Contains(lower, "cve") || strings.Contains(lower, "vulnerability") {
@@ -351,8 +392,54 @@ func deriveCategory(scannerFamily string, tags []string) domain.FindingCategory 
 			return domain.CategoryDAST
 		}
 	}
+	if hasVulnID {
+		return domain.CategorySCA
+	}
 
 	return domain.CategorySAST // default
+}
+
+// vulnIDPattern matches a rule id that is a vulnerability identifier.
+var vulnIDPattern = regexp.MustCompile(`(?i)^(CVE-\d{4}-\d{4,}|GHSA(-[0-9a-z]{4}){3}|PYSEC-\d{4}-\d+|GO-\d{4}-\d+|RUSTSEC-\d{4}-\d+|OSV-\d{4}-\d+)$`)
+
+// packageOf reads the package of an SCA message ("Package: lodash", "Installed Version: 4.17.20", "Fixed Version:
+// 4.17.21"), the lines Trivy writes. It returns nil when the message names none. The purl is generic: the
+// ecosystem is not in the message, and a name alone would make the fingerprint weak (D11).
+func packageOf(msg string) *domain.PackageLocation {
+	var name, installed, fixed string
+	for _, line := range strings.Split(msg, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "package":
+			name = v
+		case "installed version":
+			installed = v
+		case "fixed version":
+			fixed = v
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	base := "pkg:generic/" + url.PathEscape(name)
+	pkg := &domain.PackageLocation{PurlBase: base, Purl: base, ComponentName: name, InstalledVersion: installed, FixedVersion: fixed}
+	if installed != "" {
+		pkg.Purl = base + "@" + url.PathEscape(installed)
+	}
+	return pkg
+}
+
+func firstLine(s, fallback string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 func extractCWEs(rule sarifRule) []int {

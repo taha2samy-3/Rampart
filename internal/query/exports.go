@@ -24,6 +24,11 @@ func (a *API) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "json"
 	}
+	// An unknown format used to fall through to JSON, so format=sarif returned a file that was not SARIF.
+	if format != "json" && format != "csv" && format != "ocsf" {
+		writeJSONProblem(w, http.StatusBadRequest, "https://rampart.aspm.dev/problems/validation", fmt.Sprintf("Unknown export format %q: use json, csv or ocsf", format))
+		return
+	}
 
 	qParam := r.URL.Query().Get("q")
 	var parsedQuery *grammar.Query
@@ -42,7 +47,7 @@ func (a *API) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 
 	querier, ok := a.store.(FindingQuerier)
 	if !ok {
-		writeJSONProblem(w, http.StatusInternalServerError, "https://rampart.aspm.dev/problems/internal", "Store does not support finding queries")
+		writeJSONProblem(w, http.StatusNotImplemented, "https://rampart.aspm.dev/problems/unsupported", "Store does not support finding queries")
 		return
 	}
 

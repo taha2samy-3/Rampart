@@ -8,6 +8,7 @@ import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
 import type { IngestionSearch } from '@/routes/ingestion/IngestionRoute';
+import type { ComplianceSearch } from '@/routes/compliance/ComplianceRoute';
 import type { WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
 import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
@@ -157,7 +158,14 @@ const applicationRoute = createRoute({
 
 const administrationRoute = createRoute({ getParentRoute: () => appRoute, path: '/administration', component: AdministrationRoute });
 
-const complianceRoute = createRoute({ getParentRoute: () => appRoute, path: '/compliance', component: ComplianceRoute });
+const complianceRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/compliance',
+  validateSearch: (s: Record<string, unknown>): ComplianceSearch => ({ framework: str(s.framework), application: str(s.application) }),
+  component: function Compliance() {
+    return <ComplianceRoute search={complianceRoute.useSearch()} />;
+  },
+});
 
 const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/integrations', component: IntegrationsRoute });
 

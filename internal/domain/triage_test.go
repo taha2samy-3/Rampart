@@ -176,3 +176,25 @@ func TestApplyTriage_SeverityAndTags(t *testing.T) {
 		t.Fatalf("clear tags: %v %v", err, f.Tags)
 	}
 }
+
+// Editing only the impact statement (or the justification) of a not_affected finding used to mutate the
+// finding but emit no event, so the request ended "nothing to change" and the edit was lost.
+func TestApplyTriage_EditingTheJustificationOfANotAffectedFindingIsADecision(t *testing.T) {
+	f := openFinding()
+	if _, err := domain.ApplyTriage(f, domain.TriageRequest{State: domain.StateNotAffected, Justification: "component_not_present", ImpactStatement: "old"}, "user:a", now); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := domain.ApplyTriage(f, domain.TriageRequest{ImpactStatement: "the library is only a test dependency"}, "user:a", now)
+	if err != nil {
+		t.Fatalf("an impact statement edit must be accepted: %v", err)
+	}
+	if f.ImpactStatement != "the library is only a test dependency" || len(evs) != 1 || evs[0].Type != "justification_changed" {
+		t.Errorf("want the edit applied and one justification_changed event: %q %+v", f.ImpactStatement, evs)
+	}
+	if _, err := domain.ApplyTriage(f, domain.TriageRequest{ImpactStatement: "the library is only a test dependency"}, "user:a", now); err == nil {
+		t.Error("the same text again changes nothing and must say so")
+	}
+	if evs, err := domain.ApplyTriage(f, domain.TriageRequest{Justification: "vulnerable_code_not_in_execute_path"}, "user:a", now); err != nil || len(evs) != 1 || f.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Errorf("a justification change alone: %v %+v", err, evs)
+	}
+}

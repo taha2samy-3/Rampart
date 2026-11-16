@@ -221,3 +221,13 @@ const (
 	CategoryLicense     FindingCategory = "license"
 	CategorySupplyChain FindingCategory = "supply_chain"
 )
+
+// IsValid reports whether c is one of the categories above.
+func (c FindingCategory) IsValid() bool {
+	switch c {
+	case CategorySAST, CategorySCA, CategorySecret, CategoryIaC, CategoryContainer, CategoryDAST, CategoryCSPM,
+		CategoryCompliance, CategoryLicense, CategorySupplyChain:
+		return true
+	}
+	return false
+}

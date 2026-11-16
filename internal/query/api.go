@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -10,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"rampart/internal/query/sqlbuilder"
 	"rampart/internal/scoring"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +48,7 @@ type API struct {
 	hmacKey       []byte
 	objects       objectstore.Store
 	intel         IntelSource
+	logos         logoCache
 	scorer        *scoring.Scorer
 	gw            *ingest.Gateway
 	live          *LiveHub
@@ -167,8 +171,14 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
 	routes.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)
 	routes.HandleFunc("GET /api/v1/audit", a.handleListAudit)
+	routes.HandleFunc("GET /api/v1/inventory", a.handleInventoryAssets)
+	routes.HandleFunc("GET /api/v1/inventory/components", a.handleInventoryComponents)
+	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}", a.handleGetVulnerability)
+	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}/impact", a.handleVulnerabilityImpact)
 	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
+	routes.HandleFunc("GET /api/v1/applications/{id}/compliance", a.handleApplicationCompliance)
+	routes.HandleFunc("GET /api/v1/taxonomies/{id}/logo", a.handleTaxonomyLogo)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/history", a.handleTaxonomyHistory)                 // the days a reading was kept (D102)
 	routes.HandleFunc("POST /api/v1/taxonomies/{id}/controls/{control}/attestations", a.handleAttest) // a manual control (D102)
 	routes.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
@@ -470,7 +480,7 @@ func (a *API) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	pageFeeds := a.feedsFor(r.Context(), pageIDs)
 
 	apps := map[uuid.UUID]*domain.Application{}
-	var items []FindingResponse
+	items := make([]FindingResponse, 0, len(page)) // an empty page is [], not null
 	for _, f := range page {
 		var vulnIDs []string
 		if f.VulnerabilityID != nil {
@@ -859,11 +869,39 @@ type guardedMux struct {
 }
 
 func (m *guardedMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
-	m.ServeMux.Handle(pattern, m.guard(pattern, http.HandlerFunc(h)))
+	m.ServeMux.Handle(pattern, rejectNUL(m.guard(pattern, http.HandlerFunc(h))))
 }
 
 func (m *guardedMux) Handle(pattern string, h http.Handler) {
-	m.ServeMux.Handle(pattern, m.guard(pattern, h))
+	m.ServeMux.Handle(pattern, rejectNUL(m.guard(pattern, h)))
+}
+
+// rejectNUL answers 400 to a request with a NUL in its query string or body (not a file upload). PostgreSQL stores a NUL in no
+// text or jsonb value, so the write that carried it failed and the caller got HTTP 500 "Failed to save the
+// decision" for what is a bad request (a note, a tag, a filter with %00 in it).
+func rejectNUL(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, vs := range r.URL.Query() {
+			if strings.ContainsRune(k, 0) || slices.ContainsFunc(vs, func(v string) bool { return strings.ContainsRune(v, 0) }) {
+				problem(w, http.StatusBadRequest, "validation", "A NUL character is not allowed in a query parameter")
+				return
+			}
+		}
+		if r.Body != nil && (r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodPut) &&
+			!strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+			head, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+			if bytes.IndexByte(head, 0) >= 0 || bytes.Contains(head, []byte{'\\', 'u', '0', '0', '0', '0'}) {
+				problem(w, http.StatusBadRequest, "validation", "A NUL character is not allowed in the request")
+				return
+			}
+			rest := r.Body
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(head), rest), rest}
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // ingestRoutes are the query-API routes a CI ingest token may call: the gate, which `rampart gate` calls from the

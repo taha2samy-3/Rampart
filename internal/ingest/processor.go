@@ -30,6 +30,7 @@ const (
 	ErrCodeSHA256Mismatch    = "sha256_mismatch"
 	ErrCodeParse             = "parse_error"
 	ErrCodeUnsupportedFormat = "unsupported_format"
+	ErrCodeFormatMismatch    = "format_mismatch"
 	// ErrCodeVEXDocument: a VEX document is a set of decisions, not a scan report (docs/16 D47).
 	ErrCodeVEXDocument      = "vex_document"
 	ErrCodeReportTooLarge   = "report_too_large"
@@ -183,7 +184,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	if err != nil {
 		return Result{}, p.openError(err)
 	}
-	reader := bufio.NewReaderSize(io.LimitReader(rc, p.maxReport+1), 256<<10)
+	reader := bufio.NewReaderSize(scrubNUL(io.LimitReader(rc, p.maxReport+1)), 256<<10)
 	var parseErr error
 	for raw, perr := range pp.Parser.Parse(ctx, reader, parseCtx) {
 		if perr != nil {
@@ -411,7 +412,7 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 		return 0, p.openError(err)
 	}
 	defer func() { _ = rc.Close() }()
-	data, err := io.ReadAll(io.LimitReader(rc, p.maxSBOMBytes+1))
+	data, err := io.ReadAll(scrubNUL(io.LimitReader(rc, p.maxSBOMBytes+1)))
 	if err != nil {
 		return 0, err
 	}
@@ -562,6 +563,16 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 // parsers and the tenant's parser packages (D98).
 func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint string, open StreamSource) (integrations.ParserContract, bool, error) {
 	parser := p.parsers.byName(ctx, tenantID, hint)
+	if parser != nil {
+		if rc, err := open(ctx); err == nil {
+			head := make([]byte, 64<<10)
+			n, _ := io.ReadFull(rc, head)
+			_ = rc.Close()
+			if actual, bad := p.parsers.formatMismatch(ctx, tenantID, parser, head[:n], "", ""); bad {
+				return nil, false, &jobs.PermanentError{Code: ErrCodeFormatMismatch, Err: errors.New(mismatchDetail(parser, actual))}
+			}
+		}
+	}
 	if parser == nil {
 		rc, err := open(ctx)
 		if err != nil {

@@ -22,6 +22,7 @@ export const qk = {
     list: () => ['applications', 'list'] as const,
     one: (id: string) => ['applications', 'one', id] as const,
     trend: (id: string, days: number) => ['applications', 'trend', id, days] as const,
+    compliance: (id: string) => ['applications', 'compliance', id] as const,
   },
   overview: () => ['overview'] as const,
   trend: (metric: string, days: number) => ['trend', metric, days] as const,
@@ -39,6 +40,11 @@ export const qk = {
     events: (id: string) => ['findings', 'events', id] as const,
     sources: (id: string) => ['findings', 'sources', id] as const,
     list: (q: string, sort: string) => ['findings', 'list', { q, sort }] as const,
+  },
+  vulns: {
+    one: (id: string) => ['vulns', 'one', id] as const,
+    impact: (id: string) => ['vulns', 'impact', id] as const,
+    pkg: (findingId: string) => ['findings', 'package', findingId] as const,
   },
   views: {
     all: () => ['views'] as const,

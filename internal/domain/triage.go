@@ -147,7 +147,7 @@ func ApplyTriage(f *Finding, req TriageRequest, actor string, now time.Time) ([]
 			return nil, &TriageError{Msg: "owner must be the e-mail of a member of the tenant, or empty to clear it"}
 		}
 	}
-	changed := stateChange || req.Severity != "" || req.Tags != nil || note != "" || strings.TrimSpace(req.ImpactStatement) != "" || req.Owner != nil
+	changed := stateChange || req.Severity != "" || req.Tags != nil || note != "" || strings.TrimSpace(req.ImpactStatement) != "" || strings.TrimSpace(req.Justification) != "" || req.Owner != nil
 	if !changed || (stateChange && req.State == f.State && justification == "" && req.Severity == "" && req.Tags == nil && note == "" && req.Owner == nil) {
 		return nil, ErrNothingToChange
 	}
@@ -199,11 +199,17 @@ func ApplyTriage(f *Finding, req TriageRequest, actor string, now time.Time) ([]
 		note = "" // the note is on the state event
 	}
 	if next == StateNotAffected {
+		oldJustification, oldImpact := f.Justification, f.ImpactStatement
 		if justification != "" {
 			f.Justification = justification
 		}
 		if s := strings.TrimSpace(req.ImpactStatement); s != "" {
 			f.ImpactStatement = s
+		}
+		// Changing only the justification or the impact statement of a not_affected finding is a decision of its
+		// own. It had no event, so the request ended "nothing to change" and the edit was dropped.
+		if !stateChange && (f.Justification != oldJustification || f.ImpactStatement != oldImpact) {
+			event("justification_changed", oldJustification+"\n"+oldImpact, f.Justification+"\n"+f.ImpactStatement, "")
 		}
 	}
 	if next == StateDuplicate && req.DuplicateOf != nil {

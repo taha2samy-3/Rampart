@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { listFindings, qk } from '@/api';
+import { listFindings, qk, toProblem } from '@/api';
 import type { VulnerabilityRow } from '@/api/types';
 import {
   EmptyState,
   Input,
+  ProblemMessage,
   Spinner,
   Table,
   TBody,
@@ -30,12 +31,9 @@ export function VulnerabilitiesRoute() {
   const findingsQuery = useQuery({
     queryKey: qk.findings.list('state:open', '-score'),
     queryFn: async ({ signal }) => {
-      try {
-        const res = await listFindings({ q: 'state:open', sort: '-score', limit: 200, signal });
-        return res.items ?? [];
-      } catch {
-        return [];
-      }
+      // An error used to become an empty list: "No vulnerabilities tracked" for a server that was down.
+      const res = await listFindings({ q: 'state:open', sort: '-score', limit: 200, signal });
+      return res.items ?? [];
     },
   });
 
@@ -53,15 +51,10 @@ export function VulnerabilitiesRoute() {
       const cveId = f.vulnerability_id || (f.rule_id?.toUpperCase().startsWith('CVE-') ? f.rule_id.toUpperCase() : null);
       if (!cveId) continue;
 
-      const epssFactor = item.risk?.factors?.find((factor) =>
-        factor.name.toLowerCase().includes('epss') || factor.reason.toLowerCase().includes('epss')
-      );
-      const epssVal = epssFactor ? epssFactor.points / 100 : undefined;
-
-      const kevFactor = item.risk?.factors?.find((factor) =>
-        factor.name.toLowerCase().includes('kev') || factor.reason.toLowerCase().includes('cisa')
-      );
-      const isKev = Boolean(kevFactor);
+      // The probability and the KEV flag are on the score breakdown. The EPSS was read from the points of its factor
+      // (150 points / 100 = "150%"), which is not a probability.
+      const epssVal = item.risk?.epss_score;
+      const isKev = Boolean(item.risk?.has_kev);
 
       const existing = map.get(cveId);
       if (existing) {
@@ -155,6 +148,8 @@ export function VulnerabilitiesRoute() {
         <div className="flex h-48 items-center justify-center">
           <Spinner />
         </div>
+      ) : findingsQuery.isError ? (
+        <ProblemMessage problem={toProblem(findingsQuery.error)} title={t('vulnerabilities.loadFailed', { defaultValue: 'Vulnerabilities could not be loaded.' })} onRetry={() => void findingsQuery.refetch()} />
       ) : filtered.length === 0 ? (
         <EmptyState title={search || onlyKev ? "No vulnerabilities match the current filter" : "No vulnerabilities tracked"}>
           {search || onlyKev
@@ -201,7 +196,7 @@ export function VulnerabilitiesRoute() {
                   </span>
                 </Td>
                 <Td className="font-mono text-12 text-ink">
-                  {v.epss ? `${(v.epss * 100).toFixed(1)}%` : '—'}
+                  {v.epss !== undefined ? `${(v.epss * 100).toFixed(1)}%` : '—'}
                 </Td>
                 <Td>
                   {v.kev ? (

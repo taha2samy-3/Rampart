@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -102,4 +103,25 @@ func (s *parserSet) detect(ctx context.Context, tenantID uuid.UUID, head []byte,
 		}
 	}
 	return best, score
+}
+
+// formatMismatch says when a report is of another format than the parser the client named. A parser that scores
+// 0 on the head says "this is not mine" (the Trivy parser reads SARIF as nothing, Detect returns 0 for it), and
+// another parser that recognises the head with confidence says what it is. Without this check, the wrong parser
+// walks the file, finds no record and reports a clean scan, and the close step then closes the real findings.
+func (s *parserSet) formatMismatch(ctx context.Context, tenantID uuid.UUID, named integrations.ParserContract, head []byte, filename, contentType string) (integrations.ParserContract, bool) {
+	if named == nil || len(head) == 0 || named.Detect(head, filename, contentType) > 0 {
+		return nil, false
+	}
+	best, score := s.detect(ctx, tenantID, head, filename, contentType)
+	if best == nil || score < 40 || best.Descriptor().ID == named.Descriptor().ID {
+		return nil, false
+	}
+	return best, true
+}
+
+// mismatchDetail is the message of a format mismatch: what the client said, what the file looks like.
+func mismatchDetail(named, actual integrations.ParserContract) string {
+	return fmt.Sprintf("the file is not a %s report: it looks like %s. Send it with format=%s, or leave format empty to detect it",
+		named.Descriptor().Name, actual.Descriptor().Name, strings.TrimPrefix(actual.Descriptor().ID, "builtin:"))
 }

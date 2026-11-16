@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -108,6 +108,13 @@ export async function getFindingSources(id: string, signal?: AbortSignal): Promi
   const raw = await get<{ reported_by?: Reporter[] | null; also_reported_by?: CorrelatedRef[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
   return { reported_by: raw.reported_by ?? [], also_reported_by: raw.also_reported_by ?? [] };
 }
+/** The package a scanner named for a finding, read from its latest occurrence; null for a finding with none (a query may not return undefined). */
+export async function getFindingPackage(id: string, signal?: AbortSignal): Promise<PackageEvidence | null> {
+  const raw = await get<{ occurrences?: { location?: { package?: PackageEvidence } }[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
+  return (raw.occurrences ?? []).find((o) => o.location?.package)?.location?.package ?? null;
+}
+export const getVulnerability = (id: string, signal?: AbortSignal) => get<VulnerabilityDetail>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}`, { signal });
+export const getVulnerabilityImpact = (id: string, signal?: AbortSignal) => get<VulnerabilityImpact>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}/impact`, { signal });
 export async function getFindingEvents(id: string, signal?: AbortSignal): Promise<FindingEvent[]> {
   const raw = await get<{ items?: FindingEvent[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}/events`, { signal });
   return raw.items ?? [];
@@ -230,6 +237,7 @@ export const findingsExportUrl = (format: 'csv' | 'json' | 'ocsf', q?: string) =
 };
 
 /** One application's open findings per day and band, new and fixed per day, and the age of what is open (D93). */
+export const getApplicationCompliance = (id: string, signal?: AbortSignal) => get<AppCompliance>(`/api/v1/applications/${encodeURIComponent(id)}/compliance`, { signal });
 export const getApplicationTrend = (id: string, days: number, signal?: AbortSignal) =>
   get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
 

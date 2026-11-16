@@ -138,6 +138,50 @@ func (s *Syncer) track(p dtclient.Project) string {
 	return "main"
 }
 
+const whyNotLatest = "not the latest version"
+
+// ImplicitLatest says whether p is the version to read for its name when versions is "latest" and Dependency-Track
+// flags none of the versions as latest. DT only sets the flag when a BOM is uploaded with isLatest=true, and most
+// pipelines never do: every project was then "not the latest version" and the whole portfolio was skipped, even a
+// project with one version. Without a flag the version with the newest BOM wins (ties by UUID, so the pick is
+// stable); when DT does name one, that one wins and this is false.
+func ImplicitLatest(p dtclient.Project, sameName []dtclient.Project) bool {
+	var best *dtclient.Project
+	for i := range sameName {
+		q := &sameName[i]
+		if q.Name != p.Name {
+			continue
+		}
+		if q.IsLatest != nil && *q.IsLatest {
+			return false
+		}
+		if best == nil || q.LastBomImport > best.LastBomImport || (q.LastBomImport == best.LastBomImport && q.UUID < best.UUID) {
+			best = q
+		}
+	}
+	return best != nil && best.UUID == p.UUID
+}
+
+// wantedIn is wanted, with the implicit latest version of a name no version of which DT flags.
+func (s *Syncer) wantedIn(ctx context.Context, p dtclient.Project) (bool, string) {
+	ok, why := s.wanted(p)
+	if ok || why != whyNotLatest {
+		return ok, why
+	}
+	versions, err := s.client.ListProjectsByName(ctx, p.Name)
+	if err != nil {
+		s.logger.Warn("dependency-track: could not list the versions of a project", "project", p.Name, "error", err)
+		return ok, why
+	}
+	if ImplicitLatest(p, versions) {
+		p.IsLatest = ptr(true)
+		return s.wanted(p)
+	}
+	return ok, why
+}
+
+func ptr[T any](v T) *T { return &v }
+
 // wanted applies the project filters of the ScanSource. The reason is recorded on an unwanted project.
 func (s *Syncer) wanted(p dtclient.Project) (bool, string) {
 	spec := s.cfg.Spec
@@ -149,7 +193,7 @@ func (s *Syncer) wanted(p dtclient.Project) (bool, string) {
 			return false, "Dependency-Track does not say which version is the latest (before 4.12): use versions: all"
 		}
 		if !*p.IsLatest {
-			return false, "not the latest version"
+			return false, whyNotLatest
 		}
 	}
 	if s.nameRe != nil && !s.nameRe.MatchString(p.Name) {
@@ -218,7 +262,7 @@ func (s *Syncer) SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, 
 
 	props, _ := s.client.GetProjectProperties(ctx, projectUUID)
 	res := s.mapping.Resolve(ctx, tenantID, *proj, props)
-	if ok, why := s.wanted(*proj); !ok {
+	if ok, why := s.wantedIn(ctx, *proj); !ok {
 		res = MappingResult{UnmappedReason: "filtered out: " + why}
 	}
 
@@ -430,7 +474,7 @@ func (s *Syncer) SyncPortfolio(ctx context.Context, tenantID, sourceID uuid.UUID
 		for _, proj := range projects {
 			props, _ := s.client.GetProjectProperties(ctx, proj.UUID)
 			res := s.mapping.Resolve(ctx, tenantID, proj, props)
-			if ok, why := s.wanted(proj); !ok {
+			if ok, why := s.wantedIn(ctx, proj); !ok {
 				res = MappingResult{UnmappedReason: "filtered out: " + why}
 			}
 			var lastBom *time.Time

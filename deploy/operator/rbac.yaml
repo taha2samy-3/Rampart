@@ -29,7 +29,11 @@ rules:
       - clusterfeedmirrors
       - clusterfeedmirrors/status
       - connectors
+      - integrationpackages
+      - parsers
       - connectors/status
+      - integrationpackages/status
+      - parsers/status
       - complianceframeworks
       - complianceframeworks/status
       - clustercomplianceframeworks
@@ -43,6 +47,8 @@ rules:
       - clusterslapolicies/finalizers
       - clusterfeedmirrors/finalizers
       - connectors/finalizers
+      - integrationpackages/finalizers
+      - parsers/finalizers
       - complianceframeworks/finalizers
       - clustercomplianceframeworks/finalizers
     verbs:

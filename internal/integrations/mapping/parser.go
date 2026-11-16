@@ -8,6 +8,7 @@ import (
 	"io"
 	"iter"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"rampart/internal/domain"
@@ -172,6 +173,7 @@ func (p *MappingParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseC
 			pkgName := p.cm.EvalString(p.cm.pkgName, vars)
 			installedVer := p.cm.EvalString(p.cm.installedVer, vars)
 			fixedVer := p.cm.EvalString(p.cm.fixedVer, vars)
+			manifest := p.cm.EvalString(p.cm.manifest, vars)
 
 			var loc domain.Location
 			if file != "" {
@@ -183,13 +185,18 @@ func (p *MappingParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseC
 			if purl != "" || pkgName != "" || installedVer != "" || fixedVer != "" {
 				loc.Package = &domain.PackageLocation{
 					Purl:             purl,
+					PurlBase:         purlBase(purl), // without it the fingerprint of an SCA finding is weak (D11)
 					ComponentName:    pkgName,
 					InstalledVersion: installedVer,
 					FixedVersion:     fixedVer,
+					ManifestPath:     manifest,
 				}
 			}
 
 			cat := domain.FindingCategory(strings.ToLower(pkg.Spec.Category))
+			if c := domain.FindingCategory(strings.ToLower(strings.TrimSpace(p.cm.EvalString(p.cm.category, vars)))); c.IsValid() {
+				cat = c
+			}
 			if cat == "" {
 				cat = domain.CategorySAST
 			}
@@ -197,6 +204,8 @@ func (p *MappingParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseC
 			rawPayload, _ := json.Marshal(item.Rec)
 
 			rf := domain.RawFinding{
+				CWEs:          parseCWEs(p.cm.EvalStringSlice(p.cm.cwes, vars)),
+				CVSSVector:    strings.TrimSpace(p.cm.EvalString(p.cm.cvssVector, vars)),
 				RuleID:        ruleID,
 				ScannerFamily: pkg.Spec.Family,
 				Category:      cat,
@@ -215,4 +224,38 @@ func (p *MappingParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseC
 			}
 		}
 	}
+}
+
+// purlBase is a package url without its version, qualifiers and subpath: pkg:npm/lodash@4.17.20 is pkg:npm/lodash.
+func purlBase(purl string) string {
+	if purl == "" {
+		return ""
+	}
+	base, _, _ := strings.Cut(purl, "?")
+	base, _, _ = strings.Cut(base, "#")
+	if i := strings.LastIndex(base, "@"); i > strings.Index(base, "/") {
+		base = base[:i]
+	}
+	return base
+}
+
+// parseCWEs reads weakness ids written as "CWE-79", "cwe-79", "79" or "CWE-79: XSS", once each. What is not a
+// number is dropped, since a record with a bad id is still a finding.
+func parseCWEs(in []string) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if len(s) >= 4 && strings.EqualFold(s[:4], "CWE-") {
+			s = s[4:]
+		}
+		if i := strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+			s = s[:i]
+		}
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }

@@ -278,6 +278,30 @@ func (c *Client) ListProjects(ctx context.Context, pageNumber, pageSize int, onl
 	return projects, total, nil
 }
 
+// ListProjectsByName returns the versions of one project name (DT keeps each version as a project of its own).
+func (c *Client) ListProjectsByName(ctx context.Context, name string) ([]Project, error) {
+	q := url.Values{}
+	q.Set("name", name)
+	q.Set("pageSize", "100")
+	endpoint := fmt.Sprintf("%s/api/v1/project?%s", c.baseURL, q.Encode())
+	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	body, code, _, err := c.doer.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching the versions of %q: %w", name, sanitizeError(err))
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d from %s", code, endpoint)
+	}
+	var projects []Project
+	if err := json.Unmarshal(body, &projects); err != nil {
+		return nil, fmt.Errorf("decoding the versions of %q: %w", name, err)
+	}
+	return projects, nil
+}
+
 // GetProject retrieves a single project's details by UUID from /api/v1/project/{uuid}.
 func (c *Client) GetProject(ctx context.Context, uuid string) (*Project, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/project/%s", c.baseURL, url.PathEscape(uuid))

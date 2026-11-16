@@ -49,15 +49,22 @@ type InputSpec struct {
 }
 
 type MapSpec struct {
-	RuleID       string       `yaml:"ruleId"`
-	Title        string       `yaml:"title"`
-	Description  string       `yaml:"description"`
-	Severity     string       `yaml:"severity"`
-	Confidence   string       `yaml:"confidence"`
-	VulnIDs      string       `yaml:"vulnIds"`
-	ToolRecordID string       `yaml:"toolRecordId"`
-	Remediation  string       `yaml:"remediation"`
-	Location     LocationSpec `yaml:"location"`
+	RuleID       string `yaml:"ruleId"`
+	Title        string `yaml:"title"`
+	Description  string `yaml:"description"`
+	Severity     string `yaml:"severity"`
+	Confidence   string `yaml:"confidence"`
+	VulnIDs      string `yaml:"vulnIds"`
+	ToolRecordID string `yaml:"toolRecordId"`
+	Remediation  string `yaml:"remediation"`
+	// CWEs is a CEL list of weakness ids ("CWE-79", "79" or 79); CVSSVector a CVSS vector string; Category a CEL
+	// expression for the category of one record (sast, sca, iac, secret, dast, ...), which wins over the package's
+	// category. They fill the same fields the built-in parsers fill, so a finding of a declarative parser is scored,
+	// grouped and shown like any other.
+	CWEs       string       `yaml:"cwes"`
+	CVSSVector string       `yaml:"cvssVector"`
+	Category   string       `yaml:"category"`
+	Location   LocationSpec `yaml:"location"`
 }
 
 type LocationSpec struct {
@@ -71,6 +78,7 @@ type PackageSpec struct {
 	Name             string `yaml:"name"`
 	InstalledVersion string `yaml:"installedVersion"`
 	FixedVersion     string `yaml:"fixedVersion"`
+	ManifestPath     string `yaml:"manifestPath"` // the file that declares the package: part of the fingerprint
 }
 
 type LimitsSpec struct {

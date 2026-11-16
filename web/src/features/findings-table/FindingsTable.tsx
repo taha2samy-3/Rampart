@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { createColumnHelper, getCoreRowModel, useReactTable } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { listApplications, qk } from '@/api';
 import type { FindingRow } from '@/api/types';
 import { BandShape, ScoreBar, Table, Td, TBody, Th, THead, Tr } from '@/components';
 import { toBand } from '@/lib/band';
@@ -50,6 +52,9 @@ export function FindingsTable({
   onToggleChecked?: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  // The application column named the application by the first 8 characters of its UUID.
+  const apps = useQuery({ queryKey: qk.applications.list(), queryFn: ({ signal }) => listApplications(signal), staleTime: 60_000 });
+  const appName = useMemo(() => new Map((apps.data ?? []).map((a) => [a.id, a.name || a.slug])), [apps.data]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowH = ROW_HEIGHT[density];
 
@@ -205,8 +210,8 @@ export function FindingsTable({
                     <span className="block truncate font-mono text-[11.5px] leading-4 text-ink-2">{locationText(r)}</span>
                   )}
                 </Td>
-                <Td className={cn('font-mono text-12 text-ink-2', HIDE_NARROW)} title={f.application_id}>
-                  {shortId(f.application_id)}
+                <Td className={cn('text-12 text-ink-2', HIDE_NARROW, !appName.has(f.application_id ?? '') && 'font-mono')} title={appName.get(f.application_id ?? '') ?? f.application_id}>
+                  <span className="block max-w-[11rem] truncate">{appName.get(f.application_id ?? '') ?? shortId(f.application_id)}</span>
                 </Td>
                 <Td className={HIDE_NARROWER}>{t(`state.${f.state}`, { defaultValue: f.state })}</Td>
                 <Td align="end" className={cn(due.late && 'font-semibold text-critical')} title={r.sla_due_date ? absoluteDate(r.sla_due_date) : undefined}>

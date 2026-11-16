@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { attestControl, getTaxonomyHistory, getTaxonomyStatus, listApplications, listTaxonomies, qk, taxonomyCsvUrl, toProblem } from '@/api';
 import type { ControlStatus, Taxonomy } from '@/api/types';
-import { BandShape, Button, Dialog, DialogContent, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
+import { BandShape, Button, FrameworkMark, Dialog, DialogContent, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, useToast } from '@/components';
 import { useAccess } from '@/app/useAccess';
 import { openText, worstBand } from '@/lib/apps';
 import { absoluteDate } from '@/lib/format';
@@ -21,19 +21,23 @@ function frameworkLabel(f: Taxonomy, t: (k: string) => string): string {
  * problem ran, approved exceptions, and the controls a person attests. Each status carries the sentence that says
  * why, so the table can be read without knowing the rules.
  */
-export function ComplianceRoute() {
+/** `framework` and `application` open the page on one framework read for one application (the application page links here). */
+export interface ComplianceSearch { framework?: string; application?: string }
+
+export function ComplianceRoute({ search }: { search?: ComplianceSearch } = {}) {
   const { t } = useTranslation();
   useEffect(() => {
     document.title = `${t('compliance.title')} - Rampart`;
   }, [t]);
   const frameworks = useQuery({ queryKey: qk.taxonomies(), queryFn: ({ signal }) => listTaxonomies(signal), staleTime: 300_000 });
   const apps = useQuery({ queryKey: qk.applications.list(), queryFn: ({ signal }) => listApplications(signal), staleTime: 60_000 });
-  const [picked, setPicked] = useState('');
-  const [app, setApp] = useState('');
+  const [picked, setPicked] = useState(search?.framework ?? '');
+  const [app, setApp] = useState(search?.application ?? '');
   const [day, setDay] = useState('');
   const usable = (frameworks.data ?? []).filter((f) => !f.error);
   const broken = (frameworks.data ?? []).filter((f) => f.error);
-  const fw = picked || usable[0]?.id || '';
+  const fw = usable.some((f) => f.id === picked) ? picked : usable[0]?.id || '';
+  const fwInfo = usable.find((f) => f.id === fw);
   const at = app ? '' : day; // a kept reading is for the whole tenant
   const history = useQuery({ queryKey: qk.taxonomyHistory(fw), queryFn: ({ signal }) => getTaxonomyHistory(fw, signal), enabled: !!fw, retry: false });
   const status = useQuery({ queryKey: qk.taxonomyStatus(fw, app, at), queryFn: ({ signal }) => getTaxonomyStatus(fw, app, signal, at), enabled: !!fw, retry: false });
@@ -56,6 +60,12 @@ export function ComplianceRoute() {
             )}
             <a className="ms-auto text-13" href={taxonomyCsvUrl(fw, app || undefined, at || undefined)} download>{t('compliance.export')}</a>
           </div>
+          {fwInfo && (
+            <div className="mt-4 flex items-center gap-3">
+              <FrameworkMark id={fwInfo.id} name={fwInfo.name} origin={fwInfo.origin} logo={fwInfo.logo} size={36} />
+              <h2 className="display m-0 text-18">{fwInfo.name} <span className="font-normal text-ink-2">{fwInfo.version}</span></h2>
+            </div>
+          )}
           {st && (
             <div className="mt-2 max-w-[80ch] text-12 text-ink-2">
               {st.note && <p className="m-0">{st.note}</p>}

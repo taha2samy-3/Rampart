@@ -43,17 +43,30 @@ func TestOpsServerEndpoints(t *testing.T) {
 	opsReady := telemetry.NewOpsServer(":0", func(ctx context.Context) error {
 		return nil
 	})
-	reqReady := httptest.NewRequest("GET", "/readyz", nil)
-	recReady := httptest.NewRecorder()
-	opsReady.Handler().ServeHTTP(recReady, reqReady)
-	if recReady.Code != http.StatusOK {
-		t.Errorf("readyz returned %d, want 200", recReady.Code)
+	readyz := func(o *telemetry.OpsServer) int {
+		rec := httptest.NewRecorder()
+		o.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+		return rec.Code
+	}
+	// The server was "ready" from the moment it was built, while migrations and bootstrap still ran, so a
+	// rolling update sent traffic to a pod that could not answer yet. It is ready when the runner says so.
+	if got := readyz(opsReady); got != http.StatusServiceUnavailable {
+		t.Errorf("readyz before SetReady returned %d, want 503", got)
+	}
+	opsReady.SetReady(true)
+	if got := readyz(opsReady); got != http.StatusOK {
+		t.Errorf("readyz returned %d, want 200", got)
+	}
+	opsReady.SetReady(false)
+	if got := readyz(opsReady); got != http.StatusServiceUnavailable {
+		t.Errorf("readyz after SetReady(false) returned %d, want 503", got)
 	}
 
 	// 3. Readyz with failing checker
 	opsFailing := telemetry.NewOpsServer(":0", func(ctx context.Context) error {
 		return errors.New("db disconnected")
 	})
+	opsFailing.SetReady(true)
 	reqFailing := httptest.NewRequest("GET", "/readyz", nil)
 	recFailing := httptest.NewRecorder()
 	opsFailing.Handler().ServeHTTP(recFailing, reqFailing)

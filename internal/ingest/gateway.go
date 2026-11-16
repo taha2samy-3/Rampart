@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +79,10 @@ type DirectReportResponse struct {
 	Reactivated    int    `json:"reactivated"`
 	Closed         int    `json:"closed"`
 	ComponentCount int    `json:"componentCount,omitempty"`
+	// Application is the slug the report was filed under. It can differ from the one the client named: an asset
+	// that already belongs to an application stays there (D10), which Warnings says.
+	Application string   `json:"application,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
 }
 
 // Gateway provides HTTP handlers for ingestion (docs/11).
@@ -511,7 +516,13 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		if err := r.ParseMultipartForm(MaxDirectReportBytes); err != nil {
-			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/payload-too-large","title":"File too large or invalid multipart"}`, http.StatusBadRequest)
+			status := http.StatusBadRequest
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			w.Header().Set("Content-Type", "application/problem+json")
+			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/payload-too-large","title":"File too large or invalid multipart","status":`+strconv.Itoa(status)+`}`, status)
 			return
 		}
 		get = r.FormValue
@@ -533,6 +544,11 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		var err error
 		data, err = io.ReadAll(r.Body)
 		if err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				http.Error(w, `{"type":"https://rampart.aspm.dev/problems/payload-too-large","title":"The report is larger than the limit of a direct upload","status":413}`, http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to read upload body"}`, http.StatusInternalServerError)
 			return
 		}
@@ -624,6 +640,16 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		}
 	}
 
+	if actual, bad := parsers.formatMismatch(r.Context(), tenantID, selectedParser, head, filename, contentType); bad {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type": "https://rampart.aspm.dev/problems/format-mismatch", "title": "The report is not in the format named",
+			"status": http.StatusBadRequest, "detail": mismatchDetail(selectedParser, actual),
+		})
+		return
+	}
+
 	runID := domain.NewID()
 	scannerFamily := selectedParser.Descriptor().ID
 
@@ -645,6 +671,16 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	if err != nil {
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve application"}`, http.StatusInternalServerError)
 		return
+	}
+
+	// D10: an asset that already belongs to an application stays in it, whatever the upload names. Say so, instead
+	// of filing the report under another application than the one the client asked for without a word.
+	filedUnder, warnings := "", []string(nil)
+	if app, err := g.store.GetApplication(r.Context(), tenantID, appID); err == nil && app != nil {
+		filedUnder = app.Slug
+		if want := strings.ToLower(declaredApp); want != "" && want != app.Slug {
+			warnings = append(warnings, fmt.Sprintf("application %q was not used: this asset already belongs to %q (D10); move the asset to change it", want, app.Slug))
+		}
 	}
 
 	if track == "" {
@@ -705,7 +741,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	_ = json.NewEncoder(w).Encode(DirectReportResponse{
 		IngestRunID: runID.String(), Status: string(res.Status), Staged: res.Stats.Parsed, Created: res.Stats.Created,
 		Updated: res.Stats.Updated, Untouched: res.Stats.Untouched, Reactivated: res.Stats.Reactivated,
-		Closed: res.Stats.Closed, ComponentCount: res.Components,
+		Closed: res.Stats.Closed, ComponentCount: res.Components, Application: filedUnder, Warnings: warnings,
 	})
 }
 
