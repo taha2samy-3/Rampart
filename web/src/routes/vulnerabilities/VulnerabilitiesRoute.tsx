@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
+import { listFindings, qk } from '@/api';
 import type { VulnerabilityRow } from '@/api/types';
 import {
   EmptyState,
   Input,
+  Spinner,
   Table,
   TBody,
   Td,
@@ -23,72 +26,95 @@ export function VulnerabilitiesRoute() {
     document.title = `${t('nav.vulnerabilities', { defaultValue: 'Vulnerabilities' })} - Rampart`;
   }, [t]);
 
-  // Curated CVE aggregate view
-  const cveRows: VulnerabilityRow[] = [
-    {
-      cve_id: 'CVE-2021-44228',
-      title: 'Apache Log4j2 JNDI Remote Code Execution (Log4Shell)',
-      severity: 'critical',
-      score: 10.0,
-      epss: 0.975,
-      kev: true,
-      affected_assets: 4,
-      affected_applications: 2,
-      open_findings: 6,
+  // Query real findings from the backend
+  const findingsQuery = useQuery({
+    queryKey: qk.findings.list('state:open', '-score'),
+    queryFn: async ({ signal }) => {
+      try {
+        const res = await listFindings({ q: 'state:open', sort: '-score', limit: 200, signal });
+        return res.items ?? [];
+      } catch {
+        return [];
+      }
     },
-    {
-      cve_id: 'CVE-2023-38606',
-      title: 'OpenSSL timing side-channel attack in RSA decryption',
-      severity: 'high',
-      score: 7.5,
-      epss: 0.124,
-      kev: false,
-      affected_assets: 2,
-      affected_applications: 1,
-      open_findings: 2,
-    },
-    {
-      cve_id: 'CVE-2024-3094',
-      title: 'XZ Utils backdoor injection in liblzma',
-      severity: 'critical',
-      score: 10.0,
-      epss: 0.892,
-      kev: true,
-      affected_assets: 1,
-      affected_applications: 1,
-      open_findings: 1,
-    },
-    {
-      cve_id: 'CVE-2022-22965',
-      title: 'Spring Framework RCE via Data Binding (Spring4Shell)',
-      severity: 'critical',
-      score: 9.8,
-      epss: 0.651,
-      kev: true,
-      affected_assets: 3,
-      affected_applications: 2,
-      open_findings: 3,
-    },
-    {
-      cve_id: 'CVE-2023-4863',
-      title: 'libwebp heap buffer overflow in WebP lossless decoding',
-      severity: 'high',
-      score: 8.8,
-      epss: 0.412,
-      kev: true,
-      affected_assets: 5,
-      affected_applications: 3,
-      open_findings: 7,
-    },
-  ];
-
-  const filtered = cveRows.filter((row) => {
-    const matchesSearch =
-      row.cve_id.toLowerCase().includes(search.toLowerCase()) ||
-      row.title.toLowerCase().includes(search.toLowerCase());
-    const matchesKev = !onlyKev || row.kev;
-    return matchesSearch && matchesKev;
   });
+
+  // Aggregate real findings by CVE ID
+  const cveRows: VulnerabilityRow[] = useMemo(() => {
+    const items = findingsQuery.data ?? [];
+    const map = new Map<string, {
+      row: VulnerabilityRow;
+      assets: Set<string>;
+      apps: Set<string>;
+    }>();
+
+    for (const item of items) {
+      const f = item.finding;
+      const cveId = f.vulnerability_id || (f.rule_id?.toUpperCase().startsWith('CVE-') ? f.rule_id.toUpperCase() : null);
+      if (!cveId) continue;
+
+      const epssFactor = item.risk?.factors?.find((factor) =>
+        factor.name.toLowerCase().includes('epss') || factor.reason.toLowerCase().includes('epss')
+      );
+      const epssVal = epssFactor ? epssFactor.points / 100 : undefined;
+
+      const kevFactor = item.risk?.factors?.find((factor) =>
+        factor.name.toLowerCase().includes('kev') || factor.reason.toLowerCase().includes('cisa')
+      );
+      const isKev = Boolean(kevFactor);
+
+      const existing = map.get(cveId);
+      if (existing) {
+        existing.row.open_findings += 1;
+        if (f.risk_score > existing.row.score) {
+          existing.row.score = f.risk_score;
+          existing.row.severity = f.severity;
+        }
+        if (isKev) existing.row.kev = true;
+        if (epssVal !== undefined && (existing.row.epss === undefined || epssVal > existing.row.epss)) {
+          existing.row.epss = epssVal;
+        }
+        if (f.asset_id) existing.assets.add(f.asset_id);
+        if (f.application_id) existing.apps.add(f.application_id);
+        existing.row.affected_assets = existing.assets.size;
+        existing.row.affected_applications = existing.apps.size;
+      } else {
+        const assets = new Set<string>();
+        const apps = new Set<string>();
+        if (f.asset_id) assets.add(f.asset_id);
+        if (f.application_id) apps.add(f.application_id);
+
+        map.set(cveId, {
+          row: {
+            cve_id: cveId,
+            title: f.title || cveId,
+            severity: f.severity,
+            score: f.risk_score,
+            epss: epssVal,
+            kev: isKev,
+            affected_assets: assets.size,
+            affected_applications: apps.size,
+            open_findings: 1,
+          },
+          assets,
+          apps,
+        });
+      }
+    }
+
+    return Array.from(map.values()).map((e) => e.row);
+  }, [findingsQuery.data]);
+
+  const filtered = useMemo(() => {
+    return cveRows.filter((row) => {
+      const matchesSearch =
+        !search.trim() ||
+        row.cve_id.toLowerCase().includes(search.toLowerCase()) ||
+        row.title.toLowerCase().includes(search.toLowerCase());
+      const matchesKev = !onlyKev || row.kev;
+      return matchesSearch && matchesKev;
+    });
+  }, [cveRows, search, onlyKev]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
@@ -125,9 +151,15 @@ export function VulnerabilitiesRoute() {
         </span>
       </div>
 
-      {filtered.length === 0 ? (
-        <EmptyState title="No vulnerabilities match the current filter">
-          Try clearing your search or unchecking CISA KEV filter.
+      {findingsQuery.isLoading ? (
+        <div className="flex h-48 items-center justify-center">
+          <Spinner />
+        </div>
+      ) : filtered.length === 0 ? (
+        <EmptyState title={search || onlyKev ? "No vulnerabilities match the current filter" : "No vulnerabilities tracked"}>
+          {search || onlyKev
+            ? "Try clearing your search or unchecking the CISA KEV filter."
+            : "Vulnerabilities automatically populate when scan reports containing CVEs are ingested."}
         </EmptyState>
       ) : (
         <Table aria-label="Vulnerabilities by CVE">

@@ -45,68 +45,26 @@ export function InventoryRoute() {
         const res = await get<{ assets: InventoryAsset[] }>('/api/v1/inventory', { signal });
         return res.assets || [];
       } catch {
-        // Fallback for Phase 3 environments without full asset graph
-        return [
-          {
-            id: 'ast_repo_backend',
-            name: 'github.com/acme/backend-api',
-            kind: 'repository',
-            application_name: 'Core Services',
-            critical_findings: 2,
-            high_findings: 5,
-            total_findings: 18,
-          },
-          {
-            id: 'ast_img_frontend',
-            name: 'docker.io/acme/frontend:v2.4.1',
-            kind: 'image',
-            application_name: 'Customer Portal',
-            critical_findings: 0,
-            high_findings: 2,
-            total_findings: 7,
-          },
-          {
-            id: 'ast_repo_infra',
-            name: 'github.com/acme/cloud-terraform',
-            kind: 'repository',
-            application_name: 'Infrastructure',
-            critical_findings: 1,
-            high_findings: 0,
-            total_findings: 3,
-          },
-        ];
+        return [];
       }
     },
   });
 
-  const components: ComponentRow[] = [
-    {
-      purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
-      name: 'log4j-core',
-      version: '2.14.1',
-      type: 'maven',
-      license: 'Apache-2.0',
-      vulnerabilities: 3,
+  const componentsQuery = useQuery({
+    queryKey: ['inventory', 'components'],
+    queryFn: async ({ signal }) => {
+      try {
+        const res = await get<{ components: ComponentRow[] }>('/api/v1/inventory/components', { signal });
+        return res.components || [];
+      } catch {
+        return [];
+      }
     },
-    {
-      purl: 'pkg:npm/axios@0.21.1',
-      name: 'axios',
-      version: '0.21.1',
-      type: 'npm',
-      license: 'MIT',
-      vulnerabilities: 1,
-    },
-    {
-      purl: 'pkg:golang/golang.org/x/crypto@0.0.0-20210921155107-0837190e1cf9',
-      name: 'golang.org/x/crypto',
-      version: 'v0.0.0',
-      type: 'golang',
-      license: 'BSD-3-Clause',
-      vulnerabilities: 0,
-    },
-  ];
+  });
 
+  const components = componentsQuery.data ?? [];
   const lowerSearch = search.trim().toLowerCase();
+
   const assets = (assetsQuery.data ?? []).filter((a) =>
     !lowerSearch ||
     a.name.toLowerCase().includes(lowerSearch) ||
@@ -203,9 +161,15 @@ export function InventoryRoute() {
         </TabsContent>
 
         <TabsContent value="components" className="flex flex-col gap-4">
-          {filteredComponents.length === 0 ? (
+          {componentsQuery.isLoading ? (
+            <div className="flex h-48 items-center justify-center">
+              <Spinner />
+            </div>
+          ) : filteredComponents.length === 0 ? (
             <EmptyState title="No matching components found">
-              Try adjusting your search query or ingesting an SBOM report.
+              {search.trim()
+                ? "Try adjusting your search query."
+                : "Packages and dependencies automatically populate when SBOM reports (CycloneDX or SPDX) are ingested."}
             </EmptyState>
           ) : (
             <Table aria-label="Components table">
