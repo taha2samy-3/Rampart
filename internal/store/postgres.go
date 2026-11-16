@@ -1246,8 +1246,12 @@ func (s *PostgresStore) SaveSBOM(ctx context.Context, sbom *domain.SBOM, compone
 			if licenses == nil {
 				licenses = []string{}
 			}
+			compTenantID := c.TenantID
+			if compTenantID == domain.NilID {
+				compTenantID = sbom.TenantID
+			}
 			_, err := tx.Exec(ctx, compQuery,
-				c.TenantID, sbom.ID, c.Ref, c.Purl, c.PurlBase, c.Name, c.Version, licenses, c.Scope, c.Direct, hashesJSON,
+				compTenantID, sbom.ID, c.Ref, c.Purl, c.PurlBase, c.Name, c.Version, licenses, c.Scope, c.Direct, hashesJSON,
 			)
 			if err != nil {
 				return err

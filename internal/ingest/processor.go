@@ -437,6 +437,14 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 		sbom = &domain.SBOM{ID: domain.NewID(), Format: parserID, CreatedAt: time.Now().UTC()}
 	}
 	sbom.TenantID, sbom.AssetID, sbom.IngestRunID, sbom.ComponentCount = run.TenantID, run.AssetID, run.ID, len(components)
+	for i := range components {
+		if components[i].TenantID == domain.NilID {
+			components[i].TenantID = run.TenantID
+		}
+		if components[i].SBOMID == domain.NilID {
+			components[i].SBOMID = sbom.ID
+		}
+	}
 	if err := p.store.SaveSBOM(ctx, sbom, components); err != nil {
 		return 0, err
 	}
