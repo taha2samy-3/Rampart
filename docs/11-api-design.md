@@ -42,9 +42,9 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 
 | Path | Verification | Effect |
 |---|---|---|
-| `POST /hooks/dependency-track/{sourceId}/{secret}` | URL secret, optional CIDR allow-list | Debounced project sync. Payload is not trusted |
-| `POST /hooks/jira/{connectorId}` | shared secret or JWT | Ticket status sync |
-| `POST /hooks/github/{connectorId}` | `X-Hub-Signature-256` | Issue sync, code scanning alert events |
+| `POST /hooks/dependency-track/{sourceId}` | `Authorization: Bearer <secret>` (D23; the secret is never in the path), optional CIDR allow-list | Debounced project sync. Payload is not trusted. Not mounted yet (docs/23 K5) |
+| `POST /hooks/jira/{connectorId}` | `X-Hub-Signature` with the connector's webhook secret (D70) | Ticket status sync; a resolution becomes a request (D27). `connectorId` is the connector row id; the tenant comes from the row (D78) |
+| `POST /hooks/github/{connectorId}` | `X-Hub-Signature-256` | Issue sync (D78). Code scanning alert events are not built |
 | `POST /hooks/gitlab/{connectorId}` | `X-Gitlab-Token` | Issue sync |
 | `POST /hooks/generic/{sourceId}` | HMAC `X-Rampart-Signature` | Generic JSON findings push |
 

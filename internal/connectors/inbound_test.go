@@ -73,12 +73,12 @@ func newInbound(t *testing.T, withSecret bool, maxDays int) *inboundHarness {
 	t.Helper()
 	h := &inboundHarness{t: t, tenant: uuid.New(), finding: uuid.New(), secret: []byte("webhook-secret-12345"), wf: &mockWorkflowService{}, notifier: &fakeNotifier{}}
 	st := ingest.NewMemoryStore()
-	jira := domain.Connector{Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+	jira := domain.Connector{ID: domain.NewID(), Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
 		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
 		Jira: &domain.JiraConnectorConfig{URL: "https://acme.atlassian.net", DefaultProject: "SEC", TwoWaySync: true, AccountID: "rampart-bot",
 			CredentialsSecretRef: domain.SecretKeyRef{Name: "api", Key: "apiToken"}},
 	}}
-	gh := domain.Connector{Name: "gh-in", TenantID: h.tenant, Type: domain.ConnectorTypeGitHub, Spec: domain.ConnectorSpec{
+	gh := domain.Connector{ID: domain.NewID(), Name: "gh-in", TenantID: h.tenant, Type: domain.ConnectorTypeGitHub, Spec: domain.ConnectorSpec{
 		Type: domain.ConnectorTypeGitHub, Direction: domain.DirectionBidirectional,
 		GitHub: &domain.GitHubConnectorConfig{Owner: "acme", Repo: "shop", TwoWaySync: true, CredentialsSecretRef: domain.SecretKeyRef{Name: "api", Key: "token"}},
 	}}
@@ -97,8 +97,8 @@ func newInbound(t *testing.T, withSecret bool, maxDays int) *inboundHarness {
 	}}
 	v := fakeVerifier{tickets: map[string]bool{h.finding.String() + "|SEC-77": true, h.finding.String() + "|#12": true}}
 	h.handler = connectors.NewInboundWebhookHandler(st, h.wf, secrets).WithTicketVerifier(v).WithNotifier(h.notifier).WithSettings(fakeSettings{maxDays: maxDays})
-	h.jiraURL = fmt.Sprintf("/api/v1/t/%s/connectors/jira-in/webhook", h.tenant)
-	h.githubURL = fmt.Sprintf("/api/v1/t/%s/connectors/gh-in/webhook", h.tenant)
+	h.jiraURL = "/hooks/jira/" + jira.ID.String() // D78: the connector id, never the tenant or the name
+	h.githubURL = "/hooks/github/" + gh.ID.String()
 	return h
 }
 
@@ -257,7 +257,7 @@ func TestInbound_NoVerifier_ActsOnNothing(t *testing.T) {
 	_ = bare
 	// A handler without a ticket verifier must not act on a signed delivery.
 	st := ingest.NewMemoryStore()
-	conn := domain.Connector{Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+	conn := domain.Connector{ID: uuid.MustParse(strings.TrimPrefix(h.jiraURL, "/hooks/jira/")), Name: "jira-in", TenantID: h.tenant, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
 		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
 		Jira: &domain.JiraConnectorConfig{URL: "https://acme.atlassian.net", DefaultProject: "SEC", TwoWaySync: true,
 			WebhookSecretRef: domain.SecretKeyRef{Name: "hook", Key: "secret"}, CredentialsSecretRef: domain.SecretKeyRef{Name: "api"}},
@@ -312,12 +312,13 @@ func TestInbound_GitHub(t *testing.T) {
 func TestInbound_OutboundOnlyDirection_Rejected(t *testing.T) {
 	tenantID := uuid.New()
 	st := ingest.NewMemoryStore()
-	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{Name: "slack-out", TenantID: tenantID, Type: domain.ConnectorTypeSlack, Spec: domain.ConnectorSpec{
+	slackID := domain.NewID()
+	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{ID: slackID, Name: "slack-out", TenantID: tenantID, Type: domain.ConnectorTypeSlack, Spec: domain.ConnectorSpec{
 		Type: domain.ConnectorTypeSlack, Direction: domain.DirectionOutbound,
 		Slack: &domain.SlackConnectorConfig{TokenSecretRef: domain.SecretKeyRef{Name: "sec", Key: "token"}, DefaultChannel: "#general"},
 	}})
 	handler := connectors.NewInboundWebhookHandler(st, nil, nil)
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/t/%s/connectors/slack-out/webhook", tenantID), strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/hooks/slack/"+slackID.String(), strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -328,7 +329,8 @@ func TestInbound_OutboundOnlyDirection_Rejected(t *testing.T) {
 func TestInbound_WebhookRateLimitedPerAddress(t *testing.T) {
 	st := ingest.NewMemoryStore()
 	tenantID := domain.NewID()
-	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{Name: "jira-hook", TenantID: tenantID, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
+	hookID := domain.NewID()
+	_ = st.SaveConnector(context.Background(), tenantID, domain.Connector{ID: hookID, Name: "jira-hook", TenantID: tenantID, Type: domain.ConnectorTypeJira, Spec: domain.ConnectorSpec{
 		Type: domain.ConnectorTypeJira, Direction: domain.DirectionBidirectional,
 		Jira: &domain.JiraConnectorConfig{
 			URL:              "https://acme.atlassian.net",
@@ -340,7 +342,7 @@ func TestInbound_WebhookRateLimitedPerAddress(t *testing.T) {
 
 	handler := connectors.NewInboundWebhookHandler(st, nil, nil).WithRateLimit(60) // 1 req/sec, burst 5
 
-	url := fmt.Sprintf("/api/v1/t/%s/connectors/jira-hook/webhook", tenantID)
+	url := "/hooks/jira/" + hookID.String()
 
 	// First 5 requests consume burst capacity
 	for i := 0; i < 5; i++ {
@@ -442,5 +444,30 @@ func TestInbound_NotAffectedCreatesWorkflowRequest(t *testing.T) {
 	}
 	if !strings.Contains(h.wf.requests[0].Justification, "VEX justification") {
 		t.Errorf("justification should reference VEX justification: %s", h.wf.requests[0].Justification)
+	}
+}
+
+// D78: the path names the connector by id and type; the tenant comes from the row. A wrong type, a random id, the
+// old tenant-and-name path and a name instead of an id all answer as if nothing were there.
+func TestInbound_PathIsTheConnectorIDAndType(t *testing.T) {
+	h := newInbound(t, true, 0)
+	body := h.jiraPayload("jira:issue_updated", "Won't Do", "SEC-77", "acc-1", h.label(), "resolution")
+	sig := map[string]string{"X-Hub-Signature": "sha256=" + sign(h.secret, body)}
+	jiraID := strings.TrimPrefix(h.jiraURL, "/hooks/jira/")
+	for name, path := range map[string]string{
+		"github type on a jira connector": "/hooks/github/" + jiraID,
+		"unknown id":                      "/hooks/jira/" + uuid.New().String(),
+		"old tenant path":                 fmt.Sprintf("/api/v1/t/%s/connectors/jira-in/webhook", h.tenant),
+		"name instead of id":              "/hooks/jira/jira-in",
+	} {
+		if w := h.send(path, body, sig); w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 404 or 400, got %d", name, w.Code)
+		}
+	}
+	if len(h.wf.requests) != 0 {
+		t.Fatalf("a wrong path must act on nothing: %d requests", len(h.wf.requests))
+	}
+	if w := h.send(h.jiraURL, body, sig); w.Code != http.StatusOK || len(h.wf.requests) != 1 {
+		t.Fatalf("the right path must work: %d, %d requests", w.Code, len(h.wf.requests))
 	}
 }

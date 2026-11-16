@@ -2,6 +2,7 @@ package apply_test
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"strings"
 	"testing"
 
@@ -374,7 +375,8 @@ func TestApply_Connector(t *testing.T) {
 	if conn.Type != domain.ConnectorTypeJira || conn.Spec.Jira.DefaultProject != "SEC" {
 		t.Errorf("unexpected connector in store: %+v", conn)
 	}
-	if conn.Status.WebhookURL != "/hooks/jira/jira-sec" {
-		t.Errorf("unexpected status webhook URL: %s", conn.Status.WebhookURL)
+	// Without twoWaySync Jira never calls back, so there is no inbound URL (D78); the id is stable.
+	if conn.Status.WebhookURL != "" || conn.ID == uuid.Nil {
+		t.Errorf("unexpected webhook URL %q or missing id %s", conn.Status.WebhookURL, conn.ID)
 	}
 }

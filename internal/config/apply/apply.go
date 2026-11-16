@@ -554,15 +554,16 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			return "", fmt.Errorf("apply: connector validation failed: %w", err)
 		}
 
-		// Preserve existing status/conditions if already present
+		// Preserve existing status/conditions and the row id if already present (the webhook URL names the id, D78)
 		existing, _ := a.store.GetConnector(ctx, tenant.ID, header.Metadata.Name)
 		if existing != nil {
+			conn.ID = existing.ID
 			conn.Status = existing.Status
-		} else {
-			conn.Status = domain.ConnectorStatus{
-				WebhookURL: fmt.Sprintf("/hooks/%s/%s", spec.Type, header.Metadata.Name),
-			}
 		}
+		if conn.ID == uuid.Nil {
+			conn.ID = domain.NewID()
+		}
+		conn.Status.WebhookURL = domain.InboundWebhookPath(conn)
 
 		if err := a.store.SaveConnector(ctx, tenant.ID, conn); err != nil {
 			return "", err

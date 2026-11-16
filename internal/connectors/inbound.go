@@ -33,9 +33,9 @@ type WorkflowService interface {
 	Request(ctx context.Context, tenantID uuid.UUID, requester string, req domain.RiskAcceptanceRequest) (*workflow.Outcome, error)
 }
 
-// InboundConnectorStore resolves connectors by tenant and name.
+// InboundConnectorStore resolves the connector an inbound webhook names by its id (D78).
 type InboundConnectorStore interface {
-	GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error)
+	GetConnectorByID(ctx context.Context, id uuid.UUID) (*domain.Connector, error)
 }
 
 // TicketVerifier says whether Rampart itself opened this ticket for this finding. A webhook is only acted on for
@@ -170,21 +170,22 @@ func reply(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"status": msg})
 }
 
-// ServeHTTP handles POST /api/v1/t/{tenant}/connectors/{name}/webhook. The order matters: the endpoint is public,
-// so nothing is parsed or remembered before the sender is proven (D70): size, then signature, then duplicates,
-// then the payload.
+// ServeHTTP handles POST /hooks/{type}/{connectorId} on the ingest gateway (D78; docs/04, 11, 15). The path names
+// the connector by its row id and its type; the tenant is read from the connector, never from the path. The order
+// matters: the endpoint is public, so nothing is parsed or remembered before the sender is proven (D70): size, then
+// signature, then duplicates, then the payload.
 func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	tenantID, connectorName, err := extractTenantAndConnector(r)
+	hookType, connectorID, err := extractHookTarget(r)
 	if err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	if h.limiter != nil {
-		key := "webhook:" + ratelimit.ClientIP(r) + ":" + connectorName
+		key := "webhook:" + ratelimit.ClientIP(r) + ":" + connectorID.String()
 		rate := float64(h.ratePerMin) / 60.0
 		if rate <= 0 {
 			rate = 1.0
@@ -198,11 +199,13 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	conn, err := h.store.GetConnector(r.Context(), tenantID, connectorName)
-	if err != nil || conn == nil {
+	conn, err := h.store.GetConnectorByID(r.Context(), connectorID)
+	// A connector of another type answers exactly like a missing one, so the path cannot be used to learn types.
+	if err != nil || conn == nil || string(conn.Type) != hookType {
 		http.Error(w, "connector not found", http.StatusNotFound)
 		return
 	}
+	tenantID := conn.TenantID
 	if conn.Direction() == domain.DirectionOutbound {
 		http.Error(w, "connector does not accept inbound webhooks", http.StatusBadRequest)
 		return
@@ -572,21 +575,18 @@ func extractFindingIDFromLabels(labels []string) uuid.UUID {
 	return uuid.Nil
 }
 
-func extractTenantAndConnector(r *http.Request) (uuid.UUID, string, error) {
-	// Standard path format: /api/v1/t/{tenant}/connectors/{name}/webhook
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	for i, p := range parts {
-		if p == "t" && i+1 < len(parts) {
-			tID, err := uuid.Parse(parts[i+1])
-			if err != nil {
-				return uuid.Nil, "", fmt.Errorf("invalid tenant id: %w", err)
-			}
-			for j := i + 2; j < len(parts); j++ {
-				if parts[j] == "connectors" && j+1 < len(parts) {
-					return tID, parts[j+1], nil
-				}
-			}
+// extractHookTarget reads {type} and {connectorId} from /hooks/{type}/{connectorId}.
+func extractHookTarget(r *http.Request) (string, uuid.UUID, error) {
+	hookType, idStr := r.PathValue("type"), r.PathValue("id")
+	if hookType == "" || idStr == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) == 3 && parts[0] == "hooks" {
+			hookType, idStr = parts[1], parts[2]
 		}
 	}
-	return uuid.Nil, "", errors.New("invalid path: expected /api/v1/t/{tenant}/connectors/{name}/webhook")
+	id, err := uuid.Parse(idStr)
+	if hookType == "" || err != nil || id == uuid.Nil {
+		return "", uuid.Nil, errors.New("invalid path: expected /hooks/{type}/{connectorId}")
+	}
+	return hookType, id, nil
 }

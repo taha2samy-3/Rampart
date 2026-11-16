@@ -898,6 +898,11 @@ func (m *MemoryStore) SaveConnector(ctx context.Context, tenantID uuid.UUID, con
 		conn.ID = domain.NewID()
 	}
 	conn.TenantID = tenantID
+	if prev, ok := m.connectors[connKey(tenantID, conn.Name)]; ok && prev.ID != uuid.Nil {
+		conn.ID = prev.ID // the id is stable across saves, as in PostgreSQL (ON CONFLICT keeps it)
+	} else if conn.ID == uuid.Nil {
+		conn.ID = domain.NewID()
+	}
 	now := time.Now().UTC()
 	if conn.CreatedAt.IsZero() {
 		conn.CreatedAt = now
@@ -917,6 +922,19 @@ func (m *MemoryStore) GetConnector(ctx context.Context, tenantID uuid.UUID, name
 	}
 	cp := *conn
 	return &cp, nil
+}
+
+// GetConnectorByID finds a connector by its id alone (inbound webhooks, D78).
+func (m *MemoryStore) GetConnectorByID(ctx context.Context, id uuid.UUID) (*domain.Connector, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.connectors {
+		if id != uuid.Nil && c.ID == id {
+			cp := *c
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrConnectorNotFound
 }
 
 func (m *MemoryStore) ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error) {

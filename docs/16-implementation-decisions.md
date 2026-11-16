@@ -1176,7 +1176,7 @@ Milestone 3.3 Section 3.4 introduces systematic request rate limiting, payload s
 - Excessively large payloads return HTTP 413 (`payload-too-large`).
 
 ### 4. Public Inbound Connector Webhooks
-- Specialized rate limiter in `InboundWebhookHandler` on `POST /api/v1/t/{tenant}/connectors/{name}/webhook`:
+- Specialized rate limiter in `InboundWebhookHandler` on `POST /hooks/{type}/{connectorId}` (moved there by D78; it was `/api/v1/t/{tenant}/connectors/{name}/webhook`):
   - Keyed by `webhook:<client_ip>:<connector_name>`.
   - Configurable via `limits.webhookPerMinute` (default 60 req/min, burst 5).
   - Evaluated immediately before reading the request body, connector lookups, or secret resolution, protecting Rampart from webhook amplification floods.
@@ -1335,3 +1335,17 @@ D69 let a platform administrator allow private CIDRs and internal host patterns 
 - **Tested:** `TestSSRFAllowlistScopedTo` (in scope, other tenant, other type, no tenant, `"*"`, nil, loopback switch), `TestValidateOutboundURLRefusesUnresolvableHost`, `TestSafeClientScopedAllowlist` (unscoped, other tenant and other type refused before any connection; in scope passes the guard), and the configuration refusals in `TestConnectorsSSRFAllowlistConfig`.
 
 Sources: OWASP Server-Side Request Forgery Prevention Cheat Sheet (allow-list per use case; deny internal networks for user-supplied URLs), https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html ; docs/23 C1.
+
+## D78. Inbound webhooks are `/hooks/{type}/{connectorId}` on the ingest gateway (docs/23 C2)
+
+D70 and D73 put the Jira and GitHub callbacks at `POST /api/v1/t/{tenant}/connectors/{name}/webhook`, on the query API. Docs 04 (`status.webhookURL: …/hooks/jira/…`), 11 (the `/hooks` table) and 15 (the route split) put public callbacks under `/hooks` on `ingest-gateway`. The `/api/v1` form had three faults: in distributed mode the Ingress sends `/api` to `query-api`, the read path; it put unauthenticated routes inside the prefix whose rule is "session or API token"; and its URL carried the tenant id and a connector name anyone could guess.
+
+- **The path.** `POST /hooks/jira/{connectorId}` and `POST /hooks/github/{connectorId}`, mounted with the ingest-gateway routes. `{connectorId}` is the connector row's id (UUIDv7, stable across re-applies: `ON CONFLICT` keeps it, and the operator and `rampart apply` read it back before writing the URL). The old route is removed, not kept as an alias: its shape was the problem.
+- **The tenant comes from the row, never the path.** The caller is not signed in, so the request has no tenant and row-level security hides every connector from the application role. Migration `00035_connector_webhook_lookup.sql` (schema version 35, chart `minSchemaVersion` 35) adds one `SELECT` policy, `webhook_lookup`, that shows the single row whose id the handler sets in `app.webhook_connector_id` for the lookup transaction only (`set_config(…, true)`). `Store.GetConnectorByID` is the only reader. A security-definer function was not used: the connector table forces row-level security, so even its owner would see nothing without a tenant.
+- **A wrong type answers like a missing connector** (404), so the path cannot be used to learn what a connector is. An outbound connector still refuses any delivery (400). The D70 order is unchanged: rate limit (now keyed by address and connector id), size, signature with that tenant's webhook secret, duplicates, payload.
+- **Which connectors get a URL.** `domain.InboundWebhookPath`: only Jira and GitHub with two-way sync, the only ones that are called back. The generic `webhook` connector, which only sends, no longer shows a callback URL in its status.
+- **Upgrade note.** A Jira or GitHub webhook registered against the old URL stops being delivered: copy the new `status.webhookURL` into Jira or GitHub. The registration itself is still done by hand (D70 part C).
+- **Not built here:** Dependency-Track's `/hooks/dependency-track/{id}` (docs/23 K5, its own slice; its `LookupScanSource` reads `scan_source` without a tenant and needs the same kind of policy); a per-connector cap independent of the address (docs/23 C3).
+- **Tested:** `TestInbound_PathIsTheConnectorIDAndType` (wrong type, unknown id, the old tenant path, a name instead of an id: all refused and nothing acted on; the right path works), the existing inbound tests on the new path, `TestInboundWebhookPath`, `TestApply_Connector`, and on PostgreSQL `TestGetConnectorByID_OnPostgreSQL` (the application role finds the row and its tenant by id, an unknown id finds nothing, and afterwards another tenant still sees none of the connectors).
+
+Sources: docs 04 §4, 11 (Hooks), 15 (route split); D27 (`ingest-gateway` serves the write path), D70, D73; docs/23 C2.

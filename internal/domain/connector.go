@@ -427,6 +427,22 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 	return nil
 }
 
+// InboundWebhookPath is the path a connector receives callbacks on, /hooks/{type}/{connectorId}, or "" when it
+// receives none: only Jira and GitHub with two-way sync are called back (D78). The tenant is not in the path; the
+// handler reads it from the connector.
+func InboundWebhookPath(c Connector) string {
+	if c.ID == uuid.Nil {
+		return ""
+	}
+	switch c.Type {
+	case ConnectorTypeJira, ConnectorTypeGitHub:
+		if c.Direction() == DirectionBidirectional {
+			return fmt.Sprintf("/hooks/%s/%s", c.Type, c.ID)
+		}
+	}
+	return ""
+}
+
 // GetCondition returns the condition with the specified type, or nil if not found.
 func (c *Connector) GetCondition(condType string) *ConnectorCondition {
 	for i := range c.Status.Conditions {

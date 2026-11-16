@@ -19,6 +19,8 @@ var (
 type Connectors interface {
 	SaveConnector(ctx context.Context, tenantID uuid.UUID, conn domain.Connector) error
 	GetConnector(ctx context.Context, tenantID uuid.UUID, name string) (*domain.Connector, error)
+	// GetConnectorByID finds a connector by id alone; only inbound webhooks use it (D78).
+	GetConnectorByID(ctx context.Context, id uuid.UUID) (*domain.Connector, error)
 	ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error)
 	DeleteConnector(ctx context.Context, tenantID uuid.UUID, name string) error
 	UpdateConnectorStatus(ctx context.Context, tenantID uuid.UUID, name string, status domain.ConnectorStatus) error
@@ -101,6 +103,48 @@ func (s *PostgresStore) GetConnector(ctx context.Context, tenantID uuid.UUID, na
 	}
 
 	return &conn, nil
+}
+
+// GetConnectorByID finds a connector by its id alone, for an inbound webhook that names only the id
+// (/hooks/{type}/{connectorId}, D78). The caller has no tenant yet: the lookup runs with app.webhook_connector_id
+// set for this one transaction, which the webhook_lookup policy (migration 00035) uses to show that single row.
+func (s *PostgresStore) GetConnectorByID(ctx context.Context, id uuid.UUID) (*domain.Connector, error) {
+	if id == uuid.Nil {
+		return nil, ErrConnectorNotFound
+	}
+	var conn domain.Connector
+	var specRaw, statusRaw []byte
+	var typeStr string
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.webhook_connector_id', $1, true)`, id.String()); err != nil {
+		return nil, err
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT id, tenant_id, name, type, spec, status, created_at, updated_at
+		FROM connector WHERE id = $1`, id).
+		Scan(&conn.ID, &conn.TenantID, &conn.Name, &typeStr, &specRaw, &statusRaw, &conn.CreatedAt, &conn.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrConnectorNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	conn.Type = domain.ConnectorType(typeStr)
+	if len(specRaw) > 0 {
+		if err := json.Unmarshal(specRaw, &conn.Spec); err != nil {
+			return nil, err
+		}
+	}
+	if len(statusRaw) > 0 {
+		if err := json.Unmarshal(statusRaw, &conn.Status); err != nil {
+			return nil, err
+		}
+	}
+	return &conn, tx.Commit(ctx)
 }
 
 func (s *PostgresStore) ListConnectors(ctx context.Context, tenantID uuid.UUID, connType ...domain.ConnectorType) ([]domain.Connector, error) {

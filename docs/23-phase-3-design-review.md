@@ -51,6 +51,7 @@ The review answers three questions:
 - **Basis**: OWASP SSRF Prevention Cheat Sheet (allow-list per use case, deny the internal network for user-supplied URLs).
 
 ### C2 (P1) Inbound webhooks go back to `/hooks/{type}/{opaque id}` on the gateway
+- **Status: done for Jira and GitHub (D78, 2026-11-16).** Dependency-Track's hook is part of the K5 slice.
 - **Now** (D70, D73 §4; code: `internal/query/api.go:219`): `POST /api/v1/t/{tenant}/connectors/{name}/webhook`.
 - **Problem**: docs 04, 11 and 15 put public callbacks under `/hooks` on `ingest-gateway`. Doc 04 has `status.webhookURL: …/hooks/jira/0193…`, doc 11 has the hooks table, and doc 15 has the route split. The `/api/v1` path causes three problems:
   - In distributed mode the Ingress sends it to `query-api`.

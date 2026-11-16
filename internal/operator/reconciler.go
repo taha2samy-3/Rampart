@@ -706,14 +706,18 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 	status.ObservedGeneration = cr.Metadata.Generation
 	status.LastSync = &now
 
-	// Webhook URL generation for inbound / bidirectional connectors (Milestone 3.2, D23, D69)
-	status.WebhookURL = ""
-	if r.publicURL != "" && (conn.Direction() == domain.DirectionInbound || conn.Direction() == domain.DirectionBidirectional || conn.Type == domain.ConnectorTypeWebhook) {
-		tSlug := tenant.Slug
-		if tSlug == "" {
-			tSlug = tenant.ID.String()
-		}
-		status.WebhookURL = fmt.Sprintf("%s/api/v1/t/%s/connectors/%s/webhook", r.publicURL, tSlug, cr.Metadata.Name)
+	// The row id is stable across saves; the inbound webhook URL names it (D78).
+	if existing, gerr := r.store.GetConnector(ctx, tenant.ID, cr.Metadata.Name); gerr == nil && existing != nil && existing.ID != uuid.Nil {
+		conn.ID = existing.ID
+	} else if conn.ID == uuid.Nil {
+		conn.ID = domain.NewID()
+	}
+
+	// Inbound webhook URL: only trackers that sync back (Jira, GitHub with twoWaySync) receive callbacks. It is
+	// /hooks/{type}/{connectorId} on the ingest gateway; no tenant, no name in it (D78, docs/04, 11, 15).
+	status.WebhookURL = domain.InboundWebhookPath(conn)
+	if status.WebhookURL != "" {
+		status.WebhookURL = r.publicURL + status.WebhookURL
 	}
 
 	// Connection verification (D69, docs/04, docs/20 Milestone 3.1)

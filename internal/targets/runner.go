@@ -273,7 +273,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if pgStore != nil { // a ticket is tied to its finding by the outbox, which only PostgreSQL has
 		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
 	}
-	queryAPI.SetInboundWebhookHandler(inboundHandler)
 	// The ticket sweeper reads the pending tickets of every tenant, which row-level security allows only the system
 	// role. Without it the application role would see no rows at all and every ticket would wait for ever, so it is
 	// not started, and the log says why. The advisory lock the sweeper takes needs the system pool as well: without
@@ -360,8 +359,11 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	if isAll || contains(targetList, "ingest-gateway") {
-		r.logger.Info("mounting ingest-gateway routes on /ingest/v1")
+		r.logger.Info("mounting ingest-gateway routes on /ingest/v1 and /hooks")
 		gw.RegisterRoutes(mux)
+		// Public callbacks live under /hooks on the write path (docs/04, 11, 15; D78), addressed by the connector id.
+		mux.Handle("POST /hooks/jira/{id}", inboundHandler)
+		mux.Handle("POST /hooks/github/{id}", inboundHandler)
 	}
 
 	if isAll || contains(targetList, "query-api") {

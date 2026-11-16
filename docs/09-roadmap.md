@@ -51,7 +51,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 1: unreadable records with their position on the run page, the close step skipped on them, and the raw report for maintainers with an audit entry (D51) | built; tested on PostgreSQL and with Vitest. Not built: recoverable records in SARIF, CycloneDX, SPDX and Syft; retention |
 | Phase 3.0: Spike 6 (CEL mapping benchmark) and connector model architecture (D69) | built; tested and documented |
 | Phase 3.1: Connectors CRD, store, safe client (SSRF guard), notifiers, router, Check() verification (D69) | built; tested on PostgreSQL, envtest, and CI |
-| Phase 3.2: Trackers (Jira, GitHub), inbound webhooks, ticket outbox, comment/close lifecycle (D70) | built; tested on PostgreSQL, verified against Jira & GitHub specs |
+| Phase 3.2: Trackers (Jira, GitHub), inbound webhooks, ticket outbox, comment/close lifecycle (D70) | built; tested on PostgreSQL, verified against Jira & GitHub specs. Inbound webhooks moved to `/hooks/{type}/{connectorId}` on the gateway (D78); SSRF allowlist scoped per tenant and connector type (D77) |
 | Phase 3.3: CI OIDC federation (D22, D72), mass-close guard settings (D71), rate limits & quotas (D73) | built; fuzzed, tested on PostgreSQL and envtest |
 | Phase 3.4: Dependency-Track upstream source, FPF streaming parser, sync & debounce state machine (D74) | built; tested on PostgreSQL with live simulation |
 | Phase 3.5: Integration SDK, CEL mapping engine, parser conformance kit, Wave 2 native parsers (D75) | built; fuzzed and tested across 8 scanner families |

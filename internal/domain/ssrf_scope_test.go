@@ -68,3 +68,21 @@ func TestValidateOutboundURLRefusesUnresolvableHost(t *testing.T) {
 		t.Errorf("reconcile-time check keeps accepting an unresolved name: %v", err)
 	}
 }
+
+func TestInboundWebhookPath(t *testing.T) {
+	id := uuid.New()
+	twoWay := Connector{ID: id, Type: ConnectorTypeJira, Spec: ConnectorSpec{Jira: &JiraConnectorConfig{TwoWaySync: true}}}
+	if got := InboundWebhookPath(twoWay); got != "/hooks/jira/"+id.String() {
+		t.Errorf("two-way Jira: %q", got)
+	}
+	for name, c := range map[string]Connector{
+		"one-way jira": {ID: id, Type: ConnectorTypeJira, Spec: ConnectorSpec{Jira: &JiraConnectorConfig{}}},
+		"webhook":      {ID: id, Type: ConnectorTypeWebhook},
+		"slack":        {ID: id, Type: ConnectorTypeSlack},
+		"no id":        {Type: ConnectorTypeJira, Spec: ConnectorSpec{Jira: &JiraConnectorConfig{TwoWaySync: true}}},
+	} {
+		if got := InboundWebhookPath(c); got != "" {
+			t.Errorf("%s: expected no inbound path, got %q", name, got)
+		}
+	}
+}
