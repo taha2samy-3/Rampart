@@ -609,7 +609,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		Type:      cr.Spec.Type,
 		Spec:      cr.Spec,
 	}
-	if err := conn.ValidateWithAllowlist(r.allowlist); err != nil {
+	if err := conn.ValidateWithAllowlist(r.allowlist.ScopedTo(tenant.ID, conn.Type)); err != nil {
 		reason := "InvalidSpec"
 		if errors.Is(err, domain.ErrConnectorNotSupported) {
 			reason = "NotSupported"

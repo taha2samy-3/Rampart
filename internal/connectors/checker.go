@@ -52,6 +52,18 @@ func (c *DefaultChecker) SetSlackAuthURL(u string) {
 
 // Check probes the connector's target service to verify authentication and reachability.
 func (c *DefaultChecker) Check(ctx context.Context, conn domain.Connector, secret []byte) error {
+	return c.forConnector(conn).check(ctx, conn, secret)
+}
+
+// forConnector narrows the client and the allowlist to this connector's tenant and type (D77).
+func (c *DefaultChecker) forConnector(conn domain.Connector) *DefaultChecker {
+	cp := *c
+	cp.client = c.client.Scoped(conn.TenantID, conn.Type)
+	cp.allowlist = c.allowlist.ScopedTo(conn.TenantID, conn.Type)
+	return &cp
+}
+
+func (c *DefaultChecker) check(ctx context.Context, conn domain.Connector, secret []byte) error {
 	switch conn.Type {
 	case domain.ConnectorTypeSlack:
 		return c.checkSlack(ctx, conn, secret)

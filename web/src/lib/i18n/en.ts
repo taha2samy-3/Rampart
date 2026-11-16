@@ -2,6 +2,7 @@
 export const en = {
   common: {
     close: 'Close',
+    cancel: 'Cancel',
     copy: 'Copy',
     copied: 'Copied',
     retry: 'Try again',
@@ -506,6 +507,9 @@ export const en = {
     uploadDescription: 'Upload a SARIF, CycloneDX, SPDX or scanner report file.',
     uploadFileLabel: 'Report file',
     uploadDropZone: 'Drop a scanner report here, or click to browse',
+    uploadFormat: 'Parser / Format',
+    uploadFormatAuto: 'Auto-detect from file (Recommended)',
+    uploadFormatHelp: 'Rampart automatically detects scanner signatures. Choose a format only if you want an explicit override.',
     uploadApplication: 'Application',
     uploadApplicationPlaceholder: 'e.g. payments-api',
     uploadTrack: 'Branch / Track',

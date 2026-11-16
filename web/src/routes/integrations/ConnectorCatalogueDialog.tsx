@@ -119,21 +119,22 @@ export function ConnectorCatalogueDialog({
   };
 
   const generateYaml = () => {
-    const type = selectedType?.id ?? 'connector';
+    const rawType = selectedType?.id ?? 'connector';
+    const crdType = rawType === 'dependency-track' ? 'dependencyTrack' : rawType;
     return `apiVersion: rampart.aspm.dev/v1alpha1
 kind: Connector
 metadata:
-  name: ${name || `${type}-connector`}
+  name: ${name || `${rawType}-connector`}
   namespace: rampart-system
 spec:
-  type: ${type}
+  type: ${crdType}
   direction: ${selectedType?.direction ?? 'outbound'}
   enabled: true
-  ${type}:
+  ${crdType}:
     url: "${url || 'https://external-service.example.com'}"
     ${selectedType?.id === 'jira' ? `defaultProject: "${extraField1 || 'SEC'}"\n    issueType: "${extraField2 || 'Bug'}"\n    twoWaySync: ${twoWaySync}` : ''}${selectedType?.id === 'github' ? `repository: "${extraField1 || 'org/repo'}"\n    twoWaySync: ${twoWaySync}` : ''}${selectedType?.id === 'slack' ? `channel: "${extraField1 || '#appsec-alerts'}"` : ''}${selectedType?.id === 'email' ? `from: "${extraField1 || 'security@example.com'}"\n    to: ["${extraField2 || 'team@example.com'}"]` : ''}
     credentialsSecretRef:
-      name: ${name ? `${name}-secret` : `${type}-secret`}
+      name: ${name ? `${name}-secret` : `${rawType}-secret`}
       key: token`;
   };
 

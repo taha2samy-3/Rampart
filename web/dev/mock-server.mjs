@@ -137,7 +137,162 @@ const eventsOf = (id) => {
   return EVENTS.get(id);
 };
 const ACCEPTANCES = [
-  { id: 'ra-31', status: 'approved', justification: 'The payments admin API is only reachable over the VPN', owner: 'user:sara.ahmed@acme.example', requester: 'user:sara.ahmed@acme.example', approver: 'user:boss@acme.example', expires_at: new Date(Date.now() + 40 * 86400000).toISOString(), on_expiry: 'reactivate', created_at: new Date(Date.now() - 5 * 86400000).toISOString(), finding_ids: ['f-1', 'f-2'] },
+  { id: 'ra-31', status: 'approved', justification: 'The payments admin API is only reachable over the VPN', owner: 'user:sara.ahmed@acme.example', requester: 'user:sara.ahmed@acme.example', approver: 'user:boss@acme.example', expires_at: new Date(Date.now() + 40 * 86400000).toISOString(), on_expiry: 'reactivate', created_at: new Date(Date.now() - 5 * 86400000).toISOString(), finding_ids: ['f0000000-0000-4000-8000-000000000001', 'f0000000-0000-4000-8000-000000000002'] },
+  { id: 'ra-32', status: 'pending', justification: 'Legacy crypto algorithm in staging environment undergoing migration in Q1', owner: 'user:omar@acme.example', requester: 'user:omar@acme.example', expires_at: new Date(Date.now() + 60 * 86400000).toISOString(), on_expiry: 'close', created_at: new Date(Date.now() - 2 * 86400000).toISOString(), finding_ids: ['f0000000-0000-4000-8000-000000000003'] },
+  { id: 'ra-33', status: 'expired', justification: 'Temporary waiver for CVE-2023-44487 during maintenance window', owner: 'user:sara.ahmed@acme.example', requester: 'user:sara.ahmed@acme.example', approver: 'user:boss@acme.example', expires_at: new Date(Date.now() - 10 * 86400000).toISOString(), on_expiry: 'reactivate', created_at: new Date(Date.now() - 70 * 86400000).toISOString(), finding_ids: ['f0000000-0000-4000-8000-000000000004'] },
+];
+
+const PARSERS = [
+  { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0 standard with enrichers for Semgrep, Trivy, Gitleaks, CodeQL' },
+  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.5.0', support_level: 'builtin', description: 'CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats' },
+  { id: 'builtin:spdx', name: 'SPDX Parser (JSON/Tag-Value)', kind: 'parser', version: '2.3.0', support_level: 'builtin', description: 'SPDX 2.2 and 2.3 SBOM parser for JSON and Tag-Value formats' },
+  { id: 'builtin:openvex', name: 'OpenVEX Parser', kind: 'parser', version: '0.2.0', support_level: 'builtin', description: 'OpenVEX triage statements and exploitability assertions parser' },
+  { id: 'builtin:syft', name: 'Syft Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Anchore Syft SBOM parser with artifact catalog and dependency relationships' },
+  { id: 'builtin:trivy', name: 'Trivy Parser (JSON)', kind: 'parser', version: '2.0.0', support_level: 'builtin', description: 'Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations, licenses' },
+  { id: 'builtin:grype', name: 'Grype Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Grype JSON: vulnerability matches with their related identifiers' },
+  { id: 'builtin:semgrep', name: 'Semgrep Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Semgrep JSON: code findings with CWE, location and code snippet hash' },
+  { id: 'builtin:trufflehog', name: 'TruffleHog Parser (JSON lines)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'TruffleHog JSON lines: secrets, verified against live endpoints' },
+  { id: 'builtin:gitleaks', name: 'Gitleaks Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Gitleaks JSON: secrets found in git repositories; secret is hashed' },
+  { id: 'builtin:dependencytrack', name: 'Dependency-Track Parser (FPF/JSON)', kind: 'parser', version: '1.4.0', support_level: 'builtin', description: 'Dependency-Track FPF export and direct API finding response parser with VEX' },
+  { id: 'builtin:checkov', name: 'Checkov Parser (JSON)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile' },
+  { id: 'builtin:bandit', name: 'Bandit Parser (JSON)', kind: 'parser', version: '1.7.0', support_level: 'builtin', description: 'Bandit Python SAST vulnerability and security flaw report' },
+  { id: 'builtin:nuclei', name: 'Nuclei Parser (JSONL)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Nuclei template-based vulnerability scan results' },
+  { id: 'builtin:zap', name: 'OWASP ZAP Parser (JSON)', kind: 'parser', version: '2.14.0', support_level: 'builtin', description: 'OWASP ZAP DAST web application security report' },
+  { id: 'builtin:dependencycheck', name: 'OWASP Dependency-Check Parser (JSON)', kind: 'parser', version: '8.4.0', support_level: 'builtin', description: 'OWASP Dependency-Check SCA vulnerability report' },
+  { id: 'builtin:snyk', name: 'Snyk Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Snyk open source and container vulnerability report' },
+  { id: 'builtin:kubebench', name: 'kube-bench Parser (JSON)', kind: 'parser', version: '0.6.0', support_level: 'builtin', description: 'Aqua Security kube-bench CIS Kubernetes benchmark report' },
+  { id: 'builtin:prowler', name: 'Prowler Parser (JSON)', kind: 'parser', version: '4.0.0', support_level: 'builtin', description: 'Prowler AWS/Azure/GCP cloud security and compliance report' },
+  { id: 'crd:custom-sast-mapper', name: 'Custom In-House SAST', kind: 'parser', version: '1.0.0', support_level: 'community', description: 'Declarative CEL mapping parser registered dynamically via IntegrationPackage CRD' },
+];
+
+const CONNECTORS = [
+  {
+    name: 'jira-cloud-corp',
+    type: 'jira',
+    direction: 'bidirectional',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'Connected to acme.atlassian.net (Jira Cloud)' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'github-issues-prod',
+    type: 'github',
+    direction: 'bidirectional',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'App token authenticated with issues:write permission' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'dtrack-prod-sync',
+    type: 'dependency-track',
+    direction: 'inbound',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'Dependency-Track v4.14 API key valid, 12 projects synced' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'slack-security-secops',
+    type: 'slack',
+    direction: 'outbound',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'Bot joined #secops-alerts channel' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'teams-incident-response',
+    type: 'teams',
+    direction: 'outbound',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'Incoming webhook endpoint reachable' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'webhook-siem-forwarder',
+    type: 'generic-webhook',
+    direction: 'outbound',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'HMAC signature verification active (200 OK)' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+  {
+    name: 'email-critical-digest',
+    type: 'email',
+    direction: 'outbound',
+    enabled: true,
+    status: {
+      conditions: [{ type: 'Connected', status: 'True', message: 'SMTP TLS handshake confirmed on port 587' }],
+      last_check_time: new Date().toISOString(),
+    },
+  },
+];
+
+const DTRACK_PROJECTS = [
+  { project_uuid: 'dtrack-prj-01', name: 'payment-service', version: '2.14.0', last_bom_import: new Date(Date.now() - 3600000).toISOString() },
+  { project_uuid: 'dtrack-prj-02', name: 'auth-gateway', version: '1.8.2', last_bom_import: new Date(Date.now() - 14400000).toISOString() },
+  { project_uuid: 'dtrack-prj-03', name: 'notification-worker', version: '3.0.1', last_bom_import: new Date(Date.now() - 86400000).toISOString() },
+];
+
+const HELD_CLOSES = [
+  {
+    id: 'hc-001',
+    ingest_run_id: RUNS[0].id,
+    scope: { tenant_id: 't-1', scan_source_id: 'src-1', scanner_family: 'trivy', asset_id: 'github.com/acme/checkout', track: 'main' },
+    finding_ids: ['f0000000-0000-4000-8000-000000000001', 'f0000000-0000-4000-8000-000000000002'],
+    created_at: new Date(Date.now() - 7200000).toISOString(),
+  },
+  {
+    id: 'hc-002',
+    ingest_run_id: RUNS[3].id,
+    scope: { tenant_id: 't-1', scan_source_id: 'src-2', scanner_family: 'semgrep', asset_id: 'github.com/acme/billing', track: 'main' },
+    finding_ids: ['f0000000-0000-4000-8000-000000000003'],
+    created_at: new Date(Date.now() - 43200000).toISOString(),
+  },
+];
+
+const GROUPS = [
+  {
+    id: 'grp-001',
+    tenant_id: 't-1',
+    name: 'Remediation Sprint 42 (PCI DSS 6.2)',
+    description: 'Track critical and high SQLi and auth vulnerabilities required for Q4 audit',
+    owner: 'sara.ahmed@acme.example',
+    member_count: 5,
+    created_at: new Date(Date.now() - 5 * 86400000).toISOString(),
+    updated_at: new Date(Date.now() - 86400000).toISOString(),
+  },
+  {
+    id: 'grp-002',
+    tenant_id: 't-1',
+    name: 'Payment Gateway Hardening',
+    description: 'Resolve all open secrets and SSRF flaws in checkout and billing services',
+    owner: 'omar@acme.example',
+    member_count: 3,
+    created_at: new Date(Date.now() - 12 * 86400000).toISOString(),
+    updated_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+  },
+];
+
+const VIEWS = [
+  { id: 'v-01', tenant_id: 't-1', owner: 'sara.ahmed@acme.example', name: 'Critical Internet Facing', query: 'severity:critical internet_facing:true state:open', is_shared: true },
+  { id: 'v-02', tenant_id: 't-1', owner: 'omar@acme.example', name: 'Open Secrets in Git', query: 'category:secrets state:open', is_shared: true },
+];
+
+const INVENTORY = [
+  { id: 'inv-1', name: 'github.com/acme/checkout', type: 'repository', criticality: 'critical', environment: 'production', internet_facing: true, owner: 'sara.ahmed@acme.example', last_seen: new Date().toISOString() },
+  { id: 'inv-2', name: 'github.com/acme/billing', type: 'repository', criticality: 'high', environment: 'production', internet_facing: false, owner: 'omar@acme.example', last_seen: new Date().toISOString() },
+  { id: 'inv-3', name: 'registry.acme.example/checkout:v2.14', type: 'container_image', criticality: 'critical', environment: 'production', internet_facing: true, owner: 'sara.ahmed@acme.example', last_seen: new Date().toISOString() },
 ];
 const PROOFS = {
   'ra-31': [
@@ -451,6 +606,14 @@ const server = http.createServer((req, res) => {
         return;
       }
     }
+    if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
+    if (p === '/api/v1/connectors') return json(res, { items: CONNECTORS });
+    if (p === '/api/v1/dtrack/unmapped') return json(res, { projects: DTRACK_PROJECTS });
+    if (p === '/api/v1/held-closes') return json(res, { items: HELD_CLOSES });
+    if (p === '/api/v1/groups') return json(res, { groups: GROUPS });
+    if (p === '/api/v1/views') return json(res, { views: VIEWS });
+    if (p === '/api/v1/settings') return json(res, { riskAcceptanceApproval: true, riskAcceptanceMaxDays: 90 });
+    if (p === '/api/v1/inventory') return json(res, { assets: INVENTORY });
     if (p === '/api/v1/findings') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list findings', 'The database did not answer within 5 s.');
       if (dataMode === 'empty') return json(res, { items: null, total: 0 });

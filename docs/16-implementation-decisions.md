@@ -1322,8 +1322,16 @@ Milestone 3.6 implements finding groups, saved views, streaming exports, live up
 - **PrometheusRule (`deploy/helm/rampart/templates/prometheusrule.yaml`)**:
   - Alert rules for stalled ticket outbox (>1 hour), disconnected connectors (>15m), pending held closes (>1h), failing feed syncs, and elevated ingest error rates (>10%).
 
+## D77. The SSRF allowlist is scoped to tenants and connector types (docs/23 C1)
 
+D69 let a platform administrator allow private CIDRs and internal host patterns (an in-cluster Dependency-Track, an on-premise Jira) for **every** connector of **every** tenant. On a shared install that let any tenant admin point a webhook connector at `kubernetes.default.svc`, the bundled object store or any other internal endpoint the exception covered: the always-blocked list (metadata, loopback, link-local) does not include cluster service ranges.
 
+- **The exception names its scope.** `connectors.ssrfAllowlist.tenants` (tenant ids from `Tenant.status.tenantId`, or `"*"`) and `connectors.ssrfAllowlist.connectorTypes` (`dependencyTrack`, `jira`, …, or `"*"`); env `RAMPART_CONNECTORS_SSRF_ALLOWLIST_TENANTS` and `…_CONNECTOR_TYPES`. Both are required whenever CIDRs, hosts or internal HTTP are set; an allowlist without them, a tenant that is not an id, or an unknown connector type is **refused at startup** with the reason, not guessed at (the same rule as D41 and D53). `"*"` must be written explicitly. Tenant ids rather than slugs because a slug can be renamed and the dial-time check only knows the id.
+- **Applied where the connector is known.** `PlatformSSRFAllowlist.ScopedTo(tenant, type)` returns the allowlist as it applies to one connector; out of scope it grants nothing (only the test switch `AllowLoopback` survives). The operator validates a `Connector` against its scoped allowlist; the checker, the notifiers (Slack, Teams, webhook) and the trackers (Jira, GitHub) use `SafeClient.Scoped(tenant, type)`; the Dependency-Track probe uses the checker's scoped client.
+- **Checked before sending and at dial time.** A scoped client puts its allowlist on each request; the dialer and the redirect check read it from there. A request is also checked just before it is sent (`domain.ValidateOutboundURL`, which refuses a name that does not resolve), because a pooled connection is reused without a new dial: without it a request outside the scope could ride a connection an in-scope connector opened. An unscoped client (for example CI federation key fetching, D72) gets the default policy: public addresses only.
+- **Unchanged:** the always-blocked addresses are never allowed; internal HTTP is still allowed only for allow-listed host names, not for IP literals (D69); e-mail keeps refusing internal SMTP hosts.
+- **Upgrade note.** An existing configuration with CIDRs or hosts and no scope now fails to start and says what to add. That is deliberate: the previous behaviour was the hole.
+- **Not built:** several rules with different hosts for different tenants (one rule today; a list of rules is the next step if needed); an issuer of CI federation on a private network.
+- **Tested:** `TestSSRFAllowlistScopedTo` (in scope, other tenant, other type, no tenant, `"*"`, nil, loopback switch), `TestValidateOutboundURLRefusesUnresolvableHost`, `TestSafeClientScopedAllowlist` (unscoped, other tenant and other type refused before any connection; in scope passes the guard), and the configuration refusals in `TestConnectorsSSRFAllowlistConfig`.
 
-
-
+Sources: OWASP Server-Side Request Forgery Prevention Cheat Sheet (allow-list per use case; deny internal networks for user-supplied URLs), https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html ; docs/23 C1.

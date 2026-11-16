@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 	"rampart/internal/domain"
 )
@@ -198,10 +199,24 @@ type SSRFAllowlistConfig struct {
 	CIDRs             []string `json:"cidrs" yaml:"cidrs"`
 	Hosts             []string `json:"hosts" yaml:"hosts"`
 	AllowInternalHTTP bool     `json:"allow_internal_http" yaml:"allowInternalHttp"`
+	// Tenants and ConnectorTypes scope the exception (D77): tenant ids (Tenant.status.tenantId) or "*",
+	// connector types (dependencyTrack, jira, …) or "*". Both are required when anything is allowed.
+	Tenants        []string `json:"tenants" yaml:"tenants"`
+	ConnectorTypes []string `json:"connector_types" yaml:"connectorTypes"`
+}
+
+// scopeableConnectorTypes are the connector types that make outbound calls and may be named in the scope.
+var scopeableConnectorTypes = map[string]bool{
+	string(domain.ConnectorTypeJira): true, string(domain.ConnectorTypeGitHub): true,
+	string(domain.ConnectorTypeSlack): true, string(domain.ConnectorTypeTeams): true,
+	string(domain.ConnectorTypeEmail): true, string(domain.ConnectorTypeWebhook): true,
+	string(domain.ConnectorTypeDependencyTrack): true,
 }
 
 // ToPlatformSSRFAllowlist converts SSRFAllowlistConfig to domain.PlatformSSRFAllowlist.
-// It returns an error if any CIDR is malformed or if any host pattern contains "*".
+// It returns an error if any CIDR is malformed, if any host pattern is "*", or if an allowlist that grants
+// something does not say which tenants and connector types it is for (D77): an unscoped exception would
+// open the internal network to every tenant's connectors, so it is refused rather than guessed.
 func (c *SSRFAllowlistConfig) ToPlatformSSRFAllowlist() (*domain.PlatformSSRFAllowlist, error) {
 	if c == nil || (len(c.CIDRs) == 0 && len(c.Hosts) == 0 && !c.AllowInternalHTTP) {
 		return nil, nil
@@ -212,9 +227,29 @@ func (c *SSRFAllowlistConfig) ToPlatformSSRFAllowlist() (*domain.PlatformSSRFAll
 			return nil, fmt.Errorf("ssrf allowlist: wildcard '*' is not allowed (all hosts permitted is insecure)")
 		}
 	}
+	tenants := cleanList(c.Tenants)
+	types := cleanList(c.ConnectorTypes)
+	if len(tenants) == 0 || len(types) == 0 {
+		return nil, fmt.Errorf("ssrf allowlist: tenants and connectorTypes are required (tenant ids or \"*\", connector types or \"*\"); an exception that names no scope would apply to every tenant (D77)")
+	}
+	for _, t := range tenants {
+		if t == "*" {
+			continue
+		}
+		if _, err := uuid.Parse(t); err != nil {
+			return nil, fmt.Errorf("ssrf allowlist: tenant %q is not a tenant id (use Tenant.status.tenantId) or \"*\"", t)
+		}
+	}
+	for _, ct := range types {
+		if ct != "*" && !scopeableConnectorTypes[ct] {
+			return nil, fmt.Errorf("ssrf allowlist: unknown connector type %q", ct)
+		}
+	}
 	out := &domain.PlatformSSRFAllowlist{
 		AllowedHosts:      c.Hosts,
 		AllowInternalHTTP: c.AllowInternalHTTP,
+		Tenants:           tenants,
+		ConnectorTypes:    types,
 	}
 	for _, cidr := range c.CIDRs {
 		trimmed := strings.TrimSpace(cidr)
@@ -637,6 +672,12 @@ func applyEnv(cfg *Config) {
 	if v := get("CONNECTORS_SSRF_ALLOWLIST_ALLOW_INTERNAL_HTTP"); v != "" {
 		cfg.Connectors.SSRFAllowlist.AllowInternalHTTP = strings.ToLower(v) == "true" || v == "1"
 	}
+	if v := get("CONNECTORS_SSRF_ALLOWLIST_TENANTS"); v != "" {
+		cfg.Connectors.SSRFAllowlist.Tenants = splitList(v)
+	}
+	if v := get("CONNECTORS_SSRF_ALLOWLIST_CONNECTOR_TYPES"); v != "" {
+		cfg.Connectors.SSRFAllowlist.ConnectorTypes = splitList(v)
+	}
 	if v := get("LIMITS_INGEST_PER_HOUR"); v != "" {
 		if val, err := strconv.Atoi(v); err == nil {
 			cfg.Limits.IngestPerHour = val
@@ -657,6 +698,17 @@ func applyEnv(cfg *Config) {
 			cfg.Limits.WebhookPerMinute = val
 		}
 	}
+}
+
+// cleanList trims each entry and drops the empty ones.
+func cleanList(in []string) []string {
+	var out []string
+	for _, p := range in {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func splitList(v string) []string {

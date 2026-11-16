@@ -906,7 +906,7 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 		if serr != nil {
 			return nil, serr
 		}
-		t, terr := NewJiraTracker(*conn.Spec.Jira, r.client, b, r.publicURL)
+		t, terr := NewJiraTracker(*conn.Spec.Jira, r.client.Scoped(tenantID, conn.Type), b, r.publicURL)
 		if terr != nil {
 			return nil, terr
 		}
@@ -925,7 +925,7 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 		if serr != nil {
 			return nil, serr
 		}
-		t, terr := NewGitHubTracker(*conn.Spec.GitHub, r.client, b, r.publicURL)
+		t, terr := NewGitHubTracker(*conn.Spec.GitHub, r.client.Scoped(tenantID, conn.Type), b, r.publicURL)
 		if terr != nil {
 			return nil, terr
 		}

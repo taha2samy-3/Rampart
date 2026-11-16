@@ -313,7 +313,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			token = string(b)
 		}
-		return NewSlackNotifier(r.client, token, conn.Spec.Slack.DefaultChannel), nil
+		return NewSlackNotifier(r.client.Scoped(tenantID, conn.Type), token, conn.Spec.Slack.DefaultChannel), nil
 
 	case domain.ConnectorTypeTeams:
 		if conn.Spec.Teams == nil {
@@ -334,7 +334,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			webhookURL = string(b)
 		}
-		return NewTeamsNotifier(r.client, webhookURL), nil
+		return NewTeamsNotifier(r.client.Scoped(tenantID, conn.Type), webhookURL), nil
 
 	case domain.ConnectorTypeWebhook:
 		if conn.Spec.Webhook == nil {
@@ -355,7 +355,7 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 			}
 			secret = b
 		}
-		return NewWebhookNotifier(r.client, conn.Spec.Webhook.URL, secret, conn.Spec.Webhook.Format, conn.Spec.Webhook.Headers), nil
+		return NewWebhookNotifier(r.client.Scoped(tenantID, conn.Type), conn.Spec.Webhook.URL, secret, conn.Spec.Webhook.Format, conn.Spec.Webhook.Headers), nil
 
 	case domain.ConnectorTypeEmail:
 		if conn.Spec.Email == nil {

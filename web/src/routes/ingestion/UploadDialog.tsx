@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { qk, toProblem, uploadReport } from '@/api';
+import { listParsers, qk, toProblem, uploadReport } from '@/api';
 import { Button, Dialog, DialogClose, DialogContent, Input, ProblemMessage, useToast } from '@/components';
 import { cn } from '@/lib/cn';
 
@@ -30,15 +30,23 @@ function UploadForm({ onDone }: { onDone: () => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
+  const [format, setFormat] = useState('');
   const [app, setApp] = useState('');
   const [track, setTrack] = useState('main');
   const [isDragging, setIsDragging] = useState(false);
 
   const ids = {
     file: useId(),
+    format: useId(),
     app: useId(),
     track: useId(),
   };
+
+  const parsersQuery = useQuery({
+    queryKey: qk.parsers.list(),
+    queryFn: ({ signal }) => listParsers(signal).catch(() => []),
+  });
+  const parsers = parsersQuery.data ?? [];
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -46,6 +54,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
       return uploadReport(file, {
         application: app.trim() || undefined,
         track: track.trim() || undefined,
+        format: format || undefined,
       });
     },
     onSuccess: () => {
@@ -110,6 +119,32 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             <span className="text-13 text-ink-2">{t('ingestion.uploadDropZone')}</span>
           )}
         </div>
+      </div>
+
+      <div>
+        <label htmlFor={ids.format} className="mb-1 block text-12 font-medium text-ink">
+          {t('ingestion.uploadFormat')}
+        </label>
+        <select
+          id={ids.format}
+          value={format}
+          onChange={(e) => setFormat(e.target.value)}
+          className="h-8 w-full rounded-ctl border border-rule bg-surface px-2.5 text-13 text-ink focus:border-accent focus:outline-none"
+        >
+          <option value="">{t('ingestion.uploadFormatAuto')}</option>
+          {parsers.map((p) => {
+            const cleanId = p.id.replace(/^builtin:/, '');
+            const isCustom = p.support_level !== 'builtin';
+            return (
+              <option key={p.id} value={cleanId}>
+                {p.name} {isCustom ? `[CRD: ${p.id}]` : ''}
+              </option>
+            );
+          })}
+        </select>
+        <p className="mt-1 text-11 text-ink-2">
+          {t('ingestion.uploadFormatHelp')}
+        </p>
       </div>
 
       <div>

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -102,11 +104,53 @@ func IsBlockedIPWithAllowlist(ip net.IP, allowlist *PlatformSSRFAllowlist) bool 
 
 // PlatformSSRFAllowlist defines administrator-configured network ranges and hosts
 // permitted for in-cluster (e.g. Dependency-Track on .svc:8080) or on-premise integrations (D69).
+//
+// The exception is scoped (D77): it applies only to the tenants in Tenants and the connector types in
+// ConnectorTypes. "*" in either list matches every value; an empty list matches nothing. Every caller that
+// knows which connector it is working for narrows the allowlist with ScopedTo before using it, so one
+// tenant's in-cluster Dependency-Track never opens the cluster network to every other tenant's webhook.
 type PlatformSSRFAllowlist struct {
 	AllowedCIDRs      []*net.IPNet
 	AllowedHosts      []string
 	AllowInternalHTTP bool
 	AllowLoopback     bool // Only for testing with local mock servers
+
+	// Tenants are tenant ids (Tenant.status.tenantId) or "*". ConnectorTypes are connector types
+	// (dependencyTrack, jira, …) or "*".
+	Tenants        []string
+	ConnectorTypes []string
+}
+
+// Grants reports whether the allowlist opens anything beyond the default policy.
+func (p *PlatformSSRFAllowlist) Grants() bool {
+	return p != nil && (len(p.AllowedCIDRs) > 0 || len(p.AllowedHosts) > 0 || p.AllowInternalHTTP)
+}
+
+// ScopedTo returns the allowlist as it applies to one connector of one tenant (D77). When the connector is
+// outside the scope the result keeps only AllowLoopback (a test switch) and grants nothing, so the default
+// public-HTTPS-only policy applies. A nil allowlist stays nil.
+func (p *PlatformSSRFAllowlist) ScopedTo(tenantID uuid.UUID, connectorType ConnectorType) *PlatformSSRFAllowlist {
+	if p == nil {
+		return nil
+	}
+	if tenantID != uuid.Nil && scopeMatches(p.Tenants, tenantID.String()) && scopeMatches(p.ConnectorTypes, string(connectorType)) {
+		cp := *p
+		return &cp
+	}
+	return &PlatformSSRFAllowlist{AllowLoopback: p.AllowLoopback}
+}
+
+func scopeMatches(list []string, value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, v := range list {
+		v = strings.TrimSpace(v)
+		if v == "*" || strings.EqualFold(v, value) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsIPAllowed returns true if the IP matches any allowed CIDR in the platform allowlist.
@@ -165,7 +209,18 @@ func ValidateConnectorURLWithPolicy(rawURL string, allowInsecureHTTP bool) error
 }
 
 // ValidateConnectorURLWithAllowlist validates connector URL using a platform administrator allowlist.
+// A name that does not resolve is accepted here (reconcile time, D69): the dial-time guard checks it again.
 func ValidateConnectorURLWithAllowlist(rawURL string, allowlist *PlatformSSRFAllowlist) error {
+	return validateURL(rawURL, allowlist, false)
+}
+
+// ValidateOutboundURL is the strict form used just before a request is sent (D77): a name that does not
+// resolve is refused, because a pooled connection to it could otherwise be reused without a new dial check.
+func ValidateOutboundURL(rawURL string, allowlist *PlatformSSRFAllowlist) error {
+	return validateURL(rawURL, allowlist, true)
+}
+
+func validateURL(rawURL string, allowlist *PlatformSSRFAllowlist, strictDNS bool) error {
 	trimmed := strings.TrimSpace(rawURL)
 	if trimmed == "" {
 		return fmt.Errorf("%w: url cannot be empty", ErrSSRFBlocked)
@@ -212,7 +267,10 @@ func ValidateConnectorURLWithAllowlist(rawURL string, allowlist *PlatformSSRFAll
 	// Resolve hostname to IP addresses
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		// If DNS resolution fails, allow it only if it is a plausible external domain name or an allowed internal host
+		if strictDNS {
+			return fmt.Errorf("%w: host %q does not resolve", ErrSSRFBlocked, hostname)
+		}
+		// Reconcile time: allow it; the dial-time guard resolves and checks again (D69).
 		return nil
 	}
 

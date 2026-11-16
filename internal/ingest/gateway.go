@@ -532,13 +532,13 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		get = r.URL.Query().Get
 	}
 
-	declaredApp := get("app")
+	declaredApp := firstNonEmpty(get("app"), get("application"))
 	scannerOverride := strings.ToLower(strings.TrimSpace(get("scanner")))
 	formatHint := get("format")
 	// D10: the canonical upload context decides asset, version and track. The file
 	// name is never an asset key.
 	uploadCtx := domain.UploadContext{
-		Repository:  get("repository"),
+		Repository:  firstNonEmpty(get("repository"), get("repo")),
 		Branch:      firstNonEmpty(get("branch"), get("track")),
 		Commit:      get("commit"),
 		ImageRef:    get("imageRef"),

@@ -77,12 +77,13 @@ export async function listRuns(args: { cursor?: string; limit?: number; signal?:
 export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1/runs/${encodeURIComponent(id)}`, { signal });
 
 /** Upload a security report directly from the UI (docs/13 §1, Phase 2 MVP). */
-export function uploadReport(file: File, options?: { source?: string; application?: string; track?: string }) {
+export function uploadReport(file: File, options?: { source?: string; application?: string; track?: string; format?: string }) {
   const fd = new FormData();
   fd.append('file', file, file.name);
   if (options?.source) fd.append('source', options.source);
   if (options?.application) fd.append('application', options.application);
   if (options?.track) fd.append('track', options.track);
+  if (options?.format) fd.append('format', options.format);
   return post<{ ingestRunId: string; status: string }>('/api/v1/uploads/direct', fd);
 }
 

@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"rampart/internal/domain"
 )
 
@@ -29,9 +31,52 @@ const (
 )
 
 // SafeClient is the hardened outbound HTTP client enforcing SSRF guards, timeouts, and response limits (D69).
+//
+// The platform allowlist in its configuration applies to a request only when the request carries the scope
+// of the connector it is made for (D77): use Scoped(tenant, type) to get a client for one connector. An
+// unscoped client applies the default policy (public addresses only) even when an allowlist is configured.
 type SafeClient struct {
 	httpClient *http.Client
 	cfg        SafeClientConfig
+	scope      *ssrfScope
+}
+
+type ssrfScope struct {
+	tenantID      uuid.UUID
+	connectorType domain.ConnectorType
+}
+
+type allowlistCtxKey struct{}
+
+// Scoped returns a client for one connector of one tenant. It shares the connection pool of c; every request
+// it sends is checked against the allowlist as it applies to that connector (D77).
+func (c *SafeClient) Scoped(tenantID uuid.UUID, connectorType domain.ConnectorType) *SafeClient {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.scope = &ssrfScope{tenantID: tenantID, connectorType: connectorType}
+	return &cp
+}
+
+// effectiveAllowlist is the platform allowlist narrowed to this client's scope; without a scope it grants nothing.
+func (c *SafeClient) effectiveAllowlist() *domain.PlatformSSRFAllowlist {
+	if c.cfg.Allowlist == nil {
+		return nil
+	}
+	if c.scope == nil {
+		return c.cfg.Allowlist.ScopedTo(uuid.Nil, "")
+	}
+	return c.cfg.Allowlist.ScopedTo(c.scope.tenantID, c.scope.connectorType)
+}
+
+// allowlistFrom reads the allowlist a request was sent with; a request that carries none gets the platform
+// allowlist with no scope, which grants nothing.
+func allowlistFrom(ctx context.Context, platform *domain.PlatformSSRFAllowlist) *domain.PlatformSSRFAllowlist {
+	if al, ok := ctx.Value(allowlistCtxKey{}).(*domain.PlatformSSRFAllowlist); ok {
+		return al
+	}
+	return platform.ScopedTo(uuid.Nil, "")
 }
 
 // AllowLoopback returns whether this client allows loopback connections (test mode only).
@@ -95,9 +140,10 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 				}
 			}
 
+			allowlist := allowlistFrom(ctx, cfg.Allowlist)
 			var lastErr error
 			for _, ip := range ips {
-				if domain.IsBlockedIPWithAllowlistAndHost(ip, host, cfg.Allowlist, cfg.AllowLoopback) {
+				if domain.IsBlockedIPWithAllowlistAndHost(ip, host, allowlist, cfg.AllowLoopback) {
 					lastErr = fmt.Errorf("%w: destination %s (%s) is blocked by SSRF policy (D69)", ErrSSRFDialBlocked, host, ip.String())
 					continue
 				}
@@ -139,7 +185,7 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 			}
 			// Verify redirect target URL scheme and host against SSRF
 			if !cfg.AllowLoopback {
-				if err := domain.ValidateConnectorURLWithAllowlist(req.URL.String(), cfg.Allowlist); err != nil {
+				if err := domain.ValidateConnectorURLWithAllowlist(req.URL.String(), allowlistFrom(req.Context(), cfg.Allowlist)); err != nil {
 					return fmt.Errorf("%w: redirect target blocked: %v", ErrSSRFDialBlocked, err)
 				}
 			}
@@ -209,6 +255,15 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 
 // Do executes an HTTP request with bounded response size and returns the read body.
 func (c *SafeClient) Do(req *http.Request) ([]byte, int, http.Header, error) {
+	allowlist := c.effectiveAllowlist()
+	req = req.WithContext(context.WithValue(req.Context(), allowlistCtxKey{}, allowlist))
+	// Checked before sending as well as at dial time: a pooled connection is reused without a new dial, so
+	// without this a request outside the scope could ride a connection another connector opened (D77).
+	if !c.cfg.AllowLoopback {
+		if err := domain.ValidateOutboundURL(req.URL.String(), allowlist); err != nil {
+			return nil, 0, nil, fmt.Errorf("%w: %v", ErrSSRFDialBlocked, err)
+		}
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, 0, nil, err
