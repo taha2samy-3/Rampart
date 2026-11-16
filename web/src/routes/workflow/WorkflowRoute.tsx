@@ -98,7 +98,7 @@ function AcceptancesView({ search, set }: { search: WorkflowSearch; set: (patch:
                   <span className="block truncate text-[11.5px] leading-4 text-ink-2">{r.owner}</span>
                 </Td>
                 <Td>{t(`acceptance.status.${r.status}`)}</Td>
-                <Td className="text-ink-2">{t('acceptance.covers', { count: r.finding_ids.length })}</Td>
+                <Td className="text-ink-2">{t('acceptance.covers', { count: (r.finding_ids ?? []).length })}</Td>
                 <Td align="end" className="text-ink-2" title={absoluteDate(r.expires_at)}>{absoluteDate(r.expires_at)}</Td>
               </Tr>
             ))}
@@ -215,7 +215,7 @@ function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: 
                       {status}
                     </span>
                   </Td>
-                  <Td className="text-ink-2">{r.finding_ids.length} to close</Td>
+                  <Td className="text-ink-2">{(r.finding_ids ?? []).length} to close</Td>
                   <Td align="end" className="text-ink-2" title={absoluteDate(r.created_at)}>{absoluteDate(r.created_at)}</Td>
                 </Tr>
               );
@@ -283,12 +283,13 @@ function HeldCloseDetail({ hc }: { hc: HeldClose }) {
   });
 
   const problem = mutation.isError ? toProblem(mutation.error) : null;
-  const sample = hc.finding_ids.slice(0, 5);
+  const findingIds = hc.finding_ids ?? [];
+  const sample = findingIds.slice(0, 5);
 
   return (
     <article aria-label="Held close detail" className="px-4 py-3">
       <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">
-        {hc.scope.scanner_family || 'Scan'} — {hc.finding_ids.length} findings held
+        {hc.scope.scanner_family || 'Scan'} — {findingIds.length} findings held
       </h2>
       <p className="mt-1 text-13 text-ink-2">
         Status: <span className="font-semibold capitalize">{hc.decision || 'pending review'}</span>
@@ -309,14 +310,14 @@ function HeldCloseDetail({ hc }: { hc: HeldClose }) {
       </dl>
 
       <section className="mt-4">
-        <h3 className="m-0 mb-1 text-13 font-semibold">Sample Findings ({sample.length} of {hc.finding_ids.length})</h3>
+        <h3 className="m-0 mb-1 text-13 font-semibold">Sample Findings ({sample.length} of {findingIds.length})</h3>
         <ul className="m-0 list-none p-0 text-12 font-mono text-ink-2">
           {sample.map((id) => (
             <li key={id} className="border-b border-rule py-1">{id}</li>
           ))}
         </ul>
-        {hc.finding_ids.length > 5 && (
-          <p className="m-0 mt-1 text-11 text-ink-2">...and {hc.finding_ids.length - 5} more</p>
+        {findingIds.length > 5 && (
+          <p className="m-0 mt-1 text-11 text-ink-2">...and {findingIds.length - 5} more</p>
         )}
       </section>
 
@@ -376,7 +377,7 @@ function Detail({ ra }: { ra: RiskAcceptance }) {
   return (
     <article aria-label={t('acceptance.detail')} className="px-4 py-3">
       <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">{ra.justification}</h2>
-      <p className="mt-1 text-13 text-ink-2">{t(`acceptance.status.${ra.status}`)}. {t('acceptance.covers', { count: ra.finding_ids.length })}.</p>
+      <p className="mt-1 text-13 text-ink-2">{t(`acceptance.status.${ra.status}`)}. {t('acceptance.covers', { count: (ra.finding_ids ?? []).length })}.</p>
 
       <dl className="m-0 mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
         <dt className="text-ink-2">{t('acceptance.owner')}</dt><dd className="m-0">{ra.owner.replace(/^user:/, '')}</dd>

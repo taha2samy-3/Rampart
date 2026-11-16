@@ -1,0 +1,92 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: parsers.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: Parser
+    listKind: ParserList
+    plural: parsers
+    singular: parser
+    shortNames:
+      - rpparser
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Family, type: string, jsonPath: .spec.family}
+        - {name: Version, type: string, jsonPath: .spec.version}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                A declarative security report parser (CEL mapping engine, docs/19 §4).
+              required: [version, family]
+              properties:
+                version:
+                  type: string
+                description:
+                  type: string
+                family:
+                  type: string
+                category:
+                  type: string
+                detect:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                input:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                map:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                severityMap:
+                  type: object
+                  additionalProperties:
+                    type: string
+                limits:
+                  type: object
+                  properties:
+                    maxRecords:
+                      type: integer
+                    maxDepth:
+                      type: integer
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

@@ -381,7 +381,7 @@ export function renderApp(path: string) {
 /** What the server lists by default: some built-ins and one parser package the tenant installed (D98). */
 const DEFAULT_PARSERS: ParserDescriptor[] = [
   { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0' },
-  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.6', support_level: 'builtin', description: 'CycloneDX SBOM, VDR and VEX' },
+  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.6.0', support_level: 'builtin', description: 'CycloneDX SBOM, VDR and VEX' },
   { id: 'builtin:trivy', name: 'Trivy Parser (JSON)', kind: 'parser', version: '2', support_level: 'builtin', description: 'Trivy JSON' },
   { id: 'builtin:semgrep', name: 'Semgrep Parser (JSON)', kind: 'parser', version: '1', support_level: 'builtin', description: 'Semgrep JSON' },
   { id: 'mapping:pip-audit', name: 'pip-audit (Declarative)', kind: 'parser', version: '1.0.0', support_level: 'community', description: 'Declarative mapping parser for pip-audit (sca)' },

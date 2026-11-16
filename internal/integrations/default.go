@@ -75,7 +75,7 @@ func DefaultRegistry() *Registry {
 			ID:           "builtin:cyclonedx",
 			Name:         "CycloneDX Parser (JSON/XML)",
 			Kind:         KindParser,
-			Version:      "1.5.0",
+			Version:      "1.6.0",
 			SupportLevel: SupportBuiltin,
 			Description:  "CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats",
 		},

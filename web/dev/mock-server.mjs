@@ -144,7 +144,7 @@ const ACCEPTANCES = [
 
 const PARSERS = [
   { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0 standard with enrichers for Semgrep, Trivy, Gitleaks, CodeQL' },
-  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.5.0', support_level: 'builtin', description: 'CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats' },
+  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.6.0', support_level: 'builtin', description: 'CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats' },
   { id: 'builtin:spdx', name: 'SPDX Parser (JSON/Tag-Value)', kind: 'parser', version: '2.3.0', support_level: 'builtin', description: 'SPDX 2.2 and 2.3 SBOM parser for JSON and Tag-Value formats' },
   { id: 'builtin:openvex', name: 'OpenVEX Parser', kind: 'parser', version: '0.2.0', support_level: 'builtin', description: 'OpenVEX triage statements and exploitability assertions parser' },
   { id: 'builtin:syft', name: 'Syft Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Anchore Syft SBOM parser with artifact catalog and dependency relationships' },

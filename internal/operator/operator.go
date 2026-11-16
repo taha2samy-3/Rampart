@@ -139,3 +139,9 @@ func (op *Operator) ReconcileIntegrationPackage(ctx context.Context, cr *PolicyC
 	op.logger.Debug("reconciling integration package", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
 	return op.packages.Reconcile(ctx, cr)
 }
+
+// ReconcileParser installs a Parser CR.
+func (op *Operator) ReconcileParser(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling parser", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.packages.Reconcile(ctx, cr)
+}

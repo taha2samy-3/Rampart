@@ -44,6 +44,15 @@ func (r *IntegrationPackageReconciler) Reconcile(ctx context.Context, cr *Policy
 		status.SetCondition("Ready", "False", "StorageError", "the store does not keep integration packages")
 		return status, fmt.Errorf("store does not keep integration packages")
 	}
+	if cr.Spec == nil {
+		cr.Spec = make(map[string]any)
+	}
+	if cr.Spec["kind"] == nil || cr.Spec["kind"] == "" {
+		cr.Spec["kind"] = "parser"
+	}
+	if cr.Spec["runtime"] == nil || cr.Spec["runtime"] == "" {
+		cr.Spec["runtime"] = "mapping"
+	}
 	raw, _ := json.Marshal(cr.Spec)
 	rec := domain.IntegrationPackageRecord{TenantID: tenant.ID, Name: cr.Metadata.Name, Spec: raw, Generation: cr.Metadata.Generation}
 	spec, perr := declarative.Parse(raw)
