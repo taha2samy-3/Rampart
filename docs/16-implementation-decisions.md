@@ -1466,11 +1466,11 @@ D70 part B listed twelve redesigns; docs/21 marked them done without recording t
 | B3 ticketing policy | `spec.ticketing {onCritical, minBand, project, projects, maxPerHour}`; the resolver takes the connector with `onCritical: true`; the hourly cap is enforced per connector; due reservations are taken round-robin across tenants. **Not built:** the summary ticket for findings over the cap (they wait for the next hour) | `domain/connector.go`, `connectors/trackers.go`, `tickets.go` |
 | B4 errors that will not heal | 400, 401, 403, 404 and 422 give up at once (`TrackerError`, `IsFatalTrackerError`); 408, 429 and 5xx retry | `domain/connector.go` |
 | B5 not_affected request | a webhook mapped to `not_affected` creates a workflow request with its justification | docs/21 §2.4 |
-| B6 accountId from /myself | **not built:** the inbound handler reads `status.accountId`, but nothing writes it; it falls back to the `accountId` typed in the spec, as before | `connectors/inbound.go` |
+| B6 accountId from /myself | built in D87: the Check reads `/rest/api/3/myself` and the operator stores `status.accountId`, which the inbound handler reads; the spec value stays as a fallback | `connectors/check_trackers.go` |
 | B7 public endpoint limits | per address and connector (D73), moved to `/hooks` with the connector id (D78); a per-connector cap independent of address is not built | D73, D78 |
 | B8 shared delivery cache | `webhook_delivery` table next to the in-memory cache | migration 28 |
 | B9 Jira Data Center | **Jira Cloud only** (REST v3); the tracker's comment still names Data Center and should not | `connectors/trackers.go` |
-| B10 project create metadata | **not built:** `priority` and `labels` are still sent without asking the project | — |
+| B10 project create metadata | built in D87: the Check reads the create metadata of the project and issue type; the tracker sends `priority` and `labels` only when accepted | `connectors/check_trackers.go`, `trackers.go` |
 | B11 system role | the sweeper runs only with `database.systemUrl` and the server says so in the log when it is missing; no security-definer function was added | `targets/runner.go` |
 | B12 the migration's blanket `skipped` | kept: only rows reserved before the outbox, with an empty result, were marked `skipped` | migration 27 |
 
@@ -1498,3 +1498,107 @@ Sources: the code paths in the table; D70; docs/21 §1, §2.
 **Tested:** the OCSF test above; on PostgreSQL `TestFeeds_NVDSync` (full paged read, CWE and the primary 3.1 score chosen over a secondary 4.0, KEV and EPSS untouched, the API key sent, the second sync incremental) and `TestClusterFeedMirror_OnPostgreSQL` (default wins, a refused spec is never in force); `TestParseFeedMirrorSpec`, `TestApplyMirror` (mirror replaces URLs; deny skips the rest), `TestApply_ClusterFeedMirror`.
 
 Sources: OCSF schema 1.5.0, class Application Security Posture Finding and the objects cloud, finding_info, metadata, application (https://schema.ocsf.io/1.5.0/classes/application_security_posture_finding); NIST, NVD CVE API 2.0 and its rate limits (https://nvd.nist.gov/developers/vulnerabilities, https://nvd.nist.gov/developers/start-here); ADR 0003; docs/00 §4, docs/01 D2–D4, G4; D19, D29, D35, D39, D40, D41.
+
+## D87. The Jira and GitHub Checks call the tracker; the account and the accepted fields come from them (D70 B6, B10)
+
+Two defects found while building B6 and B10:
+- **Jira's Check did not call Jira.** `checkJira` validated the address against the SSRF policy and returned; the operator then wrote `Connected=True, AuthOK, "Connector verified successfully"` for credentials nothing had tried.
+- **GitHub had no Check.** The switch had no GitHub case, so every GitHub connector answered "unsupported connector type for check" and showed `Connected=False`.
+
+**Now:**
+- **Jira:** (1) `GET /rest/api/3/myself` proves the credentials (401 or 403 fails the Check with that reason) and gives the `accountId` Rampart acts as; the operator stores it in `status.accountId`, which the inbound handler already reads to recognise Rampart's own changes (D70 B6; the spec's typed value stays as a fallback). (2) `GET /rest/api/3/issue/createmeta/{project}/issuetypes` must list the configured issue type (default `Bug`), or the Check fails with the reason. (3) `GET /rest/api/3/issue/createmeta/{project}/issuetypes/{id}` gives the fields that screen accepts; the operator stores them in `status.acceptedFields`, and the tracker sends `priority` and `labels` only when they are accepted (D70 B10), because Jira refuses the whole issue for one field its screen lacks. When the fields are unknown (no Check yet), everything is sent as before. A project whose screen lacks `labels` loses the lookup before a retry (D70 B2), which needs the label.
+- **GitHub:** `GET /repos/{owner}/{repo}` with the token; the Check fails unless the repository is visible and `permissions.push` is true, because without push access GitHub creates the issue and silently drops labels and assignees (docs/20 §4).
+- The checker's results travel in `domain.ConnectorCheckInfo` (`CheckDetailed`); `Check` keeps its signature.
+- **Tested:** `TestJiraCheckLearnsAccountAndFields` (account and fields read; refused credentials and a missing issue type fail), `TestGitHubCheckNeedsPushAccess` (push, no push, an invisible repository), `TestJiraCreateSendsOnlyAcceptedFields`.
+
+Sources: Atlassian, Jira Cloud REST API v3, "Get current user" and "Get create metadata issue types for a project" / "Get create field metadata for a project and issue type id" (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/); GitHub REST API, "Get a repository" (permissions) and docs/20 §4; D70.
+
+## D88. Every vulnerability database, free or licensed, as exploitation intelligence through `ClusterFeedMirror`
+
+**The request (2026-11-16):** cover every vulnerability database, including paid ones. D86 already had KEV, EPSS, NVD and OSV. What was missing is the intelligence that separates a CVE someone is exploiting from one nobody is: exploitation reported outside CISA KEV, and whether public exploit code exists. That is what the market's paid feeds sell (VulnCheck, VulnDB/Flashpoint, Recorded Future, Mandiant). The design line of D86 still holds: these sources enrich a CVE a tool reported; none creates a finding (D39), and the code stays in the core because it writes global tables (D19).
+
+**Sources built (optional; a block in the `ClusterFeedMirror` switches each on, `url` makes it a mirror, `tokenFile` is a mounted Secret):**
+
+| Source | Licence | What it gives | How it is read |
+|---|---|---|---|
+| CISA Vulnrichment (`vulnrichment`) | CC0 | SSVC (stored in `vulnerability.ssvc`); Exploitation `active` means exploited, `poc` means public code; CISA's CVSS and CWEs where NVD has none | the repository archive, every `CVE-*.json`, the ADP container `CISA-ADP` |
+| Exploit Database (`exploitdb`) | public (OffSec) | public exploit code: maturity `poc` | `files_exploits.csv`, CVE ids in `codes` |
+| Metasploit (`metasploit`) | BSD | an `exploit` module: maturity `weaponized` (auxiliary modules do not count) | `db/modules_metadata_base.json` |
+| ENISA EUVD (`euvd`) | public | exploited per ENISA; EUVD ids become aliases of the CVEs Rampart knows | `GET /api/vulnerabilities?exploited=true`, paged by 100, 1 s between pages |
+| VulnCheck KEV (`vulncheckKev`) | community (free, token) or commercial | exploited (~80 % more than CISA KEV, per VulnCheck); an XDB exploit gives maturity `poc` | `GET /v3/backup/vulncheck-kev` (Bearer), signed link, archive SHA-256 checked, the token not sent to the storage host |
+| Any licensed or in-house feed (`custom[]`) | the customer's licence | exploited and maturity, or full OSV advisories | format `intel-jsonl` (one `{"id","exploited","maturity","reportedAt","evidence"}` per line; a bad line refuses the whole file) or `osv-zip` |
+
+**Why licensed feeds come in through a format, not built-in clients.** VulnDB, Recorded Future, Mandiant, Flashpoint and Snyk require a contract. Their terms restrict redistribution, and we cannot test their APIs without accounts. A client nobody can test is the "claimed but not wired" defect this review keeps finding. The customer who holds the licence exports or proxies the feed into `intel-jsonl` or OSV, the formats the free sources already prove. A custom feed cannot take a built-in feed's name, so licensed data never passes for CISA's or NIST's. The licensed data stays inside the installation; Rampart's exports carry findings, not feed records.
+
+**Storage.** A new table, `vulnerability_exploitation (vulnerability_id, source, exploited, maturity none|poc|weaponized, reported_at, evidence_url)`, is added in migration `00037`, schema version 37, written only by the system role. There is no foreign key, because a source may name a CVE before NVD has it. Each sync **replaces** the source's rows in one transaction, because every source publishes its full list; a CVE a source withdraws therefore stops counting. Rows of a source switched off are deleted at the next round. A source that fails keeps its last good rows. With `egress: deny`, a source without its own `url` is off.
+
+**Precedence.**
+- CISA KEV stays in its own columns: `vuln.kev` is still only CISA's, and its due date alone caps SLAs (docs/06 §4).
+- Exploitation is the OR over sources; maturity is the highest.
+- For CVSS and CWE: NVD's primary score first (D86), then CISA ADP when NVD has nothing. The NVD write still replaces its own values on each sync.
+
+**Risk (docs/06 §2).**
+- The CEL environment gains `vuln.exploited`, `vuln.exploited_sources`, and `vuln.exploit_maturity`.
+- Built-in factors:
+  - `EXPLOITED_REPORTED` (`vuln.exploited && !vuln.kev`, +300, the KEV weight, because SSVC treats active exploitation the same whoever reports it, and KEV is not counted twice);
+  - `EXPLOIT_WEAPONIZED` (+120, the "functional/weaponized" row docs/06 already had).
+- A finding with no evidence scores exactly as before, so the built-in numbers do not move. A sync round re-scores through `OnSynced` (D28).
+
+**Not built, and why.** These are left out with reasons, not silently:
+- CVE List V5: Vulnrichment carries the CISA part we need.
+- GitHub Advisory Database: already read through OSV.
+- Nuclei templates: detection templates, not exploits.
+- VulnCheck's paid indexes (NVD++ and others): through `custom`.
+
+**Tested:**
+- `TestParseSources`: each published format, auxiliary modules ignored, intel-jsonl refusals, the SSVC `active` decision, EUVD aliases.
+- `TestParseFeedMirrorSpec_OptionalSources`: VulnCheck without a token, a relative or unclean token path, an unknown format, a custom feed named `nvd`, and duplicates are refused.
+- `TestBuiltinExploitationFactors`: +420 for exploited and weaponized; KEV plus another source counts once.
+
+Sources:
+- CISA Vulnrichment (https://github.com/cisagov/vulnrichment).
+- Exploit Database (https://gitlab.com/exploit-database/exploitdb).
+- Metasploit Framework `db/modules_metadata_base.json`.
+- ENISA EUVD API (https://euvd.enisa.europa.eu/apidoc, base https://euvdservices.enisa.europa.eu). The paths were read from a published OpenAPI description, because the page did not load; they are to be re-checked against ENISA in CI.
+- VulnCheck docs, "VulnCheck KEV schema" and "Backup" (https://docs.vulncheck.com).
+- VulnDB licensing (vuldb.com/kb/softwarelicense): commercial use requires a contract.
+- docs/06 §2–3; D19, D28, D39, D86.
+
+## D89. A vulnerability database can be added as a plugin: a container that fetches, and a format that Rampart loads
+
+**Question (from the owner).** Can each vulnerability database be a plugin, its own container with its own code that fetches and updates, so that anyone can add a new one without changing Rampart?
+
+**Decision: yes, with one boundary. A feed plugin fetches and translates. It never writes to the database.**
+
+```
+[feed plugin container]   fetches from its source (public API, licensed feed, in-house list), any language
+        │  produces one file in a published format: intel-jsonl or osv-zip (D88)
+        ▼
+  serves it at a URL (pull)  — or —  posts it to the feed ingest endpoint (push, to build)
+        ▼
+[Rampart feed loader]      validates the whole file, refuses it on one bad record, writes as rampart_system (D19)
+```
+
+**Why the boundary.** The `vulnerability` and `vulnerability_exploitation` tables are global: every tenant's score and SLA read them. A plugin holding database credentials could, through a bug or a compromise, rewrite them for all tenants, and every plugin pod would carry a connection string. D19 keeps one writer for global tables. The contract between a plugin and Rampart is therefore a data format, not code, and not SQL.
+
+**Why it is right.** It is how the established tools split the work:
+- OpenCTI connectors are separate containers that talk to the platform's API, never to its database.
+- Anchore splits vunnel, which fetches and normalises each provider into files, from grype-db, which builds the database.
+- Dependency-Track and Trivy keep their built-in mirrors, which is why the core feeds below stay built in.
+
+**How it differs from a connector (docs/19, docs/23 §6).** A connector is per tenant (namespaced, the tenant's own tracker or source). A feed is global intelligence, so a feed plugin is:
+- registered in the cluster-scoped `ClusterFeedMirror`, by a platform administrator only, never by a tenant;
+- named with the rule of D88: it cannot take a built-in feed's name, so a plugin's data never passes for CISA's or NIST's;
+- detection-free: it only enriches what scanners and Dependency-Track already reported (D39, D86).
+
+**What exists today.** The pull form already works: `ClusterFeedMirror.spec.custom[]` takes `{name, url, format, tokenFile}` (D88). Any container that serves `intel-jsonl` or `osv-zip` at a URL inside the cluster is a feed plugin now.
+
+**What stays built in, and why.** KEV, EPSS, OSV and NVD. The risk score and the KEV due date depend on them, they must work on a fresh install with nothing extra deployed, and they are mirrored for air-gapped installs. The optional sources of D88 (Vulnrichment, ExploitDB, Metasploit, EUVD, VulnCheck KEV) stay in-process for now: they are written and tested, and moving them out is churn with no gain for users. New sources from here on are added as plugins.
+
+**To build (tracked under the plugin design, docs/23 §6):**
+1. Push mode: `POST /api/v1/feeds/{name}` with a per-plugin token that can reach that one feed and nothing else. Same validation as pull.
+2. A Helm template per plugin: a CronJob or Deployment with its own secret, no database credentials, egress limited to its source.
+3. A contract document with the two formats and a small reference plugin, so a licensed-feed customer can write one without touching Rampart.
+4. Optional integrity: a `sha256` alongside the file, or a cosign signature checked against a key named in the mirror spec.
+
+Refs: D19, D39, D86, D88; docs/19; docs/23 §6.

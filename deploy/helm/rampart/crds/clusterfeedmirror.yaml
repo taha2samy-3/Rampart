@@ -59,6 +59,33 @@ spec:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                   description: Not built; refused.
+                vulnrichment: &src
+                  type: object
+                  description: "D88. Optional source; the block switches it on. url replaces the public address; tokenFile is a mounted Secret."
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                exploitdb: *src
+                metasploit: *src
+                euvd: *src
+                vulncheckKev:
+                  type: object
+                  required: [tokenFile]
+                  description: "D88. VulnCheck KEV; a token is required (community or commercial)."
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                custom:
+                  type: array
+                  description: "D88. Licensed or in-house intelligence in a documented format (osv-zip or intel-jsonl)."
+                  items:
+                    type: object
+                    required: [name, url, format]
+                    properties:
+                      name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,40}$'}
+                      url: {type: string, pattern: '^https?://'}
+                      format: {type: string, enum: [osv-zip, intel-jsonl]}
+                      tokenFile: {type: string, pattern: '^/'}
                 egress:
                   type: string
                   enum: [allow, deny]

@@ -116,3 +116,17 @@ func TestCompileRiskPolicy(t *testing.T) {
 		t.Fatalf("the error should list the fields: %v", err)
 	}
 }
+
+// D88: exploitation reported outside CISA KEV, and a weaponized exploit, raise the built-in score; KEV is not counted twice.
+func TestBuiltinExploitationFactors(t *testing.T) {
+	p := risk.Builtin()
+	base := p.Evaluate(risk.Input{Finding: risk.FindingInput{Severity: "high"}}).TotalScore
+	ex := p.Evaluate(risk.Input{Finding: risk.FindingInput{Severity: "high"}, Vuln: risk.VulnInput{Exploited: true, ExploitMaturity: "weaponized"}}).TotalScore
+	if ex != base+300+120 {
+		t.Fatalf("exploited and weaponized: %d, want %d", ex, base+420)
+	}
+	kev := p.Evaluate(risk.Input{Finding: risk.FindingInput{Severity: "high"}, Vuln: risk.VulnInput{KEV: true, Exploited: true}}).TotalScore
+	if kev != base+300 {
+		t.Fatalf("KEV and another source reporting the same exploitation count once: %d", kev)
+	}
+}

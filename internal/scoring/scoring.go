@@ -204,6 +204,9 @@ func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedSto
 		if e, ok := feeds.GetEPSS(id); ok {
 			in.Vuln.EPSS = e.EPSS
 		}
+		if e, ok := feeds.GetExploitation(id); ok {
+			in.Vuln.Exploited, in.Vuln.ExploitedSources, in.Vuln.ExploitMaturity = e.Exploited, e.Sources, e.Maturity
+		}
 	}
 	criticality := "low"
 	if app != nil {

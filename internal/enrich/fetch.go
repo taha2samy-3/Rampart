@@ -44,6 +44,8 @@ type FeedConfig struct {
 	NVDAPIKey    string
 	NVDDisabled  bool
 	NVDPageDelay time.Duration // tests only; zero picks the delay NIST asks for
+	// SourcePageDelay is the pause between pages of a paged optional source (EUVD); tests only, zero is 1 s.
+	SourcePageDelay time.Duration
 	// Mirror returns the ClusterFeedMirror in force, read at the start of every round (D86); nil when none.
 	Mirror     func(ctx context.Context) (*domain.FeedMirrorSpec, error)
 	Interval   time.Duration
@@ -153,11 +155,13 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 	cfg.defaults()
 	var errs []error
 	skipKEV, skipEPSS := false, false
+	var mirror *domain.FeedMirrorSpec
 	if cfg.Mirror != nil {
 		m, err := cfg.Mirror(ctx)
 		if err != nil {
 			return fmt.Errorf("feeds: reading the ClusterFeedMirror: %w", err)
 		}
+		mirror = m
 		skipKEV, skipEPSS = cfg.applyMirror(m, log)
 	}
 
@@ -236,6 +240,10 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 			log.Info("feed synced", "feed", "osv", "records", total)
 		}
 	}
+
+	// The optional sources (D88): exploitation evidence, SSVC, licensed feeds. Without a mirror, none is on, and the
+	// rows of any source switched off are removed.
+	errs = append(errs, s.syncOptionalAll(ctx, cfg, mirror, log)...)
 	return errors.Join(errs...)
 }
 
@@ -353,7 +361,36 @@ func (s *FeedSyncer) Lookup(ctx context.Context, ids []string) (*FeedStore, erro
 			fs.SetEPSS(score)
 		}
 	}
-	return fs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Exploitation evidence from the optional sources (D88), by id or alias.
+	erows, err := s.pool.Query(ctx, `
+		WITH req AS (SELECT DISTINCT unnest($1::text[]) AS rid),
+		m AS (
+			SELECT rid, rid AS vid FROM req
+			UNION
+			SELECT r.rid, a.vulnerability_id FROM req r JOIN vulnerability_alias a ON a.alias = r.rid
+		)
+		SELECT m.rid, bool_or(e.exploited),
+		       COALESCE(array_agg(DISTINCT e.source) FILTER (WHERE e.exploited), '{}'),
+		       max(CASE e.maturity WHEN 'weaponized' THEN 2 WHEN 'poc' THEN 1 ELSE 0 END)
+		FROM m JOIN vulnerability_exploitation e ON e.vulnerability_id = m.vid
+		GROUP BY m.rid`, req)
+	if err != nil {
+		return nil, fmt.Errorf("enrich: looking up exploitation: %w", err)
+	}
+	defer erows.Close()
+	for erows.Next() {
+		var e Exploitation
+		var rank int32
+		if err := erows.Scan(&e.ID, &e.Exploited, &e.Sources, &rank); err != nil {
+			return nil, err
+		}
+		e.Maturity = [...]string{MaturityNone, MaturityPoC, MaturityWeaponized}[rank]
+		fs.SetExploitation(e)
+	}
+	return fs, erows.Err()
 }
 
 // RunScheduler syncs the feeds at start and then every cfg.Interval. Only one replica syncs at a time:

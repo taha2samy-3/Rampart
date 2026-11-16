@@ -41,6 +41,7 @@ Sketch of the v1 schema. Final DDL lives in `internal/store/migrations` (goose).
 > | `finding_group`, `finding_group_member` (without the `application_id`, `group_by` and key below; docs/23 C8), `saved_view` (33) | D76 |
 > | Policy `webhook_lookup` on `connector`: one row by id for inbound webhooks (35) | D78 |
 > | `cluster_policy.kind` admits `feeds` for `ClusterFeedMirror` (36) | D86 |
+> | `vulnerability_exploitation` (source, exploited, maturity none/poc/weaponized), written by the system role, each source replaces its rows (37) | D88 |
 >
 > From schema version 6 on, each decision in 16 names its migration; `internal/store/migrations` is the DDL.
 

@@ -28,6 +28,7 @@ type DefaultChecker struct {
 	client       *SafeClient
 	allowlist    *domain.PlatformSSRFAllowlist
 	slackAuthURL string
+	githubAPI    string
 }
 
 // NewDefaultChecker creates a new DefaultChecker.
@@ -74,7 +75,10 @@ func (c *DefaultChecker) check(ctx context.Context, conn domain.Connector, secre
 	case domain.ConnectorTypeWebhook:
 		return c.checkWebhook(ctx, conn, secret)
 	case domain.ConnectorTypeJira:
-		return c.checkJira(ctx, conn, secret)
+		_, err := c.checkJiraDetailed(ctx, conn, secret) // calls Jira; checkJira alone only checks the address
+		return err
+	case domain.ConnectorTypeGitHub:
+		return c.checkGitHub(ctx, conn, secret)
 	case domain.ConnectorTypeDependencyTrack:
 		return c.checkDependencyTrack(ctx, conn, secret)
 	default:

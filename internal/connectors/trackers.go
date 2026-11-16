@@ -91,6 +91,26 @@ type JiraTracker struct {
 	authHeader    string
 	publicURL     string
 	tenantSlug    string
+	// acceptedFields are the create fields the project's screen accepts, read at Check (D87, D70 B10); nil when
+	// unknown (not checked yet), in which case everything is sent as before.
+	acceptedFields map[string]bool
+}
+
+// SetAcceptedFields records which create fields the Jira project accepts (D87).
+func (j *JiraTracker) SetAcceptedFields(fields []string) {
+	if len(fields) == 0 {
+		j.acceptedFields = nil
+		return
+	}
+	j.acceptedFields = map[string]bool{}
+	for _, f := range fields {
+		j.acceptedFields[f] = true
+	}
+}
+
+// accepts reports whether a create field may be sent: always when the project's fields are unknown.
+func (j *JiraTracker) accepts(field string) bool {
+	return j.acceptedFields == nil || j.acceptedFields[field]
 }
 
 // Name returns the connector name or default "jira".
@@ -202,10 +222,14 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 		"issuetype": map[string]string{
 			"name": issueType,
 		},
-		"priority": map[string]string{
-			"name": priorityName,
-		},
-		"labels": labels,
+	}
+	// D70 B10: one field the project's create screen lacks makes Jira refuse the whole issue, so priority and labels
+	// go only where the screen accepts them. Without labels, the lookup before a retry (B2) cannot find the issue.
+	if j.accepts("priority") {
+		fields["priority"] = map[string]string{"name": priorityName}
+	}
+	if j.accepts("labels") {
+		fields["labels"] = labels
 	}
 
 	// Custom fields: placeholders are filled, and none may replace a field this tracker owns.
@@ -912,6 +936,7 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 		}
 		t.SetTenantSlug(slug)
 		t.SetConnectorName(conn.Name)
+		t.SetAcceptedFields(conn.Status.AcceptedFields) // D87, D70 B10
 		if conn.Spec.Ticketing != nil {
 			t.SetTicketingPolicy(*conn.Spec.Ticketing)
 		}

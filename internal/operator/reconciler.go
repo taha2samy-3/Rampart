@@ -729,8 +729,22 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 	}
 
 	// Connection verification (D69, docs/04, docs/20 Milestone 3.1)
+	var learned struct {
+		accountID string
+		fields    []string
+	}
 	if r.checker != nil {
-		if err := r.checker.Check(ctx, conn, secretBytes); err != nil {
+		var err error
+		if dc, ok := r.checker.(interface {
+			CheckDetailed(ctx context.Context, conn domain.Connector, secret []byte) (domain.ConnectorCheckInfo, error)
+		}); ok {
+			var info domain.ConnectorCheckInfo
+			info, err = dc.CheckDetailed(ctx, conn, secretBytes)
+			learned.accountID, learned.fields = info.AccountID, info.AcceptedFields
+		} else {
+			err = r.checker.Check(ctx, conn, secretBytes)
+		}
+		if err != nil {
 			status.SetCondition("Connected", "False", "AuthFailed", err.Error())
 		} else {
 			status.SetCondition("Connected", "True", "AuthOK", "Connector verified successfully")
@@ -745,6 +759,8 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		ObservedGeneration: status.ObservedGeneration,
 		WebhookURL:         status.WebhookURL,
 		LastSync:           status.LastSync,
+		AccountID:          learned.accountID, // D87, D70 B6: the account Rampart acts as, read at Check
+		AcceptedFields:     learned.fields,    // D87, D70 B10
 	}
 	for _, c := range status.Conditions {
 		conn.Status.Conditions = append(conn.Status.Conditions, domain.ConnectorCondition{

@@ -228,6 +228,14 @@ type ConnectorSpec struct {
 	DependencyTrack *DependencyTrackConnectorConfig `json:"dependencyTrack,omitempty"`
 }
 
+// ConnectorCheckInfo is what a connector's Check learns besides "it works" (D87): the account the connector acts as,
+// which Rampart's own changes are recognised by (D70 B6), and the fields the configured Jira project accepts on
+// create (D70 B10).
+type ConnectorCheckInfo struct {
+	AccountID      string
+	AcceptedFields []string
+}
+
 // ConnectorCondition describes the state of a connector at a point in time.
 type ConnectorCondition struct {
 	Type               string    `json:"type"`   // e.g. "Connected"
@@ -243,7 +251,9 @@ type ConnectorStatus struct {
 	Conditions         []ConnectorCondition `json:"conditions,omitempty"`
 	WebhookURL         string               `json:"webhookURL,omitempty"`
 	AccountID          string               `json:"accountId,omitempty"`
-	LastSync           *time.Time           `json:"lastSync,omitempty"`
+	// AcceptedFields are the create fields the Jira project and issue type accept, read at Check (D87, D70 B10).
+	AcceptedFields []string   `json:"acceptedFields,omitempty"`
+	LastSync       *time.Time `json:"lastSync,omitempty"`
 }
 
 // Connector is the domain model for external tool connectors.

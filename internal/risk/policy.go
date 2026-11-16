@@ -55,6 +55,11 @@ type VulnInput struct {
 	ID   string
 	KEV  bool
 	EPSS float64
+	// D88: from the optional sources. Exploited is exploitation in the wild reported by a source other than CISA KEV
+	// (vuln.kev stays CISA's); ExploitMaturity is none, poc or weaponized (public exploit code).
+	Exploited        bool
+	ExploitedSources []string
+	ExploitMaturity  string
 }
 
 // AppInput: `app.criticality`, `.internet_facing`, `.data_classification`, `.compensating_controls`.
@@ -81,12 +86,20 @@ func (in Input) activation() map[string]any {
 			"severity": in.Finding.Severity, "category": in.Finding.Category, "rule_id": in.Finding.RuleID,
 			"scanner": in.Finding.Scanner, "cwes": cwes, "secret_verified": in.Finding.SecretVerified, "track": in.Finding.Track,
 		},
-		"vuln": map[string]any{"id": in.Vuln.ID, "kev": in.Vuln.KEV, "epss": in.Vuln.EPSS},
+		"vuln": map[string]any{"id": in.Vuln.ID, "kev": in.Vuln.KEV, "epss": in.Vuln.EPSS, "exploited": in.Vuln.Exploited,
+			"exploited_sources": str(in.Vuln.ExploitedSources), "exploit_maturity": maturity(in.Vuln.ExploitMaturity)},
 		"app": map[string]any{
 			"criticality": in.App.Criticality, "internet_facing": in.App.InternetFacing,
 			"data_classification": str(in.App.DataClassification), "compensating_controls": str(in.App.CompensatingControls),
 		},
 	}
+}
+
+func maturity(m string) string {
+	if m == "" {
+		return "none"
+	}
+	return m
 }
 
 // BuiltinSpec is the policy of docs/06 section 2, as data. It gives exactly the numbers the code gave before
@@ -98,6 +111,8 @@ func BuiltinSpec() RiskPolicySpec {
 			{Name: "KEV", When: "vuln.kev", Points: 300, Group: "threat", Reason: "Vulnerability listed in CISA Known Exploited Vulnerabilities catalog"},
 			{Name: "EPSS_HIGH", When: "vuln.epss >= 0.5", Points: 150, Group: "threat", Reason: "EPSS exploitation probability is >= 50%"},
 			{Name: "EPSS_MODERATE", When: "vuln.epss >= 0.1 && vuln.epss < 0.5", Points: 60, Group: "threat", Reason: "EPSS exploitation probability is >= 10%"},
+			{Name: "EXPLOITED_REPORTED", When: "vuln.exploited && !vuln.kev", Points: 300, Group: "threat", Reason: "Exploitation in the wild reported by a configured intelligence source (not in CISA KEV)"},
+			{Name: "EXPLOIT_WEAPONIZED", When: `vuln.exploit_maturity == "weaponized"`, Points: 120, Group: "threat", Reason: "A weaponized public exploit exists (a Metasploit module or a configured source)"},
 			{Name: "SECRET_VERIFIED", When: "finding.secret_verified", Points: 250, Group: "threat", Reason: "Secret credential verified live against upstream provider"},
 			{Name: "INTERNET_FACING", When: "app.internet_facing", Points: 100, Group: "context", Reason: "Asset or application is internet-facing"},
 			{Name: "SENSITIVE_DATA", When: `app.data_classification.exists(d, d in ["pci", "pii", "phi"])`, Points: 80, Group: "context", Reason: "Application handles sensitive data (PCI, PII, or PHI)"},
@@ -233,7 +248,7 @@ func Compile(spec RiskPolicySpec) (*Policy, error) {
 		}
 		out, _, err := prog.Eval(probe)
 		if err != nil {
-			return nil, fmt.Errorf("%w: factor %s: %v (the fields are finding.severity, .category, .rule_id, .scanner, .cwes, .secret_verified, .track; vuln.id, .kev, .epss; app.criticality, .internet_facing, .data_classification, .compensating_controls)", ErrPolicy, f.Name, err)
+			return nil, fmt.Errorf("%w: factor %s: %v (the fields are finding.severity, .category, .rule_id, .scanner, .cwes, .secret_verified, .track; vuln.id, .kev, .epss, .exploited, .exploited_sources, .exploit_maturity; app.criticality, .internet_facing, .data_classification, .compensating_controls)", ErrPolicy, f.Name, err)
 		}
 		if _, ok := out.Value().(bool); !ok {
 			return nil, fmt.Errorf("%w: factor %s: when must be true or false", ErrPolicy, f.Name)
@@ -247,7 +262,7 @@ func Compile(spec RiskPolicySpec) (*Policy, error) {
 func fullInput() Input {
 	return Input{
 		Finding: FindingInput{Severity: "high", Category: "sast", RuleID: "r", Scanner: "s", CWEs: []int{79}, SecretVerified: true, Track: "main"},
-		Vuln:    VulnInput{ID: "CVE-0000-0000", KEV: true, EPSS: 0.5},
+		Vuln:    VulnInput{ID: "CVE-0000-0000", KEV: true, EPSS: 0.5, Exploited: true, ExploitedSources: []string{"s"}, ExploitMaturity: "poc"},
 		App:     AppInput{Criticality: "high", InternetFacing: true, DataClassification: []string{"pii"}, CompensatingControls: []string{"waf"}},
 	}
 }

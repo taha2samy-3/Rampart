@@ -38,6 +38,7 @@ type FeedStore struct {
 	kev  map[string]KEVEntry
 	epss map[string]EPSSScore
 	nvd  map[string]NVDEntry
+	expl map[string]Exploitation
 }
 
 // NewFeedStore creates a new threat intelligence store.
@@ -46,6 +47,7 @@ func NewFeedStore() *FeedStore {
 		kev:  make(map[string]KEVEntry),
 		epss: make(map[string]EPSSScore),
 		nvd:  make(map[string]NVDEntry),
+		expl: make(map[string]Exploitation),
 	}
 }
 
@@ -166,4 +168,19 @@ func (s *FeedStore) LoadEPSSCSV(r io.Reader) (int, error) {
 	}
 
 	return count, nil
+}
+
+// SetExploitation records what the optional sources say about one vulnerability (D88).
+func (s *FeedStore) SetExploitation(e Exploitation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expl[strings.ToUpper(strings.TrimSpace(e.ID))] = e
+}
+
+// GetExploitation returns what the optional sources say about one vulnerability (D88).
+func (s *FeedStore) GetExploitation(id string) (Exploitation, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.expl[strings.ToUpper(strings.TrimSpace(id))]
+	return e, ok
 }
