@@ -148,9 +148,11 @@ jobs:
               id="$(find_id)"
               if [[ -z "$id" ]]; then
                 echo "Registering $url on Artifact Hub..."
-                jq -n --arg url "$url" --arg name "$CHART_NAME" --arg display "$DISPLAY_NAME" \
-                  '{kind: 0, name: $name, display_name: $display, url: $url}' |
-                  curl -fsS "${hdr[@]}" -H 'Content-Type: application/json' -X POST "$api/repositories/user" --data-binary @- || true
+                reg_payload="$(jq -n --arg url "$url" --arg name "$CHART_NAME" --arg display "$DISPLAY_NAME" \
+                  '{kind: 0, name: $name, display_name: $display, url: $url}')"
+                echo "Payload: $reg_payload"
+                resp="$(curl -s -w "\nHTTP_STATUS:%{http_code}" "${hdr[@]}" -H 'Content-Type: application/json' -X POST "$api/repositories/user" --data-binary "$reg_payload" 2>&1 || true)"
+                echo "Artifact Hub response: $resp"
                 id="$(find_id)"
               fi
             else
