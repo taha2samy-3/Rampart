@@ -425,6 +425,13 @@ func (e *RecordError) Error() string {
 }
 
 // Upload is a presigned upload awaiting, or past, its `complete` call (D2, D9).
+// UploadOptions are the tightening options of the token that created an upload (D22): the parse worker applies
+// them later, when the token itself is no longer around (D80).
+type UploadOptions struct {
+	MinSeverity Severity `json:"min_severity,omitempty"`
+	NoClose     bool     `json:"no_close,omitempty"`
+}
+
 type Upload struct {
 	ID             uuid.UUID     `json:"id"`
 	TenantID       uuid.UUID     `json:"tenant_id"`
@@ -436,6 +443,7 @@ type Upload struct {
 	SizeBytes      int64         `json:"size_bytes"`       // declared at create, signed into the PUT
 	FormatHint     string        `json:"format_hint,omitempty"`
 	Context        UploadContext `json:"context"`
+	Options        UploadOptions `json:"options"`
 	Status         string        `json:"status"` // created | completed
 	CreatedAt      time.Time     `json:"created_at"`
 }

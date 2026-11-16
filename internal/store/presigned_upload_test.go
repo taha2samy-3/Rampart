@@ -333,3 +333,47 @@ func (h *uploadHarness) runTimeout() time.Duration {
 }
 
 func ctx0() context.Context { return context.Background() }
+
+// D80: a token's tightening options reach the parse worker on the presigned path. Before, they were applied on the
+// direct path only, so a run uploaded with a presigned URL ignored min_sev and no_close.
+func TestPresignedUpload_AppliesTheTokensOptions(t *testing.T) {
+	h := newUploadHarness(t)
+	raw, rec, err := auth.GenerateToken(h.tenant, auth.RoleIngest, "ci:options-test", []string{"ingest", "min_sev:critical", "no_close"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SaveToken(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	h.token = raw
+
+	report, err := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, putStatus := h.upload(report, "")
+	if putStatus != http.StatusOK {
+		t.Fatalf("PUT: %d", putStatus)
+	}
+	upID, _ := uuid.Parse(id)
+	u, err := h.store.GetUpload(context.Background(), h.tenant, upID)
+	if err != nil || u.Options.MinSeverity != domain.SeverityCritical || !u.Options.NoClose {
+		t.Fatalf("the upload must keep the token's options: %+v, %v", u, err)
+	}
+	code, body := h.call("POST", "/ingest/v1/uploads/"+id+"/complete", ingest.CompleteUploadRequest{SHA256: sha(report)}, nil)
+	if code != http.StatusAccepted {
+		t.Fatalf("complete: %d %s", code, body)
+	}
+	var done ingest.CompleteUploadResponse
+	_ = json.Unmarshal(body, &done)
+	run := h.waitRun(done.IngestRunID)
+	if run.Stats.SkippedMinSeverity == 0 {
+		t.Fatalf("min_sev:critical was not applied by the parse worker: %+v", run.Stats)
+	}
+	findings, _ := h.app.ListFindings(context.Background(), h.tenant)
+	for _, f := range findings {
+		if f.Severity != domain.SeverityCritical {
+			t.Fatalf("a %s finding was created by a token that asked for critical only", f.Severity)
+		}
+	}
+}

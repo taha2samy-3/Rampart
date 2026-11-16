@@ -137,80 +137,82 @@ func randomKey() []byte {
 
 // RegisterRoutes mounts all /api/v1 routes onto the router.
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/findings", a.handleListFindings)
-	mux.HandleFunc("GET /api/v1/findings/{id}", a.handleGetFinding)
-	mux.HandleFunc("PATCH /api/v1/findings/{id}", a.handlePatchFinding)
-	mux.HandleFunc("POST /api/v1/findings/bulk", a.handleBulkTriage)
-	mux.HandleFunc("GET /api/v1/findings/{id}/events", a.handleFindingEvents)
-	mux.HandleFunc("POST /api/v1/gate", a.handleGate) // D26
-	mux.HandleFunc("POST /api/v1/risk-acceptances", a.handleRequestAcceptance)
-	mux.HandleFunc("GET /api/v1/risk-acceptances", a.handleListAcceptances)
-	mux.HandleFunc("GET /api/v1/risk-acceptances/{id}", a.handleGetAcceptance)
-	mux.HandleFunc("POST /api/v1/risk-acceptances/{id}/approve", a.decide("approve"))
-	mux.HandleFunc("POST /api/v1/risk-acceptances/{id}/reject", a.decide("reject"))
-	mux.HandleFunc("POST /api/v1/risk-acceptances/{id}/revoke", a.decide("revoke"))
-	mux.HandleFunc("POST /api/v1/risk-acceptances/{id}/proofs", a.handleAddProof)
-	mux.HandleFunc("GET /api/v1/risk-acceptances/{id}/proofs", a.handleListProofs)
-	mux.HandleFunc("GET /api/v1/risk-acceptances/{id}/proofs/{proof}", a.handleGetProof)
-	mux.HandleFunc("GET /api/v1/settings", a.handleGetSettings)
-	mux.HandleFunc("PATCH /api/v1/settings", a.handlePatchSettings)
-	mux.HandleFunc("GET /api/v1/applications", a.handleListApplications)
-	mux.HandleFunc("GET /api/v1/applications/{id}/summary", a.handleApplicationSummary)
-	mux.HandleFunc("GET /api/v1/hierarchy", a.handleListHierarchy)
-	mux.HandleFunc("GET /api/v1/dashboards/overview", a.handleOverview)
-	mux.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
-	mux.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)
-	mux.HandleFunc("GET /api/v1/audit", a.handleListAudit)
-	mux.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
-	mux.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
-	mux.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
-	mux.HandleFunc("GET /api/v1/access-bindings", a.handleListBindings)
-	mux.HandleFunc("POST /api/v1/access-bindings", a.handleCreateBinding)
-	mux.HandleFunc("DELETE /api/v1/access-bindings/{id}", a.handleDeleteBinding)
-	mux.HandleFunc("GET /api/v1/me/access", a.handleMyAccess)
-	mux.HandleFunc("GET /api/v1/metrics/trend", a.handleTrend)
-	mux.HandleFunc("GET /api/v1/runs", a.handleListRuns)
-	mux.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
-	mux.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
-	mux.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleGetAssetSBOM) // alias per doc 11
-	mux.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
-	mux.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
-	mux.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)
-	mux.HandleFunc("GET /api/v1/applications/{id}/sbom/path", a.handleGetAssetSBOMPath)
-	mux.HandleFunc("GET /api/v1/assets/{id}/vex", a.handleExportVEX)
-	mux.HandleFunc("GET /api/v1/applications/{id}/vex", a.handleExportVEX)
-	mux.HandleFunc("POST /api/v1/vex", a.handleImportVEX)
-	mux.HandleFunc("POST /api/v1/uploads", a.handleCreateUpload)
-	mux.HandleFunc("POST /api/v1/uploads/{id}/complete", a.handleCompleteUpload)
-	mux.HandleFunc("POST /api/v1/uploads/direct", a.handleDirectUpload)
-	mux.HandleFunc("GET /api/v1/held-closes", a.handleListHeldCloses)
-	mux.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
-	mux.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
+	// Every route goes through ingestOnlyGuard (D80): a CI ingest token reaches only the gate.
+	routes := &guardedMux{ServeMux: mux, guard: a.ingestOnlyGuard}
+	routes.HandleFunc("GET /api/v1/findings", a.handleListFindings)
+	routes.HandleFunc("GET /api/v1/findings/{id}", a.handleGetFinding)
+	routes.HandleFunc("PATCH /api/v1/findings/{id}", a.handlePatchFinding)
+	routes.HandleFunc("POST /api/v1/findings/bulk", a.handleBulkTriage)
+	routes.HandleFunc("GET /api/v1/findings/{id}/events", a.handleFindingEvents)
+	routes.HandleFunc("POST /api/v1/gate", a.handleGate) // D26
+	routes.HandleFunc("POST /api/v1/risk-acceptances", a.handleRequestAcceptance)
+	routes.HandleFunc("GET /api/v1/risk-acceptances", a.handleListAcceptances)
+	routes.HandleFunc("GET /api/v1/risk-acceptances/{id}", a.handleGetAcceptance)
+	routes.HandleFunc("POST /api/v1/risk-acceptances/{id}/approve", a.decide("approve"))
+	routes.HandleFunc("POST /api/v1/risk-acceptances/{id}/reject", a.decide("reject"))
+	routes.HandleFunc("POST /api/v1/risk-acceptances/{id}/revoke", a.decide("revoke"))
+	routes.HandleFunc("POST /api/v1/risk-acceptances/{id}/proofs", a.handleAddProof)
+	routes.HandleFunc("GET /api/v1/risk-acceptances/{id}/proofs", a.handleListProofs)
+	routes.HandleFunc("GET /api/v1/risk-acceptances/{id}/proofs/{proof}", a.handleGetProof)
+	routes.HandleFunc("GET /api/v1/settings", a.handleGetSettings)
+	routes.HandleFunc("PATCH /api/v1/settings", a.handlePatchSettings)
+	routes.HandleFunc("GET /api/v1/applications", a.handleListApplications)
+	routes.HandleFunc("GET /api/v1/applications/{id}/summary", a.handleApplicationSummary)
+	routes.HandleFunc("GET /api/v1/hierarchy", a.handleListHierarchy)
+	routes.HandleFunc("GET /api/v1/dashboards/overview", a.handleOverview)
+	routes.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
+	routes.HandleFunc("POST /api/v1/notifications/read", a.handleReadNotifications)
+	routes.HandleFunc("GET /api/v1/audit", a.handleListAudit)
+	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
+	routes.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
+	routes.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
+	routes.HandleFunc("GET /api/v1/access-bindings", a.handleListBindings)
+	routes.HandleFunc("POST /api/v1/access-bindings", a.handleCreateBinding)
+	routes.HandleFunc("DELETE /api/v1/access-bindings/{id}", a.handleDeleteBinding)
+	routes.HandleFunc("GET /api/v1/me/access", a.handleMyAccess)
+	routes.HandleFunc("GET /api/v1/metrics/trend", a.handleTrend)
+	routes.HandleFunc("GET /api/v1/runs", a.handleListRuns)
+	routes.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
+	routes.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
+	routes.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleGetAssetSBOM) // alias per doc 11
+	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
+	routes.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
+	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)
+	routes.HandleFunc("GET /api/v1/applications/{id}/sbom/path", a.handleGetAssetSBOMPath)
+	routes.HandleFunc("GET /api/v1/assets/{id}/vex", a.handleExportVEX)
+	routes.HandleFunc("GET /api/v1/applications/{id}/vex", a.handleExportVEX)
+	routes.HandleFunc("POST /api/v1/vex", a.handleImportVEX)
+	routes.HandleFunc("POST /api/v1/uploads", a.handleCreateUpload)
+	routes.HandleFunc("POST /api/v1/uploads/{id}/complete", a.handleCompleteUpload)
+	routes.HandleFunc("POST /api/v1/uploads/direct", a.handleDirectUpload)
+	routes.HandleFunc("GET /api/v1/held-closes", a.handleListHeldCloses)
+	routes.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
+	routes.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
 
 	// Dependency-Track integration & unmapped projects (docs/10 §3, §13)
-	mux.HandleFunc("GET /api/v1/dtrack/unmapped", a.handleListUnmappedDTrackProjects)
-	mux.HandleFunc("POST /api/v1/dtrack/projects/{uuid}/map", a.handleMapDTrackProject)
+	routes.HandleFunc("GET /api/v1/dtrack/unmapped", a.handleListUnmappedDTrackProjects)
+	routes.HandleFunc("POST /api/v1/dtrack/projects/{uuid}/map", a.handleMapDTrackProject)
 
 	// Saved views & finding groups (docs/21 §6.1, §6.2)
-	mux.HandleFunc("GET /api/v1/views", a.handleListViews)
-	mux.HandleFunc("POST /api/v1/views", a.handleCreateView)
-	mux.HandleFunc("DELETE /api/v1/views/{id}", a.handleDeleteView)
-	mux.HandleFunc("GET /api/v1/groups", a.handleListGroups)
-	mux.HandleFunc("POST /api/v1/groups", a.handleCreateGroup)
-	mux.HandleFunc("GET /api/v1/groups/{id}", a.handleGetGroup)
-	mux.HandleFunc("DELETE /api/v1/groups/{id}", a.handleDeleteGroup)
-	mux.HandleFunc("POST /api/v1/groups/{id}/members", a.handleAddGroupMembers)
-	mux.HandleFunc("DELETE /api/v1/groups/{id}/members", a.handleRemoveGroupMembers)
+	routes.HandleFunc("GET /api/v1/views", a.handleListViews)
+	routes.HandleFunc("POST /api/v1/views", a.handleCreateView)
+	routes.HandleFunc("DELETE /api/v1/views/{id}", a.handleDeleteView)
+	routes.HandleFunc("GET /api/v1/groups", a.handleListGroups)
+	routes.HandleFunc("POST /api/v1/groups", a.handleCreateGroup)
+	routes.HandleFunc("GET /api/v1/groups/{id}", a.handleGetGroup)
+	routes.HandleFunc("DELETE /api/v1/groups/{id}", a.handleDeleteGroup)
+	routes.HandleFunc("POST /api/v1/groups/{id}/members", a.handleAddGroupMembers)
+	routes.HandleFunc("DELETE /api/v1/groups/{id}/members", a.handleRemoveGroupMembers)
 
 	// Exports & Live SSE (docs/21 §6.3, §6.4)
-	mux.HandleFunc("GET /api/v1/findings/export", a.handleExportFindings)
-	mux.HandleFunc("GET /api/v1/events", a.handleEventsSSE)
+	routes.HandleFunc("GET /api/v1/findings/export", a.handleExportFindings)
+	routes.HandleFunc("GET /api/v1/events", a.handleEventsSSE)
 
 	// Parsers catalogue & descriptors (docs/19 §2, docs/13 §9)
-	mux.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
+	routes.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
 
-	mux.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
-	mux.HandleFunc("GET /openapi.json", a.handleOpenAPI)
+	routes.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
+	routes.HandleFunc("GET /openapi.json", a.handleOpenAPI)
 }
 
 // FindingResponse wraps a finding with its calculated risk and SLA details.
@@ -828,4 +830,46 @@ func firstNonEmptyStr(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// guardedMux wraps every handler registered on it with guard.
+type guardedMux struct {
+	*http.ServeMux
+	guard func(pattern string, h http.Handler) http.Handler
+}
+
+func (m *guardedMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.ServeMux.Handle(pattern, m.guard(pattern, http.HandlerFunc(h)))
+}
+
+func (m *guardedMux) Handle(pattern string, h http.Handler) {
+	m.ServeMux.Handle(pattern, m.guard(pattern, h))
+}
+
+// ingestRoutes are the query-API routes a CI ingest token may call: the gate, which `rampart gate` calls from the
+// pipeline with the same token it uploaded with (D26, D37).
+var ingestRoutes = map[string]bool{"POST /api/v1/gate": true}
+
+// ingestOnlyGuard refuses a caller whose role is ingest on every other route (D80). An ingest token is for writing
+// reports; most read routes check only the tenant, so without this a 15-minute CI token could read every finding of
+// the tenant. A request with no credentials or another role passes through untouched.
+func (a *API) ingestOnlyGuard(pattern string, h http.Handler) http.Handler {
+	if ingestRoutes[pattern] {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var u *auth.ContextUser
+		if cu, ok := auth.FromContext(r.Context()); ok {
+			u = cu
+		} else if a.authn != nil && r.Header.Get("Authorization") != "" {
+			u, _ = a.authn.AuthenticateRequest(r)
+		}
+		if u != nil && u.Role == auth.RoleIngest {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"type":"https://rampart.aspm.dev/problems/forbidden","title":"An ingest token can only upload reports and call the gate","status":403}`))
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }

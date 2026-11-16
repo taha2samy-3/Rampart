@@ -119,6 +119,7 @@ var ErrUploadExists = errors.New("store: an upload with this idempotency key exi
 // CreateUpload inserts an upload in status created.
 func (s *PostgresStore) CreateUpload(ctx context.Context, u *domain.Upload) error {
 	ctxJSON, _ := json.Marshal(u.Context)
+	optJSON, _ := json.Marshal(u.Options)
 	var key *string
 	if u.IdempotencyKey != "" {
 		key = &u.IdempotencyKey
@@ -129,9 +130,9 @@ func (s *PostgresStore) CreateUpload(ctx context.Context, u *domain.Upload) erro
 	}
 	err := s.withTenantTx(ctx, u.TenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO upload (id, tenant_id, scan_source_id, idempotency_key, request_hash, object_ref, sha256, size_bytes, format_hint, context, status, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			u.ID, u.TenantID, src, key, u.RequestHash, u.ObjectRef, u.SHA256, u.SizeBytes, u.FormatHint, ctxJSON, u.Status, u.CreatedAt)
+			INSERT INTO upload (id, tenant_id, scan_source_id, idempotency_key, request_hash, object_ref, sha256, size_bytes, format_hint, context, options, status, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			u.ID, u.TenantID, src, key, u.RequestHash, u.ObjectRef, u.SHA256, u.SizeBytes, u.FormatHint, ctxJSON, optJSON, u.Status, u.CreatedAt)
 		return err
 	})
 	var pgErr *pgconn.PgError
@@ -141,19 +142,20 @@ func (s *PostgresStore) CreateUpload(ctx context.Context, u *domain.Upload) erro
 	return err
 }
 
-const uploadCols = `id, tenant_id, scan_source_id, coalesce(idempotency_key, ''), request_hash, object_ref, sha256, size_bytes, coalesce(format_hint, ''), context, status, created_at`
+const uploadCols = `id, tenant_id, scan_source_id, coalesce(idempotency_key, ''), request_hash, object_ref, sha256, size_bytes, coalesce(format_hint, ''), context, options, status, created_at`
 
 func scanUpload(row pgx.Row) (*domain.Upload, error) {
 	var u domain.Upload
 	var src *uuid.UUID
-	var ctxJSON []byte
-	if err := row.Scan(&u.ID, &u.TenantID, &src, &u.IdempotencyKey, &u.RequestHash, &u.ObjectRef, &u.SHA256, &u.SizeBytes, &u.FormatHint, &ctxJSON, &u.Status, &u.CreatedAt); err != nil {
+	var ctxJSON, optJSON []byte
+	if err := row.Scan(&u.ID, &u.TenantID, &src, &u.IdempotencyKey, &u.RequestHash, &u.ObjectRef, &u.SHA256, &u.SizeBytes, &u.FormatHint, &ctxJSON, &optJSON, &u.Status, &u.CreatedAt); err != nil {
 		return nil, err
 	}
 	if src != nil {
 		u.ScanSourceID = *src
 	}
 	_ = json.Unmarshal(ctxJSON, &u.Context)
+	_ = json.Unmarshal(optJSON, &u.Options)
 	return &u, nil
 }
 

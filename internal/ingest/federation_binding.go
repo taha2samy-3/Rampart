@@ -131,3 +131,20 @@ func BindUploadContext(scopes []string, ctx *domain.UploadContext) error {
 func branchOfRef(ref string) string {
 	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/")
 }
+
+// TokenOptions reads the tightening options a token carries (D22): min_sev:<severity> and no_close. The direct
+// path applies them at once; the presigned path stores them on the upload for the parse worker (D80).
+func TokenOptions(scopes []string) domain.UploadOptions {
+	var o domain.UploadOptions
+	for _, sc := range scopes {
+		switch {
+		case sc == "no_close":
+			o.NoClose = true
+		case strings.HasPrefix(sc, "min_sev:"):
+			if sev := domain.ParseSeverity(strings.TrimPrefix(sc, "min_sev:")); sev.Valid() {
+				o.MinSeverity = sev
+			}
+		}
+	}
+	return o
+}

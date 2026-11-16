@@ -334,7 +334,8 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 	u := &domain.Upload{
 		ID: id, TenantID: tenantID, ScanSourceID: sourceID, IdempotencyKey: key, RequestHash: reqHash,
 		ObjectRef: fmt.Sprintf("tenants/%s/uploads/%04d/%02d/%02d/%s", tenantID, now.Year(), int(now.Month()), now.Day(), id), // D9
-		SizeBytes: req.SizeBytes, FormatHint: req.FormatHint, Context: req.Context, Status: "created", CreatedAt: now,
+		SizeBytes: req.SizeBytes, FormatHint: req.FormatHint, Context: req.Context, Options: TokenOptions(caller.Scopes),
+		Status: "created", CreatedAt: now,
 	}
 	if err := g.store.CreateUpload(r.Context(), u); err != nil {
 		if errors.Is(err, store.ErrUploadExists) { // lost a race with the same key
@@ -658,15 +659,8 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		return
 	}
 
-	var minSeverity domain.Severity
-	noClose := false
-	for _, sc := range caller.Scopes {
-		if sc == "no_close" {
-			noClose = true
-		} else if strings.HasPrefix(sc, "min_sev:") {
-			minSeverity = domain.ParseSeverity(strings.TrimPrefix(sc, "min_sev:"))
-		}
-	}
+	opts := TokenOptions(caller.Scopes)
+	minSeverity, noClose := opts.MinSeverity, opts.NoClose
 
 	res, err := g.processor.Process(r.Context(), ProcessParams{
 		Run: run, Parser: selectedParser, ScannerOverride: scannerOverride, ScanFinished: scanFinished,
