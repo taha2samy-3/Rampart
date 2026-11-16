@@ -42,10 +42,16 @@ func isKnownField(f string) bool {
 	return false
 }
 
+// MaxQueryLen bounds the query string length to protect against unbounded allocations (D16, D59).
+const MaxQueryLen = 4096
+
 // Parse turns a query string into a structured Query AST per normative D16 EBNF. An unknown field is an error,
 // never ignored: an ignored term widens the match, and a bulk change by filter would then reach findings the
 // person did not mean (D59). Free text that contains a colon (a URL) is written in quotes.
 func Parse(q string) (Query, error) {
+	if len(q) > MaxQueryLen {
+		return Query{}, fmt.Errorf("query too long: %d bytes (limit %d)", len(q), MaxQueryLen)
+	}
 	var terms []Term
 	tokens := tokenize(q)
 
@@ -128,9 +134,7 @@ func tokenize(input string) []string {
 	var current strings.Builder
 	inQuote := false
 
-	for i := 0; i < len(input); i++ {
-		ch := rune(input[i])
-
+	for _, ch := range input {
 		if ch == '"' {
 			inQuote = !inQuote
 			continue
@@ -158,8 +162,7 @@ func splitValues(s string) []string {
 	var current strings.Builder
 	inQuote := false
 
-	for i := 0; i < len(s); i++ {
-		ch := rune(s[i])
+	for _, ch := range s {
 		if ch == '"' {
 			inQuote = !inQuote
 			continue
