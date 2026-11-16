@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { IconButton, IconSidebar, Tooltip } from '@/components';
@@ -85,7 +85,9 @@ export function Shell() {
         </aside>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto outline-none">
           <ErrorBoundary>
-            <Outlet />
+            <Suspense fallback={null}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>

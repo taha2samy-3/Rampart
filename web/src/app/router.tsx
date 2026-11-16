@@ -1,22 +1,14 @@
 import {
   createRootRoute, createRoute, createRouter, createMemoryHistory, Outlet, redirect,
-  useLocation, useNavigate, type RouterHistory,
+  useLocation, useNavigate, lazyRouteComponent, type RouterHistory,
 } from '@tanstack/react-router';
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components';
 import { FindingsRoute, type FindingsSearch } from '@/routes/findings/FindingsRoute';
-import { ApplicationRoute } from '@/routes/applications/ApplicationRoute';
-import { ComplianceRoute } from '@/routes/compliance/ComplianceRoute';
-import { AdministrationRoute } from '@/routes/administration/AdministrationRoute';
-import { ApplicationsRoute } from '@/routes/applications/ApplicationsRoute';
-import { IngestionRoute, type IngestionSearch } from '@/routes/ingestion/IngestionRoute';
-import { OverviewRoute } from '@/routes/overview/OverviewRoute';
 import { LoginPage, type LoginSearch } from '@/routes/login/LoginPage';
-import { WorkflowRoute, type WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
-import { IntegrationsRoute } from '@/routes/integrations/IntegrationsRoute';
-import { InventoryRoute } from '@/routes/inventory/InventoryRoute';
-import { VulnerabilitiesRoute } from '@/routes/vulnerabilities/VulnerabilitiesRoute';
+import type { IngestionSearch } from '@/routes/ingestion/IngestionRoute';
+import type { WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
 import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
 import { Bootstrap } from './Bootstrap';
@@ -24,6 +16,17 @@ import { ErrorView } from './ErrorBoundary';
 import { NAV_ITEMS } from './nav';
 import { useApp } from './session';
 import { Shell } from './Shell';
+
+const ApplicationRoute = lazyRouteComponent(() => import('@/routes/applications/ApplicationRoute'), 'ApplicationRoute');
+const ApplicationsRoute = lazyRouteComponent(() => import('@/routes/applications/ApplicationsRoute'), 'ApplicationsRoute');
+const AdministrationRoute = lazyRouteComponent(() => import('@/routes/administration/AdministrationRoute'), 'AdministrationRoute');
+const ComplianceRoute = lazyRouteComponent(() => import('@/routes/compliance/ComplianceRoute'), 'ComplianceRoute');
+const IngestionRoute = lazyRouteComponent(() => import('@/routes/ingestion/IngestionRoute'), 'IngestionRoute');
+const IntegrationsRoute = lazyRouteComponent(() => import('@/routes/integrations/IntegrationsRoute'), 'IntegrationsRoute');
+const InventoryRoute = lazyRouteComponent(() => import('@/routes/inventory/InventoryRoute'), 'InventoryRoute');
+const OverviewRoute = lazyRouteComponent(() => import('@/routes/overview/OverviewRoute'), 'OverviewRoute');
+const VulnerabilitiesRoute = lazyRouteComponent(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute'), 'VulnerabilitiesRoute');
+const WorkflowRoute = lazyRouteComponent(() => import('@/routes/workflow/WorkflowRoute'), 'WorkflowRoute');
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
