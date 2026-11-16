@@ -1,0 +1,36 @@
+{
+  "name": "Homegrown Scanner",
+  "type": "Homegrown Scanner",
+  "version": "0.9",
+  "findings": [
+    {
+      "title": "Weak TLS configuration",
+      "description": "TLS 1.0 is enabled.",
+      "severity": "Medium",
+      "mitigation": "Disable TLS 1.0 and 1.1.",
+      "date": "2026-09-30",
+      "cve": null,
+      "cwe": 326,
+      "cvssv3": null,
+      "file_path": null,
+      "line": null,
+      "unique_id_from_tool": "hs-77",
+      "vuln_id_from_tool": "TLS-OLD",
+      "static_finding": false,
+      "dynamic_finding": true,
+      "endpoints": [{"protocol": "https", "host": "api.example.com", "port": 8443, "path": "health"}]
+    },
+    {
+      "title": "Outdated jQuery",
+      "description": "jQuery 1.12.4 has known XSS issues.",
+      "severity": "Low",
+      "component_name": "jquery",
+      "component_version": "1.12.4",
+      "vulnerability_ids": [{"vulnerability_id": "CVE-2020-11022"}, {"vulnerability_id": "CVE-2020-11023"}],
+      "file_path": "static/js/jquery.min.js",
+      "line": "1",
+      "static_finding": true,
+      "dynamic_finding": false
+    }
+  ]
+}

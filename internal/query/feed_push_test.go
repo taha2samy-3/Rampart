@@ -21,7 +21,9 @@ type pushStore struct {
 	staged map[string]string
 }
 
-func (p *pushStore) GetClusterFeedMirror(context.Context) (*domain.FeedMirrorSpec, error) { return p.mirror, nil }
+func (p *pushStore) GetClusterFeedMirror(context.Context) (*domain.FeedMirrorSpec, error) {
+	return p.mirror, nil
+}
 func (p *pushStore) StageFeedPush(_ context.Context, feed string, body []byte, _ string, _ int) error {
 	p.staged[feed] = string(body)
 	return nil

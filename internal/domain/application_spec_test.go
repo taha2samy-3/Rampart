@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,6 +53,22 @@ func TestApplicationSpec_Selectors(t *testing.T) {
 		}
 		if _, err := s.ToApplication(id, tenant, "x"); err == nil {
 			t.Fatalf("%s: accepted", name)
+		}
+	}
+}
+
+// D102: complianceScope is lower-case, kept in order without duplicates, and a malformed scope is refused.
+func TestApplicationSpecComplianceScope(t *testing.T) {
+	app, err := ApplicationSpec{ComplianceScope: []string{"pci", "sox", "pci", "iso:27001"}}.ToApplication(uuid.New(), uuid.New(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(app.ComplianceScope, ","); got != "pci,sox,iso:27001" {
+		t.Fatalf("scopes %q", got)
+	}
+	for _, bad := range []string{"PCI", "", "-pci", "pci dss"} {
+		if _, err := (ApplicationSpec{ComplianceScope: []string{bad}}).ToApplication(uuid.New(), uuid.New(), "shop"); err == nil {
+			t.Errorf("scope %q must be refused", bad)
 		}
 	}
 }

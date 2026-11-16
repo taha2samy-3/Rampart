@@ -55,6 +55,15 @@ spec:
                   items:
                     type: string
                     enum: [waf, apiGateway, mtls, privateNetwork]
+                complianceScope:
+                  description: >-
+                    The compliance scopes the application is in, for example pci or sox. A ComplianceFramework with
+                    appliesTo.complianceScope reads only the applications that list the scope (docs/16 D102).
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: string
+                    pattern: '^[a-z0-9][a-z0-9:._-]{0,63}$'
                 selectors:
                   description: Attach repositories and images to this application automatically. A pattern is an exact key or a prefix ending in * (docs/16 D56).
                   type: object

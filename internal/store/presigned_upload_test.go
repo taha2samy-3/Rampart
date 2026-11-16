@@ -83,7 +83,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	h.scorer = scoring.New(appStore, h.syncer, scoring.NewDBPolicy(appStore))
 	processor := ingest.NewProcessor(appStore, nil, h.objects, nil)
 	processor.SetScorer(h.scorer)
-	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse))
+	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,13 +116,20 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 
 func (h *uploadHarness) call(method, path string, body any, headers map[string]string) (int, []byte) {
 	h.t.Helper()
+	return h.do(h.token, method, path, body, headers)
+}
+
+// do sends one request with the given token. It reads no harness state another goroutine may change, so tests
+// can call it concurrently (callAs does).
+func (h *uploadHarness) do(token, method, path string, body any, headers map[string]string) (int, []byte) {
+	h.t.Helper()
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, h.server.URL+path, rd)
-	req.Header.Set("Authorization", "Bearer "+h.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

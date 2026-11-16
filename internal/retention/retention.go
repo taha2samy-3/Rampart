@@ -195,6 +195,12 @@ func Run(ctx context.Context, s *Sweeper, lockPool *pgxpool.Pool, interval time.
 				return
 			}
 			defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockKey) }()
+			// Bookkeeping rows nothing else removes (docs/23 R1, D99), as rampart_system.
+			if res, err := store.Housekeeping(ctx, lockPool, s.now()); err != nil {
+				s.log.Warn("housekeeping failed", "error", err)
+			} else if len(res) > 0 {
+				s.log.Info("housekeeping removed spent rows", "rows", res)
+			}
 		}
 		s.Sweep(ctx)
 	}

@@ -1,0 +1,59 @@
+{
+  "format": "rampart-generic/v1",
+  "tool": "Acme Audit",
+  "version": "2.3.0",
+  "findings": [
+    {
+      "id": "ACME-0001",
+      "rule_id": "acme.sql-concat",
+      "title": "SQL built by string concatenation",
+      "severity": "high",
+      "description": "The query in login() concatenates user input.",
+      "remediation": "Use bound parameters.",
+      "cwe": "CWE-89",
+      "file": "src\\auth\\login.go",
+      "line": 42,
+      "end_line": 44
+    },
+    {
+      "id": "ACME-0002",
+      "title": "lodash prototype pollution",
+      "severity": "Medium",
+      "cve": "CVE-2021-23337",
+      "vulnerability_ids": ["GHSA-35jh-r3h4-6jhm"],
+      "cvssv3": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+      "component": "lodash",
+      "version": "4.17.20",
+      "fixed_version": "4.17.21",
+      "purl": "pkg:npm/lodash@4.17.20",
+      "manifest": "web/package-lock.json"
+    },
+    {
+      "id": "ACME-0003",
+      "rule_id": "acme.stripe-key",
+      "title": "Stripe live key committed",
+      "severity": "critical",
+      "file": "deploy/.env",
+      "line": 7,
+      "secret": "mock_stripe_secret_token_12345"
+    },
+    {
+      "id": "ACME-0004",
+      "rule_id": "acme.open-redirect",
+      "title": "Open redirect on /login",
+      "cvss_score": 6.1,
+      "cwe": [601],
+      "url": "https://app.example.com/login",
+      "method": "get",
+      "param": "next"
+    },
+    {
+      "title": "Public S3 bucket",
+      "severity": "low",
+      "category": "cspm",
+      "rule_id": "acme.s3-public",
+      "resource": "arn:aws:s3:::acme-uploads",
+      "resource_type": "AWS::S3::Bucket"
+    }
+  ]
+}

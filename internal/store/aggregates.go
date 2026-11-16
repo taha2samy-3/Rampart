@@ -111,7 +111,7 @@ func (s *PostgresStore) ApplicationDetail(ctx context.Context, tenantID, appID u
 			}
 			return err
 		}
-		d = &domain.AppDetail{AppSummary: sum, MTTR: []domain.MTTR{}, Coverage: []domain.CoverageRow{}}
+		d = &domain.AppDetail{AppSummary: sum, MTTR: []domain.MTTR{}, Coverage: []domain.CoverageRow{}, OpenByCategory: map[string]map[string]int{}}
 		if d.SLA, err = slaStanding(ctx, tx, tenantID, &appID); err != nil {
 			return err
 		}
@@ -135,6 +135,46 @@ func (s *PostgresStore) ApplicationDetail(ctx context.Context, tenantID, appID u
 			if m, ok := byBand[b]; ok {
 				d.MTTR = append(d.MTTR, m)
 			}
+		}
+		byCat, err := tx.Query(ctx, `SELECT category, risk_band, count(*) FROM finding
+			WHERE tenant_id = $1 AND application_id = $2 AND state IN `+activeStates+` GROUP BY category, risk_band`, tenantID, appID)
+		if err != nil {
+			return err
+		}
+		for byCat.Next() {
+			var cat, band string
+			var n int
+			if err := byCat.Scan(&cat, &band, &n); err != nil {
+				byCat.Close()
+				return err
+			}
+			if d.OpenByCategory[cat] == nil {
+				d.OpenByCategory[cat] = map[string]int{}
+			}
+			d.OpenByCategory[cat][band] += n
+		}
+		byCat.Close()
+		if err := byCat.Err(); err != nil {
+			return err
+		}
+		fams, err := tx.Query(ctx, `SELECT rule_scanner_family, array_agg(DISTINCT category) FROM finding
+			WHERE tenant_id = $1 AND application_id = $2 GROUP BY rule_scanner_family`, tenantID, appID)
+		if err != nil {
+			return err
+		}
+		d.FamilyCategories = map[string][]string{}
+		for fams.Next() {
+			var fam string
+			var cats []string
+			if err := fams.Scan(&fam, &cats); err != nil {
+				fams.Close()
+				return err
+			}
+			d.FamilyCategories[fam] = cats
+		}
+		fams.Close()
+		if err := fams.Err(); err != nil {
+			return err
 		}
 		cov, err := tx.Query(ctx, `SELECT sc.asset_id, a.key, sc.scanner_family, max(r.created_at)
 			FROM ingest_run_scope sc

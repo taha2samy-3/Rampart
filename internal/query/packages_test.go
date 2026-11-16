@@ -46,3 +46,41 @@ func TestListIntegrationPackages(t *testing.T) {
 		t.Fatal("a package that does not validate shows its error")
 	}
 }
+
+// D98: GET /api/v1/parsers lists the tenant's parser packages after the built-ins, and only that tenant's.
+func TestListParsersIncludesTenantPackages(t *testing.T) {
+	ctx := context.Background()
+	st := ingest.NewMemoryStore()
+	tenant, other := uuid.New(), uuid.New()
+	spec := `{"kind":"parser","runtime":"mapping","version":"1.0.0","family":"pip-audit","category":"sca",
+	  "detect":{"probes":[{"jsonHasKeys":["dependencies"]}]},"input":{"format":"json","records":"$.dependencies[*].vulns[*]","parent":"dep"},
+	  "map":{"ruleId":"rec.id","title":"rec.id"}}`
+	_ = st.SaveIntegrationPackage(ctx, domain.IntegrationPackageRecord{TenantID: tenant, Name: "pip-audit", Kind: "parser", Runtime: "mapping", Version: "1.0.0", Spec: []byte(spec)})
+	_ = st.SaveIntegrationPackage(ctx, domain.IntegrationPackageRecord{TenantID: other, Name: "other-tenants", Kind: "parser", Runtime: "mapping", Version: "1.0.0", Spec: []byte(spec)})
+
+	authn := auth.NewAuthenticatorWithStore(st)
+	api := query.NewAPIWithAuth(st, nil, authn)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+	req := httptest.NewRequest("GET", "/api/v1/parsers", nil)
+	req.Header.Set("Authorization", "Bearer "+authn.DefaultAdminToken(tenant))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var out struct {
+		Parsers []struct {
+			ID           string `json:"id"`
+			SupportLevel string `json:"support_level"`
+		} `json:"parsers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	var mine, theirs bool
+	for _, p := range out.Parsers {
+		mine = mine || (p.ID == "mapping:pip-audit" && p.SupportLevel == "community")
+		theirs = theirs || p.ID == "mapping:other-tenants"
+	}
+	if !mine || theirs {
+		t.Fatalf("want this tenant's package and not the other's: %s", w.Body.String())
+	}
+}

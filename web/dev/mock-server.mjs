@@ -162,6 +162,8 @@ const PARSERS = [
   { id: 'builtin:snyk', name: 'Snyk Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Snyk open source and container vulnerability report' },
   { id: 'builtin:kubebench', name: 'kube-bench Parser (JSON)', kind: 'parser', version: '0.6.0', support_level: 'builtin', description: 'Aqua Security kube-bench CIS Kubernetes benchmark report' },
   { id: 'builtin:prowler', name: 'Prowler Parser (JSON)', kind: 'parser', version: '4.0.0', support_level: 'builtin', description: 'Prowler AWS/Azure/GCP cloud security and compliance report' },
+  { id: 'builtin:gitlab', name: 'GitLab Security Report Parser (JSON)', kind: 'parser', version: '15', support_level: 'builtin', description: 'GitLab SAST, secret detection, dependency scanning, container scanning and DAST reports (schema v14, v15)' },
+  { id: 'builtin:genericjson', name: 'Generic JSON Parser', kind: 'parser', version: '1', support_level: 'builtin', description: 'Rampart generic findings format, a superset of DefectDojo Generic Findings Import' },
   { id: 'crd:custom-sast-mapper', name: 'Custom In-House SAST', kind: 'parser', version: '1.0.0', support_level: 'community', description: 'Declarative CEL mapping parser registered dynamically via IntegrationPackage CRD' },
 ];
 
@@ -469,11 +471,40 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/me/permissions') return json(res, { role: 'admin', scopes: ['tenant'] });
     if (p === '/api/v1/taxonomies') return json(res, { items: [
       { id: 'owasp-top10-2021', name: 'OWASP Top 10', version: '2021', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10 },
-      { id: 'pci-dss-4.0.1-req6', name: 'PCI DSS, requirement 6 and 8.6.2', version: '4.0.1', source: 'https://www.pcisecuritystandards.org/document_library/', kind: 'category', note: 'PCI DSS does not list weaknesses by CWE, so each requirement is assessed by the kind of scan that evidences it.', controls: 6 },
+      { id: 'pci-dss-4.0.1-req6', name: 'PCI DSS, requirement 6 and 8.6.2', version: '4.0.1', source: 'https://www.pcisecuritystandards.org/document_library/', kind: 'category', note: 'PCI DSS does not list weaknesses by CWE, so each requirement is assessed by the kind of scan that evidences it.', controls: 6, origin: 'builtin' },
+      { id: 'acme-secure-coding', name: 'ACME secure coding policy', version: '2026.1', source: 'https://wiki.acme.example/secpol', kind: 'custom', controls: 5, origin: 'tenant', scope: 'pci', window_days: 30 },
+      { id: 'acme-draft', name: 'acme-draft', version: '', kind: 'custom', controls: 0, origin: 'tenant', error: 'compliance framework: control "SC-9": unknown category "sasst" (one of sast, sca, secret, iac, container, dast, cspm, compliance, license, supply_chain)' },
     ] });
+    if (p.startsWith('/api/v1/taxonomies/') && p.endsWith('/history')) {
+      const d = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+      return json(res, { days: [d(1), d(2), d(3), d(30), d(90)] });
+    }
+    if (p.startsWith('/api/v1/taxonomies/') && p.endsWith('/attestations') && req.method === 'POST') {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id: 'at-1', status: 'passed', note: 'ok', attested_by: 'user:sara.ahmed@acme.example', attested_at: new Date().toISOString(), expires_at: new Date(Date.now() + 365 * 86400000).toISOString() }));
+    }
+    if (p === '/api/v1/taxonomies/acme-secure-coding/status') {
+      const z = { critical: 0, high: 0, medium: 0, low: 0 };
+      const ago = (n) => new Date(Date.now() - n * 86400000).toISOString();
+      return json(res, { id: 'acme-secure-coding', name: 'ACME secure coding policy', version: '2026.1', source: 'https://wiki.acme.example/secpol', kind: 'custom', origin: 'tenant', scope: 'pci',
+        controls: 5, evaluated_at: new Date().toISOString(), window_days: 30, status: [
+        { id: 'SC-1', name: 'No critical or high injection flaws', status: 'open', open: 3, bands: { ...z, critical: 1, high: 2 }, accepted: 1, query: 'cwe:77,78,79,89 state:open,under_investigation,affected', query_exact: false, evidence: ['semgrep'], assessed_apps: 3, total_apps: 3,
+          reason: '3 open findings break it. 1 finding is risk-accepted: approved exceptions, not counted as open.' },
+        { id: 'SC-2', name: 'No hard-coded credentials', status: 'clear', open: 0, bands: z, query: 'category:secret state:open,under_investigation,affected', query_exact: true, evidence: ['gitleaks', 'semgrep'], assessed_apps: 3, total_apps: 3,
+          reason: 'Nothing that bears on it is open, and a secret scan ran in all 3 applications in the last 30 days.' },
+        { id: 'SC-3', name: 'Dependencies with a known exploited vulnerability are patched', status: 'not_assessed', open: 0, bands: z, query: 'category:sca state:open,under_investigation,affected', query_exact: true, evidence: ['trivy'], assessed_apps: 2, total_apps: 3,
+          reason: 'Assessed in 2 of 3 applications. The other one had no dependency (SCA) scan in the last 30 days.' },
+        { id: 'SC-4', name: 'A threat model is reviewed for each release', description: 'Attested by the application security lead.', status: 'clear', open: 0, bands: z, manual: true,
+          attestation: { id: 'at-0', framework_id: 'acme-secure-coding', control_id: 'SC-4', status: 'passed', note: 'Threat model of release 4.2 reviewed', evidence_url: 'https://wiki.acme.example/tm/4.2', attested_by: 'user:omar@acme.example', attested_at: ago(20), expires_at: ago(-345) },
+          reason: 'omar@acme.example attested on ' + new Date(Date.now() - 20 * 86400000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + ' that it is met; in force until next year.' },
+        { id: 'SC-5', name: 'Penetration test of internet-facing services each year', status: 'not_assessed', open: 0, bands: z, manual: true,
+          reason: 'A person attests this control, and nobody has yet.' },
+      ] });
+    }
     if (p.startsWith('/api/v1/taxonomies/') && p.endsWith('/status')) {
       const b = (c, h, m, l) => ({ critical: c, high: h, medium: m, low: l });
-      const ctl = (id, name, status, bands, evidence) => ({ id, name, status, open: Object.values(bands).reduce((a, n) => a + n, 0), bands, query: 'cwe:89 state:open', evidence });
+      const reasonOf = (status, open) => status === 'open' ? `${open} open findings break it.` : status === 'clear' ? 'Nothing that bears on it is open, and a SAST or DAST scan ran in all 3 applications in the last 30 days.' : 'No SAST or DAST scan ran in the last 30 days, so nothing can be said.';
+      const ctl = (id, name, status, bands, evidence) => { const open = Object.values(bands).reduce((a, n) => a + n, 0); return { id, name, status, open, bands, query: 'cwe:89 state:open', query_exact: true, evidence, reason: reasonOf(status, open) }; };
       return json(res, { id: p.split('/')[4], name: 'OWASP Top 10', version: '2021', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10, evaluated_at: new Date().toISOString(), window_days: 30, status: [
         ctl('A01:2021', 'Broken Access Control', 'open', b(0, 2, 3, 0), ['semgrep']),
         ctl('A02:2021', 'Cryptographic Failures', 'clear', b(0, 0, 0, 0), ['semgrep', 'trivy']),
@@ -550,6 +581,16 @@ const server = http.createServer((req, res) => {
           { asset_id: 'as-2', asset: `registry.acme.example/${a.slug}`, scanner: 'trivy', last_scan: day(6) },
         ],
         top_findings: ALL.slice(0, 5).map((r) => ({ id: r.finding.id, title: r.finding.title, band: r.risk.band, risk_score: r.risk.total_score, state: r.finding.state, sla_due_date: r.sla_due_date })),
+        // D101: one row per kind of testing; DAST and cloud never ran, IaC is stale.
+        scan_coverage: [
+          { category: 'sast', scanners: ['semgrep'], last_scan: day(0.2), open: { critical: 1, high: 3, medium: 2 } },
+          { category: 'sca', scanners: ['trivy'], last_scan: day(6), open: { critical: 2, high: 2, medium: 1, low: 1 } },
+          { category: 'secret', scanners: ['gitleaks', 'semgrep', 'trivy'], last_scan: day(0.2), open: { high: 1 } },
+          { category: 'iac', scanners: ['checkov'], last_scan: day(45), open: { medium: 1, low: 1 } },
+          { category: 'container', scanners: ['trivy'], last_scan: day(6), open: {} },
+          { category: 'dast', scanners: [], open: {} },
+          { category: 'cspm', scanners: [], open: {} },
+        ],
       });
     }
     if (p === '/api/v1/dashboards/overview') return json(res, OVERVIEW());

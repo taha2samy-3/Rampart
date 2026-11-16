@@ -34,7 +34,7 @@ spec:
   businessCriticality: critical       # critical|high|medium|low
   internetFacing: true
   dataClassification: [pci, pii]
-  complianceScope: [pci-dss, soc2]
+  complianceScope: [pci-dss, soc2]   # labels a ComplianceFramework's appliesTo.complianceScope selects (D102, docs/27)
   compensatingControls: [waf, apiGateway]   # waf | apiGateway | mtls | privateNetwork (D55)
   lifecycle: production
   services:
@@ -327,6 +327,10 @@ spec:
 status: {matchedFindings: 14, state: Active}
 ```
 
+### ComplianceFramework and ClusterComplianceFramework
+
+A framework Rampart does not ship, described as data: a tenant's own (`ComplianceFramework`, namespaced) or one the platform offers every tenant (`ClusterComplianceFramework`). Each control is matched to findings by CWE, category or scanner rule, optionally from a minimum severity, or attested by a person. The fields, the rules and an example are in docs/27; the decision in docs/16 D102.
+
 ## 4. Integrations
 
 ### `Connector`
@@ -390,7 +394,7 @@ spec:
   direction: outbound
   webhook:
     url: https://siem.example.com/webhook
-    secretRef: {name: webhook-hmac-key, key: secret} # Used for X-Rampart-Signature-256
+    secretRef: {name: webhook-hmac-key, key: secret} # signs each delivery: webhook-id, webhook-timestamp, webhook-signature (Standard Webhooks, D100)
     format: cloudevents                              # cloudevents | raw
     headers:
       X-Environment: "production"

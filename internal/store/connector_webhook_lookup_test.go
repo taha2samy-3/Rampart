@@ -3,7 +3,6 @@ package store_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -59,7 +58,7 @@ func TestGetConnectorByID_OnPostgreSQL(t *testing.T) {
 			t.Fatalf("SECURITY VIOLATION: tenant B sees %d connectors of tenant A after a webhook lookup", len(list))
 		}
 		if _, err := appStore.GetConnector(ctx, tenantB.ID, "jira-two-way"); err == nil {
-			t.Fatal(fmt.Sprintf("SECURITY VIOLATION: tenant B reads tenant A's connector by name (pass %d)", i))
+			t.Fatalf("SECURITY VIOLATION: tenant B reads tenant A's connector by name (pass %d)", i)
 		}
 	}
 }

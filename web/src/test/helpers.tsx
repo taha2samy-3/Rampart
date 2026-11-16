@@ -55,7 +55,8 @@ export interface Scenario {
   dtUnmapped?: Record<string, DTrackProjectRecord[]>;
   dtDecisions?: Record<string, UpstreamDecision[]>;
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
-  taxonomies?: { id: string; name: string; version: string }[];
+  taxonomies?: { id: string; name: string; version: string; origin?: string; error?: string }[];
+  taxonomyHistory?: string[];
   taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error';
   /** GET /api/v1/me/access: roles on single applications (default none). */
   access?: Record<string, string>;
@@ -188,6 +189,12 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/taxonomies') {
       const items = (sc.taxonomies ?? [{ id: 'owasp-top10-2021', name: 'OWASP Top 10', version: '2021' }]).map((f) => ({ source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10, ...f }));
       return json({ items });
+    }
+    if (path.startsWith('/api/v1/taxonomies/') && path.endsWith('/history')) {
+      return json({ days: sc.taxonomyHistory ?? [] });
+    }
+    if (path.startsWith('/api/v1/taxonomies/') && path.endsWith('/attestations') && init?.method === 'POST') {
+      return json({ id: 'at-1', status: 'passed', note: 'x', attested_by: 'user:sara@acme.example', attested_at: '2026-11-16T10:00:00Z', expires_at: '2027-11-16T10:00:00Z' }, 201);
     }
     if (path.startsWith('/api/v1/taxonomies/') && path.endsWith('/status')) {
       if (sc.taxonomyStatus === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
@@ -354,7 +361,7 @@ export function mockFetch(sc: Scenario): Calls {
     }
     if (path === '/api/v1/parsers') {
       if (sc.parsers === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list parsers', status: 500, request_id: 'req_parsers' }, 500);
-      return json({ parsers: sc.parsers ?? null });
+      return json({ parsers: sc.parsers ?? DEFAULT_PARSERS });
     }
     if (path === '/api/v1/findings') {
       if (sc.findings === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list findings', status: 500, request_id: 'req_1' }, 500);
@@ -370,3 +377,12 @@ export function renderApp(path: string) {
   const history = createMemoryHistory({ initialEntries: [path] });
   return { history, ...render(<App history={history} />) };
 }
+
+/** What the server lists by default: some built-ins and one parser package the tenant installed (D98). */
+const DEFAULT_PARSERS: ParserDescriptor[] = [
+  { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0' },
+  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.6', support_level: 'builtin', description: 'CycloneDX SBOM, VDR and VEX' },
+  { id: 'builtin:trivy', name: 'Trivy Parser (JSON)', kind: 'parser', version: '2', support_level: 'builtin', description: 'Trivy JSON' },
+  { id: 'builtin:semgrep', name: 'Semgrep Parser (JSON)', kind: 'parser', version: '1', support_level: 'builtin', description: 'Semgrep JSON' },
+  { id: 'mapping:pip-audit', name: 'pip-audit (Declarative)', kind: 'parser', version: '1.0.0', support_level: 'community', description: 'Declarative mapping parser for pip-audit (sca)' },
+];

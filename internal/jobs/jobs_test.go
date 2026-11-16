@@ -33,31 +33,4 @@ func TestInMemJobQueue(t *testing.T) {
 	default:
 		t.Fatal("expected item in ParseJobs channel")
 	}
-
-	// Enrich
-	enrichArgs := jobs.EnrichJobArgs{IngestRunID: runID, TenantID: tenantID}
-	if enrichArgs.Kind() != "enrich" {
-		t.Errorf("expected kind 'enrich', got %q", enrichArgs.Kind())
-	}
-	if err := q.EnqueueEnrich(ctx, enrichArgs); err != nil {
-		t.Fatalf("EnqueueEnrich failed: %v", err)
-	}
-
-	// Policy
-	policyArgs := jobs.PolicyJobArgs{IngestRunID: runID, TenantID: tenantID}
-	if policyArgs.Kind() != "policy" {
-		t.Errorf("expected kind 'policy', got %q", policyArgs.Kind())
-	}
-	if err := q.EnqueuePolicy(ctx, policyArgs); err != nil {
-		t.Fatalf("EnqueuePolicy failed: %v", err)
-	}
-
-	// Notify
-	notifyArgs := jobs.NotifyJobArgs{IngestRunID: runID, TenantID: tenantID}
-	if notifyArgs.Kind() != "notify" {
-		t.Errorf("expected kind 'notify', got %q", notifyArgs.Kind())
-	}
-	if err := q.EnqueueNotify(ctx, notifyArgs); err != nil {
-		t.Fatalf("EnqueueNotify failed: %v", err)
-	}
 }

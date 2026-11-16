@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"rampart/internal/integrations/declarative"
@@ -61,6 +62,69 @@ type NotificationRouter struct {
 	secretResolver SecretResolver
 	client         *SafeClient
 	publicURL      string
+	queue          DeliveryQueue
+}
+
+// DeliveryQueue queues one message for one connector (docs/23 K4, D97). jobs.RiverQueue implements it.
+type DeliveryQueue interface {
+	EnqueueDelivery(ctx context.Context, tenantID uuid.UUID, connector string, message []byte) error
+}
+
+// SetDeliveryQueue makes the router queue each (connector, message) as a job instead of sending it from the
+// caller's goroutine: a slow or failing service then holds a delivery worker, not the ingest run, and a failed
+// send is retried and kept, not logged and lost (K4). Without a queue (the in-memory mode) it sends inline.
+func (r *NotificationRouter) SetDeliveryQueue(q DeliveryQueue) { r.queue = q }
+
+func (r *NotificationRouter) enqueue(ctx context.Context, tenantID uuid.UUID, connector string, msg NotificationMessage) error {
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if err := r.queue.EnqueueDelivery(ctx, tenantID, connector, b); err != nil {
+		return fmt.Errorf("connector %q enqueue failed: %w", connector, err)
+	}
+	return nil
+}
+
+// ErrConnectorGone is returned by Deliver when the connector was deleted after the message was queued.
+var ErrConnectorGone = errors.New("router: the connector no longer exists")
+
+// Deliver sends one queued message to one connector: the delivery worker's side of SetDeliveryQueue. Secrets are
+// resolved now, so a rotated secret is used and none is ever stored in the queue. A connector deleted since is
+// ErrConnectorGone (nothing to retry); any other failure is returned for the queue to retry.
+func (r *NotificationRouter) Deliver(ctx context.Context, tenantID uuid.UUID, connector string, msg NotificationMessage) error {
+	conn, err := r.store.GetConnector(ctx, tenantID, connector)
+	if errors.Is(err, store.ErrConnectorNotFound) || (err == nil && conn == nil) {
+		return ErrConnectorGone
+	}
+	if err != nil {
+		return fmt.Errorf("router: loading connector %q: %w", connector, err)
+	}
+	n, err := r.buildNotifier(ctx, tenantID, *conn)
+	if err != nil {
+		return fmt.Errorf("connector %q build error: %w", connector, err)
+	}
+	if n == nil {
+		return ErrConnectorGone // no longer a notifier
+	}
+	return n.Send(ctx, msg)
+}
+
+// isNotifier says whether a connector sends notifications, without resolving its secrets.
+func isNotifier(conn domain.Connector) bool {
+	switch conn.Type {
+	case domain.ConnectorTypeSlack:
+		return conn.Spec.Slack != nil
+	case domain.ConnectorTypeTeams:
+		return conn.Spec.Teams != nil
+	case domain.ConnectorTypeWebhook:
+		return conn.Spec.Webhook != nil
+	case domain.ConnectorTypeEmail:
+		return conn.Spec.Email != nil
+	case domain.ConnectorTypePlugin:
+		return conn.Spec.Plugin != nil
+	}
+	return false
 }
 
 // NewNotificationRouter creates a new notification routing engine with default configuration.
@@ -103,6 +167,15 @@ func (r *NotificationRouter) RouteNotification(ctx context.Context, tenantID uui
 
 		// Apply noise-reduction routing filters (D25/D69)
 		if !matchesRouting(conn.Spec.Routing, msg) {
+			continue
+		}
+
+		if r.queue != nil {
+			if isNotifier(conn) {
+				if err := r.enqueue(ctx, tenantID, conn.Name, msg); err != nil {
+					errs = append(errs, err)
+				}
+			}
 			continue
 		}
 
@@ -243,6 +316,12 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		if cond := conn.GetCondition("Connected"); cond != nil && cond.Status == "False" {
 			continue
 		}
+		if r.queue != nil {
+			if isNotifier(conn) {
+				targets = append(targets, activeTarget{name: conn.Name, routing: conn.Spec.Routing})
+			}
+			continue
+		}
 		notifier, err := r.buildNotifier(ctx, tenantID, conn)
 		if err != nil {
 			allErrs = append(allErrs, fmt.Errorf("connector %q build error: %w", conn.Name, err))
@@ -283,6 +362,12 @@ func (r *NotificationRouter) RouteIngestRunFindings(ctx context.Context, tenantI
 		}
 		for _, tgt := range targets {
 			if !matchesRouting(tgt.routing, msg) {
+				continue
+			}
+			if r.queue != nil {
+				if err := r.enqueue(ctx, tenantID, tgt.name, msg); err != nil {
+					allErrs = append(allErrs, err)
+				}
 				continue
 			}
 			if err := tgt.notifier.Send(ctx, msg); err != nil {

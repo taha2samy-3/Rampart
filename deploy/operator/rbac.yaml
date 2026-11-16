@@ -30,6 +30,10 @@ rules:
       - clusterfeedmirrors/status
       - connectors
       - connectors/status
+      - complianceframeworks
+      - complianceframeworks/status
+      - clustercomplianceframeworks
+      - clustercomplianceframeworks/status
       - tenants/finalizers
       - applications/finalizers
       - scansources/finalizers
@@ -39,6 +43,8 @@ rules:
       - clusterslapolicies/finalizers
       - clusterfeedmirrors/finalizers
       - connectors/finalizers
+      - complianceframeworks/finalizers
+      - clustercomplianceframeworks/finalizers
     verbs:
       - get
       - list

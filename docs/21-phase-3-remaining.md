@@ -158,7 +158,7 @@ Dependency-Track is integrated as an **upstream source** (a `Source`, not a trac
 **Status: 100% complete (decision D75).**
 
 1. **Contracts and Registry (`internal/integrations`)**:
-   - `ParserContract`, `SourceContract`, `TrackerContract`, `NotifierContract` defined with `Descriptor` including JSON Schema (`ConfigSchema`), `Secrets`, `Egress`, and `Capabilities`.
+   - `ParserContract` (and, until D96 removed them unused, `SourceContract`, `TrackerContract`, `NotifierContract`) defined with `Descriptor` including JSON Schema (`ConfigSchema`), `Secrets`, `Egress`, and `Capabilities`.
    - Built-ins adapted and registered: `builtin:jira`, `builtin:github`, `builtin:slack`, `builtin:teams`, `builtin:email`, `builtin:webhook`, `builtin:dependency-track`.
    - Contract conformance tests verify descriptors and all contract operations (`contracts_test.go`).
 2. **Declarative Mapping Engine (`internal/integrations/mapping`)**:

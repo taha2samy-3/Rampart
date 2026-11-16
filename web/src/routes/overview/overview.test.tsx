@@ -92,7 +92,14 @@ describe('applications', () => {
   });
 
   it('a row opens the application page, which says where it stands', async () => {
-    mockFetch({ loggedIn: true, apps: [app(1)], appPages: { 'app-1': appPage(1) } });
+    const recent = new Date(Date.now() - 3_600_000).toISOString();
+    const old = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const scan_coverage = [
+      { category: 'sast', scanners: ['semgrep'], last_scan: recent, open: { critical: 1, high: 2 } },
+      { category: 'sca', scanners: [], open: {} },
+      { category: 'iac', scanners: ['checkov'], last_scan: old, open: {} },
+    ];
+    mockFetch({ loggedIn: true, apps: [app(1)], appPages: { 'app-1': appPage(1, { scan_coverage }) } });
     const { history, container } = renderApp('/applications');
     await userEvent.click(await screen.findByText('Application 1'));
     await waitFor(() => expect(history.location.pathname).toBe('/applications/app-1'));
@@ -109,7 +116,19 @@ describe('applications', () => {
     expect(screen.getByText(/new and \d+ fixed in \d+ weeks/)).toBeInTheDocument();
     expect(screen.getByText('Over 180 days')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'SQL injection in order search' })).toBeInTheDocument();
-    expect(within(screen.getByRole('table', { name: 'Coverage' })).getByText('semgrep')).toBeInTheDocument();
+    expect(within(screen.getByRole('table', { name: 'By asset and scanner' })).getByText('semgrep')).toBeInTheDocument();
+    // D101: one row per kind of testing; the gap and the stale scan are said in words, not only shown
+    expect(screen.getByText('2 of 3 kinds of testing have run. Not scanned: Dependencies (SCA). Older than 30 days: Infrastructure as code.')).toBeInTheDocument();
+    // the radar: neutral, fixed axis order, the gap named on its spoke; its label is the same sentence
+    expect(screen.getByRole('img', { name: '2 of 3 kinds of testing have run. Not scanned: Dependencies (SCA).' })).toBeInTheDocument();
+    expect(screen.getByText('not scanned')).toBeInTheDocument();
+    const cov = screen.getByRole('table', { name: 'Scan coverage' });
+    const sca = within(cov).getByText('Dependencies (SCA)').closest('tr')!;
+    expect(within(sca).getByText('Not scanned')).toBeInTheDocument();
+    const sast = within(cov).getByText('Code (SAST)').closest('tr')!;
+    expect(within(sast).getByText('1 critical, 2 high')).toBeInTheDocument();
+    expect(within(sast).getByRole('img', { name: '1 critical, 2 high' })).toBeInTheDocument();
+    expect(within(within(cov).getByText('Infrastructure as code').closest('tr')!).getByText(/, stale$/)).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 

@@ -66,6 +66,17 @@ func (s *PostgresStore) DeleteRiskPolicy(ctx context.Context, tenantID uuid.UUID
 	return s.deletePolicy(ctx, tenantID, "risk", namespace, name)
 }
 
+// DeleteTenantPolicy removes a tenant policy object of any kind. For sla and risk the tenant is recomputed against
+// what is left; a ComplianceFramework (D102) is simply gone.
+func (s *PostgresStore) DeleteTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind, namespace, name string) error {
+	if !rescores(kind) {
+		_, err := s.pool.Exec(ctx, `DELETE FROM policy_object WHERE tenant_id = $1 AND kind = $2 AND namespace = $3 AND name = $4`,
+			tenantID, kind, namespace, name)
+		return err
+	}
+	return s.deletePolicy(ctx, tenantID, kind, namespace, name)
+}
+
 func (s *PostgresStore) deletePolicy(ctx context.Context, tenantID uuid.UUID, kind, namespace, name string) error {
 	// The flag that asks for a recompute lives on policy rows, and the row that carried it is going. A tombstone
 	// row (no applied spec, so it is never a policy in force) carries it instead; the sweep clears the flag.

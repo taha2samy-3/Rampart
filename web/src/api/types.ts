@@ -291,6 +291,14 @@ export interface ApplicationPage extends AppSummary {
   mttr: { band: OpenBand; days: number; fixed: number }[];
   coverage: CoverageRow[];
   top_findings: TopFinding[];
+  scan_coverage?: CategoryCoverage[];
+}
+/** One kind of testing on the application page (D101). */
+export interface CategoryCoverage {
+  category: string;
+  scanners: string[];
+  last_scan?: string;
+  open: Partial<Record<OpenBand, number>>;
 }
 export interface OverdueFinding {
   id: string;
@@ -365,10 +373,35 @@ export interface MyAccess { role: Role; applications: Record<string, Role> }
 export interface AccessBinding { id: string; subject: string; role: Role; application_id: string; application_name?: string; managed_by: string; created_by: string; created_at: string }
 
 /** A compliance framework (docs/16 D52). */
-export interface Taxonomy { id: string; name: string; version: string; source: string; kind: 'cwe' | 'category'; note?: string; controls: number }
+export interface Taxonomy {
+  id: string; name: string; version: string; source: string; kind: 'cwe' | 'category' | 'custom'; note?: string; controls: number;
+  /** builtin: shipped with Rampart; cluster: installed by the platform; tenant: installed by this tenant (D102). */
+  origin?: 'builtin' | 'cluster' | 'tenant';
+  scope?: string;
+  window_days?: number;
+  /** A resource that does not validate: listed so its owner sees why, never evaluated. */
+  error?: string;
+}
+export interface Attestation {
+  id: string; framework_id: string; control_id: string; application_id?: string; status: 'passed' | 'failed';
+  note: string; evidence_url?: string; attested_by: string; attested_at: string; expires_at: string;
+}
 export type ControlState = 'open' | 'clear' | 'not_assessed';
-export interface ControlStatus { id: string; name: string; status: ControlState; open: number; bands: Record<OpenBand, number>; query: string; evidence?: string[] }
-export interface TaxonomyStatus extends Taxonomy { evaluated_at: string; window_days: number; status: ControlStatus[] }
+export interface ControlStatus {
+  id: string; name: string; description?: string; status: ControlState;
+  /** The status in one sentence: why it reads so, and what would change it. */
+  reason?: string;
+  open: number; bands: Record<OpenBand, number>;
+  /** Risk-accepted findings: approved exceptions, not counted as open. */
+  accepted?: number;
+  query?: string;
+  /** false: the link lists part of what is counted (a control matched two ways). */
+  query_exact?: boolean;
+  evidence?: string[]; needs?: string[];
+  assessed_apps?: number; total_apps?: number;
+  manual?: boolean; attestation?: Attestation;
+}
+export interface TaxonomyStatus extends Taxonomy { evaluated_at: string; window_days: number; historical?: boolean; status: ControlStatus[] }
 
 /** A mass-close held by the safety guard for confirmation (docs/16 D22, docs/21 Section 3.2). */
 export interface HeldCloseScope {

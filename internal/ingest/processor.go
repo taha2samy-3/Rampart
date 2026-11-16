@@ -52,6 +52,7 @@ type Processor struct {
 	store        Store
 	engine       *Engine
 	registry     *integrations.Registry
+	parsers      *parserSet
 	objects      objectstore.Store
 	logger       *slog.Logger
 	router       IngestNotificationRouter
@@ -69,7 +70,7 @@ func NewProcessor(store Store, registry *integrations.Registry, objects objectst
 	if registry == nil {
 		registry = integrations.DefaultRegistry()
 	}
-	return &Processor{store: store, engine: NewEngine(store), registry: registry, objects: objects, logger: logger,
+	return &Processor{store: store, engine: NewEngine(store), registry: registry, parsers: newParserSet(registry, store), objects: objects, logger: logger,
 		batchRows: 5000, maxReport: 512 << 20, maxSBOMBytes: 256 << 20}
 }
 
@@ -355,16 +356,12 @@ func (p *Processor) routeRunFindings(ctx context.Context, run *domain.IngestRun,
 		}
 	}
 
+	// No stand-ins: a made-up finding with a random id gives a link to nothing (docs/23 K4). If the findings cannot
+	// be read, nothing is sent and the run says so in the log.
 	if len(findingsList) == 0 {
-		for _, res := range fresh {
-			findingsList = append(findingsList, &domain.Finding{
-				ID:            uuid.New(),
-				TenantID:      run.TenantID,
-				ApplicationID: run.ApplicationID,
-				Severity:      res.Severity,
-				Title:         fmt.Sprintf("%s finding (%s)", res.Severity, res.FindingKey),
-			})
-		}
+		p.logger.Warn("routing ingest run findings: the new findings could not be loaded; no notification sent",
+			"run", run.ID, "tenant", run.TenantID, "new", len(fresh))
+		return
 	}
 
 	if errs := p.router.RouteIngestRunFindings(ctx, run.TenantID, appName, findingsList); len(errs) > 0 {
@@ -532,7 +529,7 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 	}
 
 	open := func(ctx context.Context) (io.ReadCloser, error) { return p.objects.Open(ctx, u.ObjectRef) }
-	parser, isSBOM, err := p.selectParser(ctx, u.FormatHint, open)
+	parser, isSBOM, err := p.selectParser(ctx, u.TenantID, u.FormatHint, open)
 	if err != nil {
 		return err
 	}
@@ -553,15 +550,10 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 	return nil
 }
 
-// selectParser picks the parser from the declared format, or detects it from the first 64 KiB.
-func (p *Processor) selectParser(ctx context.Context, hint string, open StreamSource) (integrations.ParserContract, bool, error) {
-	var parser integrations.ParserContract
-	if hint != "" {
-		var err error
-		if parser, err = p.registry.GetParser("builtin:" + strings.ToLower(hint)); err != nil {
-			parser, _ = p.registry.GetParser(strings.ToLower(hint))
-		}
-	}
+// selectParser picks the parser from the declared format, or detects it from the first 64 KiB, over the built-in
+// parsers and the tenant's parser packages (D98).
+func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint string, open StreamSource) (integrations.ParserContract, bool, error) {
+	parser := p.parsers.byName(ctx, tenantID, hint)
 	if parser == nil {
 		rc, err := open(ctx)
 		if err != nil {
@@ -571,7 +563,7 @@ func (p *Processor) selectParser(ctx context.Context, hint string, open StreamSo
 		n, _ := io.ReadFull(rc, head)
 		_ = rc.Close()
 		var score int
-		parser, score = p.registry.DetectParser(head[:n], "", "")
+		parser, score = p.parsers.detect(ctx, tenantID, head[:n], "", "")
 		if parser == nil || score < 40 {
 			return nil, false, &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: errors.New("the report format is not recognised")}
 		}

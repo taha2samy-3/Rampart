@@ -1,0 +1,46 @@
+{
+  "version": "15.0.7",
+  "vulnerabilities": [
+    {
+      "id": "6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b",
+      "name": "Remote code injection in Log4j",
+      "description": "Apache Log4j2 JNDI features do not protect against attacker controlled LDAP and other JNDI related endpoints.",
+      "severity": "Critical",
+      "solution": "Upgrade to version 2.15.0 or above.",
+      "identifiers": [
+        {"type": "gemnasium", "name": "Gemnasium-f2b1a1a4-8e1e-4f3e-9d36-6a8a3e0c0f7e", "value": "f2b1a1a4-8e1e-4f3e-9d36-6a8a3e0c0f7e", "url": "https://gitlab.com/gitlab-org/security-products/gemnasium-db/-/blob/master/maven/org.apache.logging.log4j/log4j-core/CVE-2021-44228.yml"},
+        {"type": "cve", "name": "CVE-2021-44228", "value": "CVE-2021-44228", "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228"},
+        {"type": "ghsa", "name": "GHSA-jfh8-c2jp-5v3q", "value": "GHSA-jfh8-c2jp-5v3q"}
+      ],
+      "cvss_vectors": [{"vendor": "NVD", "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+      "links": [{"url": "https://logging.apache.org/log4j/2.x/security.html"}],
+      "location": {
+        "file": "pom.xml",
+        "dependency": {"package": {"name": "org.apache.logging.log4j/log4j-core"}, "version": "2.14.1", "iid": 4, "direct": true}
+      }
+    },
+    {
+      "id": "1b0c9d8e7f6a5b6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a",
+      "name": "Prototype Pollution in minimist",
+      "description": "Minimist is vulnerable to prototype pollution via the setKey() function.",
+      "severity": "Medium",
+      "identifiers": [
+        {"type": "gemnasium", "name": "Gemnasium-0c4c2b9e-1111-4c4c-9e9e-2b2b2b2b2b2b", "value": "0c4c2b9e-1111-4c4c-9e9e-2b2b2b2b2b2b"},
+        {"type": "cve", "name": "CVE-2021-44906", "value": "CVE-2021-44906"}
+      ],
+      "location": {
+        "file": "web/package-lock.json",
+        "dependency": {"package": {"name": "minimist"}, "version": "1.2.5", "iid": 17, "direct": false, "dependency_path": [{"iid": 3}]}
+      }
+    }
+  ],
+  "remediations": [],
+  "scan": {
+    "analyzer": {"id": "gemnasium", "name": "Gemnasium", "vendor": {"name": "GitLab"}, "version": "5.2.0"},
+    "scanner": {"id": "gemnasium", "name": "Gemnasium", "vendor": {"name": "GitLab"}, "version": "5.2.0"},
+    "type": "dependency_scanning",
+    "start_time": "2026-10-01T10:00:00",
+    "end_time": "2026-10-01T10:00:41",
+    "status": "success"
+  }
+}

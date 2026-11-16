@@ -2,6 +2,27 @@
 
 Status: proposal, written 2026-11-16. Nothing here is normative. Each item that is accepted becomes a D-section in [16](16-implementation-decisions.md) and a row in [09](09-roadmap.md); an item that is rejected says why here.
 
+**Where each item landed** (updated with D100):
+
+| Item | Decision |
+|---|---|
+| C1, C2, C4, C5 | D77, D78, D79, D82 |
+| C3, E1, K6, DT1 | D84 |
+| C6, K1, K2 | D82 (placeholders removed), D96 (the unused contracts removed instead of migrated to) |
+| C7 | D85 |
+| C8 | D90 |
+| C9 | D100 (Standard Webhooks) |
+| C10 | D100 removes `sonarqube`. The other differences are in the documents only (names, e-mail cap, problem type, RateLimit header draft) and are still open |
+| H1, H2 | D83, D80 and D81 |
+| S1 | D91 |
+| K3 | D94 (`Connector.type: plugin`) |
+| K4 | D97 |
+| K5, K6, DT1 to DT6 | D92 |
+| K7 | D82 |
+| M1, X1 | docs/09 rows, updated with each decision |
+| R1 | D99 |
+| §6 (connectors as plugins) | Built in part: notifier and parser packages (D94, D98). §6.2 and §6.3, one contract per kind, were rejected (D96). Declarative trackers and sources moved to Phase 4 (D98). |
+
 The review answers three questions:
 1. Which Phase 3 design decisions should change (sections 1 and 2)?
 2. Can the Dependency-Track integration be built from [10](10-dependency-track-integration.md), D23 and D74 as they are written (section 3)?

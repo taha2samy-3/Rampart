@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -11,15 +12,18 @@ import (
 // ApplicationSpec is the spec of an Application resource (docs/04), shared by the operator and `rampart apply`
 // so both turn the same YAML into the same row (D3, D55).
 type ApplicationSpec struct {
-	DisplayName          string    `json:"displayName"`
-	BusinessCriticality  string    `json:"businessCriticality,omitempty"`
-	InternetFacing       bool      `json:"internetFacing,omitempty"`
-	Owners               []string  `json:"owners,omitempty"`
-	DataClassification   []string  `json:"dataClassification,omitempty"`
-	CompensatingControls []string  `json:"compensatingControls,omitempty"`
-	Lifecycle            string    `json:"lifecycle,omitempty"`
-	Hierarchy            []string  `json:"hierarchy,omitempty"`
-	Selectors            Selectors `json:"selectors,omitempty"`
+	DisplayName          string   `json:"displayName"`
+	BusinessCriticality  string   `json:"businessCriticality,omitempty"`
+	InternetFacing       bool     `json:"internetFacing,omitempty"`
+	Owners               []string `json:"owners,omitempty"`
+	DataClassification   []string `json:"dataClassification,omitempty"`
+	CompensatingControls []string `json:"compensatingControls,omitempty"`
+	// ComplianceScope names the compliance scopes the application is in (for example pci, sox): a framework with
+	// appliesTo.complianceScope reads only the applications that list it (docs/16 D102).
+	ComplianceScope []string  `json:"complianceScope,omitempty"`
+	Lifecycle       string    `json:"lifecycle,omitempty"`
+	Hierarchy       []string  `json:"hierarchy,omitempty"`
+	Selectors       Selectors `json:"selectors,omitempty"`
 }
 
 // Selectors attach assets to an application automatically (docs/04, D10 resolution step (b), D56). A pattern is
@@ -78,6 +82,9 @@ var compensatingControls = map[string]string{
 	"waf": "waf", "apiGateway": "api_gateway", "mtls": "mtls", "privateNetwork": "private_network",
 }
 
+// complianceScopeRe is the shape of a compliance scope, the same as a framework's appliesTo.complianceScope (D102).
+var complianceScopeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9:._-]{0,63}$`)
+
 // ToApplication validates the spec and builds the application it describes. Unknown values are refused, not
 // dropped, so a typo in a resource shows as Ready=False instead of a silently lower score.
 func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (Application, error) {
@@ -105,6 +112,17 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 		}
 		controls = append(controls, v)
 	}
+	var scopes []string
+	seenScope := map[string]bool{}
+	for _, c := range s.ComplianceScope {
+		if !complianceScopeRe.MatchString(c) {
+			return Application{}, fmt.Errorf("complianceScope %q: lower-case letters, digits and - . _ :, starting with a letter or digit", c)
+		}
+		if !seenScope[c] {
+			seenScope[c] = true
+			scopes = append(scopes, c)
+		}
+	}
 	if err := s.Selectors.validate(); err != nil {
 		return Application{}, err
 	}
@@ -130,8 +148,8 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 	return Application{
 		ID: id, TenantID: tenantID, Slug: slug, Name: name, BusinessCriticality: crit, InternetFacing: s.InternetFacing,
 		Owners: s.Owners, DataClassification: classes, CompensatingControls: controls, Lifecycle: lifecycle,
-		HierarchyPath: hierarchyPath,
-		Selectors:     Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
+		ComplianceScope: scopes, HierarchyPath: hierarchyPath,
+		Selectors: Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
 	}, nil
 }
 

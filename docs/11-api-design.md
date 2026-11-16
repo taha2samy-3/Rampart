@@ -46,7 +46,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `POST /hooks/jira/{connectorId}` | `X-Hub-Signature` with the connector's webhook secret (D70) | Ticket status sync; a resolution becomes a request (D27). `connectorId` is the connector row id; the tenant comes from the row (D78) |
 | `POST /hooks/github/{connectorId}` | `X-Hub-Signature-256` | Issue sync (D78). Code scanning alert events are not built |
 | `POST /hooks/gitlab/{connectorId}` | `X-Gitlab-Token` | Issue sync |
-| `POST /hooks/generic/{sourceId}` | HMAC `X-Rampart-Signature` | Generic JSON findings push |
+| `POST /hooks/generic/{sourceId}` | HMAC `X-Rampart-Signature` | Generic JSON findings push. Not built: upload the file with `--format generic` (D98) |
 
 ## Read and triage (`/api/v1`)
 
@@ -133,7 +133,7 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 
 ## Events (outbound webhooks and NATS)
 
-Envelope follows CloudEvents 1.0: `{specversion, id, source, type, time, subject, tenant, data}`. Signed with `X-Rampart-Signature: sha256=<hmac>`.
+Envelope follows CloudEvents 1.0: `{specversion, id, source, type, time, subject, tenant, data}`. Signed the Standard Webhooks way (D100): `webhook-id` (the message id, the same on a retry), `webhook-timestamp`, and `webhook-signature: v1,<base64 HMAC-SHA256 of id.timestamp.body>`.
 
 Types: `rampart.finding.created`, `.updated`, `.state_changed`, `.reactivated`, `.closed`, `.sla_breaching`, `.sla_breached`, `rampart.risk_acceptance.requested`, `.approved`, `.expiring`, `.expired`, `rampart.ingest.completed`, `.failed`, `rampart.gate.evaluated`, `rampart.connector.degraded`, `rampart.source.sync_completed`.
 

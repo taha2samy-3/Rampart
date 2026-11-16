@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 	"rampart/internal/auth"
+	"rampart/internal/compliance"
 	"rampart/internal/domain"
 	"rampart/internal/risk"
 )
@@ -57,6 +58,9 @@ type ConfigStore interface {
 	SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
 	// SaveClusterPolicy stores a ClusterRiskPolicy (kind "risk") or ClusterSLAPolicy (kind "sla") (D62).
 	SaveClusterPolicy(ctx context.Context, kind string, p PolicyObject) error
+	// SaveTenantPolicy stores a tenant policy object of any kind ("sla", "risk", "compliance"), with the rule of
+	// SaveSLAPolicy: an invalid spec is kept with its reason and the last valid one stays in force (D41, D102).
+	SaveTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind string, p PolicyObject) error
 	// SaveIdentityProvider stores a tenant-scoped or cluster-scoped (tenantID == nil) IdentityProvider (D8, D27, D64).
 	SaveIdentityProvider(ctx context.Context, tenantID *uuid.UUID, idp domain.IdentityProvider) error
 	GetIdentityProvider(ctx context.Context, tenantID *uuid.UUID, name string) (*domain.IdentityProvider, error)
@@ -82,10 +86,22 @@ type Finalizer interface {
 	DeleteRiskPolicy(ctx context.Context, tenantID uuid.UUID, namespace, name string) error
 	// DeleteClusterPolicy removes a cluster policy; every tenant is re-scored against what is left.
 	DeleteClusterPolicy(ctx context.Context, kind, name string) error
+	// DeleteTenantPolicy removes a tenant policy object of any kind (D102).
+	DeleteTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind, namespace, name string) error
 	// TenantHasData says whether the tenant has applications, assets, findings or ingest runs.
 	TenantHasData(ctx context.Context, tenantID uuid.UUID) (bool, error)
 	// PurgeTenant deletes the tenant and everything that belongs to it.
 	PurgeTenant(ctx context.Context, tenantID uuid.UUID) error
+}
+
+// ValidateFramework checks a ComplianceFramework or ClusterComplianceFramework (D102): the spec must parse, and its
+// name must not be the id of a built-in framework, which it would otherwise shadow.
+func ValidateFramework(name string, spec []byte) error {
+	if _, builtIn := compliance.Get(name); builtIn {
+		return fmt.Errorf("%w: the name %q is the id of a built-in framework; choose another name", compliance.ErrInvalidFramework, name)
+	}
+	_, err := compliance.ParseFrameworkSpec(spec)
+	return err
 }
 
 // PolicyObject is a policy as the control plane hands it to the store.
@@ -206,8 +222,30 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("riskpolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror":
+	case "complianceframework":
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		obj := PolicyObject{Namespace: namespace, Name: header.Metadata.Name, Spec: header.Spec}
+		if err := ValidateFramework(header.Metadata.Name, header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveTenantPolicy(ctx, tenant.ID, "compliance", obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: complianceframework %q was stored but is not applied: %s", header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("complianceframework.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clustercomplianceframework":
 		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
+		if lk == "clustercomplianceframework" { // D102: a framework every tenant sees
+			name := header.Metadata.Name
+			kind, parse = "compliance", func(b []byte) error { return ValidateFramework(name, b) }
+		}
 		if lk == "clusterslapolicy" {
 			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
 		}
@@ -264,7 +302,7 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			domain.DTrackSourceInput
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
-		dtSpec, dtSchedule, isDT, dtErr := spec.DTrackSourceInput.Check()
+		dtSpec, dtSchedule, isDT, dtErr := spec.Check()
 		if dtErr != nil {
 			return "", fmt.Errorf("apply: %w", dtErr)
 		}
@@ -869,6 +907,29 @@ func (m *MemoryConfigStore) SaveRiskPolicy(ctx context.Context, tenantID uuid.UU
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.policies["risk:"+tenantID.String()+":"+p.Namespace+":"+p.Name] = p
+	return nil
+}
+
+// SaveTenantPolicy implements ConfigStore. Keys: an SLAPolicy as SaveSLAPolicy, any other kind
+// "<kind>:<tenant>:<ns>:<name>".
+func (m *MemoryConfigStore) SaveTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind string, p PolicyObject) error {
+	if kind == "sla" {
+		return m.SaveSLAPolicy(ctx, tenantID, p)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies[kind+":"+tenantID.String()+":"+p.Namespace+":"+p.Name] = p
+	return nil
+}
+
+// DeleteTenantPolicy implements Finalizer.
+func (m *MemoryConfigStore) DeleteTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind, namespace, name string) error {
+	if kind == "sla" {
+		return m.DeleteSLAPolicy(ctx, tenantID, namespace, name)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.policies, kind+":"+tenantID.String()+":"+namespace+":"+name)
 	return nil
 }
 

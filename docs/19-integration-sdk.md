@@ -31,6 +31,8 @@ All four tiers implement the same contracts (§3), produce the same canonical da
 
 ## 3. Contracts
 
+> **Status (D96).** Only the parser contract is built (`integrations.ParserContract`); built-in parsers and parser packages (D98) implement it. The source, tracker and notifier contracts below are the design for code plugins (tier 2). They were written once without any implementation and removed; the built-in trackers implement `domain.Tracker`, the notifiers and notifier packages `connectors.Notifier`, and Dependency-Track is its own syncer. They are written again, from that code, when tier 2 is built.
+
 One set of Go interfaces in `internal/integrations`. Built-in integrations implement them directly; the declarative engines and plugin hosts are adapters that implement them on behalf of a definition or a plugin.
 
 ```go

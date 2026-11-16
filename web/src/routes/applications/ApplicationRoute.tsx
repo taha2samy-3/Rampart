@@ -7,6 +7,7 @@ import type { ApplicationPage } from '@/api/types';
 import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks } from '@/components';
 import type { ChartBand } from '@/components';
 import { openText } from '@/lib/apps';
+import { ScanCoverage } from './ScanCoverage';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
@@ -114,9 +115,11 @@ function Page({ app }: { app: ApplicationPage }) {
           )}
         </section>
 
-        <section className="mt-6" aria-labelledby="app-coverage">
-          <h2 id="app-coverage" className="mb-1 text-14 font-semibold">{t('apps.coverage')}</h2>
-          <p className="m-0 mb-2 text-12 text-ink-2">{t('apps.coverageHelp')}</p>
+        {app.scan_coverage && app.scan_coverage.length > 0 && <ScanCoverage rows={app.scan_coverage} />}
+
+        <details className="mt-3">
+          <summary id="app-coverage" className="cursor-pointer text-13 text-ink-2">{t('apps.coverage')}</summary>
+          <p className="m-0 mb-2 mt-1 text-12 text-ink-2">{t('apps.coverageHelp')}</p>
           {app.coverage.length === 0 ? (
             <EmptyState className="p-0 text-left" title={t('apps.coverageEmpty')} />
           ) : (
@@ -139,7 +142,7 @@ function Page({ app }: { app: ApplicationPage }) {
               </TBody>
             </Table>
           )}
-        </section>
+        </details>
 
         <section className="mt-6" aria-labelledby="app-vex">
           <h2 id="app-vex" className="mb-1 text-14 font-semibold">{t('apps.vex')}</h2>

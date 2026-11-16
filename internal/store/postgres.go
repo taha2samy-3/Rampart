@@ -1009,13 +1009,15 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 
 // applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
 const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
-	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, coalesce(hierarchy_path, '')`
+	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, coalesce(hierarchy_path, ''),
+	compliance_scope`
 
 func scanApplication(row pgx.Row, app *domain.Application) error {
 	var owners, selectors []byte
 	var hPath string
 	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
-		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt, &hPath); err != nil {
+		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt, &hPath,
+		&app.ComplianceScope); err != nil {
 		return err
 	}
 	app.HierarchyPath = hPath
@@ -1533,19 +1535,20 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
 			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by,
-			                         hierarchy_node_id, hierarchy_path)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15)
+			                         hierarchy_node_id, hierarchy_path, compliance_scope)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15, $16)
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET
 				name = EXCLUDED.name, description = EXCLUDED.description,
 				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
 				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
 				owners = EXCLUDED.owners, selectors = EXCLUDED.selectors, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
+				compliance_scope = EXCLUDED.compliance_scope,
 				hierarchy_node_id = COALESCE(EXCLUDED.hierarchy_node_id, application.hierarchy_node_id),
 				hierarchy_path = COALESCE(EXCLUDED.hierarchy_path, application.hierarchy_path),
 				version = application.version + 1`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
 			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt,
-			hNodeID, nonEmpty(hPath)); err != nil {
+			hNodeID, nonEmpty(hPath), nonNil(app.ComplianceScope)); err != nil {
 			return err
 		}
 		if hPath != "" {
@@ -2277,6 +2280,13 @@ func (s *PostgresStore) SaveRiskPolicy(ctx context.Context, tenantID uuid.UUID, 
 	return s.savePolicy(ctx, tenantID, "risk", p)
 }
 
+// SaveTenantPolicy stores a tenant policy object of any kind ("sla", "risk", "compliance") with the rule of
+// SaveSLAPolicy: an invalid spec is kept with its reason, and the last valid spec stays in force (D41, D102). Only
+// sla and risk move scores and due dates; a ComplianceFramework never asks for a recompute.
+func (s *PostgresStore) SaveTenantPolicy(ctx context.Context, tenantID uuid.UUID, kind string, p apply.PolicyObject) error {
+	return s.savePolicy(ctx, tenantID, kind, p)
+}
+
 func (s *PostgresStore) savePolicy(ctx context.Context, tenantID uuid.UUID, kind string, p apply.PolicyObject) error {
 	spec := p.Spec
 	if len(spec) == 0 {
@@ -2288,15 +2298,16 @@ func (s *PostgresStore) savePolicy(ctx context.Context, tenantID uuid.UUID, kind
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO policy_object (id, tenant_id, kind, namespace, name, spec, applied_spec, compiled_ok, compile_error, generation, recompute_needed, updated_at)
-		VALUES ($1, $2, $10, $3, $4, $5, $9::jsonb, $6, $7, $8, $6, NOW())
+		VALUES ($1, $2, $10, $3, $4, $5, $9::jsonb, $6, $7, $8, $6 AND $11, NOW())
 		ON CONFLICT (tenant_id, kind, namespace, name) DO UPDATE SET
 			-- Only a valid spec that differs from the one in force moves scores and due dates.
 			recompute_needed = policy_object.recompute_needed OR
-				(EXCLUDED.compiled_ok AND policy_object.applied_spec IS DISTINCT FROM EXCLUDED.applied_spec),
+				($11 AND EXCLUDED.compiled_ok AND policy_object.applied_spec IS DISTINCT FROM EXCLUDED.applied_spec),
 			applied_spec = COALESCE(EXCLUDED.applied_spec, policy_object.applied_spec),
 			spec = EXCLUDED.spec, compiled_ok = EXCLUDED.compiled_ok, compile_error = EXCLUDED.compile_error,
 			generation = EXCLUDED.generation, updated_at = NOW()`,
-		domain.NewID(), tenantID, p.Namespace, p.Name, spec, p.Error == "", nonEmpty(p.Error), p.Generation, applied, kind)
+		domain.NewID(), tenantID, p.Namespace, p.Name, spec, p.Error == "", nonEmpty(p.Error), p.Generation, applied, kind,
+		rescores(kind))
 	return err
 }
 
@@ -2330,6 +2341,10 @@ func (s *PostgresStore) policySpec(ctx context.Context, tenantID uuid.UUID, kind
 	}
 	return spec, err == nil, err
 }
+
+// rescores says whether a policy of this kind moves scores or due dates: SLA and risk policies do; a feed mirror
+// (D86) and a compliance framework (D102) do not.
+func rescores(kind string) bool { return kind == "sla" || kind == "risk" }
 
 // SaveClusterPolicy stores a ClusterRiskPolicy or ClusterSLAPolicy (D62). When the spec in force changes, every
 // application of every tenant is flagged, so the SLA sweep re-scores them all: a cluster default is everybody's
@@ -2367,7 +2382,7 @@ func (s *PostgresStore) SaveClusterPolicy(ctx context.Context, kind string, p ap
 			kind, p.Name, spec, applied, p.Error == "", nonEmpty(p.Error), p.Generation); err != nil {
 			return err
 		}
-		if !changed || kind == "feeds" { // a feed mirror changes where feeds are read, not any score (D86)
+		if !changed || !rescores(kind) { // a feed mirror or a framework changes no score (D86, D102)
 			return nil
 		}
 		_, err := tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE`)
@@ -2394,7 +2409,7 @@ func (s *PostgresStore) GetClusterFeedMirror(ctx context.Context) (*domain.FeedM
 func (s *PostgresStore) DeleteClusterPolicy(ctx context.Context, kind, name string) error {
 	return s.withSystemTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM cluster_policy WHERE kind = $1 AND name = $2`, kind, name)
-		if err != nil || tag.RowsAffected() == 0 {
+		if err != nil || tag.RowsAffected() == 0 || kind == "compliance" { // a framework moves no score (D102)
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE`)

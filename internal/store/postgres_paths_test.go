@@ -266,4 +266,3 @@ func TestPostgresStore_MoveAssetToApplication_NullAppFinding(t *testing.T) {
 		t.Fatalf("finding ApplicationID = %v, want %v", updatedF.ApplicationID, app.ID)
 	}
 }
-

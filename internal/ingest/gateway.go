@@ -86,6 +86,7 @@ type Gateway struct {
 	store     Store
 	processor *Processor
 	registry  *integrations.Registry
+	parsers   *parserSet
 	feeds     *enrich.FeedStore
 	authn     *auth.Authenticator
 	objects   objectstore.Store // nil: presigned uploads are unavailable (POST /reports still works)
@@ -121,7 +122,7 @@ func NewGatewayWithDeps(
 		feeds = enrich.NewFeedStore()
 	}
 	return &Gateway{
-		queue: queue, store: s, registry: registry, feeds: feeds,
+		queue: queue, store: s, registry: registry, feeds: feeds, parsers: newParserSet(registry, s),
 		authn:          auth.NewAuthenticatorWithStore(s),
 		processor:      NewProcessor(s, registry, nil, nil),
 		maxReportBytes: MaxReportBytesLimit,
@@ -600,17 +601,11 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	head := data[:headSize]
 
 	// Format detection
-	var selectedParser integrations.ParserContract
-	if formatHint != "" {
-		var err error
-		selectedParser, err = g.registry.GetParser("builtin:" + strings.ToLower(formatHint))
-		if err != nil {
-			selectedParser, _ = g.registry.GetParser(strings.ToLower(formatHint))
-		}
-	}
+	parsers := g.parsers
+	selectedParser := parsers.byName(r.Context(), tenantID, formatHint)
 	if selectedParser == nil {
 		var score int
-		selectedParser, score = g.registry.DetectParser(head, filename, contentType)
+		selectedParser, score = parsers.detect(r.Context(), tenantID, head, filename, contentType)
 		if selectedParser == nil || score < 40 {
 			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/unsupported-format","title":"Unsupported report format"}`, http.StatusBadRequest)
 			return
@@ -776,18 +771,14 @@ func canonicalVulnID(f domain.RawFinding) string {
 // (D10): from the format the client declared, else from the parser that recognises the first 64 KiB of the object,
 // the same detection the worker will use. SCA reports of an image go to an image asset, code reports to a repository.
 func (g *Gateway) categoryOf(ctx context.Context, u *domain.Upload) domain.FindingCategory {
-	var parser integrations.ParserContract
-	if hint := strings.ToLower(u.FormatHint); hint != "" {
-		if p, err := g.registry.GetParser("builtin:" + hint); err == nil {
-			parser = p
-		}
-	}
+	parsers := g.parsers
+	parser := parsers.byName(ctx, u.TenantID, u.FormatHint)
 	if parser == nil && g.objects != nil {
 		if rc, err := g.objects.Open(ctx, u.ObjectRef); err == nil {
 			head := make([]byte, 64<<10)
 			n, _ := io.ReadFull(rc, head)
 			_ = rc.Close()
-			if p, score := g.registry.DetectParser(head[:n], "", ""); p != nil && score >= 40 {
+			if p, score := parsers.detect(ctx, u.TenantID, head[:n], "", ""); p != nil && score >= 40 {
 				parser = p
 			}
 		}

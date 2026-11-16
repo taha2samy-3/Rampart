@@ -6,7 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -317,16 +317,18 @@ func (w *WebhookNotifier) Send(ctx context.Context, msg NotificationMessage) err
 		req.Header.Set(k, v)
 	}
 
-	// Compute HMAC-SHA256 signature with timestamp replay protection (D69)
+	// Standard Webhooks (docs/23 C9, D100): webhook-id is the message id, the same on every retry, so a receiver
+	// can drop a duplicate; the timestamp is inside the signed string, so it can refuse a replay. The signature is
+	// "v1," + base64(HMAC-SHA256(secret, id + "." + timestamp + "." + body)).
+	id := msg.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
 	ts := strconv.FormatInt(time.Now().UTC().Unix(), 10)
-	req.Header.Set("X-Rampart-Timestamp", ts)
-
+	req.Header.Set("webhook-id", id)
+	req.Header.Set("webhook-timestamp", ts)
 	if len(w.secret) > 0 {
-		mac := hmac.New(sha256.New, w.secret)
-		mac.Write([]byte(ts + "."))
-		mac.Write(bodyBytes)
-		sig := hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set("X-Rampart-Signature-256", "sha256="+sig)
+		req.Header.Set("webhook-signature", StandardWebhookSignature(w.secret, id, ts, bodyBytes))
 	}
 
 	sanitizedURL := SanitizeURL(w.url)
@@ -338,6 +340,14 @@ func (w *WebhookNotifier) Send(ctx context.Context, msg NotificationMessage) err
 		return fmt.Errorf("webhook endpoint %s returned status %d", sanitizedURL, status)
 	}
 	return nil
+}
+
+// StandardWebhookSignature is the webhook-signature value for one delivery (Standard Webhooks, v1).
+func StandardWebhookSignature(secret []byte, id, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(id + "." + timestamp + "."))
+	mac.Write(body)
+	return "v1," + base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // --- Email Notifier ---

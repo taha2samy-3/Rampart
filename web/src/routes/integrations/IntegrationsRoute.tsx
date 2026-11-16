@@ -128,8 +128,9 @@ export function IntegrationsRoute() {
               Installed packages
             </h2>
             <p className="max-w-[72ch] text-13 text-ink-2">
-              A package describes a tool as data: the request it sends, the secrets it needs and the hosts it may reach.
-              Apply an IntegrationPackage in your namespace, then a Connector of type plugin that names it. No Rampart
+              A package describes a tool as data. A notifier package gives the request it sends, the secrets it needs and
+              the hosts it may reach; a Connector of type plugin names it. A parser package maps a report format to
+              findings; uploads use it by name or when it recognises the file. Apply either in your namespace. No Rampart
               release is needed.
             </p>
             {packagesQuery.isError ? (
@@ -161,7 +162,13 @@ export function IntegrationsRoute() {
                         {p.secrets.length > 0 && <span className="block text-12">needs {p.secrets.join(', ')}</span>}
                       </Td>
                       <Td className="font-mono text-12 text-ink-2">{p.egress.join(', ') || 'nothing'}</Td>
-                      <Td className="text-13 text-ink-2">{p.used_by.length ? p.used_by.join(', ') : 'no connector'}</Td>
+                      <Td className="text-13 text-ink-2">
+                        {p.kind === 'parser'
+                          ? `uploads named ${p.name}, or detected`
+                          : p.used_by.length
+                            ? p.used_by.join(', ')
+                            : 'no connector'}
+                      </Td>
                       <Td className={p.error ? 'whitespace-normal text-13 font-medium text-ink' : 'text-13 text-ink-2'}>
                         {p.error ? `Not used: ${p.error}` : 'Installed'}
                       </Td>

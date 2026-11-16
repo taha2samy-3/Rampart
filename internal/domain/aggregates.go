@@ -89,6 +89,11 @@ type AppDetail struct {
 	SLA      SLAStanding   `json:"sla"`
 	MTTR     []MTTR        `json:"mttr"`
 	Coverage []CoverageRow `json:"coverage"`
+	// OpenByCategory counts the open findings by category and band: category -> band -> count.
+	OpenByCategory map[string]map[string]int `json:"open_by_category"`
+	// FamilyCategories is what each scanner family produced for this application, open or not: the categories a
+	// family Rampart does not classify (a generic upload, a parser package) is counted for.
+	FamilyCategories map[string][]string `json:"-"`
 }
 
 // Changes counts what moved since a point in time (docs/13: "what changed since yesterday").

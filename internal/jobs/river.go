@@ -34,7 +34,7 @@ func NewRiverQueue(ctx context.Context, pool *pgxpool.Pool, directURL string, wo
 	}
 
 	if workers == nil {
-		workers = NewWorkers(nil)
+		workers = NewWorkers(nil, nil)
 	}
 
 	driver := riverpgxv5.New(pool)
@@ -44,9 +44,7 @@ func NewRiverQueue(ctx context.Context, pool *pgxpool.Pool, directURL string, wo
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 50},
 			"parse":            {MaxWorkers: 20},
-			"enrich":           {MaxWorkers: 20},
-			"policy":           {MaxWorkers: 20},
-			"notify":           {MaxWorkers: 20},
+			NotifyQueue:        {MaxWorkers: 20},
 			DTrackQueue:        {MaxWorkers: DTrackMaxWorkers},
 		},
 		FetchPollInterval: 1 * time.Second,
@@ -107,33 +105,6 @@ func (q *RiverQueue) EnqueueParseTx(ctx context.Context, tx pgx.Tx, args ParseJo
 			ByArgs: true,
 		},
 		MaxAttempts: ParseMaxAttempts,
-	})
-	return err
-}
-
-// EnqueueEnrich inserts an EnrichJob into River.
-func (q *RiverQueue) EnqueueEnrich(ctx context.Context, args EnrichJobArgs) error {
-	_, err := q.client.Insert(ctx, args, &river.InsertOpts{
-		Queue:       "enrich",
-		MaxAttempts: 25,
-	})
-	return err
-}
-
-// EnqueuePolicy inserts a PolicyJob into River.
-func (q *RiverQueue) EnqueuePolicy(ctx context.Context, args PolicyJobArgs) error {
-	_, err := q.client.Insert(ctx, args, &river.InsertOpts{
-		Queue:       "policy",
-		MaxAttempts: 25,
-	})
-	return err
-}
-
-// EnqueueNotify inserts a NotifyJob into River.
-func (q *RiverQueue) EnqueueNotify(ctx context.Context, args NotifyJobArgs) error {
-	_, err := q.client.Insert(ctx, args, &river.InsertOpts{
-		Queue:       "notify",
-		MaxAttempts: 25,
 	})
 	return err
 }
@@ -240,57 +211,20 @@ func (w *ParseWorker) Work(ctx context.Context, job *river.Job[ParseJobArgs]) er
 
 // NewWorkers builds the worker set. A kind with no handler fails its jobs (ErrNoHandler) instead of
 // pretending to have done the work.
-func NewWorkers(parse ParseHandler, dtrack ...*DTrackSyncWorker) *river.Workers {
+func NewWorkers(parse ParseHandler, dtrack *DTrackSyncWorker, notify ...*NotifyDeliveryWorker) *river.Workers {
 	w := river.NewWorkers()
 	river.AddWorker(w, &ParseWorker{Handle: parse})
-	dw := &DTrackSyncWorker{}
-	if len(dtrack) > 0 && dtrack[0] != nil {
-		dw = dtrack[0]
+	dw := dtrack
+	if dw == nil {
+		dw = &DTrackSyncWorker{}
 	}
 	river.AddWorker(w, dw)
-	river.AddWorker(w, &EnrichWorker{})
-	river.AddWorker(w, &PolicyWorker{})
-	river.AddWorker(w, &NotifyWorker{})
+	nw := &NotifyDeliveryWorker{}
+	if len(notify) > 0 && notify[0] != nil {
+		nw = notify[0]
+	}
+	river.AddWorker(w, nw)
 	return w
-}
-
-// EnrichWorker processes enrichment jobs via River.
-type EnrichWorker struct {
-	river.WorkerDefaults[EnrichJobArgs]
-	Handler func(ctx context.Context, job *river.Job[EnrichJobArgs]) error
-}
-
-func (w *EnrichWorker) Work(ctx context.Context, job *river.Job[EnrichJobArgs]) error {
-	if w.Handler != nil {
-		return w.Handler(ctx, job)
-	}
-	return ErrNoHandler
-}
-
-// PolicyWorker processes risk scoring and SLA evaluations via River.
-type PolicyWorker struct {
-	river.WorkerDefaults[PolicyJobArgs]
-	Handler func(ctx context.Context, job *river.Job[PolicyJobArgs]) error
-}
-
-func (w *PolicyWorker) Work(ctx context.Context, job *river.Job[PolicyJobArgs]) error {
-	if w.Handler != nil {
-		return w.Handler(ctx, job)
-	}
-	return ErrNoHandler
-}
-
-// NotifyWorker processes downstream alert and ticketing notifications via River.
-type NotifyWorker struct {
-	river.WorkerDefaults[NotifyJobArgs]
-	Handler func(ctx context.Context, job *river.Job[NotifyJobArgs]) error
-}
-
-func (w *NotifyWorker) Work(ctx context.Context, job *river.Job[NotifyJobArgs]) error {
-	if w.Handler != nil {
-		return w.Handler(ctx, job)
-	}
-	return ErrNoHandler
 }
 
 // TxParseEnqueuer enqueues a parse job inside an open transaction, so the job and the ingest run it

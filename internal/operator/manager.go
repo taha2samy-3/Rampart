@@ -50,6 +50,9 @@ var (
 	gvkClusterFeedMirror = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterFeedMirror"}
 	// D94: tier-1 integrations installed as data in a tenant namespace.
 	gvkIntegrationPackage = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "IntegrationPackage"}
+	// D102: user-defined compliance frameworks, for one tenant or for every tenant.
+	gvkComplianceFramework        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ComplianceFramework"}
+	gvkClusterComplianceFramework = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterComplianceFramework"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -163,6 +166,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	clusterRisk := policyCR(gvkClusterRiskPolicy, NewClusterRiskPolicyReconciler(cfg.Store))
 	clusterSLA := policyCR(gvkClusterSLAPolicy, NewClusterSLAPolicyReconciler(cfg.Store))
 	feedMirror := policyCR(gvkClusterFeedMirror, NewClusterFeedMirrorReconciler(cfg.Store))
+	frameworks := policyCR(gvkComplianceFramework, NewComplianceFrameworkReconciler(cfg.Store))
+	clusterFrameworks := policyCR(gvkClusterComplianceFramework, NewClusterComplianceFrameworkReconciler(cfg.Store))
 	pkgR := NewIntegrationPackageReconciler(cfg.Store)
 	packages := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkIntegrationPackage, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
 
@@ -172,7 +177,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
 	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
-		"clusterfeedmirror": {gvkClusterFeedMirror, feedMirror}} {
+		"clusterfeedmirror": {gvkClusterFeedMirror, feedMirror}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}
@@ -185,7 +190,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}, "integrationpackage": {gvkIntegrationPackage, packages}} {
+	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}, "integrationpackage": {gvkIntegrationPackage, packages},
+		"complianceframework": {gvkComplianceFramework, frameworks}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

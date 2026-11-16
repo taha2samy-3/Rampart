@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"bytes"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
@@ -22,6 +23,7 @@ type MappingSpec struct {
 	Kind        string            `yaml:"kind"`
 	Runtime     string            `yaml:"runtime"`
 	Version     string            `yaml:"version"`
+	Description string            `yaml:"description"`
 	Family      string            `yaml:"family"`
 	Category    string            `yaml:"category"`
 	Detect      DetectSpec        `yaml:"detect"`
@@ -97,4 +99,30 @@ func LoadMappingYAML(data []byte) (*MappingPackage, error) {
 	}
 
 	return &pkg, nil
+}
+
+// NewParserFromSpec builds the parser of an installed IntegrationPackage (kind parser, runtime mapping; docs/19
+// §4, docs/16 D98) from its spec as JSON. Decoding is strict: a misspelled field is refused, not ignored, so a
+// mapping cannot silently map nothing.
+func NewParserFromSpec(name string, specJSON []byte) (*MappingParser, error) {
+	var spec MappingSpec
+	dec := yaml.NewDecoder(bytes.NewReader(specJSON)) // JSON is YAML; the struct carries yaml tags
+	dec.KnownFields(true)
+	if err := dec.Decode(&spec); err != nil {
+		return nil, fmt.Errorf("mapping: %w", err)
+	}
+	doc, err := yaml.Marshal(MappingPackage{APIVersion: "rampart.aspm.dev/v1alpha1", Kind: "IntegrationPackage", Metadata: Metadata{Name: name}, Spec: spec})
+	if err != nil {
+		return nil, err
+	}
+	if spec.Family == "" {
+		return nil, fmt.Errorf("mapping: family is required: it names the scanner the findings come from")
+	}
+	if spec.Map.RuleID == "" || spec.Map.Title == "" {
+		return nil, fmt.Errorf("mapping: map.ruleId and map.title are required")
+	}
+	if len(spec.Detect.Filenames) == 0 && len(spec.Detect.Probes) == 0 {
+		return nil, fmt.Errorf("mapping: detect needs filenames or probes; without them the parser is only used by name")
+	}
+	return NewMappingParser(doc)
 }

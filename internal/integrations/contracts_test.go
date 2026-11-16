@@ -24,17 +24,4 @@ func TestRegistry_AllBuiltinContracts(t *testing.T) {
 			t.Errorf("kind mismatch for %s: got %s", desc.ID, p.Descriptor().Kind)
 		}
 	}
-
-	// Trackers, notifiers and sources: none registered until the real implementations are (D82, docs/23 §6). The
-	// placeholders that were registered are gone; this keeps them from coming back unnoticed.
-	if n := len(reg.ListTrackers()) + len(reg.ListNotifiers()) + len(reg.ListSources()); n != 0 {
-		t.Errorf("expected no placeholder trackers, notifiers or sources, got %d", n)
-	}
-
-	// 5. ListAll
-	all := reg.ListAll()
-	expectedTotal := len(parsers)
-	if len(all) != expectedTotal {
-		t.Errorf("ListAll() count mismatch: got %d, want %d", len(all), expectedTotal)
-	}
 }

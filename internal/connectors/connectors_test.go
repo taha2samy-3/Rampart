@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,15 +98,14 @@ func TestSlackNotifier_BlockKit(t *testing.T) {
 	_ = msg
 }
 
+// docs/23 C9, D100: the webhook is signed the Standard Webhooks way, over the id, the timestamp and the body.
 func TestWebhookNotifier_HMACSignature(t *testing.T) {
 	secret := []byte("webhook-secret-key-42")
-	var receivedSig string
-	var receivedTimestamp string
+	var h http.Header
 	var receivedBody []byte
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedSig = r.Header.Get("X-Rampart-Signature-256")
-		receivedTimestamp = r.Header.Get("X-Rampart-Timestamp")
+		h = r.Header.Clone()
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -121,22 +120,18 @@ func TestWebhookNotifier_HMACSignature(t *testing.T) {
 	if err := notifier.Send(context.Background(), msg); err != nil {
 		t.Fatalf("notifier.Send failed: %v", err)
 	}
-
-	if receivedSig == "" {
-		t.Fatal("expected X-Rampart-Signature-256 header, got empty")
+	id, ts, sig := h.Get("webhook-id"), h.Get("webhook-timestamp"), h.Get("webhook-signature")
+	if id != msg.ID || ts == "" || sig == "" {
+		t.Fatalf("want webhook-id %q, a timestamp and a signature; got %q %q %q", msg.ID, id, ts, sig)
 	}
-	if receivedTimestamp == "" {
-		t.Fatal("expected X-Rampart-Timestamp header for replay attack protection, got empty")
-	}
-
-	// Verify HMAC signature over timestamp + "." + body (D69 replay protection)
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(receivedTimestamp + "."))
+	mac.Write([]byte(id + "." + ts + "."))
 	mac.Write(receivedBody)
-	expectedSig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-
-	if receivedSig != expectedSig {
-		t.Errorf("signature mismatch: got %s, expected %s", receivedSig, expectedSig)
+	if want := "v1," + base64.StdEncoding.EncodeToString(mac.Sum(nil)); sig != want {
+		t.Errorf("signature mismatch: got %s, want %s", sig, want)
+	}
+	if connectors.StandardWebhookSignature(secret, id, ts, append(receivedBody, ' ')) == sig {
+		t.Error("a changed body must change the signature")
 	}
 }
 

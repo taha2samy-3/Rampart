@@ -44,6 +44,8 @@ type Application struct {
 	// CompensatingControls: waf, api_gateway, mtls, private_network (docs/03). The built-in risk policy's
 	// COMPENSATING_CONTROL factor reads them (D55, D62).
 	CompensatingControls []string `json:"compensating_controls,omitempty"`
+	// ComplianceScope: the compliance scopes the application is in; a framework's appliesTo reads it (D102).
+	ComplianceScope []string `json:"compliance_scope,omitempty"`
 	// Selectors attach repositories and images to the application (D56).
 	Selectors Selectors `json:"selectors"`
 	Lifecycle string    `json:"lifecycle"` // planning | development | production | deprecated

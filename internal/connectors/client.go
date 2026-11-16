@@ -178,7 +178,7 @@ func NewSafeClientWithConfig(cfg SafeClientConfig) *SafeClient {
 				if initialReq.URL.Host != req.URL.Host {
 					if initialReq.Header.Get("Authorization") != "" ||
 						initialReq.Header.Get("X-Api-Key") != "" ||
-						initialReq.Header.Get("X-Rampart-Signature-256") != "" {
+						initialReq.Header.Get("Webhook-Signature") != "" {
 						return errors.New("cross-host redirect blocked for authenticated request (D69 credential guard)")
 					}
 				}

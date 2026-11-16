@@ -21,16 +21,16 @@ func TestJiraCheckLearnsAccountAndFields(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		switch {
-		case r.URL.Path == "/rest/api/3/myself":
+		switch r.URL.Path {
+		case "/rest/api/3/myself":
 			if r.Header.Get("Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("bot@example.com:token")) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			_, _ = w.Write([]byte(`{"accountId":"5b10ac8d82e05b22cc7d4ef5"}`))
-		case r.URL.Path == "/rest/api/3/issue/createmeta/SEC/issuetypes":
+		case "/rest/api/3/issue/createmeta/SEC/issuetypes":
 			_, _ = w.Write([]byte(`{"issueTypes":[{"id":"10001","name":"Bug"}]}`))
-		case r.URL.Path == "/rest/api/3/issue/createmeta/SEC/issuetypes/10001":
+		case "/rest/api/3/issue/createmeta/SEC/issuetypes/10001":
 			_, _ = w.Write([]byte(`{"fields":[{"fieldId":"summary"},{"fieldId":"labels"}]}`))
 		default:
 			http.NotFound(w, r)

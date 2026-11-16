@@ -169,6 +169,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/audit", a.handleListAudit)
 	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
+	routes.HandleFunc("GET /api/v1/taxonomies/{id}/history", a.handleTaxonomyHistory)                 // the days a reading was kept (D102)
+	routes.HandleFunc("POST /api/v1/taxonomies/{id}/controls/{control}/attestations", a.handleAttest) // a manual control (D102)
 	routes.HandleFunc("GET /api/v1/runs/{id}/report", a.handleRunReport)
 	routes.HandleFunc("GET /api/v1/access-bindings", a.handleListBindings)
 	routes.HandleFunc("POST /api/v1/access-bindings", a.handleCreateBinding)

@@ -316,15 +316,35 @@ func (r *SLAPolicyReconciler) Reconcile(ctx context.Context, cr *SLAPolicyCR) (*
 	return status, nil
 }
 
-// PolicyReconciler reconciles RiskPolicy, ClusterRiskPolicy and ClusterSLAPolicy (D62), the way SLAPolicyReconciler
+// PolicyReconciler reconciles RiskPolicy, ClusterRiskPolicy, ClusterSLAPolicy (D62), ClusterFeedMirror (D86),
+// ComplianceFramework and ClusterComplianceFramework (D102), the way SLAPolicyReconciler
 // reconciles SLAPolicy (D41): a spec that fails validation is stored with its reason and not applied, and Ready
 // says why. A namespaced policy belongs to the tenant that owns its namespace; a cluster policy to every tenant.
 type PolicyReconciler struct {
 	store   apply.ConfigStore
-	kind    string // risk | sla
+	kind    string // risk | sla | feeds | compliance
 	cluster bool
 	label   string // the resource kind, for messages
 	parse   func([]byte) error
+	// check, when set, validates instead of parse and also sees the resource's name.
+	check func(name string, spec []byte) error
+}
+
+// NewComplianceFrameworkReconciler reconciles namespaced ComplianceFramework resources (D102).
+func NewComplianceFrameworkReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "compliance", label: "ComplianceFramework", check: apply.ValidateFramework}
+}
+
+// NewClusterComplianceFrameworkReconciler reconciles ClusterComplianceFramework resources (D102).
+func NewClusterComplianceFrameworkReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "compliance", cluster: true, label: "ClusterComplianceFramework", check: apply.ValidateFramework}
+}
+
+func (r *PolicyReconciler) validate(name string, spec []byte) error {
+	if r.check != nil {
+		return r.check(name, spec)
+	}
+	return r.parse(spec)
 }
 
 // NewRiskPolicyReconciler reconciles namespaced RiskPolicy resources.
@@ -367,7 +387,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 		return status, nil
 	}
 	obj := apply.PolicyObject{Namespace: cr.Metadata.Namespace, Name: cr.Metadata.Name, Spec: spec, Generation: cr.Metadata.Generation}
-	if perr := r.parse(spec); perr != nil {
+	if perr := r.validate(cr.Metadata.Name, spec); perr != nil {
 		obj.Error = perr.Error()
 	}
 	if r.cluster {
@@ -382,7 +402,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 			status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
 			return status, nil
 		}
-		err = r.store.SaveRiskPolicy(ctx, tenant.ID, obj)
+		err = r.store.SaveTenantPolicy(ctx, tenant.ID, r.kind, obj)
 	}
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
@@ -393,7 +413,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 		status.SetCondition("Ready", "False", "InvalidSpec", obj.Error)
 		return status, nil
 	}
-	status.SetCondition("Ready", "True", "Reconciled", r.label+" reconciled; scores and due dates are recomputed in the background")
+	msg := r.label + " reconciled; scores and due dates are recomputed in the background"
+	if r.kind == "compliance" {
+		msg = r.label + " reconciled; the compliance report reads it"
+	}
+	status.SetCondition("Ready", "True", "Reconciled", msg)
 	return status, nil
 }
 
@@ -409,7 +433,7 @@ func (r *PolicyReconciler) Finalize(ctx context.Context, cr *PolicyCR) (*PolicyS
 	if tenant == nil {
 		return nil, true, nil
 	}
-	return nil, true, r.store.DeleteRiskPolicy(ctx, tenant.ID, cr.Metadata.Namespace, cr.Metadata.Name)
+	return nil, true, r.store.DeleteTenantPolicy(ctx, tenant.ID, r.kind, cr.Metadata.Namespace, cr.Metadata.Name)
 }
 
 // IdentityProviderReconciler reconciles tenant-scoped IdentityProvider custom resources (docs/04, docs/14, docs/16 D64).
@@ -853,6 +877,10 @@ func (r *ConnectorReconciler) reconcilePlugin(ctx context.Context, cr *Connector
 	spec, err := declarative.Parse(rec.Spec)
 	if err != nil {
 		return fail("PackageInvalid", err.Error())
+	}
+	if spec.Kind != "notifier" {
+		// A parser package is used by uploads, not by a connector (D98).
+		return fail("InvalidSpec", fmt.Sprintf("IntegrationPackage %q is a %s; a connector of type plugin names a notifier", rec.Name, spec.Kind))
 	}
 	if _, err := spec.ValidateConfig(conn.Spec.Plugin.Config); err != nil {
 		return fail("InvalidSpec", err.Error())

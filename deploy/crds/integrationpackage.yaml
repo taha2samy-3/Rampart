@@ -33,10 +33,11 @@ spec:
             spec:
               type: object
               description: >-
-                A tool described as data (docs/19 §6, docs/16 D94): its secrets, the hosts it may reach and the request it
-                makes. A tenant namespace accepts only data runtimes; the operator validates the definition and refuses what
-                this version does not run, by name.
-              required: [kind, runtime, version, egress]
+                A tool described as data (docs/19 §6, docs/16 D94, D98): a notifier (runtime declarative) with its secrets,
+                the hosts it may reach and the request it makes, or a parser (runtime mapping) with its detection and CEL
+                field mapping. A tenant namespace accepts only data runtimes; the operator validates the definition and
+                refuses what this version does not run, by name.
+              required: [kind, runtime, version]
               properties:
                 kind:
                   type: string
@@ -68,6 +69,31 @@ spec:
                 send:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                # A parser (runtime mapping, docs/19 §4): checked by compiling it, so the schema here stays open.
+                family:
+                  type: string
+                category:
+                  type: string
+                detect:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                input:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                map:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                severityMap:
+                  type: object
+                  additionalProperties:
+                    type: string
+                limits:
+                  type: object
+                  properties:
+                    maxRecords:
+                      type: integer
+                    maxDepth:
+                      type: integer
             status:
               type: object
               properties:

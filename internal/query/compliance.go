@@ -1,8 +1,14 @@
 package query
 
 import (
+	"context"
 	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,45 +18,136 @@ import (
 	"rampart/internal/compliance"
 	"rampart/internal/domain"
 	"rampart/internal/store"
+	"rampart/internal/telemetry"
 )
 
 // TaxonomyInfo is a framework in the list.
 type TaxonomyInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Source   string `json:"source"`
-	Kind     string `json:"kind"`
-	Note     string `json:"note,omitempty"`
-	Controls int    `json:"controls"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	Source     string `json:"source"`
+	Kind       string `json:"kind"`
+	Note       string `json:"note,omitempty"`
+	Origin     string `json:"origin"`          // builtin | cluster | tenant
+	Scope      string `json:"scope,omitempty"` // only applications whose complianceScope lists it
+	WindowDays int    `json:"window_days"`
+	Controls   int    `json:"controls"`
+	Error      string `json:"error,omitempty"` // a resource that does not validate: shown, not used
+}
+
+func infoOf(f compliance.Framework) TaxonomyInfo {
+	return TaxonomyInfo{ID: f.ID, Name: f.Name, Version: f.Version, Source: f.Source, Kind: f.Kind, Note: f.Note, Origin: f.Origin,
+		Scope: f.Scope, WindowDays: f.Window(), Controls: len(f.Controls)}
+}
+
+type frameworkLister interface {
+	ListComplianceFrameworks(ctx context.Context, tenantID uuid.UUID) ([]store.StoredFramework, error)
+}
+
+type scopeLister interface {
+	ApplicationComplianceScopes(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID][]string, error)
+}
+
+// frameworks are the built-in frameworks, then those the platform and the tenant installed (D102). A tenant's
+// framework with the name of a platform one replaces it for that tenant. broken lists the resources that do not
+// validate, so the screen can say why they are missing.
+func (a *API) frameworks(ctx context.Context, tenantID uuid.UUID) (fws []compliance.Framework, broken []TaxonomyInfo, err error) {
+	builtin, err := compliance.All()
+	if err != nil {
+		return nil, nil, err
+	}
+	fws = append(fws, builtin...)
+	lister, ok := a.store.(frameworkLister)
+	if !ok {
+		return fws, nil, nil
+	}
+	stored, err := lister.ListComplianceFrameworks(ctx, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	byName := map[string]compliance.Framework{}
+	for _, s := range stored {
+		if s.Spec == nil {
+			broken = append(broken, TaxonomyInfo{ID: s.Name, Name: s.Name, Origin: s.Origin, Error: s.Error})
+			continue
+		}
+		spec, perr := compliance.ParseFrameworkSpec(s.Spec)
+		if perr != nil {
+			broken = append(broken, TaxonomyInfo{ID: s.Name, Name: s.Name, Origin: s.Origin, Error: perr.Error()})
+			continue
+		}
+		if prev, ok := byName[s.Name]; ok && prev.Origin == "tenant" {
+			continue
+		}
+		f := spec.Framework(s.Name, s.Origin)
+		if s.Error != "" { // the last valid spec is in force; the newer one is not
+			f.Note = strings.TrimSpace(f.Note + " The latest change is not applied: " + s.Error)
+		}
+		byName[s.Name] = f
+	}
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fws = append(fws, byName[n])
+	}
+	return fws, broken, nil
+}
+
+func (a *API) framework(ctx context.Context, tenantID uuid.UUID, id string) (*compliance.Framework, error) {
+	fws, _, err := a.frameworks(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range fws {
+		if fws[i].ID == id {
+			return &fws[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (a *API) handleListTaxonomies(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := a.requireRole(w, r, auth.RoleViewer); !ok {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
 		return
 	}
-	fs, err := compliance.All()
+	fws, broken, err := a.frameworks(r.Context(), tenantID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "internal", "The frameworks could not be loaded")
 		return
 	}
-	out := make([]TaxonomyInfo, 0, len(fs))
-	for _, f := range fs {
-		out = append(out, TaxonomyInfo{ID: f.ID, Name: f.Name, Version: f.Version, Source: f.Source, Kind: f.Kind, Note: f.Note, Controls: len(f.Controls)})
+	out := make([]TaxonomyInfo, 0, len(fws)+len(broken))
+	for _, f := range fws {
+		out = append(out, infoOf(f))
 	}
+	out = append(out, broken...)
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
-// ControlStatus is one control's reading, with what it rests on.
+// ControlStatus is one control's reading, with what it rests on and a sentence that says why.
 type ControlStatus struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Status   string         `json:"status"`
-	Open     int            `json:"open"`
-	Bands    map[string]int `json:"bands"`
-	Query    string         `json:"query"`              // the findings filter that lists them
-	Evidence []string       `json:"evidence,omitempty"` // scanners that ran lately and could evidence it
-	Rank     int            `json:"rank,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Status      string         `json:"status"` // open | clear | not_assessed
+	Reason      string         `json:"reason"` // the status in one sentence a reader can act on
+	Open        int            `json:"open"`
+	Bands       map[string]int `json:"bands"`
+	Accepted    int            `json:"accepted"` // risk-accepted findings: approved exceptions, not counted as open
+	Query       string         `json:"query,omitempty"`
+	QueryExact  bool           `json:"query_exact"` // false: the link lists part of what is counted
+	Evidence    []string       `json:"evidence,omitempty"`
+	Needs       []string       `json:"needs,omitempty"` // the kinds of scan that read it
+	// Tenant-wide, a control is assessed only where its scans ran: in how many of the applications in scope.
+	AssessedApps int                `json:"assessed_apps"`
+	TotalApps    int                `json:"total_apps"`
+	Manual       bool               `json:"manual,omitempty"`
+	Attestation  *store.Attestation `json:"attestation,omitempty"`
+	Rank         int                `json:"rank,omitempty"`
 }
 
 // TaxonomyStatus is GET /api/v1/taxonomies/{id}/status.
@@ -58,17 +155,263 @@ type TaxonomyStatus struct {
 	TaxonomyInfo
 	Application *uuid.UUID      `json:"application,omitempty"`
 	EvaluatedAt time.Time       `json:"evaluated_at"`
-	WindowDays  int             `json:"window_days"`
+	Historical  bool            `json:"historical,omitempty"` // read from the day's kept reading, not now
 	Controls    []ControlStatus `json:"status"`
 }
 
-const evidenceWindow = 30 * 24 * time.Hour
+// categoryWords names scan kinds in a sentence.
+var categoryWords = map[string]string{"sast": "SAST", "sca": "dependency (SCA)", "secret": "secret", "iac": "IaC", "container": "image",
+	"dast": "DAST", "cspm": "cloud", "compliance": "benchmark", "license": "licence", "supply_chain": "supply-chain"}
 
-// handleTaxonomyStatus is GET /api/v1/taxonomies/{id}/status?application=&format=csv. Per control: open findings
-// by band, and whether a scan that could evidence it ran in the last 30 days. "Clear" means assessed and nothing
-// open; it is not a certification.
+func kindsText(cats []string) string {
+	w := make([]string, 0, len(cats))
+	for _, c := range cats {
+		if v, ok := categoryWords[c]; ok {
+			w = append(w, v)
+		} else {
+			w = append(w, c)
+		}
+	}
+	switch len(w) {
+	case 0:
+		return "a matching"
+	case 1:
+		return w[0]
+	}
+	return strings.Join(w[:len(w)-1], ", ") + " or " + w[len(w)-1]
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// evaluate reads a framework now, for one application or for every application in its scope.
+func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Framework, app *uuid.UUID, now time.Time) (*TaxonomyStatus, error) {
+	rd, ok := a.store.(store.ComplianceReader)
+	if !ok {
+		return nil, errUnsupported
+	}
+	// The applications in scope: the one asked for; else those whose complianceScope lists the framework's scope;
+	// else all. nil means "all" to the store when the store cannot list them.
+	var apps []uuid.UUID
+	switch {
+	case app != nil:
+		apps = []uuid.UUID{*app}
+	default:
+		if sl, ok := a.store.(scopeLister); ok {
+			scopes, err := sl.ApplicationComplianceScopes(ctx, tenantID)
+			if err != nil {
+				return nil, err
+			}
+			apps = []uuid.UUID{}
+			for id, sc := range scopes {
+				if fw.Scope == "" || containsStr(sc, fw.Scope) {
+					apps = append(apps, id)
+				}
+			}
+		}
+	}
+	matches := make([]store.ControlMatch, 0, len(fw.Controls))
+	for _, c := range fw.Controls {
+		if c.Manual {
+			continue
+		}
+		m := store.ControlMatch{ID: c.ID, CWEs: c.CWEs, Categories: c.Categories, MinSeverity: c.MinSeverity}
+		for _, rm := range c.Rules {
+			m.Rules = append(m.Rules, store.RuleMatch{ScannerFamily: rm.ScannerFamily, RuleID: rm.RuleID})
+		}
+		matches = append(matches, m)
+	}
+	counts, err := rd.ControlCounts(ctx, tenantID, apps, matches)
+	if err != nil {
+		return nil, err
+	}
+	window := fw.Window()
+	scans, err := rd.RecentScans(ctx, tenantID, apps, now.AddDate(0, 0, -window))
+	if err != nil {
+		return nil, err
+	}
+	fromFindings, err := rd.FamilyFindingCategories(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	extra := a.familyCategories(ctx, tenantID, fromFindings)
+	scanned := map[uuid.UUID]map[string]bool{} // app -> category
+	families := map[uuid.UUID]map[string]bool{}
+	byCat := map[string][]string{}
+	for _, s := range scans {
+		if scanned[s.App] == nil {
+			scanned[s.App], families[s.App] = map[string]bool{}, map[string]bool{}
+		}
+		families[s.App][s.Family] = true
+		for _, cat := range compliance.CategoriesOf(s.Family, extra) {
+			scanned[s.App][cat] = true
+			if !containsStr(byCat[cat], s.Family) {
+				byCat[cat] = append(byCat[cat], s.Family)
+			}
+		}
+	}
+	appSet := apps
+	if appSet == nil { // the store cannot list applications: read the ones that were scanned
+		for id := range scanned {
+			appSet = append(appSet, id)
+		}
+	}
+	var atts []store.Attestation
+	if hasManual(fw) {
+		if atts, err = rd.Attestations(ctx, tenantID, fw.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	res := &TaxonomyStatus{TaxonomyInfo: infoOf(fw), Application: app, EvaluatedAt: now, Controls: make([]ControlStatus, 0, len(fw.Controls))}
+	for _, c := range fw.Controls {
+		cs := ControlStatus{ID: c.ID, Name: c.Name, Description: c.Description, Rank: c.Rank, Manual: c.Manual, Bands: map[string]int{}, TotalApps: len(appSet)}
+		if c.Manual {
+			cs.Attestation = attestationFor(atts, c.ID, app)
+			readManual(&cs, now)
+			res.Controls = append(res.Controls, cs)
+			continue
+		}
+		cc := counts[c.ID]
+		for _, b := range domain.Bands {
+			cs.Bands[b] = cc.Open[b]
+			cs.Open += cc.Open[b]
+		}
+		cs.Accepted = cc.Accepted
+		cs.Query, cs.QueryExact = c.Query()
+		cs.Needs = c.EvidenceCategories()
+		for _, cat := range cs.Needs {
+			for _, fam := range byCat[cat] {
+				if !containsStr(cs.Evidence, fam) {
+					cs.Evidence = append(cs.Evidence, fam)
+				}
+			}
+		}
+		for _, rm := range c.Rules {
+			for _, f := range families {
+				if f[rm.ScannerFamily] && !containsStr(cs.Evidence, rm.ScannerFamily) {
+					cs.Evidence = append(cs.Evidence, rm.ScannerFamily)
+				}
+			}
+		}
+		sort.Strings(cs.Evidence)
+		for _, id := range appSet {
+			if c.Assessed(scanned[id], families[id]) {
+				cs.AssessedApps++
+			}
+		}
+		readMatched(&cs, c, window, app != nil)
+		res.Controls = append(res.Controls, cs)
+	}
+	return res, nil
+}
+
+var errUnsupported = errors.New("compliance views need PostgreSQL")
+
+func hasManual(fw compliance.Framework) bool {
+	for _, c := range fw.Controls {
+		if c.Manual {
+			return true
+		}
+	}
+	return false
+}
+
+// attestationFor is the newest attestation of a control: for the application asked about, else one made for the
+// whole tenant. Tenant-wide, only an attestation for the whole tenant counts.
+func attestationFor(atts []store.Attestation, controlID string, app *uuid.UUID) *store.Attestation {
+	var tenantWide *store.Attestation
+	for i := range atts { // newest first
+		a := &atts[i]
+		if a.ControlID != controlID {
+			continue
+		}
+		if app != nil && a.ApplicationID != nil && *a.ApplicationID == *app {
+			return a
+		}
+		if a.ApplicationID == nil && tenantWide == nil {
+			tenantWide = a
+		}
+	}
+	return tenantWide
+}
+
+func readManual(cs *ControlStatus, now time.Time) {
+	a := cs.Attestation
+	who := ""
+	if a != nil {
+		who = strings.TrimPrefix(a.AttestedBy, "user:") // the person, as a reader names them
+	}
+	switch {
+	case a == nil:
+		cs.Status = string(compliance.StatusNotAssessed)
+		cs.Reason = "A person attests this control, and nobody has yet."
+	case !a.ExpiresAt.After(now):
+		cs.Status = string(compliance.StatusNotAssessed)
+		cs.Reason = fmt.Sprintf("The last attestation, by %s, expired on %s. Attest it again.", who, a.ExpiresAt.Format("2 Jan 2006"))
+	case a.Status == "failed":
+		cs.Status = string(compliance.StatusOpen)
+		cs.Reason = fmt.Sprintf("%s attested on %s that it is not met.", who, a.AttestedAt.Format("2 Jan 2006"))
+	default:
+		cs.Status = string(compliance.StatusClear)
+		cs.Reason = fmt.Sprintf("%s attested on %s that it is met; in force until %s.", who, a.AttestedAt.Format("2 Jan 2006"), a.ExpiresAt.Format("2 Jan 2006"))
+	}
+}
+
+// readMatched decides a matched control's status and says why. Clear needs evidence everywhere it applies: one
+// application's scan does not clear a control for another that was never scanned.
+func readMatched(cs *ControlStatus, c compliance.Control, window int, oneApp bool) {
+	needs := kindsText(cs.Needs)
+	if len(c.Rules) > 0 && len(cs.Needs) == 0 {
+		fams := []string{}
+		for _, r := range c.Rules {
+			if !containsStr(fams, r.ScannerFamily) {
+				fams = append(fams, r.ScannerFamily)
+			}
+		}
+		needs = strings.Join(fams, " or ")
+	}
+	exceptions := ""
+	if cs.Accepted > 0 {
+		exceptions = " " + plural(cs.Accepted, "finding is", "findings are") + " risk-accepted: approved exceptions, not counted as open."
+	}
+	switch {
+	case cs.Open > 0:
+		cs.Status = string(compliance.StatusOpen)
+		cs.Reason = plural(cs.Open, "open finding breaks", "open findings break") + " it."
+	case cs.TotalApps == 0:
+		cs.Status = string(compliance.StatusNotAssessed)
+		cs.Reason = "No application is in this framework's scope."
+	case cs.AssessedApps == 0:
+		cs.Status = string(compliance.StatusNotAssessed)
+		cs.Reason = fmt.Sprintf("No %s scan ran in the last %d days, so nothing can be said.", needs, window)
+	case cs.AssessedApps < cs.TotalApps:
+		cs.Status = string(compliance.StatusNotAssessed)
+		rest := "The other one"
+		if n := cs.TotalApps - cs.AssessedApps; n > 1 {
+			rest = fmt.Sprintf("The other %d", n)
+		}
+		cs.Reason = fmt.Sprintf("Assessed in %d of %d applications. %s had no %s scan in the last %d days.",
+			cs.AssessedApps, cs.TotalApps, rest, needs, window)
+	default:
+		cs.Status = string(compliance.StatusClear)
+		where := ""
+		if !oneApp && cs.TotalApps > 1 {
+			where = fmt.Sprintf(" in all %d applications", cs.TotalApps)
+		}
+		cs.Reason = fmt.Sprintf("Nothing that bears on it is open, and a %s scan ran%s in the last %d days.", needs, where, window)
+	}
+	cs.Reason += exceptions // an approved exception is said whatever the status: an auditor reads it
+}
+
+// handleTaxonomyStatus is GET /api/v1/taxonomies/{id}/status?application=&format=csv&at=YYYY-MM-DD. "Clear" means
+// assessed and nothing open; it is evidence for an auditor, not a certification.
 func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	tenantID, user, ok := a.requireRole(w, r, auth.RoleViewer)
 	if !ok {
 		return
 	}
@@ -77,8 +420,12 @@ func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusNotImplemented, "unsupported", "Compliance views need PostgreSQL")
 		return
 	}
-	fw, found := compliance.Get(r.PathValue("id"))
-	if !found {
+	fw, err := a.framework(r.Context(), tenantID, r.PathValue("id"))
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "The frameworks could not be loaded")
+		return
+	}
+	if fw == nil {
 		problem(w, http.StatusNotFound, "not-found", "No such framework")
 		return
 	}
@@ -96,79 +443,188 @@ func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "validation", "format is json or csv")
 		return
 	}
-	now := time.Now().UTC()
-	matches := make([]store.ControlMatch, 0, len(fw.Controls))
-	for _, c := range fw.Controls {
-		matches = append(matches, store.ControlMatch{ID: c.ID, CWEs: c.CWEs, Categories: c.Categories})
-	}
-	counts, err := rd.ControlCounts(r.Context(), tenantID, app, matches)
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "internal", "Failed to evaluate the framework")
-		return
-	}
-	scans, err := rd.RecentScans(r.Context(), tenantID, app, now.Add(-evidenceWindow))
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "internal", "Failed to read the recent scans")
-		return
-	}
-	scanned := map[string]bool{}
-	byCat := map[string][]string{}
-	for _, s := range scans {
-		for _, cat := range compliance.FamilyCategories[s.Family] {
-			scanned[cat] = true
-			byCat[cat] = append(byCat[cat], s.Family)
+	var res *TaxonomyStatus
+	if at := r.URL.Query().Get("at"); at != "" {
+		day, err := time.Parse("2006-01-02", at)
+		if err != nil {
+			problem(w, http.StatusBadRequest, "validation", "at is a day, such as 2026-06-30")
+			return
 		}
-	}
-	res := TaxonomyStatus{
-		TaxonomyInfo: TaxonomyInfo{ID: fw.ID, Name: fw.Name, Version: fw.Version, Source: fw.Source, Kind: fw.Kind, Note: fw.Note, Controls: len(fw.Controls)},
-		Application:  app, EvaluatedAt: now, WindowDays: int(evidenceWindow / (24 * time.Hour)),
-		Controls: make([]ControlStatus, 0, len(fw.Controls)),
-	}
-	for _, c := range fw.Controls {
-		bands := map[string]int{}
-		for _, b := range domain.Bands {
-			bands[b] = counts[c.ID][b]
-		}
-		open := 0
-		for _, n := range counts[c.ID] {
-			open += n
-		}
-		cs := ControlStatus{ID: c.ID, Name: c.Name, Open: open, Bands: bands, Query: c.Query(), Rank: c.Rank}
-		switch {
-		case open > 0:
-			cs.Status = string(compliance.StatusOpen)
-		case c.Assessed(scanned):
-			cs.Status = string(compliance.StatusClear)
-		default:
-			cs.Status = string(compliance.StatusNotAssessed)
-		}
-		seen := map[string]bool{}
-		for _, cat := range append(append([]string{}, c.Categories...), []string{"sast", "dast", "sca", "container"}[:map[bool]int{true: 4, false: 0}[len(c.Categories) == 0]]...) {
-			for _, fam := range byCat[cat] {
-				if !seen[fam] {
-					seen[fam] = true
-					cs.Evidence = append(cs.Evidence, fam)
-				}
-			}
-		}
-		res.Controls = append(res.Controls, cs)
-	}
-	if format == "csv" {
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+fw.ID+`.csv"`)
-		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"framework", "version", "application", "control", "name", "status", "open", "critical", "high", "medium", "low", "evidence", "evaluated_at"})
-		appCell := ""
 		if app != nil {
-			appCell = app.String()
+			problem(w, http.StatusBadRequest, "validation", "The daily reading is kept for the whole tenant; leave out application")
+			return
 		}
-		for _, c := range res.Controls {
-			_ = cw.Write([]string{fw.Name, fw.Version, appCell, c.ID, c.Name, c.Status, strconv.Itoa(c.Open),
-				strconv.Itoa(c.Bands["critical"]), strconv.Itoa(c.Bands["high"]), strconv.Itoa(c.Bands["medium"]), strconv.Itoa(c.Bands["low"]),
-				strings.Join(c.Evidence, " "), now.Format(time.RFC3339)})
+		raw, err := rd.ComplianceSnapshot(r.Context(), tenantID, fw.ID, day)
+		if errors.Is(err, store.ErrNoSnapshot) {
+			problem(w, http.StatusNotFound, "not-found", "No reading of this framework was kept for "+at)
+			return
 		}
-		cw.Flush()
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "The kept reading could not be read")
+			return
+		}
+		res = &TaxonomyStatus{}
+		if err := json.Unmarshal(raw, res); err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "The kept reading could not be read")
+			return
+		}
+		res.Historical = true
+	} else {
+		res, err = a.evaluate(r.Context(), tenantID, *fw, app, time.Now().UTC())
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "Failed to evaluate the framework")
+			return
+		}
+	}
+	if format != "csv" {
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	// A compliance report leaves the system: who took it, and of what, is audit evidence too.
+	_ = a.store.RecordAudit(r.Context(), auth.AuditEvent{
+		TenantID: tenantID, Actor: actorOf(user), Action: "GET /api/v1/taxonomies/{id}/status?format=csv",
+		ResourceType: "compliance-frameworks", ResourceID: fw.ID,
+		Detail: map[string]any{"version": fw.Version, "application": app, "at": r.URL.Query().Get("at")}, RequestID: telemetry.RequestID(r.Context()),
+	})
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fw.ID+`.csv"`)
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"framework", "version", "application", "control", "name", "status", "reason", "open", "critical", "high", "medium", "low",
+		"accepted", "assessed_applications", "applications", "evidence", "attested_by", "attested_at", "attestation_expires", "evaluated_at"})
+	appCell := ""
+	if app != nil {
+		appCell = app.String()
+	}
+	for _, c := range res.Controls {
+		by, at, exp := "", "", ""
+		if c.Attestation != nil {
+			by, at, exp = c.Attestation.AttestedBy, c.Attestation.AttestedAt.Format(time.RFC3339), c.Attestation.ExpiresAt.Format(time.RFC3339)
+		}
+		_ = cw.Write([]string{res.Name, res.Version, appCell, c.ID, csvCell(c.Name), c.Status, csvCell(c.Reason), strconv.Itoa(c.Open),
+			strconv.Itoa(c.Bands["critical"]), strconv.Itoa(c.Bands["high"]), strconv.Itoa(c.Bands["medium"]), strconv.Itoa(c.Bands["low"]),
+			strconv.Itoa(c.Accepted), strconv.Itoa(c.AssessedApps), strconv.Itoa(c.TotalApps), strings.Join(c.Evidence, " "),
+			csvCell(by), at, exp, res.EvaluatedAt.Format(time.RFC3339)})
+	}
+	cw.Flush()
+}
+
+// csvCell defuses a cell a spreadsheet would run as a formula (D84).
+func csvCell(s string) string {
+	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+		return "'" + s
+	}
+	return s
+}
+
+// handleTaxonomyHistory is GET /api/v1/taxonomies/{id}/history: the days a reading was kept, newest first.
+func (a *API) handleTaxonomyHistory(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	rd, ok := a.store.(store.ComplianceReader)
+	if !ok {
+		problem(w, http.StatusNotImplemented, "unsupported", "Compliance views need PostgreSQL")
+		return
+	}
+	days, err := rd.ComplianceSnapshotDays(r.Context(), tenantID, r.PathValue("id"), 400)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "The kept readings could not be listed")
+		return
+	}
+	out := make([]string, 0, len(days))
+	for _, d := range days {
+		out = append(out, d.Format("2006-01-02"))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": out})
+}
+
+// AttestRequest is the body of POST /api/v1/taxonomies/{id}/controls/{control}/attestations.
+type AttestRequest struct {
+	Status        string     `json:"status"` // passed | failed
+	Note          string     `json:"note"`
+	EvidenceURL   string     `json:"evidence_url,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"` // default a year; at most three
+	ApplicationID *uuid.UUID `json:"application_id,omitempty"`
+}
+
+// handleAttest records a person's reading of a manual control (D102). Only a maintainer or above may attest:
+// the same people who approve risk acceptances (docs/07).
+func (a *API) handleAttest(w http.ResponseWriter, r *http.Request) {
+	tenantID, user, ok := a.requireRole(w, r, auth.RoleMaintainer)
+	if !ok {
+		return
+	}
+	rd, ok := a.store.(store.ComplianceReader)
+	if !ok {
+		problem(w, http.StatusNotImplemented, "unsupported", "Compliance views need PostgreSQL")
+		return
+	}
+	fw, err := a.framework(r.Context(), tenantID, r.PathValue("id"))
+	if err != nil || fw == nil {
+		problem(w, http.StatusNotFound, "not-found", "No such framework")
+		return
+	}
+	var ctl *compliance.Control
+	for i := range fw.Controls {
+		if fw.Controls[i].ID == r.PathValue("control") {
+			ctl = &fw.Controls[i]
+		}
+	}
+	if ctl == nil {
+		problem(w, http.StatusNotFound, "not-found", "No such control in this framework")
+		return
+	}
+	if !ctl.Manual {
+		problem(w, http.StatusConflict, "conflict", "This control is read from findings and scans; only a manual control is attested")
+		return
+	}
+	var req AttestRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		problem(w, http.StatusBadRequest, "validation", "The body is not valid JSON")
+		return
+	}
+	now := time.Now().UTC()
+	req.Note = strings.TrimSpace(req.Note)
+	switch {
+	case req.Status != "passed" && req.Status != "failed":
+		problem(w, http.StatusBadRequest, "validation", "status is passed or failed")
+		return
+	case req.Note == "" || len(req.Note) > 4000:
+		problem(w, http.StatusBadRequest, "validation", "note says what was checked and how; it is required, at most 4000 characters")
+		return
+	}
+	if req.EvidenceURL != "" {
+		u, err := url.Parse(req.EvidenceURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			problem(w, http.StatusBadRequest, "validation", "evidence_url is an https link to where the evidence is kept")
+			return
+		}
+	}
+	expires := now.AddDate(1, 0, 0)
+	if req.ExpiresAt != nil {
+		expires = req.ExpiresAt.UTC()
+		if !expires.After(now) || expires.After(now.AddDate(3, 0, 0)) {
+			problem(w, http.StatusBadRequest, "validation", "expires_at is in the future and at most three years away")
+			return
+		}
+	}
+	if req.ApplicationID != nil {
+		if app, err := a.store.GetApplication(r.Context(), tenantID, *req.ApplicationID); err != nil || app == nil {
+			problem(w, http.StatusBadRequest, "validation", "application_id is not an application of this tenant")
+			return
+		}
+	}
+	att := store.Attestation{ID: uuid.New(), FrameworkID: fw.ID, ControlID: ctl.ID, ApplicationID: req.ApplicationID, Status: req.Status,
+		Note: req.Note, EvidenceURL: req.EvidenceURL, AttestedBy: actorOf(user), AttestedAt: now, ExpiresAt: expires}
+	if err := rd.AddAttestation(r.Context(), tenantID, att); err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "The attestation could not be recorded")
+		return
+	}
+	_ = a.store.RecordAudit(r.Context(), auth.AuditEvent{
+		TenantID: tenantID, Actor: actorOf(user), Action: "POST /api/v1/taxonomies/{id}/controls/{control}/attestations",
+		ResourceType: "compliance-frameworks", ResourceID: fw.ID,
+		Detail: map[string]any{"control": ctl.ID, "status": req.Status, "application": req.ApplicationID, "expires_at": expires}, RequestID: telemetry.RequestID(r.Context()),
+	})
+	writeJSON(w, http.StatusCreated, att)
 }

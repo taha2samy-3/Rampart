@@ -11,6 +11,8 @@ import (
 	"rampart/internal/parsers/cyclonedx"
 	"rampart/internal/parsers/dependencycheck"
 	"rampart/internal/parsers/dependencytrack"
+	"rampart/internal/parsers/genericjson"
+	"rampart/internal/parsers/gitlab"
 	"rampart/internal/parsers/gitleaks"
 	"rampart/internal/parsers/grype"
 	"rampart/internal/parsers/kubebench"
@@ -139,6 +141,9 @@ func DefaultRegistry() *Registry {
 		{"builtin:snyk", "Snyk Parser (JSON)", "1", "Snyk open source and container vulnerability report", snyk.NewParser()},
 		{"builtin:kubebench", "kube-bench Parser (JSON)", "0.6", "Aqua Security kube-bench CIS Kubernetes benchmark report", kubebench.NewParser()},
 		{"builtin:prowler", "Prowler Parser (JSON)", "4", "Prowler AWS/Azure/GCP cloud security and compliance report", prowler.NewParser()},
+		{"builtin:gitlab", "GitLab Security Report Parser (JSON)", "15", "GitLab security reports (schema v14/v15): SAST, secret detection, dependency and container scanning, DAST; the secret is hashed and never stored", gitlab.NewParser()},
+		// Generic JSON scores low (at most 45 without its format marker), so any parser that knows a report wins.
+		{"builtin:genericjson", "Generic JSON Parser", "1", "Rampart Generic JSON findings (a superset of DefectDojo's Generic Findings Import) for tools with no parser", genericjson.NewParser()},
 	} {
 		_ = reg.RegisterParser(&parserAdapter{
 			desc:   Descriptor{ID: p.id, Name: p.name, Kind: KindParser, Version: p.version, SupportLevel: SupportBuiltin, Description: p.desc},
@@ -146,11 +151,9 @@ func DefaultRegistry() *Registry {
 		})
 	}
 
-	// Trackers, notifiers and sources are not registered here yet. The placeholder adapters that were (a Jira
-	// "tracker" returning RAMPART-101, notifiers that sent nothing, a Dependency-Track "source" yielding an invented
-	// CVE) were removed: nothing called them and they made the registry claim what the product does not do (D82,
-	// docs/23 K1). The real connectors live in internal/connectors; the connector catalogue the UI reads is
-	// domain.ConnectorCatalogue. Registering the real implementations behind one contract is docs/23 section 6.
+	// The registry holds parsers only. Trackers and notifiers live in internal/connectors, Dependency-Track in
+	// internal/upstream/dependencytrack, and the connector catalogue the UI reads is domain.ConnectorCatalogue. The
+	// unused tracker, notifier and source contracts were removed (D96, docs/26).
 
 	return reg
 }

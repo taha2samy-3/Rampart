@@ -111,7 +111,6 @@ const (
 	ConnectorTypeGitLab      ConnectorType = "gitlab"
 	ConnectorTypeAzureBoards ConnectorType = "azureBoards"
 	ConnectorTypeServiceNow  ConnectorType = "serviceNow"
-	ConnectorTypeSonarQube   ConnectorType = "sonarqube"
 )
 
 // ConnectorDirection indicates the flow of data relative to Rampart (docs/19, docs/20).
@@ -288,7 +287,7 @@ func (c *Connector) Direction() ConnectorDirection {
 		return c.Spec.Direction
 	}
 	switch c.Type {
-	case ConnectorTypeDependencyTrack, ConnectorTypeSonarQube:
+	case ConnectorTypeDependencyTrack:
 		return DirectionInbound
 	case ConnectorTypeJira:
 		if c.Spec.Jira != nil && c.Spec.Jira.TwoWaySync {
@@ -328,7 +327,7 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 			if c.Spec.Direction != DirectionOutbound {
 				return fmt.Errorf("%w: connector type %q only supports outbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
 			}
-		case ConnectorTypeDependencyTrack, ConnectorTypeSonarQube:
+		case ConnectorTypeDependencyTrack:
 			if c.Spec.Direction != DirectionInbound {
 				return fmt.Errorf("%w: connector type %q only supports inbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
 			}
@@ -341,7 +340,7 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 
 	// Reject unimplemented types per user requirement
 	switch c.Type {
-	case ConnectorTypeGitLab, ConnectorTypeAzureBoards, ConnectorTypeServiceNow, ConnectorTypeSonarQube:
+	case ConnectorTypeGitLab, ConnectorTypeAzureBoards, ConnectorTypeServiceNow:
 		return fmt.Errorf("%w: connector type %q is not supported in Phase 3 (planned for future phases)", ErrConnectorNotSupported, c.Type)
 	}
 

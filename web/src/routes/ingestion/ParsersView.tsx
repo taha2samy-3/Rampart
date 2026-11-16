@@ -24,35 +24,14 @@ interface ParsersViewProps {
   onUploadClick?: () => void;
 }
 
-const FALLBACK_PARSERS: ParserDescriptor[] = [
-  { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0 standard with enrichers for Semgrep, Trivy, Gitleaks, CodeQL' },
-  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.5.0', support_level: 'builtin', description: 'CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats' },
-  { id: 'builtin:spdx', name: 'SPDX Parser (JSON/Tag-Value)', kind: 'parser', version: '2.3.0', support_level: 'builtin', description: 'SPDX 2.2 and 2.3 SBOM parser for JSON and Tag-Value formats' },
-  { id: 'builtin:openvex', name: 'OpenVEX Parser', kind: 'parser', version: '0.2.0', support_level: 'builtin', description: 'OpenVEX triage statements and exploitability assertions parser' },
-  { id: 'builtin:syft', name: 'Syft Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Anchore Syft SBOM parser with artifact catalog and dependency relationships' },
-  { id: 'builtin:trivy', name: 'Trivy Parser (JSON)', kind: 'parser', version: '2.0.0', support_level: 'builtin', description: 'Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations, licenses' },
-  { id: 'builtin:grype', name: 'Grype Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Grype JSON: vulnerability matches with their related identifiers' },
-  { id: 'builtin:semgrep', name: 'Semgrep Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Semgrep JSON: code findings with CWE, location and code snippet hash' },
-  { id: 'builtin:trufflehog', name: 'TruffleHog Parser (JSON lines)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'TruffleHog JSON lines: secrets, verified against live endpoints' },
-  { id: 'builtin:gitleaks', name: 'Gitleaks Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Gitleaks JSON: secrets found in git repositories; secret is hashed' },
-  { id: 'builtin:dependencytrack', name: 'Dependency-Track Parser (FPF/JSON)', kind: 'parser', version: '1.4.0', support_level: 'builtin', description: 'Dependency-Track FPF export and direct API finding response parser with VEX' },
-  { id: 'builtin:checkov', name: 'Checkov Parser (JSON)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile' },
-  { id: 'builtin:bandit', name: 'Bandit Parser (JSON)', kind: 'parser', version: '1.7.0', support_level: 'builtin', description: 'Bandit Python SAST vulnerability and security flaw report' },
-  { id: 'builtin:nuclei', name: 'Nuclei Parser (JSONL)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Nuclei template-based vulnerability scan results' },
-  { id: 'builtin:zap', name: 'OWASP ZAP Parser (JSON)', kind: 'parser', version: '2.14.0', support_level: 'builtin', description: 'OWASP ZAP DAST web application security report' },
-  { id: 'builtin:dependencycheck', name: 'OWASP Dependency-Check Parser (JSON)', kind: 'parser', version: '8.4.0', support_level: 'builtin', description: 'OWASP Dependency-Check SCA vulnerability report' },
-  { id: 'builtin:snyk', name: 'Snyk Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Snyk open source and container vulnerability report' },
-  { id: 'builtin:kubebench', name: 'kube-bench Parser (JSON)', kind: 'parser', version: '0.6.0', support_level: 'builtin', description: 'Aqua Security kube-bench CIS Kubernetes benchmark report' },
-  { id: 'builtin:prowler', name: 'Prowler Parser (JSON)', kind: 'parser', version: '4.0.0', support_level: 'builtin', description: 'Prowler AWS/Azure/GCP cloud security and compliance report' },
-];
-
 function categorizeParser(id: string): string {
   if (['builtin:sarif', 'builtin:semgrep', 'builtin:bandit'].includes(id)) return 'SAST';
-  if (['builtin:cyclonedx', 'builtin:spdx', 'builtin:syft', 'builtin:dependencytrack', 'builtin:dependencycheck', 'builtin:grype', 'builtin:snyk'].includes(id)) return 'SCA & SBOM';
+  if (['builtin:cyclonedx', 'builtin:spdx', 'builtin:syft', 'builtin:dependencytrack', 'builtin:dependencycheck', 'builtin:grype', 'builtin:snyk', 'builtin:trivy'].includes(id)) return 'SCA & SBOM';
   if (['builtin:gitleaks', 'builtin:trufflehog'].includes(id)) return 'Secrets';
   if (['builtin:checkov', 'builtin:kubebench', 'builtin:prowler'].includes(id)) return 'IaC & Cloud';
   if (['builtin:openvex'].includes(id)) return 'VEX';
   if (['builtin:zap', 'builtin:nuclei'].includes(id)) return 'DAST';
+  if (id === 'builtin:gitlab') return 'Several';
   return 'General';
 }
 
@@ -88,7 +67,7 @@ spec:
     vulnIds: "[rec.cve_id]"
     location:
       file: "rec.file_path"
-      startLine: "string(rec.line_number)"
+      startLine: "rec.line_number"
   limits:
     maxRecords: 500000
     maxDepth: 64`;
@@ -102,17 +81,12 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
 
   const query = useQuery({
     queryKey: qk.parsers.list(),
-    queryFn: async ({ signal }) => {
-      try {
-        const res = await listParsers(signal);
-        return res.length > 0 ? res : FALLBACK_PARSERS;
-      } catch {
-        return FALLBACK_PARSERS;
-      }
-    },
+    // No fallback list: what is shown is what this server reads, including this tenant's parser packages (D98).
+    queryFn: ({ signal }) => listParsers(signal),
   });
 
-  const parsers = query.data ?? FALLBACK_PARSERS;
+  const parsers = useMemo(() => query.data ?? [], [query.data]);
+  const installed = parsers.filter((p) => p.support_level !== 'builtin').length;
 
   const filtered = useMemo(() => {
     return parsers.filter((p) => {
@@ -135,19 +109,20 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
       <div className="mb-4 flex flex-col justify-between gap-3 tablet:flex-row tablet:items-center">
         <div>
           <div className="flex items-center gap-2.5">
-            <h2 className="display text-18 font-semibold text-ink">Supported Parsers & Formats</h2>
-            <span className="rounded-full bg-accent/15 px-2.5 py-0.5 text-11 font-medium text-accent">
-              {parsers.length} Built-in Engines
+            <h2 className="display text-18 font-semibold text-ink">Parsers and formats</h2>
+            <span className="text-13 text-ink-2">
+              {parsers.length - installed} built in{installed > 0 ? `, ${installed} installed as ${installed === 1 ? 'a package' : 'packages'}` : ''}
             </span>
           </div>
           <p className="mt-1 text-13 text-ink-2">
-            Streaming high-performance parsers with automatic format detection, plus runtime declarative CEL mapping.
+            Each upload is read by the parser it names, or by the one that recognises the file. A format Rampart does not
+            read can be added as a parser package, with no release.
           </p>
         </div>
 
         <div className="flex items-center gap-2 self-start tablet:self-auto">
           <Button variant="secondary" onClick={() => setCelModalOpen(true)}>
-            + Custom CEL Parser
+            Add a parser package
           </Button>
           {onUploadClick && (
             <Button variant="primary" onClick={onUploadClick}>
@@ -187,7 +162,11 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
       </div>
 
       {/* Parsers Table */}
-      {query.isLoading ? (
+      {query.isError ? (
+        <p role="alert" className="text-13 text-ink-2">
+          The parsers could not be loaded.
+        </p>
+      ) : query.isLoading ? (
         <div className="flex h-48 items-center justify-center">
           <Spinner />
         </div>
@@ -203,8 +182,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                 <Th className="w-[260px]">Parser Name</Th>
                 <Th className="w-[120px]">Category</Th>
                 <Th className="w-[160px]">Input Format</Th>
-                <Th className="w-[110px]">Tier</Th>
-                <Th className="w-[130px]">Engine Status</Th>
+                <Th className="w-[150px]">Source</Th>
                 <Th>Description</Th>
                 <Th align="end" className="w-[90px]">Action</Th>
               </tr>
@@ -225,22 +203,11 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                         <span className="font-mono text-11 text-ink-2">{p.id}</span>
                       </div>
                     </Td>
-                    <Td>
-                      <span className="rounded bg-chrome px-1.5 py-0.5 text-11 font-medium text-ink-2">
-                        {cat}
-                      </span>
-                    </Td>
+                    <Td className="text-12 text-ink-2">{cat}</Td>
                     <Td className="font-mono text-12 text-ink-2">{format}</Td>
-                    <Td>
-                      <span className="inline-flex rounded-ctl bg-ink-3/15 px-2 py-0.5 text-11 font-medium capitalize text-ink-2">
-                        Tier {p.support_level === 'builtin' ? '1' : '2'}
-                      </span>
-                    </Td>
-                    <Td>
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-2 py-0.5 text-11 font-medium text-success">
-                        <span className="size-1.5 rounded-full bg-success animate-pulse" />
-                        Active
-                      </span>
+                    <Td className="text-12 text-ink-2">
+                      {/* plain words, no pill: colour is for risk (docs/13 §6) */}
+                      {p.support_level === 'builtin' ? 'Built in' : 'Installed package'}
                     </Td>
                     <Td className="max-w-[340px] truncate text-12 text-ink-2" title={p.description}>
                       {p.description}

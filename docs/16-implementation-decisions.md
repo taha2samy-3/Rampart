@@ -1250,11 +1250,9 @@ Milestone 3.5 implements the Integration SDK extension framework, declarative pa
 ### 1. Contracts & Unified Registry (`internal/integrations`)
 - Standardized extension contracts:
   - `ParserContract`: streaming ingest (`Detect`, `Parse` via `iter.Seq2[domain.RawFinding, error]`).
-  - `SourceContract`: upstream project discovery and vulnerability pulling (`Check`, `Discover`, `Pull`).
-  - `TrackerContract`: outbound issue tracking (`Check`, `Create`, `Update`, `Get`).
-  - `NotifierContract`: outbound alert dispatch (`Check`, `Send`).
+  - `SourceContract`, `TrackerContract` and `NotifierContract`. **Superseded by D96:** no real connector ever implemented them, and they were removed.
 - The `Descriptor` carries metadata and JSON Schema (`ConfigSchema`, `Secrets`, `Egress`, `Capabilities`), allowing dynamic UI configuration forms and server-side validation without hardcoding forms.
-- All built-in connectors (`builtin:jira`, `builtin:github`, `builtin:slack`, `builtin:teams`, `builtin:email`, `builtin:webhook`, `builtin:dependency-track`) are adapted to the contracts and pre-loaded in `DefaultRegistry()`.
+- ~~All built-in connectors are adapted to the contracts and pre-loaded in `DefaultRegistry()`.~~ This was never true (docs/23 K1, K2): the adapters were placeholders, removed by D82, and the contracts by D96.
 
 ### 2. Tier 1 Declarative Mapping Engine (`internal/integrations/mapping`)
 - Declarative YAML specification (`runtime: mapping`) allows defining streaming parsers without writing Go code.
@@ -1868,3 +1866,199 @@ Sources:
 - `helm template` (offline) renders with and without a plugin; `helm lint` passes.
 
 Refs: docs/19 §2, §6, §7, §11; docs/23 §6; docs/25; D19, D39, D77, D82, D88, D89.
+
+## D95. SBOM export: CycloneDX 1.6 and SPDX 2.3, per asset and merged per application (docs/09 Phase 3.6)
+
+Rampart stores the SBOM each upload carries (D15); until now it could show one and draw its graph, but not give it back as a document another tool reads. Customers hand SBOMs to auditors, to their own customers (the EU Cyber Resilience Act asks a manufacturer to keep one per product) and to tools such as Dependency-Track.
+
+- `GET /api/v1/assets/{id}/sbom?format=cyclonedx|spdx` returns the asset's latest SBOM as a standard document. Without `format` the endpoint keeps its JSON view, so the UI is unchanged.
+- `GET /api/v1/applications/{id}/sbom?format=…` merges the latest SBOM of every asset of the application into one document whose subject is the application. Components are merged by purl (else name and version), so a library used by two services appears once and names both assets it came from. It needs PostgreSQL, and answers 404 when no asset has an SBOM yet.
+- **CycloneDX 1.6 JSON** (`application/vnd.cyclonedx+json; version=1.6`) and **SPDX 2.3 JSON** (`application/spdx+json`). Both are the versions the OWASP and Linux Foundation tools read today; SPDX 3.0 is not yet read by most of them.
+- The SPDX `documentNamespace` is unique per export under `https://spdx.rampart.aspm.dev/`; SPDX 2.3 §6.5 asks only that it be unique, not fetchable.
+- The download is an attachment named after the application (or `asset-<id>`), and needs the viewer role, as the SBOM view does. The application route used to read the application id as an asset id and found nothing; it now does what doc 11 says.
+- Not built: VEX inside the CycloneDX export (VEX is its own endpoint, D47), signing the document.
+
+Code: `internal/sbomexport`, `internal/query/sbom_export.go`.
+
+Sources: CycloneDX 1.6 specification; SPDX 2.3 specification §6; EU Cyber Resilience Act Annex I part II.
+
+## D96. The tracker, notifier and source contracts are removed; only the parser contract stays (docs/23 C6, K1, K2)
+
+D75 defined one contract per integration kind (docs/19 §3) and said the built-in connectors were adapted to them. They never were: the real trackers implement `domain.Tracker`, the notifiers `connectors.Notifier`, and Dependency-Track is its own syncer (D92). The only implementations of the contracts were placeholder adapters, which D82 deleted. After that the three contracts had no implementation and no caller; only their own test used them.
+
+**Decision.** Remove `SourceContract`, `TrackerContract`, `NotifierContract`, their types, their registry functions, and the unused canonical documents in `internal/domain/canonical.go`. The registry holds parsers only. The working list of what was removed is docs/26.
+
+**Why not migrate the connectors onto them instead (docs/23 §6.2).** A shared contract earns its keep when a second implementation needs the same shape. Today:
+- the only second notifier is the declarative package (D94), and it already plugs into `connectors.Notifier`;
+- there is one tracker family (Jira, GitHub) behind one interface already;
+- there is one source.
+
+Migrating would rewrite working code to fit an interface nothing else uses. The contracts for code plugins (gRPC, WebAssembly, docs/19 §7) are written when that tier is built, from the code that exists then.
+
+**Kept:** `ParserContract`, the parser registry and the conformance kit: the ingest gateway, the processor and parser packages (D98) use them.
+
+## D97. Notifications are one River job per connector and message (docs/23 K4)
+
+**Before.** The ingest worker called the router, which sent to every connector and waited. A slow chat service held the ingest worker, and a failed send was logged and lost. When the new findings could not be read back, the processor made up stand-in findings with random ids, whose links led nowhere.
+
+**Now.**
+- The router decides as before: routing rules, the digest above 20 findings (D25), skipping connectors that are not ready. It then queues one `notify_delivery` job per (connector, message) on the `notify` queue instead of sending.
+- The job carries the tenant, the connector's name and the message. It carries no secret: the worker loads the connector and resolves its secrets when it sends, so a rotated secret is used.
+- A failed send is retried by River, 8 attempts in all as for tickets (D70 A6). A job that runs out stays in River's table as discarded, with its last error.
+- A connector deleted since the message was queued ends the job without a retry.
+- Without PostgreSQL (the in-memory mode) the router sends inline, as before.
+- The stand-in findings are gone: if the findings cannot be read, nothing is sent and the run logs why.
+- The enrich, policy and notify job kinds, which had no handler and no caller, are removed.
+
+**Not done:** the jobs are inserted after the merge commits, not inside its transaction. A crash between the two loses that run's notifications; it no longer loses them on every failed send. Inserting in the merge transaction needs the merge to return the routed messages, a larger change to the engine.
+
+Code: `internal/jobs/notify.go`, `internal/connectors/router.go` (`SetDeliveryQueue`, `Deliver`), `internal/targets/runner.go`.
+
+Sources: ADR 0002 (outbox); D25; D70 A6; River's retry policy.
+
+## D98. A parser installed as data; GitLab and Generic JSON parsers (docs/19 §4, docs/09 Phase 3.5)
+
+**Parser packages.** An `IntegrationPackage` with `kind: parser` and `runtime: mapping` describes a report format: how to recognise it, where its records are, and a CEL expression for each field (docs/19 §4). It needs no release, which was the point of the mapping engine D75 built and never connected.
+- The package is checked when it is applied, as a notifier package is: the fields are decoded strictly (a misspelled field is refused, not ignored), every CEL expression is compiled, `ruleId` and `title` are required, and so is a way to detect the format.
+- A package belongs to its tenant. It parses only that tenant's uploads, chosen by name (`--format pip-audit`) or by detection over the first 64 KiB, in competition with the built-in parsers.
+- A built-in parser owns its name and wins a tie, so a package cannot take over a format Rampart already reads.
+- Each record runs under the engine's limits: a CEL cost limit per expression, a maximum record count and depth. A bad record is reported as an unreadable record (D51), not a failed run.
+- A `Connector` of type `plugin` that names a parser package is refused: a parser is used by uploads, not by a connector.
+- The Integrations page lists parser packages with the notifiers.
+
+**GitLab security reports.** One parser reads GitLab's five report types (SAST, secret detection, dependency scanning, container scanning, DAST), schema v14 and v15. Each type is its own scanner family (`gitlab-sast`, …): the close step works per family, and one family would let a SAST upload close the dependency findings of the same pipeline. Secrets are hashed and redacted from the stored record, and authorization and cookie headers are redacted from DAST evidence.
+
+**Generic JSON.** A documented format for tools with no parser, a superset of DefectDojo's Generic Findings Import, so a DefectDojo user's existing exports load unchanged. It is detected only with low confidence unless the file carries `"format": "rampart-generic/v1"`, so it never takes a report another parser reads. The format is specified in `internal/parsers/genericjson`.
+
+The format hint `generic` names it, as docs/04 does.
+
+**Declarative trackers and sources move to Phase 4.** A tracker is not one request: it creates, finds by label, comments, closes, and takes a webhook back, with state between them (D70). A source pages through projects with a cursor and settles (D92). One templated request, which is what a declarative notifier is, describes neither, and an engine that does would be a small programming language. There is also no second tracker or source asking for it yet (D96's rule). Until then a new tracker is built in Go, and a tool that only needs to be told about findings uses a notifier package or the webhook connector.
+
+Sources: docs/19 §4; GitLab security report schemas v15 (gitlab-org/security-products/security-report-schemas); DefectDojo Generic Findings Import documentation.
+
+## D99. Housekeeping for the tables nothing cleaned (docs/23 R1)
+
+Each retention sweep, under its advisory lock and as `rampart_system`, also removes:
+- federation token ids (`federation_jti`) and inbound webhook delivery ids (`webhook_delivery`) past their expiry: they exist only to refuse a replay inside that window;
+- hourly quota windows (`quota_usage`) older than 48 hours: the limiter reads only the current hour;
+- held closes decided more than 90 days ago.
+
+It runs even when retention is off: these rows are bookkeeping, not tenant data a policy keeps. The live events (D91) are pruned by their own poller; `feed_push` and `dtrack_sync` hold one row per feed or project and do not grow; River removes its own finished jobs.
+
+Code: `internal/store/housekeeping.go`, `internal/retention`.
+
+## D100. Outbound webhooks are signed the Standard Webhooks way; `sonarqube` is no longer a connector type (docs/23 C9, C10)
+
+**Signature.** Docs 04 and 11 named two different headers, and the signature covered only the body. A webhook connector now sends:
+- `webhook-id`: the message id, the same on every retry, so a receiver can drop a duplicate;
+- `webhook-timestamp`: Unix seconds;
+- `webhook-signature`: `v1,` + base64 of HMAC-SHA256 over `id.timestamp.body` with the connector's secret.
+
+This is the Standard Webhooks specification, which Svix, Zapier and others verify with ready libraries. A receiver refuses a timestamp more than five minutes old. The old `X-Rampart-Signature-256` and `X-Rampart-Timestamp` headers are no longer sent; no release shipped them. A cross-host redirect of a signed request is refused, as for any credential.
+
+**`sonarqube`.** It was a connector type with no implementation, refused at validation, and the CRD's enum did not allow it. docs/20 §9.3 removed unbuilt types; this one was left behind. It is removed. GitLab, Azure Boards and ServiceNow stay as named refusals: they are planned trackers, and their refusal says so.
+
+Sources: Standard Webhooks specification (standardwebhooks.com, v1).
+
+## D101. Scan coverage on the application page, by kind of testing, instead of a radar
+
+ASPM products often draw an application's testing coverage as a radar: one axis per kind of testing (code, dependencies, secrets, infrastructure as code, images, running application, cloud). The question it answers is a good one: which kinds of testing does this application have, which is it missing, and what did each leave open. The radar answers it badly:
+- its shape depends on the order of the axes, so the same data looks different when two axes swap;
+- its area grows with the square of a value, so a doubling looks four times as large;
+- values cannot be read off it, and two radars side by side cannot be compared.
+
+**Decision.** The application page draws the radar, held to the rules that make it readable, and puts the exact table under it.
+- **The radar.** The spokes are always in the table's order, so the shape of one application compares with another's. The distance from the centre is the number of open findings, on a linear scale with its rings numbered; the area is never the measure. The line is neutral ink, because colour is for risk (docs/13 §6). A kind never scanned is a dashed spoke labelled "not scanned", not a point at zero. Every spoke carries its name and its count, and each point names itself on hover.
+- **The table** under it is the exact reading: one row per kind of testing, always in the same order (SAST, SCA, secrets, IaC, container images, DAST, cloud and cluster), then any other category something produced.
+- **Scanned by** names the scanner families and the last completed scan. A kind with no scan reads "Not scanned", in words: a gap is not a clean result.
+- A scan older than 30 days reads "stale".
+- **Open findings** is the risk mix bar of the applications list (D93), on one scale shared by every row, with the counts in words beside it. Colour is only the risk of the open findings (docs/13 §6).
+- A sentence above the table says how many kinds ran and names the missing and stale ones, so the table need not be read to learn the gaps.
+- The per-asset, per-scanner table that was the old "Coverage" section stays, folded, under "By asset and scanner".
+
+**Where the data comes from.** A scanner family counts for the categories `compliance.FamilyCategories` gives it, so this page and the compliance page agree on what was assessed. A family the map does not know (a SARIF tool such as CodeQL, a Generic JSON upload, a parser package) counts for the categories of the findings it produced; a run of such a tool that found nothing is not counted. D102 extends this: a parser id counts as its tool, and a parser package counts for the category it declares, here and on the Compliance page alike.
+
+Code: `internal/query/scan_coverage.go`, `internal/store/aggregates.go` (`OpenByCategory`, `FamilyCategories`), `web/src/routes/applications/ScanCoverage.tsx`.
+
+## D102. Compliance frameworks are resources; a status says why; exceptions, attestations and history are kept
+
+**What a review found (2026-11-16).** D52 built six frameworks as data compiled into the binary, with three honest states (open, clear, not assessed). The review found:
+1. A tenant could not add a framework of its own (an internal policy, SOC 2, CIS) without a release. D52 listed this as not built.
+2. "Clear" said too much:
+   - tenant-wide, one application's scan made a control clear for every application, including those never scanned;
+   - a control matched by CWE was "assessed" by a dependency or image scan, so a Trivy scan cleared "Injection" for code no SAST ever read.
+3. A risk-accepted finding vanished from its control: the control read "clear", and an auditor could not see the exception or who approved it.
+4. Nothing was kept, so "what did 6.3.3 read on 30 June?" had no answer.
+5. Scanners missing from the family-to-category map never counted as evidence:
+   - CodeQL, OSV-Scanner, Generic JSON and parser packages;
+   - and any clean run, which is recorded under its parser's id (`builtin:semgrep`), not the tool's name.
+6. `complianceScope`, shown in the Application example of docs/04, was not in the CRD, so Kubernetes dropped it.
+7. A control matched by CWE and by category gave a findings link that counted something other than the control.
+
+**Decision.**
+
+1. **Two resources**, the pattern of `RiskPolicy` and `ClusterRiskPolicy`:
+   - `ComplianceFramework`, in a tenant's namespace, read by that tenant;
+   - `ClusterComplianceFramework`, read by every tenant.
+
+   Both are applied with `kubectl` or `rampart apply`. Details:
+   - The spec is checked strictly, as a parser package is (D98): a misspelled field is refused, and every refusal names the control.
+   - A name equal to a built-in framework's id is refused.
+   - A spec that does not validate is stored with its reason. The last valid one stays in force, and the Compliance page lists the broken one under "Not applied".
+   - A tenant framework with the name of a platform one replaces it for that tenant.
+   - The six built-in frameworks are unchanged.
+2. **A control** says how it is read:
+   - **match** by `cwes`, `categories`, or scanner `rules` (`ruleId` may end in `*`), optionally only from `minSeverity` up;
+   - **evidence**, the kinds of scan that must have run for it to be read at all;
+   - or **manual**, attested by a person.
+3. **When a control is assessed:**
+   - A control matched by CWE alone needs a code scan, SAST or DAST. A dependency or image scan finds CWEs in other people's code; it does not assess the application's own.
+   - Evidence the control names replaces the default.
+   - Rules are evidenced by their own scanners.
+4. **"Clear" needs evidence everywhere it applies.** Tenant-wide, a control is clear only if every application in the framework's scope had an evidencing scan in the window. Otherwise it reads "not assessed" and says "assessed in 2 of 3 applications".
+5. **Scope.**
+   - `Application.complianceScope` is a list of labels, such as `pci`, in the CRD and stored.
+   - A framework with `appliesTo.complianceScope: pci` reads only the applications that list it.
+   - A framework without one reads all of them.
+6. **Every status has a sentence** that says why, in words a reader acts on. For example: "Assessed in 2 of 3 applications. The other one had no dependency (SCA) scan in the last 30 days." The same sentence is in the CSV export.
+7. **Exceptions.**
+   - A risk-accepted finding is counted apart as an approved exception. It does not make a control open.
+   - It is always named in the sentence, linked to the findings, and in the CSV.
+8. **Attestations.**
+   - A maintainer or above (the people who approve risk acceptances, docs/07) records whether a manual control is met: what was checked, an optional https link to the evidence, and an expiry (one year by default, at most three).
+   - Attestations are never changed or removed; the newest is the reading.
+   - An expired one reads "not assessed".
+   - An attestation may be for one application or for the whole tenant.
+   - Recording one, and exporting the CSV, are audited.
+9. **History.**
+   - Every six hours, under an advisory lock, one replica keeps the day's reading of every framework of every tenant, whole and as shown.
+   - `?at=2026-06-30` returns the day's kept reading, and the page offers the kept days.
+   - Readings are kept 400 days (an annual audit plus a month) and removed by housekeeping (D99).
+   - Only the whole-tenant reading is kept; a per-application past reading is not.
+10. **Scanner families.**
+    - The map gains CodeQL, OSV-Scanner, hadolint, Scorecard, CycloneDX and SPDX.
+    - A parser id (`builtin:semgrep`) counts as its tool.
+    - A parser package counts for the category it declares.
+    - Any other family counts for the categories of the findings it produced.
+11. **The findings link of a control** says when it lists only part of the count: "See part of the findings". The query language has no "or" across fields.
+
+**Not built:**
+- per-application history;
+- CEL conditions in a control (a condition must run in SQL to count findings, and CEL does not);
+- OSCAL import and export;
+- signing the CSV;
+- a stored mapping from a scanner's own control ids, such as kube-bench's CIS ids, other than `rules`.
+
+**Why resources and not a screen to edit frameworks.** Frameworks are policy, like RiskPolicy. Kept in Git and applied by the operator, a change is reviewed, versioned and audited the same way as the rest of the configuration (D69, D82).
+
+Code:
+- `internal/compliance` (`spec.go`, `CategoriesOf`, `EvidenceCategories`);
+- `internal/query/compliance.go` and `compliance_snapshots.go`;
+- `internal/store/compliance.go` and `compliance_frameworks.go`;
+- migrations 43 and 44;
+- `deploy/crds/complianceframework.yaml` and `clustercomplianceframework.yaml`;
+- `web/src/routes/compliance`.
+
+The guide for authors is docs/27.
+
+Sources: PCI DSS v4.0.1 requirement 6 and 12.5.2 (scope); SOC 2 Trust Services Criteria CC7.1, CC8.1 (evidence over a period); ISO/IEC 27001:2022 Annex A 8.25–8.29; NIST SP 800-218 (SSDF); Wiz, DefectDojo, Drata and Secureframe documentation on custom frameworks and controls.

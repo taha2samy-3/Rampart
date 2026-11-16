@@ -43,19 +43,92 @@ func TestFrameworksLoadAndAreWellFormed(t *testing.T) {
 }
 
 func TestStatusRule(t *testing.T) {
+	none := map[string]bool{}
 	sast := Control{ID: "x", Name: "x", Categories: []string{"sast"}}
-	if sast.Assessed(map[string]bool{"sca": true}) || !sast.Assessed(map[string]bool{"sast": true}) {
+	if sast.Assessed(map[string]bool{"sca": true}, none) || !sast.Assessed(map[string]bool{"sast": true}, none) {
 		t.Fatal("a control is assessed by the kinds of scan it names")
 	}
+	// D102: a weakness in the application's own code is found by a code scan; a dependency or image scan alone does
+	// not assess an injection control.
 	byCWE := Control{ID: "y", Name: "y", CWEs: []int{89}}
-	if !byCWE.Assessed(map[string]bool{"dast": true}) || byCWE.Assessed(map[string]bool{"secret": true}) {
-		t.Fatal("a control matched by weakness needs a code or component scan")
+	if !byCWE.Assessed(map[string]bool{"dast": true}, none) || byCWE.Assessed(map[string]bool{"sca": true, "container": true}, none) {
+		t.Fatal("a control matched by weakness needs a code scan (SAST or DAST)")
 	}
-	if q := byCWE.Query(); q != "cwe:89 state:open,under_investigation,affected" {
-		t.Fatalf("query: %q", q)
+	withEvidence := Control{ID: "z", Name: "z", CWEs: []int{89}, Evidence: []string{"sca"}}
+	if !withEvidence.Assessed(map[string]bool{"sca": true}, none) {
+		t.Fatal("evidence named by the control replaces the default")
 	}
-	if q := sast.Query(); q != "category:sast state:open,under_investigation,affected" {
-		t.Fatalf("query: %q", q)
+	byRule := Control{ID: "r", Name: "r", Rules: []RuleMatch{{ScannerFamily: "semgrep", RuleID: "python.*"}}}
+	if byRule.Assessed(map[string]bool{"sast": true}, none) || !byRule.Assessed(none, map[string]bool{"semgrep": true}) {
+		t.Fatal("a control matched by rules is assessed by its rules' scanner")
+	}
+	if q, exact := byCWE.Query(); q != "cwe:89 state:open,under_investigation,affected" || !exact {
+		t.Fatalf("query: %q %v", q, exact)
+	}
+	if q, exact := sast.Query(); q != "category:sast state:open,under_investigation,affected" || !exact {
+		t.Fatalf("query: %q %v", q, exact)
+	}
+	mixed := Control{ID: "m", Name: "m", CWEs: []int{89}, Categories: []string{"secret"}}
+	if _, exact := mixed.Query(); exact {
+		t.Fatal("a control matched two ways cannot be listed by one filter, and must say so")
+	}
+	if _, exact := byRule.Query(); exact {
+		t.Fatal("a wildcard rule cannot be listed exactly")
+	}
+}
+
+// D102: a clean run is recorded under its parser's id; it still counts for the parser's categories, and a family
+// nothing knows takes what the tenant says about it.
+func TestCategoriesOf(t *testing.T) {
+	if c := CategoriesOf("builtin:semgrep", nil); len(c) == 0 || c[0] != "sast" {
+		t.Fatalf("builtin:semgrep: %v", c)
+	}
+	if c := CategoriesOf("builtin:dependencytrack", nil); len(c) != 1 || c[0] != "sca" {
+		t.Fatalf("builtin:dependencytrack: %v", c)
+	}
+	if c := CategoriesOf("codeql", nil); len(c) != 1 || c[0] != "sast" {
+		t.Fatalf("codeql: %v", c)
+	}
+	if c := CategoriesOf("generic:acme", map[string][]string{"generic:acme": {"dast"}}); len(c) != 1 || c[0] != "dast" {
+		t.Fatalf("an unknown family takes the tenant's categories: %v", c)
+	}
+	if c := CategoriesOf("sarif:unknown", nil); len(c) != 0 {
+		t.Fatalf("a family nothing knows evidences nothing: %v", c)
+	}
+}
+
+// D102: a framework resource is checked strictly, and every refusal names the control and what to do.
+func TestParseFrameworkSpec(t *testing.T) {
+	good := `{"displayName":"ACME policy","version":"2026.1","appliesTo":{"complianceScope":"pci"},"controls":[
+	  {"id":"SC-1","name":"No hard-coded credentials","match":{"categories":["secret"]}},
+	  {"id":"SC-2","name":"No critical or high injection","match":{"cwes":[89,79],"minSeverity":"high"},"evidence":{"categories":["sast","dast"]}},
+	  {"id":"SC-3","name":"Threat model each release","manual":true},
+	  {"id":"SC-4","name":"No eval","match":{"rules":[{"scannerFamily":"semgrep","ruleId":"python.lang.security.audit.eval*"}]}}]}`
+	spec, err := ParseFrameworkSpec([]byte(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := spec.Framework("acme", "tenant")
+	if f.Scope != "pci" || len(f.Controls) != 4 || !f.Controls[2].Manual || f.Controls[1].MinSeverity != "high" || f.Window() != DefaultWindowDays {
+		t.Fatalf("framework: %+v", f)
+	}
+	for name, raw := range map[string]string{
+		"misspelled field":  `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","match":{"categories":["sast"]}}],"evidenceWindow":3}`,
+		"no version":        `{"displayName":"x","controls":[{"id":"a","name":"a","match":{"categories":["sast"]}}]}`,
+		"no controls":       `{"displayName":"x","version":"1","controls":[]}`,
+		"matches nothing":   `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a"}]}`,
+		"unknown category":  `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","match":{"categories":["sasst"]}}]}`,
+		"repeated id":       `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","manual":true},{"id":"a","name":"b","manual":true}]}`,
+		"manual with match": `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","manual":true,"match":{"categories":["sast"]}}]}`,
+		"bad severity":      `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","match":{"cwes":[89],"minSeverity":"severe"}}]}`,
+		"wildcard mid-rule": `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","match":{"rules":[{"scannerFamily":"semgrep","ruleId":"a*b"}]}}]}`,
+		"window too long":   `{"displayName":"x","version":"1","evidenceWindowDays":400,"controls":[{"id":"a","name":"a","manual":true}]}`,
+		"scope upper case":  `{"displayName":"x","version":"1","appliesTo":{"complianceScope":"PCI"},"controls":[{"id":"a","name":"a","manual":true}]}`,
+		"empty evidence":    `{"displayName":"x","version":"1","controls":[{"id":"a","name":"a","match":{"cwes":[89]},"evidence":{}}]}`,
+	} {
+		if _, err := ParseFrameworkSpec([]byte(raw)); err == nil {
+			t.Errorf("%s: want a refusal", name)
+		}
 	}
 }
 

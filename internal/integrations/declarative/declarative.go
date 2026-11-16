@@ -1,6 +1,7 @@
 // Package declarative runs tier-1 integrations: an IntegrationPackage that describes an outbound tool as data, an
 // HTTP request with templates, so a new tool is installed without a release (docs/19 §6, docs/23 §6.6, docs/16
-// D94). This version runs declarative notifiers; trackers, sources and code runtimes are refused by name.
+// D94). This version runs declarative notifiers and validates parser mappings (D98); trackers, sources and code
+// runtimes are refused by name.
 package declarative
 
 import (
@@ -17,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"rampart/internal/integrations/mapping"
 )
 
 // ErrInvalid wraps every refusal of a package or of a connector's use of it.
@@ -88,15 +90,27 @@ var MessageFields = []string{"title", "summary", "severity", "url", "appName", "
 var notBuilt = map[string]string{
 	"tracker":     "declarative trackers are not built yet; use a built-in tracker (Jira, GitHub)",
 	"source":      "declarative sources are not built yet; Dependency-Track is the built-in source",
-	"parser":      "parser mappings are not built yet; use a built-in parser",
 	"wasm":        "code runtimes (wasm) are tier 2 and need a ClusterIntegrationPackage, which is not built",
 	"grpc":        "code runtimes (grpc) are tier 2 and need a ClusterIntegrationPackage, which is not built",
-	"mapping":     "runtime mapping is for parsers, which are not built yet",
+	"mapping":     "runtime mapping is for kind parser",
 	"declarative": "",
 }
 
-// Parse decodes and validates IntegrationPackage.spec strictly.
+// Parse decodes and validates IntegrationPackage.spec strictly. A parser package (kind parser, runtime mapping;
+// D98) is validated by compiling its mapping; its Spec carries only the header fields, and the ingest pipeline
+// builds the parser from Raw.
 func Parse(raw []byte) (*Spec, error) {
+	var head struct {
+		Kind        string `json:"kind"`
+		Runtime     string `json:"runtime"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(raw, &head); err == nil && head.Kind == "parser" {
+		s := &Spec{Kind: head.Kind, Runtime: head.Runtime, Version: head.Version, Description: head.Description,
+			Raw: append(json.RawMessage(nil), raw...)}
+		return s, validateParser(s)
+	}
 	var s Spec
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -107,13 +121,29 @@ func Parse(raw []byte) (*Spec, error) {
 	return &s, s.validate()
 }
 
+func validateParser(s *Spec) error {
+	if s.Runtime != "mapping" {
+		if why := notBuilt[s.Runtime]; why != "" {
+			return fmt.Errorf("%w: runtime %q: %s", ErrInvalid, s.Runtime, why)
+		}
+		return fmt.Errorf("%w: runtime %q: a parser package uses runtime mapping", ErrInvalid, s.Runtime)
+	}
+	if !verRe.MatchString(s.Version) {
+		return fmt.Errorf("%w: version %q: use a semantic version such as 1.0.0", ErrInvalid, s.Version)
+	}
+	if _, err := mapping.NewParserFromSpec("check", s.Raw); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return nil
+}
+
 func (s *Spec) validate() error {
 	bad := func(f string, a ...any) error { return fmt.Errorf("%w: "+f, append([]any{ErrInvalid}, a...)...) }
 	if why := notBuilt[s.Kind]; why != "" {
 		return bad("kind %q: %s", s.Kind, why)
 	}
 	if s.Kind != "notifier" {
-		return bad("kind %q: use notifier", s.Kind)
+		return bad("kind %q: use notifier or parser", s.Kind)
 	}
 	if why, known := notBuilt[s.Runtime]; known && why != "" {
 		return bad("runtime %q: %s", s.Runtime, why)
@@ -426,7 +456,7 @@ func (n *Notifier) Send(ctx context.Context, message map[string]string) error {
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("%w: the rendered url is not a url", ErrInvalid)
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && allowHTTP(n.doer)) {
+	if u.Scheme != "https" && (u.Scheme != "http" || !allowHTTP(n.doer)) {
 		return fmt.Errorf("%w: the url must be https", ErrInvalid)
 	}
 	if !hostAllowed(u.Hostname(), n.spec.Egress) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"k8s.io/client-go/rest"
@@ -232,11 +234,25 @@ func (r *Runner) Run(ctx context.Context) error {
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	// The dtrack-sync worker is registered with River now; its handler is set once the service exists (D92).
 	dtWorker := &jobs.DTrackSyncWorker{}
+	// Notifications are one job per connector and message (docs/23 K4, D97): the worker resolves the connector and
+	// its secrets when it sends.
+	notifyWorker := &jobs.NotifyDeliveryWorker{Handle: func(ctx context.Context, a jobs.NotifyDeliveryArgs) error {
+		var msg connectors.NotificationMessage
+		if err := json.Unmarshal(a.Message, &msg); err != nil {
+			return &jobs.PermanentError{Code: "bad_message", Err: err}
+		}
+		err := notifRouter.Deliver(ctx, a.TenantID, a.Connector, msg)
+		if errors.Is(err, connectors.ErrConnectorGone) {
+			r.logger.Info("notification dropped: the connector is gone", "tenant", a.TenantID, "connector", a.Connector)
+			return nil
+		}
+		return err
+	}}
 	var dtHandler *dtwebhook.Handler
 	var dtEnqueuer query.DTrackEnqueuer
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
-		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, dtWorker))
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, dtWorker, notifyWorker))
 		if err != nil {
 			return fmt.Errorf("initializing river job queue: %w", err)
 		}
@@ -249,6 +265,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			_ = riverQ.Stop(stopCtx)
 		}()
 		queue = riverQ
+		notifRouter.SetDeliveryQueue(riverQ)
 		r.logger.Info("river job queue started (PostgreSQL backed)")
 
 		// Dependency-Track (docs/10, D92, docs/23 K5): syncs run as dtrack_sync jobs, a schedule starts the portfolio
@@ -365,6 +382,9 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			sweeper := retention.New(pgStore, sysStore.ListTenantIDs, objectsToPurge, owner, policy, r.logger)
 			go retention.Run(ctx, sweeper, sysStore.Pool(), interval)
+			// One compliance reading per framework per day, kept for audits (D102). It runs whether retention is on
+			// or not: the readings are evidence, kept 400 days by housekeeping (D99).
+			go queryAPI.RunComplianceSnapshots(ctx, sysStore.ListTenantIDs, sysStore.Pool(), 6*time.Hour, r.logger)
 			r.logger.Info("retention started", "enabled", r.cfg.Retention.Enabled, "interval", interval, "policy", policy, "partitions", owner != nil)
 		}
 	}

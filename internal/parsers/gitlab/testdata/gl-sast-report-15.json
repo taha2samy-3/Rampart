@@ -1,0 +1,52 @@
+{
+  "version": "15.0.7",
+  "vulnerabilities": [
+    {
+      "id": "8c8f2b6e4f8f0b4f2a0d5e3b8a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c",
+      "name": "Improper neutralization of special elements used in an SQL Command ('SQL Injection')",
+      "description": "SQL Injection is a critical vulnerability that can lead to data or system compromise.",
+      "severity": "High",
+      "identifiers": [
+        {"type": "semgrep_id", "name": "bandit.B608", "value": "bandit.B608", "url": "https://semgrep.dev/r/gitlab.bandit.B608"},
+        {"type": "cwe", "name": "CWE-89", "value": "89", "url": "https://cwe.mitre.org/data/definitions/89.html"},
+        {"type": "owasp", "name": "A03:2021 - Injection", "value": "A03:2021"},
+        {"type": "bandit_test_id", "name": "Bandit Test ID B608", "value": "B608"}
+      ],
+      "location": {"file": "app/db.py", "start_line": 42, "end_line": 42, "class": "Repository", "method": "find_user"},
+      "tracking": {
+        "type": "source",
+        "items": [{"file": "app/db.py", "line_start": 42, "line_end": 42, "signatures": [
+          {"algorithm": "scope_offset", "value": "app/db.py|Repository[0]|find_user[0]:3"},
+          {"algorithm": "hash", "value": "a9b1c2d3e4f5"}
+        ]}]
+      }
+    },
+    {
+      "id": "3d1e0f9a8b7c6d5e4f3a2b1c8c8f2b6e4f8f0b4f2a0d5e3b8a1c9d7e6f5a4b3c",
+      "name": "Use of a broken or risky cryptographic algorithm",
+      "description": "Detected MD5 hash algorithm which is considered insecure.",
+      "severity": "Medium",
+      "solution": "Use SHA-256 or stronger.",
+      "identifiers": [
+        {"type": "semgrep_id", "name": "bandit.B303-1", "value": "bandit.B303-1"},
+        {"type": "cwe", "name": "CWE-327", "value": "327"}
+      ],
+      "location": {"file": "app/crypto.py", "start_line": 7},
+      "tracking": {
+        "type": "source",
+        "items": [{"file": "app/crypto.py", "line_start": 7, "line_end": 7, "signatures": [
+          {"algorithm": "hash", "value": "0f1e2d3c4b5a"},
+          {"algorithm": "scope_offset", "value": "app/crypto.py:5"}
+        ]}]
+      }
+    }
+  ],
+  "scan": {
+    "analyzer": {"id": "semgrep", "name": "Semgrep", "url": "https://gitlab.com/gitlab-org/security-products/analyzers/semgrep", "vendor": {"name": "GitLab"}, "version": "5.12.1"},
+    "scanner": {"id": "semgrep", "name": "Semgrep", "url": "https://github.com/returntocorp/semgrep", "vendor": {"name": "GitLab"}, "version": "1.74.0"},
+    "type": "sast",
+    "start_time": "2026-10-01T10:00:00",
+    "end_time": "2026-10-01T10:01:12",
+    "status": "success"
+  }
+}

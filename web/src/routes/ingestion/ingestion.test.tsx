@@ -131,13 +131,16 @@ describe('ingest runs', () => {
     const tab = await screen.findByRole('tab', { name: 'Parsers & Formats' });
     await userEvent.click(tab);
 
-    expect(await screen.findByRole('heading', { name: 'Supported Parsers & Formats' })).toBeInTheDocument();
-    expect(screen.getByText('19 Built-in Engines')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Parsers and formats' })).toBeInTheDocument();
+    // What the server lists, the tenant's parser packages included (D98); no invented list.
+    expect(await screen.findByText('4 built in, 1 installed as a package')).toBeInTheDocument();
 
     const table = screen.getByRole('table', { name: 'Supported parsers table' });
     expect(within(table).getByText('SARIF 2.1.0 Parser')).toBeInTheDocument();
     expect(within(table).getByText('CycloneDX Parser (JSON/XML)')).toBeInTheDocument();
     expect(within(table).getByText('Trivy Parser (JSON)')).toBeInTheDocument();
+    const pkgRow = within(table).getByText('pip-audit (Declarative)').closest('tr')!;
+    expect(within(pkgRow).getByText('Installed package')).toBeInTheDocument();
 
     // Category filtering
     const sastFilter = screen.getByRole('button', { name: 'SAST' });
@@ -159,7 +162,7 @@ describe('ingest runs', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SARIF 2.1.0 Parser' })).toBeNull());
 
     // Custom CEL Parser dialog
-    await userEvent.click(screen.getByRole('button', { name: '+ Custom CEL Parser' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add a parser package' }));
     const celDialog = await screen.findByRole('dialog', { name: 'Declarative CEL Mapping Engine' });
     expect(celDialog).toBeInTheDocument();
     expect(within(celDialog).getByText(/apiVersion: rampart.aspm.dev\/v1alpha1/)).toBeInTheDocument();
@@ -167,5 +170,14 @@ describe('ingest runs', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Declarative CEL Mapping Engine' })).toBeNull());
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('says so when the parsers cannot be loaded, instead of showing a made-up list', { timeout: 15000 }, async () => {
+    mockFetch({ loggedIn: true, runs: [], parsers: 'error' });
+    renderApp('/ingestion');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Parsers & Formats' }));
+    // A 500 is retried twice (App.tsx) before the error shows.
+    expect(await screen.findByRole('alert', {}, { timeout: 8000 })).toHaveTextContent('The parsers could not be loaded.');
+    expect(screen.queryByRole('table', { name: 'Supported parsers table' })).toBeNull();
   });
 });

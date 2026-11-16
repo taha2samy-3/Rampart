@@ -30,10 +30,7 @@ func (h *uploadHarness) tokenFor(role auth.Role, subject string) string {
 
 func (h *uploadHarness) callAs(token, method, path string, body any, headers map[string]string) (int, []byte) {
 	h.t.Helper()
-	saved := h.token
-	h.token = token
-	defer func() { h.token = saved }()
-	return h.call(method, path, body, headers)
+	return h.do(token, method, path, body, headers)
 }
 
 func ingestRules(t *testing.T, h *uploadHarness, rules map[string]string, branch string) {

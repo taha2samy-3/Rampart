@@ -27,7 +27,8 @@ type TopFinding struct {
 // coverage, and the worst findings.
 type ApplicationPage struct {
 	domain.AppDetail
-	TopFindings []TopFinding `json:"top_findings"`
+	TopFindings  []TopFinding       `json:"top_findings"`
+	ScanCoverage []CategoryCoverage `json:"scan_coverage"`
 }
 
 // aggregator returns the store's aggregates, or answers 501 when it has none (the in-memory store).
@@ -99,7 +100,7 @@ func (a *API) handleApplicationSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	page := ApplicationPage{AppDetail: *detail, TopFindings: []TopFinding{}}
+	page := ApplicationPage{AppDetail: *detail, TopFindings: []TopFinding{}, ScanCoverage: scanCoverage(*detail, a.familyCategories(r.Context(), tenantID, detail.FamilyCategories))}
 	if fq, ok := a.store.(FindingQuerier); ok {
 		q, _ := grammar.Parse("app:" + id.String() + " state:open,under_investigation,affected")
 		if top, err := fq.QueryFindings(r.Context(), tenantID, &q, "-score", 5, nil); err == nil {

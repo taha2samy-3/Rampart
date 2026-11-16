@@ -1,0 +1,34 @@
+{
+  "version": "15.0.7",
+  "vulnerabilities": [
+    {
+      "id": "c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1",
+      "name": "Cross-site scripting (reflected)",
+      "description": "The value of the q request parameter is copied into the HTML document unencoded.",
+      "severity": "High",
+      "solution": "Encode output for the HTML context.",
+      "identifiers": [
+        {"type": "ZAProxy_PluginId", "name": "Cross Site Scripting (Reflected)", "value": "40012", "url": "https://www.zaproxy.org/docs/alerts/40012/"},
+        {"type": "CWE", "name": "CWE-79", "value": "79", "url": "https://cwe.mitre.org/data/definitions/79.html"}
+      ],
+      "location": {"hostname": "https://shop.example.com", "method": "get", "param": "q", "path": "/search"},
+      "evidence": {
+        "summary": "<script>alert(1)</script>",
+        "request": {"method": "GET", "url": "https://shop.example.com/search?q=x", "headers": [
+          {"name": "Cookie", "value": "session=f00dfeedcafe"},
+          {"name": "Accept", "value": "text/html"}
+        ]},
+        "response": {"reason_phrase": "OK", "status_code": 200, "headers": [{"name": "Content-Type", "value": "text/html"}]}
+      }
+    }
+  ],
+  "scan": {
+    "analyzer": {"id": "gitlab-dast", "name": "GitLab DAST", "vendor": {"name": "GitLab"}, "version": "5.0.0"},
+    "scanner": {"id": "browserker", "name": "GitLab DAST", "vendor": {"name": "GitLab"}, "version": "5.0.0"},
+    "type": "dast",
+    "start_time": "2026-10-01T10:00:00",
+    "end_time": "2026-10-01T10:05:00",
+    "status": "success",
+    "scanned_resources": [{"method": "GET", "type": "url", "url": "https://shop.example.com/search"}]
+  }
+}

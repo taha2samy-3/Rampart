@@ -15,7 +15,8 @@ export const qk = {
   access: () => ['access'] as const,
   bindings: () => ['bindings'] as const,
   taxonomies: () => ['taxonomies'] as const,
-  taxonomyStatus: (id: string, app: string) => ['taxonomies', 'status', id, app] as const,
+  taxonomyStatus: (id: string, app: string, at = '') => ['taxonomies', 'status', id, app, at] as const,
+  taxonomyHistory: (id: string) => ['taxonomies', 'history', id] as const,
   notifications: () => ['notifications'] as const,
   applications: {
     list: () => ['applications', 'list'] as const,

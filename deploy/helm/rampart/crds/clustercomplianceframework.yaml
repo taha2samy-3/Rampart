@@ -1,0 +1,162 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clustercomplianceframeworks.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterComplianceFramework
+    listKind: ClusterComplianceFrameworkList
+    plural: clustercomplianceframeworks
+    singular: clustercomplianceframework
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Display Name, type: string, jsonPath: .spec.displayName}
+        - {name: Version, type: string, jsonPath: .spec.version}
+        - {name: Scope, type: string, jsonPath: .spec.appliesTo.complianceScope}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+        - {name: Age, type: date, jsonPath: .metadata.creationTimestamp}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                A compliance framework every tenant sees, described as data (docs/16 D102): controls matched to open
+                findings by CWE, category or scanner rule, or attested by a person. Its name must not be the id of a built-in
+                framework. The operator validates the spec and reports a refused spec in status.conditions; the last valid spec
+                stays in force.
+              required: [displayName, version, controls]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                version:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                  description: The version of the framework, shown on every report that reads it.
+                source:
+                  type: string
+                  maxLength: 2048
+                  description: Where the framework is published, for example a URL.
+                description:
+                  type: string
+                  maxLength: 4096
+                note:
+                  type: string
+                  maxLength: 4096
+                appliesTo:
+                  type: object
+                  description: Without it the framework reads every application of the tenant.
+                  required: [complianceScope]
+                  properties:
+                    complianceScope:
+                      type: string
+                      pattern: '^[a-z0-9][a-z0-9:._-]{0,63}$'
+                      description: Only the applications whose spec.complianceScope lists this scope.
+                evidenceWindowDays:
+                  type: integer
+                  minimum: 1
+                  maximum: 366
+                  description: How recent a scan must be to count as evidence (default 30).
+                controls:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [id, name]
+                    properties:
+                      id:
+                        type: string
+                        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+                      name:
+                        type: string
+                        minLength: 1
+                      description:
+                        type: string
+                      match:
+                        type: object
+                        description: >-
+                          Which open findings break the control: one of the CWEs, or of the categories, or raised by
+                          one of the rules; then, when minSeverity is set, only at least that band.
+                        properties:
+                          cwes:
+                            type: array
+                            items:
+                              type: integer
+                              minimum: 1
+                              maximum: 10000
+                          categories:
+                            type: array
+                            items:
+                              type: string
+                              enum: [sast, sca, secret, iac, container, dast, cspm, compliance, license, supply_chain]
+                          rules:
+                            type: array
+                            items:
+                              type: object
+                              required: [scannerFamily, ruleId]
+                              properties:
+                                scannerFamily:
+                                  type: string
+                                  pattern: '^[a-z0-9][a-z0-9:._-]{0,63}$'
+                                ruleId:
+                                  type: string
+                                  maxLength: 201
+                                  description: A scanner rule id; it may end in * to take every rule with that prefix.
+                          minSeverity:
+                            type: string
+                            enum: [critical, high, medium, low]
+                      evidence:
+                        type: object
+                        description: Which scans must have run for the control to be assessed at all.
+                        properties:
+                          categories:
+                            type: array
+                            minItems: 1
+                            items:
+                              type: string
+                              enum: [sast, sca, secret, iac, container, dast, cspm, compliance, license, supply_chain]
+                      manual:
+                        type: boolean
+                        description: Attested by a person, not matched to findings; a manual control has no match or evidence.
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

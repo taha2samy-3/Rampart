@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -180,12 +180,19 @@ export async function listTaxonomies(signal?: AbortSignal): Promise<Taxonomy[]> 
   const raw = await get<{ items?: Taxonomy[] | null }>('/api/v1/taxonomies', { signal });
   return raw.items ?? [];
 }
-export async function getTaxonomyStatus(id: string, application: string | undefined, signal?: AbortSignal): Promise<TaxonomyStatus> {
-  const raw = await get<TaxonomyStatus & { status?: ControlStatus[] | null }>(`/api/v1/taxonomies/${encodeURIComponent(id)}/status`, { query: { application: application || undefined }, signal });
+export async function getTaxonomyStatus(id: string, application: string | undefined, signal?: AbortSignal, at?: string): Promise<TaxonomyStatus> {
+  const raw = await get<TaxonomyStatus & { status?: ControlStatus[] | null }>(`/api/v1/taxonomies/${encodeURIComponent(id)}/status`, { query: { application: application || undefined, at: at || undefined }, signal });
   return { ...raw, status: raw.status ?? [] };
 }
-export const taxonomyCsvUrl = (id: string, application: string | undefined) =>
-  `/api/v1/taxonomies/${encodeURIComponent(id)}/status?format=csv${application ? `&application=${encodeURIComponent(application)}` : ''}`;
+export const taxonomyCsvUrl = (id: string, application: string | undefined, at?: string) =>
+  `/api/v1/taxonomies/${encodeURIComponent(id)}/status?format=csv${application ? `&application=${encodeURIComponent(application)}` : ''}${at ? `&at=${encodeURIComponent(at)}` : ''}`;
+/** The days a reading of the framework was kept, newest first (D102). */
+export async function getTaxonomyHistory(id: string, signal?: AbortSignal): Promise<string[]> {
+  const raw = await get<{ days?: string[] | null }>(`/api/v1/taxonomies/${encodeURIComponent(id)}/history`, { signal });
+  return raw.days ?? [];
+}
+export const attestControl = (framework: string, control: string, body: { status: 'passed' | 'failed'; note: string; evidence_url?: string; expires_at?: string; application_id?: string }) =>
+  post<Attestation>(`/api/v1/taxonomies/${encodeURIComponent(framework)}/controls/${encodeURIComponent(control)}/attestations`, body);
 
 // --- Phase 3: Saved Views & Groups (docs/21 §6.1, §6.2) ---
 export async function listSavedViews(signal?: AbortSignal): Promise<SavedView[]> {
