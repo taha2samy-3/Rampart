@@ -1,7 +1,13 @@
+# Rampart Helm Chart Release Workflow
+# Matches the gold standard OCI release architecture used in Jasmin-gateway and cert-manager-webhook-hostinger:
+# Packages the chart, publishes to GHCR OCI, signs with Cosign, attests SLSA L3 provenance,
+# registers the repository on Artifact Hub and pushes metadata layer via ORAS.
+
 name: Release Helm Chart
 
 on:
   push:
+    tags: ["v*.*.*"]
     branches:
       - main
     paths:
@@ -9,15 +15,26 @@ on:
       - '.github/workflows/helm-release.yml'
       - 'artifacthub-repo.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Chart version to release (e.g. 0.1.0)'
+        required: false
+        default: '0.1.0'
 
 permissions:
   contents: write
   packages: write
   id-token: write
+  attestations: write
+
+env:
+  CHART_DIR: deploy/helm/rampart
+  CHART_NAME: rampart
+  DISPLAY_NAME: Rampart
 
 jobs:
-  release-helm:
-    name: Package & Release Helm Chart
+  build-and-publish:
+    name: Build, Attest & Publish Helm Chart
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -30,52 +47,145 @@ jobs:
         with:
           version: v3.16.2
 
+      - name: Docker Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine Version & Metadata
+        id: meta
+        run: |
+          if [[ -n "${{ inputs.version }}" ]]; then
+            ver="${{ inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver="$(yq '.version' "$CHART_DIR/Chart.yaml")"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+          # Sync README into chart dir for Artifact Hub rendering
+          cp README.md "$CHART_DIR/README.md"
+          
+          # Ensure owners and email are properly aligned
+          if [ -f artifacthub-repo.yml ]; then
+            cp artifacthub-repo.yml "$CHART_DIR/artifacthub-repo.yml"
+          fi
+
       - name: Lint Helm Chart
         run: |
-          helm lint deploy/helm/rampart
-
-      - name: Configure Git for Chart Releaser
-        run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-
-      - name: Copy Artifact Hub Metadata into Chart
-        run: |
-          if [ -f artifacthub-repo.yml ]; then
-            cp artifacthub-repo.yml deploy/helm/rampart/
-          fi
+          helm lint --strict "$CHART_DIR"
 
       - name: Package Chart
         run: |
-          mkdir -p .cr-release-packages
-          helm package deploy/helm/rampart --destination .cr-release-packages
+          mkdir -p dist
+          helm package "$CHART_DIR" --destination dist
 
-      - name: Publish to GitHub Packages (OCI Registry)
+      - name: Push Helm Chart to GHCR OCI
+        id: push
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          for pkg in .cr-release-packages/*.tgz; do
-            if [ -f "$pkg" ]; then
-              echo "Pushing $pkg to oci://ghcr.io/${REPO_LOWER}/charts"
-              helm push "$pkg" "oci://ghcr.io/${REPO_LOWER}/charts"
-            fi
-          done
+          repo="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+          echo "$REGISTRY_PASSWORD" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          version="${{ steps.meta.outputs.version }}"
+          out=""
+          out="$(helm push "dist/${CHART_NAME}-${version}.tgz" "oci://$repo" 2>&1)" || {
+            echo "::error::Helm push failed: $out"
+            exit 1
+          }
+          echo "$out"
+          digest="$(sed -nE 's/^Digest: (sha256:[a-f0-9]{64})$/\1/p' <<<"$out")"
+          [[ -n "$digest" ]] || { echo "::error::could not read chart digest"; exit 1; }
+          echo "chart=$repo/$CHART_NAME" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Run Chart Releaser (GitHub Releases & Pages)
-        uses: helm/chart-releaser-action@v1.6.0
+      - name: Attest Chart Provenance (SLSA Build Level 3)
+        uses: actions/attest-build-provenance@v2
         with:
-          charts_dir: deploy/helm
-          skip_existing: true
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          subject-name: ${{ steps.push.outputs.chart }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
-      - name: Trigger Artifact Hub Sync (Optional)
-        if: env.ARTIFACTHUB_API_KEY_ID != '' && env.ARTIFACTHUB_API_KEY_SECRET != ''
+      - name: Attest Chart Archive
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tgz
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign Chart (Cosign Keyless)
         env:
-          ARTIFACTHUB_API_KEY_ID: ${{ secrets.ARTIFACTHUB_API_KEY_ID }}
-          ARTIFACTHUB_API_KEY_SECRET: ${{ secrets.ARTIFACTHUB_API_KEY_SECRET }}
+          REF: ${{ steps.push.outputs.chart }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$REF"
+
+      - name: Register on Artifact Hub & Resolve Repository ID
+        env:
+          CHART: ${{ steps.push.outputs.chart }}
+          AH_KEY_ID: ${{ secrets.ARTIFACTHUB_API_KEY_ID }}
+          AH_KEY_SECRET: ${{ secrets.ARTIFACTHUB_API_KEY_SECRET }}
         run: |
-          echo "Notifying Artifact Hub of repository update..."
-          curl -s -X POST "https://artifacthub.io/api/v1/helm/webhook" \
-            -H "X-API-KEY-ID: ${ARTIFACTHUB_API_KEY_ID}" \
-            -H "X-API-KEY-SECRET: ${ARTIFACTHUB_API_KEY_SECRET}" || true
+          id=""
+          if [[ -n "$AH_KEY_ID" && -n "$AH_KEY_SECRET" ]]; then
+            api=https://artifacthub.io/api/v1
+            url="oci://$CHART"
+            hdr=(-H "X-API-KEY-ID: $AH_KEY_ID" -H "X-API-KEY-SECRET: $AH_KEY_SECRET")
+            alias="$(curl -fsS "${hdr[@]}" "$api/users/profile" 2>/dev/null | jq -r .alias || true)"
+            if [[ -n "$alias" ]]; then
+              echo "Artifact Hub authenticated as alias: $alias"
+              find_id() {
+                local res
+                res="$(curl -fsS "${hdr[@]}" "$api/repositories/search?user=$alias&name=$CHART_NAME" 2>/dev/null || true)"
+                if [[ -z "$res" || "$res" == "[]" ]]; then
+                  res="$(curl -fsS "$api/repositories/search?name=$CHART_NAME" 2>/dev/null || true)"
+                fi
+                jq -r --arg url "$url" '[.[] | select(.url == $url) | .repository_id][0] // empty' <<<"$res"
+              }
+              id="$(find_id)"
+              if [[ -z "$id" ]]; then
+                echo "Registering $url on Artifact Hub..."
+                jq -n --arg url "$url" --arg name "$CHART_NAME" --arg display "$DISPLAY_NAME" \
+                  '{kind: 0, name: $name, display_name: $display, url: $url}' |
+                  curl -fsS "${hdr[@]}" -H 'Content-Type: application/json' -X POST "$api/repositories/user" --data-binary @- || true
+                id="$(find_id)"
+              fi
+            else
+              echo "::notice::Artifact Hub API key rejected or invalid; proceeding with local repositoryID"
+            fi
+          fi
+
+          if [[ -z "$id" && -f artifacthub-repo.yml ]]; then
+            id="$(yq 'select(.repositoryID != null) | .repositoryID' artifacthub-repo.yml 2>/dev/null || true)"
+          fi
+
+          if [[ -n "$id" && "$id" != "null" && "$id" != '""' ]]; then
+            export id
+            yq -i '.repositoryID = strenv(id)' artifacthub-repo.yml
+            echo "Artifact Hub repository ID: $id"
+          else
+            echo "::notice::Artifact Hub repository ID will be synced once registered"
+          fi
+
+      - name: Setup ORAS CLI
+        uses: oras-project/setup-oras@v2
+
+      - name: Push Artifact Hub Metadata (ORAS)
+        env:
+          CHART: ${{ steps.push.outputs.chart }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          oras push "$CHART:artifacthub.io" \
+            --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+
+      - name: Upload Chart Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rampart-chart
+          path: dist/*.tgz
+          if-no-files-found: error
