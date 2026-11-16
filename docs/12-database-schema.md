@@ -27,6 +27,19 @@ Sketch of the v1 schema. Final DDL lives in `internal/store/migrations` (goose).
 > | `finding.lineage_key` (19) | D57 |
 > | `finding.owner` (20) | D59 |
 > | `risk_acceptance_proof`, insert-only for the application role (21) | D60 |
+> | `cluster_policy` (global, no row-level security) and `policy_object` kind `risk` (22) | D62, D63 |
+> | `hierarchy_node`, `application.hierarchy_node_id` and `hierarchy_path` (23) | D62 |
+> | `access_binding` scoped to a hierarchy path or the whole tenant, `subject_kind`, `idp` (24) | D48, D64 |
+> | `identity_provider` with row-level security, visible to every tenant when cluster-wide (25) | D64 |
+> | `connector` with row-level security, written by the system role only (26) | D69 |
+> | `action_ledger` reservations as the ticket outbox (27) | D70 A6 |
+> | `ticket`, `ticket_finding` (many to many) and `webhook_delivery` (shared delivery cache); replaces `ticket_link` above (28) | D70 B1, B8 |
+> | `held_close` (29) | D71 |
+> | `source_trust`, global `federation_jti` (30); one trust rule per source and issuer (34) | D72 |
+> | `quota_usage`; `api_token.rate_limit`, `quota` (31) | D73 |
+> | `dtrack_sync`, `dtrack_project`; Dependency-Track-specific instead of the generic `upstream_project` and `upstream_cursor` below, a departure recorded in docs/23 DT6 (32) | D74 |
+> | `finding_group`, `finding_group_member` (without the `application_id`, `group_by` and key below; docs/23 C8), `saved_view` (33) | D76 |
+> | Policy `webhook_lookup` on `connector`: one row by id for inbound webhooks (35) | D78 |
 >
 > From schema version 6 on, each decision in 16 names its migration; `internal/store/migrations` is the DDL.
 

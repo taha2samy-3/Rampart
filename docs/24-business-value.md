@@ -1,182 +1,184 @@
-# 24 — Business value: what Rampart is worth when it is finished, and how to talk about it
+# 24 — Business value: Rampart against the products already on the market
 
-Written 2026-11-16 for the conversations about the project: with management, a prospective customer, a partner or an investor. It says what problem Rampart solves, for whom, why now, what makes it different, how its value is measured, and what is true today, so nothing is promised that is not built.
+Written 2026-11-16, rewritten the same day from market sources. It answers one question: **why would anyone choose Rampart over what they can buy or download today?** Every market fact has a source at the end. Vendor claims are marked as vendor claims, and figures from aggregators as secondary. Where sources disagree, both figures are given. What Rampart has built today is in [09](09-roadmap.md) and [23](23-phase-3-design-review.md); this document never counts as done what is only planned.
 
-The technical design is in [00](00-vision-and-scope.md) to [19](19-integration-sdk.md); the status is in [09](09-roadmap.md) and [23](23-phase-3-design-review.md). Every market fact below has a source at the end. Where a figure is an estimate or comes from a secondary source, it says so.
+## 1. The short answer
 
-## 1. In one paragraph
+The ASPM market is real, small and consolidating. It is worth about $0.7 billion a year (2025) and is growing at about 9 % a year. The independent vendors are being bought by scanner and cloud-security companies:
+- CrowdStrike bought Bionic.
+- Wiz bought Dazz, and Google then bought Wiz for $32 billion.
+- Snyk folded its ASPM product into its Enterprise plan.
 
-Organisations run many security scanners: code, dependencies, containers, infrastructure, secrets, web. Each produces its own list, in its own format, with its own severity. Security teams spend their time merging those lists, arguing about what matters, chasing developers in Jira, and assembling evidence for auditors by hand.
+Self-hosted ASPM exists. Black Duck, Invicti (formerly Kondukto), OX Security and Checkmarx sell on-prem or air-gapped options, but only as enterprise contracts with unpublished prices. The one open-source option, DefectDojo, moved single sign-on and role-based access into its paid tier in version 3.0. That paid tier is metered at $0.15 per finding.
 
-**Rampart is one place that takes in every scanner's output, removes the duplicates, ranks what is left by real risk, sets a deadline for each issue, sends the work to the developer's own tools, and shows auditors the evidence.** This category is called Application Security Posture Management (ASPM). Rampart is built to run inside the customer's own Kubernetes cluster, configured as code, with the enterprise features that competitors sell separately included from the start.
+**Rampart's opening** is the space between those two:
+- open and self-hosted, like DefectDojo;
+- with the enterprise basics in the core (SSO, per-application roles, multi-tenancy, KEV and EPSS in an explained score), which competitors sell;
+- configured as Kubernetes resources, which none of the products reviewed here document;
+- independent of any scanner vendor.
 
-## 2. The problem, in the customer's words
+**Rampart's weaknesses are just as concrete:**
+- about twenty integrations against hundreds;
+- no scanners of its own;
+- no AI features;
+- no reachability analysis;
+- no customer references.
 
-| What the customer lives with | What it costs them |
-|---|---|
-| Six or more scanners, six formats, the same flaw reported by three of them | Analysts triage the same issue several times; numbers in reports are inflated and not trusted |
-| About 48,000 new CVEs were published in 2025 (about 40,000 in 2024) | "Fix all criticals" is not possible; without exploit data (KEV, EPSS) and business context, teams fix the wrong things first |
-| Deadlines kept in spreadsheets | SLA breaches are found at audit time, not before |
-| Tickets created by hand, and closed in Jira without the security record knowing | Work is lost between tools; nobody can say what is really fixed |
-| Audit evidence assembled by hand for PCI DSS, ISO 27001 or SOC 2 | Days of senior time per audit, with weak evidence |
-| Commercial ASPM platforms that run as SaaS only, with opaque pricing | Banks, government, defence and others who must keep vulnerability data in-house cannot use them |
-| DefectDojo, the open-source reference | It is slow at scale (imports of 1,000+ findings take minutes; filters take minutes at 5 million findings) and runs as four services to operate. SSO and role-based access left the free edition in version 3.0 |
+## 2. The market in numbers
 
-The vulnerability data itself is sensitive: it is a map of how to attack the organisation. That is the main reason the "self-hosted, in your own cluster" property matters commercially, and not only technically.
-
-## 3. Why now
-
-| Driver | What it requires | What in Rampart answers it |
+| Fact | Figure | Source quality |
 |---|---|---|
-| **EU Cyber Resilience Act**: reporting of actively exploited vulnerabilities applies from 11 September 2026; vulnerability handling and the rest apply from 11 December 2027. Fines reach €15 million or 2.5 % of worldwide turnover | Manufacturers must know which of their products carry which vulnerability, handle them, and report exploited ones fast | Inventory per application and component, KEV flag on every finding, deadlines, VEX export, SBOM via Dependency-Track |
-| **PCI DSS 4.0.1**, requirement 6.3.3 | Critical and high vulnerabilities patched within 30 days of the patch | The `pci-dss` deadline preset, breach alerts, compliance view for requirement 6 (D52, D63) |
-| **CISA KEV / BOD 22-01** and **FedRAMP** vulnerability rules | Known-exploited vulnerabilities fixed by CISA's due date; FedRAMP remediation timeframes | KEV due date caps every deadline; `cisa-bod`, `fedramp-rev5` and `fedramp-vdr` presets (D63) |
-| **ISO/IEC 27001:2022 A.8.8** (technical vulnerabilities), **NIST SSDF** and US secure-software attestation | A managed, evidenced vulnerability process | Audit log, risk acceptance with owner, expiry and proof files, evidence export (D46, D52, D60) |
-| **Gartner's ASPM category**: as quoted by vendors, Gartner expects 80 % of regulated organisations that use application security testing to adopt ASPM by 2027 (about 29 % when it said so). The report is paywalled; this is a secondary source | Buyers now have a budget line and a name for this product | Rampart is built to the capability list of that category (research/02 §1) |
+| ASPM software market | about $705 M in 2025, $763 M in 2026, about $1.31 B by 2032 (9.2 % a year) | one research firm's published summary (360iResearch); other reports are paywalled |
+| Gartner's expected adoption | 80 % of regulated organisations using application security testing to adopt ASPM by 2027 | Gartner via vendor summaries (the report is paywalled) |
+| CrowdStrike buys Bionic (ASPM) | $239.7 M per CrowdStrike's SEC filing (press reported about $350 M), September 2023 | SEC filing |
+| Wiz buys Dazz (ASPM, remediation) | about $450 M, November 2024 | press, citing sources |
+| Google buys Wiz | $32 B in cash, closed 11 March 2026; Wiz keeps its brand inside Google Cloud | Google press release |
+| ArmorCode | $16 M new funding in March 2026, $81 M raised in total (CB Insights: $83.5 M) | company press release |
+| OX Security | $60 M Series B, May 2025 | press |
+| Apiiro | says its ARR grew 104 % in 2025 and that it closed the four largest enterprise ASPM deals to date | vendor claim |
+| CVEs published | about 48,000 in 2025 (about 40,000 in 2024) | independent counts, sources differ by a few percent |
 
-## 4. Who buys, who uses, what each gets
+**What the numbers say.** Money and buyers are there. The category is also being absorbed into larger platforms that sell their own scanners or cloud security. A buyer who picks an ASPM owned by a scanner vendor gets a correlation layer whose owner sells one of the tools being correlated.
 
-| Person | Their question | What Rampart gives them |
-|---|---|---|
-| **CISO / head of security** (buyer) | "Are we getting safer, and can I prove it?" | Posture score and trend per business unit, deadline adherence, mean time to remediate, evidence for audits (D43, D62) |
-| **Application security lead** (champion) | "What should my team fix first?" | One deduplicated list ranked by an explainable score: every point shown with its reason (KEV, EPSS, internet exposure, data sensitivity, criticality) (D40, D63) |
-| **Developers and engineering managers** | "What do I have to fix, by when, and is my build blocked?" | Tickets in Jira or GitHub, a CI gate that blocks only *new* critical issues, "my work" view (D37, D59, D70) |
-| **Platform / Kubernetes team** | "Can we run it, and keep it safe and boring?" | One binary, Helm chart, operator, configuration as Kubernetes resources reviewed in Git, no data leaving the cluster (ADR 0001, 0004; D49) |
-| **Compliance and audit** | "Show me the evidence" | Framework views (OWASP Top 10 2021 and 2025, CWE Top 25, PCI DSS, ISO 27001, NIST SSDF), append-only audit log, exports (D46, D52, D58) |
-| **Managed security providers (MSSP)** | "Can I serve many clients from one install?" | Tenants isolated in the database itself (row-level security), per-tenant identity providers (ADR 0005, D64) |
+## 3. Who is on the market
 
-## 5. What makes it different
-
-| | Rampart (when finished) | DefectDojo open source | DefectDojo Pro | Commercial ASPM (ArmorCode, Apiiro, Wiz, …) | Spreadsheets and Jira |
+| Product | Owner and type | Deployment | Price model (published?) | Breadth | Note |
 |---|---|---|---|---|---|
-| Where it runs | Customer's Kubernetes, air-gapped possible | Self-hosted | SaaS or self-hosted | Mostly SaaS; on-prem sales-led | — |
-| SSO and roles per application | Included | Removed in 3.0 | Included | Included | — |
-| KEV and EPSS in the score | Included, explained point by point | Fields only, filled by scanners | Included | Included | Manual |
-| Multi-tenant | From the first table | No | Not documented | Yes | — |
-| Configuration | As code (Kubernetes resources, GitOps) | Admin screens (~100 settings) | Admin screens | Admin screens | — |
-| Formats in and out | SARIF, CycloneDX, SPDX, OpenVEX in; VEX, CSV, JSON, OCSF out; no lock-in | Many parsers | Many parsers | 260 to 375+ connectors claimed | — |
-| Dependency-Track | First-class: events, mapping, triage import | Receives DT's push | Receives DT's push | Varies | — |
-| Operating it | One binary, PostgreSQL, object storage | Django, Celery, Beat, Redis, PostgreSQL | Managed or same | Vendor-managed | — |
-| Pricing | Open core (licence to be decided) | Free | Subscription | Subscription, opaque | Staff time |
+| **DefectDojo** (open source) | DefectDojo Inc., open core | self-hosted | free | 200+ report formats | SSO and roles removed from the open edition in 3.0 |
+| **DefectDojo Pro** | same | SaaS or self-hosted | **published:** $100 a month + $0.15 per finding processed; annual by quote (AWS Marketplace once listed a team plan at $2,145 a month for up to 20,000 findings) | 140+ API connectors, 200+ parsers | metered per finding, so noisy scanners cost money |
+| **ArmorCode** | independent, venture-funded | SaaS; on-prem not documented publicly | by active developers and AI usage, by quote; AWS Marketplace entry from $4,500 a year | 320–375+ integrations claimed | leading independent; pushing "agentic AI" |
+| **Apiiro** | independent | not confirmed by the sources read | by quote | deep code analysis, risk graph | strong in large enterprises (vendor claim) |
+| **OX Security** | independent | SaaS and **on-prem** (documented) | by quote | pipeline security, PBOM | |
+| **Cycode** | independent | SaaS; on-prem listed by an aggregator only | by quote | own scanners + ingestion | bought Bearer (code scanning) |
+| **Snyk (AppRisk)** | scanner vendor | SaaS | Team $25 per developer per month; Enterprise by quote (median about $45,000 a year per Vendr data, secondary); AppRisk folded into Enterprise in late 2025 | Snyk's scanners first, third-party ingestion | an ASPM from the company selling the scanner |
+| **Wiz (Wiz Code, Dazz)** | Google Cloud | SaaS | by quote | code-to-cloud graph | now part of Google |
+| **Checkmarx One ASPM** | scanner vendor | SaaS; self-managed in a private GovCloud; on-prem air-gapped only for SAST | by quote | Checkmarx scanners + others | |
+| **Black Duck Software Risk Manager** (formerly Code Dx) | scanner vendor | SaaS, on-prem, Kubernetes (Helm), **air-gapped** | by quote | 150+ tools | closest to Rampart's deployment model; enterprise sale |
+| **Invicti ASPM** (formerly Kondukto) | scanner vendor (DAST) | on-prem and **air-gapped** (vendor statement) | by quote | 110+ integrations | |
+| **Aikido** | independent, SMB-focused | SaaS | **published:** free for 2 users; $350 / $700 / $1,050 a month for 10 users | bundles its own scanners | the "all-in-one for small teams" end |
+| **Brinqa** | independent, risk-based vulnerability management | SaaS | by quote | 260+ connectors | asset-centric rather than application-centric |
 
-**The four sentences to remember:**
-1. **Your data stays in your cluster.** It runs where regulated organisations need it, including air-gapped.
-2. **Enterprise features in the core.** SSO, roles, multi-tenancy, KEV and EPSS are what DefectDojo charges for.
-3. **Every score explains itself.** No black box: each point of the 0–1000 score has a named reason.
-4. **Configured as code.** Deadlines, risk rules, applications and connectors are reviewed in Git like any other change.
+What this table shows:
+1. **Self-hosted is not unique.** Black Duck SRM, Invicti and OX offer it, and SRM supports air-gapped. All three are enterprise sales with unpublished prices, and two of the three are owned by scanner vendors.
+2. **Published prices exist only at the edges:**
+   - Aikido (SMB, SaaS, its own scanners);
+   - Snyk Team (per developer);
+   - DefectDojo Pro (per finding).
+3. **Nobody documents configuration as code.** None of the products reviewed documents its policies, applications and connectors as Kubernetes resources reviewed in Git. They are configured in admin screens or APIs. This was checked against the documentation that could be read, not against every product's internals.
+4. **The open-source option is DefectDojo, and its open edition lost SSO and roles in 3.0.** Its users also report the performance limits at scale listed in [research/01](research/01-defectdojo.md) §8:
+   - imports of more than 1,000 findings take minutes;
+   - filters take minutes at 5 million findings;
+   - editing a finding takes 50 s at 100,000.
 
-Two further points matter in some markets:
-- An Arabic interface is planned as a first-class language (Phase 4), which is rare in this category.
-- Dependency-Track, which many teams already run, is treated as a partner rather than a competitor.
+## 4. Where Rampart can win
 
-## 6. How the value is measured
+Each segment below is a buyer the incumbents serve badly, with the reason taken from section 3.
 
-Rampart already computes most of these numbers itself, so the value can be shown with the customer's own data rather than claimed.
+| Segment | What they have today | Why it hurts | What Rampart offers | Status |
+|---|---|---|---|---|
+| **DefectDojo open-source users who outgrew it** | DefectDojo 3.x | No SSO or roles without Pro. Pro costs grow with findings ($0.15 each): 50,000 findings processed in a month is $7,600 at the published rate. Slow at scale | SSO with several identity providers, roles per application, multi-tenancy, in the core; rescans that update and close correctly; a migration path (DefectDojo-compatible import, A17, planned) | core built; migration tool not built |
+| **Regulated organisations that must self-host but will not sign a six-figure contract** (banks, public sector, defence suppliers, health) | spreadsheets, DefectDojo, or an enterprise on-prem quote | Black Duck SRM, Invicti and OX on-prem are sold by quote to large buyers | the same deployment model (self-hosted, Kubernetes, air-gapped planned) with an open core | self-hosted built; air-gapped bundle is v1.0 (Phase 4) |
+| **Platform teams that run everything as code** | admin screens | security policy lives outside Git and outside review | deadlines, risk rules, applications, identity providers and connectors as Kubernetes resources, reconciled by an operator, with status conditions; `rampart apply` without Kubernetes | built (D41, D55, D63, D64, D69) |
+| **Buyers who want a neutral layer** | an ASPM owned by Snyk, Checkmarx, Black Duck, Invicti or Google | the correlation layer is sold by the company selling one of the scanners | no scanner of its own; standard formats in and out (SARIF, CycloneDX, SPDX, OpenVEX; VEX, CSV, JSON, OCSF) | built; OCSF class needs correcting (23 E1) |
+| **Managed security providers** | per-customer instances or a SaaS ASPM licence | multi-tenancy is rare in open tools | tenants isolated in the database itself (row-level security), per-tenant identity providers | built; tenant self-service is Phase 5 |
+| **Dependency-Track users** | DT pushes FPF exports to DefectDojo on a schedule | one-way, no events, no mapping | Dependency-Track as a source: webhooks, project mapping, triage import | **designed; the sync is not wired into the server yet (23 K5)** |
 
-| Value | Metric | Where Rampart computes it |
-|---|---|---|
-| Less noise | Raw records received vs distinct findings kept; findings grouped across tools | ingest run statistics (created, untouched); correlation groups (D37, D44) |
-| Right things first | Share of open findings that are known-exploited (KEV) or high-EPSS, and how long they stay open | risk factors and filters `kev:`, `epss` (D35, D40) |
-| Faster fixing | Mean time to remediate per risk band | Overview, Applications (D43) |
-| Deadlines met | Deadline adherence over 90 days; breaches per business unit | Overview, hierarchy roll-ups (D43, D62) |
-| Coverage | Applications with no scan in 14 days | Coverage (D43) |
-| Audit effort | Time to produce evidence for a framework | Compliance export (D52) |
-| Developer friction | Builds blocked only by *new* critical issues, not old ones | CI gate (D37, D57) |
+## 5. Where Rampart loses today, and what closes it
 
-**A simple model to fill in with the customer's numbers** (do not quote it with invented inputs):
-- Triage time saved per month = (raw records − distinct findings) × minutes to triage one record ÷ 60 × cost per analyst hour.
-- Audit time saved per audit = hours spent assembling evidence today − hours with the export.
-- Exposure reduced = days a KEV vulnerability stays open today − days with KEV-capped deadlines.
-- Operating cost avoided = services and infrastructure of the current tool − one binary, one database, one object store.
-
-**Prove it with a pilot.** Four to six weeks, one business unit, its real scanners:
-1. Week 1: connect the scanners and record the baseline (raw vs distinct findings, open KEV issues, deadline adherence).
-2. Weeks 2 to 5: triage and fix in Rampart.
-3. Last week: compare the same numbers.
-
-The pilot's report is the business case.
-
-## 7. How it can make money (options, not decisions)
-
-The licence and the open-core boundary are still open ([09](09-roadmap.md) open decisions 1 and 2; Apache-2.0 is proposed in D7). The usual options in this market:
-
-| Model | Who pays | Fits Rampart because | Watch out |
+| Gap | Against whom | Closes it | When |
 |---|---|---|---|
-| Open core + enterprise subscription | Larger organisations | The core is useful alone and spreads; enterprise extras (support, SLAs, compliance packs, plugin certification) are sold | DefectDojo was criticised for moving SSO and roles to Pro: decide the boundary once, publicly |
-| Support and services | Regulated organisations self-hosting | Self-hosting needs installation, upgrades, integration work | Services scale with people, not software |
-| Managed hosting (single-tenant per customer) | Teams without a platform team | Same product, operated for them | Competes with the "your data stays with you" message unless single-tenant |
-| MSSP licence | Security providers | Multi-tenancy is built in | Needs tenant self-service (Phase 5) |
-| Integration catalogue and partners | Scanner vendors | Doc 19's "Verified" level: vendors maintain their own integration | Needs the plugin model finished first (23 §6) |
+| About 20 integrations against 140–375+ | ArmorCode, DefectDojo, Brinqa, Black Duck | the integration SDK and installable plugins (23 §6); SARIF and CycloneDX already cover tools that emit them | plugin design, then Phase 4–5 |
+| No scanners of its own | Aikido, Snyk, Cycode, Checkmarx | by design: Rampart is the neutral layer. It does not suit a buyer who wants one tool for everything | not planned |
+| No AI triage or AI remediation | ArmorCode, Apiiro, DefectDojo Pro | not planned. The explainable score is the counter-argument; an MCP server is P2 | P2 |
+| No reachability or deep code analysis | Apiiro, Snyk, Phoenix | reachability is consumed from other tools, not computed (01 D7) | P2 |
+| No SaaS offering | everyone selling SaaS | a managed single-tenant offering is a business option (section 6) | open |
+| No production references, no external security review, high availability not validated | everyone | v1.0 exit criteria (09 Phase 4) | Phase 4 |
+| Connectors are compiled in, not installable | ArmorCode, DefectDojo Pro connectors | 23 §6 | next after the current fixes |
 
-## 8. What is true today (say this, not more)
+Saying these gaps out loud is part of the pitch. A buyer will find them anyway, and an honest gap list is what a regulated buyer expects.
 
-| Status | What |
-|---|---|
-| **Built and tested (the MVP, Phases 0 to 2)** | Ingest of SARIF, CycloneDX, SPDX and native reports (Trivy, Grype, Semgrep, Gitleaks, TruffleHog, Checkov, Bandit, Nuclei, ZAP, Dependency-Check, Snyk, kube-bench, Prowler); duplicates and rescans handled; triage; risk acceptance with approval and proof; explainable score with KEV and EPSS; deadlines with PCI, FedRAMP and CISA presets; compliance views; audit log; retention; roles per application; sign-in with several identity providers; CLI and CI gate; VEX in and out; operator and Helm chart; tenants isolated in the database |
-| **Built in part (Phase 3)** | Slack, Teams, e-mail, webhooks, Jira and GitHub connectors work, but are built into the core rather than installable plugins. The Dependency-Track sync is written but not yet running in the server. Exports, groups and live updates have gaps. Details: [23](23-phase-3-design-review.md) |
-| **Not yet (v1.0, Phase 4)** | High availability validated, air-gapped bundle, SAML, performance proven on 5 million findings, external security review, Arabic interface |
+## 6. Price positioning
 
-**Do not say:**
-- **a throughput figure.** The 100,000-results-in-60-seconds goal was measured, not met (about 130 s), and withdrawn (D35). Say instead "streams reports of any size in bounded memory and never double-counts".
-- **"hundreds of integrations" or "install any tool as a plugin".** Not until 23 §6 is built.
-- **that it scans code.** It does not, by design. It works with the scanners the customer already has.
-- **that it uses AI.** It does not today, and the explainable score is the selling point.
-- **"production-ready".** That is v1.0. Today it is a working MVP suited to a pilot.
+There is no Rampart price yet: the licence and the open-core boundary are open ([09](09-roadmap.md) open decisions 1 and 2). The market gives these anchors:
 
-## 9. How to talk about it
+| Anchor | Published figure | What it means for Rampart |
+|---|---|---|
+| DefectDojo Pro | $100 a month + $0.15 per finding | Per-finding metering punishes exactly what an ASPM exists to absorb, noisy scanners. A flat price per tenant or per application is simpler to defend |
+| Aikido | $350–$1,050 a month for 10 users, its own scanners included | The price ceiling for small teams. Rampart should not compete there; that is a bundle, not a correlation layer |
+| Snyk | $25 per developer a month (Team); Enterprise median about $45,000 a year (secondary) | Per-developer pricing is the norm buyers know |
+| ArmorCode | by active developers and AI usage; Marketplace entry from $4,500 a year | The independent leader's model |
+| Black Duck SRM, Invicti, OX on-prem | quote only | The self-hosted segment has no public price. A published price is itself a differentiator there |
+
+**A defensible model to propose** (a recommendation, not a decision):
+- the core is open, with SSO, roles and multi-tenancy inside it, because removing them is what DefectDojo's open users resent;
+- paid: support with response times; compliance packs (FedRAMP, CRA evidence bundles); certified integrations; the air-gapped bundle with signed feed snapshots;
+- priced per application or per tenant, published on the website.
+
+## 7. What must be true before these claims are made
+
+| Claim | Needs | Where |
+|---|---|---|
+| "Enterprise basics in the core" | the licence decided and published | 09 open decisions |
+| "Air-gapped" | the OCI bundle and feed mirrors | Phase 4 |
+| "Dependency-Track first-class" | the sync wired and settled correctly | 23 K5, DT1–DT4 |
+| "Installable integrations" | the plugin design | 23 §6 |
+| "Production-ready" | high availability, external security review, 5-million-finding performance | Phase 4 |
+| "Faster than DefectDojo" | **not to be claimed.** Rampart's own ingest goal was missed and withdrawn (D35). What can be said: reports of any size stream in bounded memory, and rescans never double-count | D35 |
+
+## 8. How to talk about it
 
 ### 30 seconds
-"Every security scanner your teams run produces its own list. Rampart puts them in one place, removes the duplicates, ranks what is left by real risk (whether it is actively exploited, whether it is on the internet, what data it touches), gives each issue a deadline, and sends it to the developer's Jira. It runs inside your own Kubernetes cluster, so the map of your weaknesses never leaves your hands."
+"ASPM is a $700-million market that is being bought up by scanner and cloud companies. If you want one view of all your scanners' findings and you cannot send that data to a SaaS, you have two choices today: an enterprise contract with a quote-only price, or DefectDojo, whose free edition dropped single sign-on and roles. Rampart is the third option: open, self-hosted on your Kubernetes, with SSO, roles, multi-tenancy and an explained risk score in the core, configured as code, and owned by no scanner vendor."
 
-### Two minutes
-Use this order:
-1. **The problem** (section 2): too many scanners and duplicates, 48,000 CVEs a year, and evidence assembled by hand.
-2. **Why now** (section 3): CRA reporting since September 2026, PCI DSS 6.3.3.
-3. **What it does:** ingest → deduplicate → score with reasons → deadline → ticket → evidence.
-4. **Why this one** (section 5): your data stays with you, enterprise features in the core, explainable, as code.
-5. **The ask:** a pilot on one business unit with its real scanners, measured on the numbers in section 6.
-
-### By audience
-| Talking to | Lead with | Show |
-|---|---|---|
-| CISO | Proof of improvement, audit readiness, data stays in-house | Overview trend, deadline adherence, compliance view |
-| AppSec lead | One ranked list, every score explained | Finding with its score breakdown; "also reported by" |
-| Engineering manager | Only new criticals block the build; tickets in their tool | CI gate result; Jira ticket |
-| Platform team | One binary, Helm, GitOps, NetworkPolicy, no egress needed | A `ScanSource` and `SLAPolicy` in Git, `Ready=True` |
-| Compliance | Evidence on demand, append-only audit log | Framework CSV export; risk acceptance with proof and expiry |
-| Investor or management | Growing category, regulation pushing it, gap for self-hosted and open | Sections 3, 5 and 7 |
-
-### Questions you will be asked
-| Question | Answer |
+### Answers to the questions that will come
+| Question | Answer, with the fact behind it |
 |---|---|
-| "Why not DefectDojo?" | Its own users report minutes-long imports and filters at scale. It runs as four services. Since 3.0, SSO and roles are paid-only. Rampart keeps DefectDojo's good ideas (rescans, risk acceptance, Jira) and fixes those (research/01 §8) |
-| "Why not ArmorCode or Wiz?" | They are strong, and mostly SaaS. If the vulnerability data must stay inside your network, or you need air-gapped, they are hard to adopt. Rampart is built for exactly that |
-| "Does it replace our scanners?" | No. It makes the scanners you already pay for useful together |
-| "Is it ready?" | The core workflow is built and tested and is ready for a pilot. Production v1.0 needs high availability, the air-gapped bundle and a security review (section 8) |
-| "What about our data?" | It never leaves your cluster. Tenants are isolated in the database itself; secrets are encrypted; every action is in an append-only audit log |
-| "Can it integrate with tool X?" | Today, if X writes SARIF or CycloneDX, yes. Native parsers cover the common tools. Installable integrations without a release are the next step (23 §6) |
-| "What does it cost?" | Still open (section 7). For a pilot: infrastructure only, one database and one object store |
+| "Why not DefectDojo?" | Its open edition removed SSO and roles in 3.0. Pro is $0.15 per finding, so 50,000 findings a month is $7,600. Its users report minutes-long imports and filters at scale |
+| "ArmorCode is the leader, why not them?" | It is strong and has 320+ integrations. It is priced by quote per developer and AI usage, and on-prem is not publicly documented. If your data must stay in-house, or you want to own the configuration in Git, that is where Rampart fits |
+| "Black Duck SRM already runs air-gapped" | True, and it is the closest model. It is an enterprise sale with no public price, from a vendor that sells one of the scanners it correlates |
+| "Snyk gives us AppRisk in Enterprise" | It does, folded into Snyk Enterprise. It is SaaS, and it is Snyk's view of your other vendors' findings |
+| "How many integrations?" | About twenty today, plus any tool that writes SARIF or CycloneDX. Installable integrations are the next step. Do not round this up |
+| "Is it production-ready?" | No. It is a working MVP suited to a pilot; v1.0 needs high availability, the air-gapped bundle and an external security review |
+| "AI?" | None. Every point of the score has a named reason, which an auditor can check and a model's output cannot |
+
+### Do not say
+- **"the only self-hosted ASPM".** Black Duck SRM, Invicti and OX are self-hosted.
+- **"cheaper than X".** There is no price yet.
+- **"hundreds of integrations".**
+- **"production-ready".**
+- **"faster than DefectDojo"**, or any throughput figure (D35).
 
 ## Sources
 
-**Project documents (the basis for every claim about Rampart):**
-- [00](00-vision-and-scope.md), [01](01-features.md), [09](09-roadmap.md), [16](16-implementation-decisions.md) (the D-sections named in the text), [19](19-integration-sdk.md), [23](23-phase-3-design-review.md);
-- ADR 0001, 0004, 0005;
-- [research/01](research/01-defectdojo.md): DefectDojo, with its issue numbers;
-- [research/02](research/02-aspm-market.md): the market, Gartner as quoted by vendors, ArmorCode, others.
+**Market size and adoption:**
+- 360iResearch, ASPM Software market summary: https://www.marketresearch.com/360iResearch-v4164/Application-Security-Posture-Management-Software-43523152
+- Frost & Sullivan, ASPM Market 2025–2030 (paywalled; scope only): https://store.frost.com/application-security-posture-management-aspm-market-global-2025-2030.html
+- Gartner, as quoted by vendors: [research/02](research/02-aspm-market.md) §1.
 
-**CVE counts:**
-- The Stack, "CVEs in 2025" (48,185 published in 2025; other counts range from about 46,400 to 49,200 by source and date): https://www.thestack.technology/cves-in-2025-analysis/
-- Socket, citing Jerry Gamblin's count (39,962 in 2024): https://www.plushcap.com/content/socket/blog/socket-cve-volume-surges-past-48000-in-2025-as-wordpress-plugin-ecosystem-drives-growth
+**Acquisitions:**
+- CrowdStrike–Bionic, SEC figure: https://dealroom.co/news/168660-crowdstrikes-acquisitions-what-it-paid-per-sec-filings/ (and the press report: https://www.govinfosecurity.com/crowdstrike-to-buy-appsec-startup-bionic-for-reported-350m-a-23113)
+- Wiz–Dazz: https://siliconangle.com/2024/11/21/wiz-acquires-cybersecurity-startup-dazz-reported-450m/
+- Google–Wiz: https://www.googlecloudpresscorner.com/2026-03-11-Google-Completes-Acquisition-of-Wiz
 
-**EU Cyber Resilience Act:**
-- European Commission, CRA reporting: https://digital-strategy.ec.europa.eu/en/policies/cra-reporting
-- Ireland NCSC, CRA: https://ncsc.gov.ie/cra/
-- PwC on the September 2026 reporting obligations: https://www.pwc.ch/en/insights/regulation/eu-cyber-resilience-act.html
+**Funding:**
+- ArmorCode: https://www.businesswire.com/news/home/20260303648962/en/ArmorCode-Doubles-Growth-Boosts-AI-Security-Governance-with-New-Funding-and-Board-Appointment and https://www.cbinsights.com/company/armorcode/financials
+- OX Security: https://www.crowdfundinsider.com/2025/05/239500-ox-security-reports-60m-series-b-to-focus-devs-on-critical-risks-as-ai-enhances-software-development/
+- Apiiro (vendor claim): https://apiiro.com/news_item/apiiro-achieves-104-arr-growth-in-2025-as-fortune-500-adopt-agentic-appsec-to-reduce-massive-risk-across-the-software-development-lifecycle
 
-**Other regulation and standards:**
-- PCI DSS v4.0.1, requirement 6.3.3;
-- CISA BOD 22-01 and the KEV catalogue: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
-- FedRAMP rules as recorded in D63;
-- ISO/IEC 27001:2022 Annex A 8.8;
-- NIST SP 800-218 (SSDF).
+**Pricing:**
+- DefectDojo: https://defectdojo.com/pricing and https://aws.amazon.com/marketplace/pp/prodview-stklscizixsra
+- Aikido (several aggregators, checked July 2026): https://www.capterra.com/p/10015770/Aikido/ ; https://g2.com/products/aikido-security/pricing
+- Snyk: https://www.withorb.com/pricing-atlas/snyk ; https://pricingsaas.com/companies/snyk/diffs/2025Q4 ; https://us.fitgap.com/products/snyk-apprisk
+- ArmorCode: https://www.rfp.wiki/it-security/application-security-testing/application-security-posture-management-tools/armorcode/apiiro
+
+**Deployment options:**
+- OX Security on-prem: https://docs.ox.security/get-started/onboarding-to-ox/prerequisites-and-access/on-prem-preparation-guide
+- Invicti: https://www.invicti.com/aspm-comparison/invicti-vs-oxsecurity
+- Checkmarx (FedRAMP, self-managed, SAST on-prem): https://checkmarx.com/checkmarx-fedramp/
+- Black Duck SRM: https://assets.blackduck.com/images/v1777986889/ds-software_risk_manager/ds-software_risk_manager.pdf ; https://events.govexec.com/2026-fedramp-summit/download/-20260720150555-Federal_Datasheet.pdf ; https://appsecsanta.pages.dev/software-risk-manager (secondary)
+- Phoenix Security, SaaS: https://www.gartner.com/reviews/market/application-security-posture-management-aspm-tools/compare/product/phoenix-security-platform-vs-checkmarx-aspm
+
+**Other:**
+- DefectDojo editions and its performance issues: [research/01](research/01-defectdojo.md); https://docs.defectdojo.com/get_started/about/defectdojo_versions/
+- CVE counts: https://www.thestack.technology/cves-in-2025-analysis/
+- ArmorCode, Brinqa, other vendors' integration counts: [research/02](research/02-aspm-market.md).

@@ -48,17 +48,23 @@ func NewMiddleware(cfg config.LimitsConfig, store QuotaStore, authn *auth.Authen
 	}
 }
 
+// tighten returns the rate and burst for a caller whose token may carry its own rate. A token can only lower the
+// platform rate, never raise it (D79, the "tighten, never loosen" rule of D22): whoever can create a token must not
+// be able to lift their tenant above the platform's limit.
+func (m *Middleware) tighten(tokenRate *int) (float64, int) {
+	if tokenRate == nil || *tokenRate <= 0 || float64(*tokenRate) >= m.apiRate {
+		return m.apiRate, m.apiBurst
+	}
+	rate := float64(*tokenRate)
+	return rate, int(math.Min(float64(m.apiBurst), math.Max(5, rate)))
+}
+
 // Wrap returns an http.Handler that enforces rate limits and quotas.
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		// Inbound connector webhooks have their own tighter per-address and per-connector limiter
-		if strings.Contains(path, "/connectors/") && strings.HasSuffix(path, "/webhook") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
+		// Inbound webhooks live under /hooks (D78) with their own limiter; this middleware never sees them.
 		if strings.HasPrefix(path, "/api/v1") {
 			if !m.handleAPIRateLimit(w, r) {
 				return
@@ -85,10 +91,7 @@ func (m *Middleware) handleAPIRateLimit(w http.ResponseWriter, r *http.Request) 
 
 	if user != nil && user.Subject != "" {
 		key = "api:tok:" + user.TenantID.String() + ":" + user.Subject
-		if user.RateLimit != nil && *user.RateLimit > 0 {
-			rate = float64(*user.RateLimit)
-			burst = int(math.Max(5, rate))
-		}
+		rate, burst = m.tighten(user.RateLimit)
 	}
 
 	allowed, retryAfter, limit, remaining := m.limiter.Allow(key, rate, burst)
@@ -120,10 +123,7 @@ func (m *Middleware) handleIngestRateLimitAndQuota(w http.ResponseWriter, r *htt
 
 	if user != nil && user.TenantID != uuid.Nil {
 		key = "ingest:tenant:" + user.TenantID.String()
-		if user.RateLimit != nil && *user.RateLimit > 0 {
-			rate = float64(*user.RateLimit)
-			burst = int(math.Max(5, rate))
-		}
+		rate, burst = m.tighten(user.RateLimit)
 	}
 
 	allowed, retryAfter, limit, remaining := m.limiter.Allow(key, rate, burst)
@@ -151,34 +151,37 @@ func (m *Middleware) handleIngestRateLimitAndQuota(w http.ResponseWriter, r *htt
 		}
 
 		if m.store != nil && user != nil && user.TenantID != uuid.Nil {
-			quotaLimit := m.quotaHourly
-			if user.Quota != nil && *user.Quota > 0 {
-				quotaLimit = *user.Quota
+			// A token's own quota is counted on its own counter and may only be lower than the tenant's (D79);
+			// the tenant's counter always applies, with the platform limit, so no token can raise it.
+			counters := []struct {
+				key   string
+				limit int64
+				who   string
+			}{}
+			if user.Quota != nil && *user.Quota > 0 && *user.Quota < m.quotaHourly && user.Subject != "" {
+				counters = append(counters, struct {
+					key   string
+					limit int64
+					who   string
+				}{"ingest:uploads:token:" + user.Subject, *user.Quota, "token"})
 			}
+			counters = append(counters, struct {
+				key   string
+				limit int64
+				who   string
+			}{"ingest:uploads", m.quotaHourly, "tenant"})
 
-			allowedQuota, quotaRetryAfter, _, err := CheckAndIncrementQuota(
-				r.Context(),
-				m.store,
-				user.TenantID,
-				"ingest:uploads",
-				time.Hour,
-				quotaLimit,
-				1,
-				time.Now(),
-			)
-			if err != nil {
-				// Internal error checking quota: allow request to proceed so quota storage failure doesn't block ingest
-				return true
-			}
-			if !allowedQuota {
-				Problem429(
-					w,
-					"quota-exceeded",
-					"Quota Exceeded",
-					"Hourly upload quota exceeded for tenant. Please retry after the next window start.",
-					quotaRetryAfter,
-				)
-				return false
+			for _, c := range counters {
+				allowedQuota, quotaRetryAfter, _, err := CheckAndIncrementQuota(r.Context(), m.store, user.TenantID, c.key, time.Hour, c.limit, 1, time.Now())
+				if err != nil {
+					// Quota storage failure does not block ingest (D73); the in-memory limiter above still applies.
+					return true
+				}
+				if !allowedQuota {
+					Problem429(w, "quota-exceeded", "Quota Exceeded",
+						"Hourly upload quota exceeded for this "+c.who+". Please retry after the next window start.", quotaRetryAfter)
+					return false
+				}
 			}
 		}
 	}

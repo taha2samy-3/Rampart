@@ -75,6 +75,7 @@ The review answers three questions:
 - **Basis**: doc 07 §4; doc 15 (Valkey for rate limits); RFC 7239.
 
 ### C4 (P1) A token's limit may only tighten the tenant's
+- **Status: done for the token rule and the table of limits (D79, 2026-11-16).** `Tenant.spec.quotas` and `ScanSource.maxReportBytes` are recorded there as not built; federated tokens are counted on the tenant counter.
 - **Now** (D73): `api_token.rate_limit` and `api_token.quota` override the global defaults.
 - **Problem**: whoever can create a token can raise their own tenant above the platform's limit. The limits also live in five places, with no rule for which one wins:
 

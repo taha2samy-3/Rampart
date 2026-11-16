@@ -91,6 +91,8 @@ Environment prefix `RAMPART_`, nested keys joined with `_`. File `/etc/rampart/c
 | `operator.mode` | `auto` | `auto`, `on`, `off` |
 | `retention.enabled`, `.interval` | `true`, `6h` | the retention sweep (D53) |
 | `retention.occurrencesDays`, `.rawReportsDays`, `.secretReportsDays`, `.resolvedFindingsDays`, `.eventsDays`, `.auditDays`, `.runResultsDays` | 180, 90, 7, 730, 730, 2555, 30 | days; 0 keeps for ever; minimums in D53 |
+| `connectors.ssrfAllowlist.cidrs`, `.hosts`, `.allowInternalHttp` | — | private ranges and internal hosts connectors may reach (D69); never metadata, loopback or link-local |
+| `connectors.ssrfAllowlist.tenants`, `.connectorTypes` | — | required when the allowlist grants anything: tenant ids or `*`, connector types or `*` (D77) |
 
 Helm values skeleton: `mode`, `image`, `config` (the tree above), `bundled.postgres.enabled`, `bundled.seaweedfs.enabled`, `bundled.valkey.enabled`, `bundled.nats.enabled`, `ingress|gateway`, `targets.<name>.{replicas,resources,autoscaling}`, `keda.enabled`, `networkPolicy.enabled`, `serviceMonitor.enabled`.
 
@@ -1349,3 +1351,29 @@ D70 and D73 put the Jira and GitHub callbacks at `POST /api/v1/t/{tenant}/connec
 - **Tested:** `TestInbound_PathIsTheConnectorIDAndType` (wrong type, unknown id, the old tenant path, a name instead of an id: all refused and nothing acted on; the right path works), the existing inbound tests on the new path, `TestInboundWebhookPath`, `TestApply_Connector`, and on PostgreSQL `TestGetConnectorByID_OnPostgreSQL` (the application role finds the row and its tenant by id, an unknown id finds nothing, and afterwards another tenant still sees none of the connectors).
 
 Sources: docs 04 §4, 11 (Hooks), 15 (route split); D27 (`ingest-gateway` serves the write path), D70, D73; docs/23 C2.
+
+## D79. A token can only tighten the platform's limits, and the limits in one table (docs/23 C4)
+
+D73 let `api_token.rate_limit` and `api_token.quota` **override** the global defaults, so a token with `rate_limit: 1000` or `quota: 1000000` lifted its tenant above the platform's limit, and whoever can create a token could do it. The hourly upload quota was also counted on one tenant counter but compared with the token's own number, so one token's quota decided for the whole tenant.
+
+- **Tighten, never loosen** (the rule D22 applies to upload options). A token's rate applies only when it is lower than `limits.apiPerSecond`; its burst is then at most the platform's. A token's quota applies only when it is lower than `limits.ingestPerHour`.
+- **Two counters.** The tenant counter (`ingest:uploads`) always applies, with the platform limit. A token with a lower quota is also counted on its own counter (`ingest:uploads:token:<subject>`), so it is held to its number without changing what the tenant's other tokens may do. The token counter is checked first; an upload refused by the tenant counter after passing the token counter is counted once on the token, which errs on the strict side.
+- **Unchanged from D73:** a failure of the quota store does not block ingest (the in-memory limiter still applies); the limits are per replica in memory (docs/23 C3 is separate).
+- **Removed:** the middleware's skip for `/connectors/…/webhook` paths, dead since D78 moved webhooks to `/hooks`.
+
+**The limits, in one place.** Every document that names a limit should point here.
+
+| Limit | Where it is set | Default | Enforced |
+|---|---|---|---|
+| Requests per second to `/api/v1` and `/ingest/v1` | `limits.apiPerSecond`; a token may lower it | 50 (burst 50, at least 10) | yes, per replica (D73) |
+| Uploads per hour per tenant | `limits.ingestPerHour`; a token may lower it for itself | 1000 | yes, shared across replicas in `quota_usage` |
+| Request body of a direct upload (`Content-Length`) | `limits.reportBytes` | 50 MiB | yes, at the middleware |
+| Direct multipart upload (`POST /reports`) | constant | 32 MiB | yes, in the handler (docs/11) |
+| Declared size of a presigned upload | `ingest.maxReportBytes` | 512 MiB | yes, at create and signed into the URL (D9, D34) |
+| Webhook deliveries per address and connector | `limits.webhookPerMinute` | 60 a minute, burst 5 | yes (D73, D78) |
+| `Tenant.spec.quotas` (`maxIngestsPerHour`, `maxReportBytes`) | docs/04 | — | **not built**: the resource field is not read. When built it joins the same rule: the smallest of platform, tenant, source and token wins |
+| `ScanSource.ingestionPolicy.maxReportBytes` | docs/04, stored | — | **not built**: stored, not enforced |
+
+- **Tested:** `TestTokenCannotRaiseLimits` (a token asking for rate 1000 and quota 1,000,000 is held to the platform's 5 a second and 2 an hour) and `TestTokenQuotaTightensOnItsOwnCounter` (a token with quota 1 gets one upload while another token of the tenant keeps the tenant's quota); the D73 tests unchanged.
+
+Sources: D22 ("clients may tighten, never loosen"); D73; docs/23 C4.

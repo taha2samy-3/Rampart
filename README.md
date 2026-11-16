@@ -64,6 +64,11 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [17 Design review](docs/17-design-review.md) | What two independent reviews found, what was fixed, what is still open |
 | [18 Brand](docs/18-brand.md) | Logo, colour, type, voice |
 | [19 Integration SDK](docs/19-integration-sdk.md) | How to add parsers, API sources, trackers and notifiers without changing the core |
+| [20 Phase 3 plan](docs/20-phase-3-plan.md) | Milestones 3.0 to 3.6, vendor facts verified, reviews of the first code |
+| [21 Phase 3 remaining](docs/21-phase-3-remaining.md) | The work list for Phase 3 and its status |
+| [22 Phase 3 finalization](docs/22-phase-3-finalization-plan.md) | The UI and API left to close Phase 3 |
+| [23 Phase 3 design review](docs/23-phase-3-design-review.md) | Decisions to change, Dependency-Track checked against its sources, connectors as plugins |
+| [24 Business value](docs/24-business-value.md) | The problem, the market, how value is measured, how to talk about it |
 | [ADRs](docs/adr/) | Six architecture decision records |
 | [Research](docs/research/) | DefectDojo, the ASPM market, standards, Kubernetes-native patterns |
 

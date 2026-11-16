@@ -228,3 +228,79 @@ func TestIngestQuota_Middleware(t *testing.T) {
 		t.Fatalf("expected 413 Payload Too Large, got %d", wLarge.Code)
 	}
 }
+
+// D79: a token's rate and quota can only tighten the platform's limits, never raise them.
+func TestTokenCannotRaiseLimits(t *testing.T) {
+	cfg := config.LimitsConfig{APIPerSecond: 5, IngestPerHour: 2, ReportBytes: 1 << 20}
+	store := &mockQuotaStore{usage: make(map[string]int64)}
+	authn := auth.NewAuthenticator()
+	tenantID := domain.NewID()
+	bigRate, bigQuota := 1000, int64(1_000_000)
+	raw := auth.FormatToken(tenantID, "token_asking_for_more_123456789")
+	authn.RegisterToken(raw, &auth.TokenRecord{ID: domain.NewID(), TenantID: tenantID, Subject: "greedy", Role: auth.RoleIngest,
+		RateLimit: &bigRate, Quota: &bigQuota, CreatedAt: time.Now().UTC()})
+	handler := ratelimit.NewMiddleware(cfg, store, authn).Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	send := func(method, path string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader("r"))
+		req.Header.Set("Authorization", "Bearer "+raw)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// Quota: the platform allows 2 uploads an hour; the token's 1,000,000 does not lift it.
+	for i := 0; i < 2; i++ {
+		if code := send(http.MethodPost, "/ingest/v1/reports"); code != http.StatusAccepted {
+			t.Fatalf("upload %d: %d", i, code)
+		}
+	}
+	if code := send(http.MethodPost, "/ingest/v1/reports"); code != http.StatusTooManyRequests {
+		t.Fatalf("a token must not raise the tenant quota: upload 3 got %d", code)
+	}
+
+	// Rate: the platform allows 5 a second with a burst of 10; the token's 1000 does not lift it.
+	limited := false
+	for i := 0; i < 30; i++ {
+		if send(http.MethodGet, "/api/v1/findings") == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("a token must not raise the platform rate")
+	}
+}
+
+// D79: a token with a lower quota is held to it on its own counter, while other tokens of the tenant keep the
+// tenant's quota.
+func TestTokenQuotaTightensOnItsOwnCounter(t *testing.T) {
+	cfg := config.LimitsConfig{APIPerSecond: 100, IngestPerHour: 10, ReportBytes: 1 << 20}
+	store := &mockQuotaStore{usage: make(map[string]int64)}
+	authn := auth.NewAuthenticator()
+	tenantID := domain.NewID()
+	one := int64(1)
+	small := auth.FormatToken(tenantID, "token_with_small_quota_1234567")
+	other := auth.FormatToken(tenantID, "token_with_tenant_quota_123456")
+	authn.RegisterToken(small, &auth.TokenRecord{ID: domain.NewID(), TenantID: tenantID, Subject: "small", Role: auth.RoleIngest, Quota: &one, CreatedAt: time.Now().UTC()})
+	authn.RegisterToken(other, &auth.TokenRecord{ID: domain.NewID(), TenantID: tenantID, Subject: "other", Role: auth.RoleIngest, CreatedAt: time.Now().UTC()})
+	handler := ratelimit.NewMiddleware(cfg, store, authn).Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	send := func(tok string) int {
+		req := httptest.NewRequest(http.MethodPost, "/ingest/v1/reports", strings.NewReader("r"))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code
+	}
+	if send(small) != http.StatusAccepted || send(small) != http.StatusTooManyRequests {
+		t.Fatal("the small token must get exactly one upload")
+	}
+	for i := 0; i < 3; i++ {
+		if code := send(other); code != http.StatusAccepted {
+			t.Fatalf("another token of the tenant must keep the tenant quota: upload %d got %d", i, code)
+		}
+	}
+}
