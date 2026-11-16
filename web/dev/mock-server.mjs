@@ -716,6 +716,44 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/views') return json(res, { views: VIEWS });
     if (p === '/api/v1/settings') return json(res, { riskAcceptanceApproval: true, riskAcceptanceMaxDays: 90 });
     if (p === '/api/v1/inventory') return json(res, { assets: INVENTORY });
+    const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/impact)?$/.exec(p);
+    if (vm) {
+      const vid = decodeURIComponent(vm[1]);
+      if (vm[2]) {
+        return json(res, {
+          id: vid,
+          findings: 1,
+          open: 1,
+          applications: [
+            {
+              id: 'app-payments',
+              slug: 'payments-service',
+              name: 'Payments Service',
+              findings: 1,
+              open: 1,
+              max_severity: 'high',
+              max_risk_score: 850,
+              asset_ids: ['asset-1'],
+            },
+          ],
+        });
+      }
+      return json(res, {
+        id: vid,
+        known: true,
+        record: {
+          id: vid,
+          summary: 'Vulnerability in component',
+          description: 'A security vulnerability that allows remote attackers to compromise the component.',
+          epss_score: 0.95,
+          cvss_score: 8.5,
+          cvss_vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+          cwes: [79, 89],
+          links: [`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`],
+        },
+        links: [`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`],
+      });
+    }
     if (p === '/api/v1/findings') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list findings', 'The database did not answer within 5 s.');
       if (dataMode === 'empty') return json(res, { items: null, total: 0 });
