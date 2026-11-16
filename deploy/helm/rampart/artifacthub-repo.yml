@@ -1,0 +1,6 @@
+# Artifact Hub repository metadata file
+# https://artifacthub.io/docs/topics/repositories/
+repositoryID: ""
+owners:
+  - name: Taha Samy
+    email: security@rampart.aspm.dev

@@ -4,6 +4,10 @@ description: Rampart Cloud-Native Application Security Posture Management (ASPM)
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+home: https://rampart.aspm.dev
+icon: https://raw.githubusercontent.com/taha2samy-3/Rampart/main/web/public/favicon.svg
+sources:
+  - https://github.com/taha2samy-3/Rampart
 keywords:
   - aspm
   - appsec
@@ -13,4 +17,13 @@ keywords:
 maintainers:
   - name: rampart-team
     email: security@rampart.aspm.dev
+annotations:
+  artifacthub.io/category: security
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/taha2samy-3/Rampart
+    - name: Issue Tracker
+      url: https://github.com/taha2samy-3/Rampart/issues
 

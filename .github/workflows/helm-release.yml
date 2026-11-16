@@ -1,0 +1,82 @@
+name: Release Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'deploy/helm/**'
+      - '.github/workflows/helm-release.yml'
+      - 'artifacthub-repo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release-helm:
+    name: Package & Release Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Lint Helm Chart
+        run: |
+          helm lint deploy/helm/rampart
+
+      - name: Configure Git for Chart Releaser
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Copy Artifact Hub Metadata into Chart
+        run: |
+          if [ -f artifacthub-repo.yml ]; then
+            cp artifacthub-repo.yml deploy/helm/rampart/
+          fi
+
+      - name: Package Chart
+        run: |
+          mkdir -p .cr-release-packages
+          helm package deploy/helm/rampart --destination .cr-release-packages
+
+      - name: Publish to GitHub Packages (OCI Registry)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          for pkg in .cr-release-packages/*.tgz; do
+            if [ -f "$pkg" ]; then
+              echo "Pushing $pkg to oci://ghcr.io/${REPO_LOWER}/charts"
+              helm push "$pkg" "oci://ghcr.io/${REPO_LOWER}/charts"
+            fi
+          done
+
+      - name: Run Chart Releaser (GitHub Releases & Pages)
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: deploy/helm
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Trigger Artifact Hub Sync (Optional)
+        if: env.ARTIFACTHUB_API_KEY_ID != '' && env.ARTIFACTHUB_API_KEY_SECRET != ''
+        env:
+          ARTIFACTHUB_API_KEY_ID: ${{ secrets.ARTIFACTHUB_API_KEY_ID }}
+          ARTIFACTHUB_API_KEY_SECRET: ${{ secrets.ARTIFACTHUB_API_KEY_SECRET }}
+        run: |
+          echo "Notifying Artifact Hub of repository update..."
+          curl -s -X POST "https://artifacthub.io/api/v1/helm/webhook" \
+            -H "X-API-KEY-ID: ${ARTIFACTHUB_API_KEY_ID}" \
+            -H "X-API-KEY-SECRET: ${ARTIFACTHUB_API_KEY_SECRET}" || true
