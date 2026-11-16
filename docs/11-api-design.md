@@ -99,7 +99,8 @@ OpenAPI 3.1, generated from Go types (huma). Three route families, served by dif
 | `GET /integrations`, `GET /integrations/{id}` | Catalogue of installed integrations: kind, runtime, version, support level, config schema, required secrets and egress, conformance result |
 | `POST /integrations/{id}/enable`, `/disable` | Tenant admin enables an installed integration for the tenant |
 | `POST /integrations/validate` | Dry-run a mapping or declarative definition against an uploaded sample; returns the canonical output and record errors |
-| `GET /sources`, `GET /connectors` | Status of sources and connectors, including DT sync state and unmapped projects |
+| `GET /sources`, `GET /connectors` | Status of sources and connectors, including DT sync state and unmapped projects (`GET /connectors` built, D82) |
+| `GET /connectors/catalogue`, `POST /connectors/validate` | Connector types with schemas and examples; a dry run of a `Connector` resource. Connectors are created only as resources; there is no write route (D82) |
 | `POST /sources/{id}/sync` | Trigger a pull now |
 | `GET /sources/{id}/unmapped`, `POST /sources/{id}/map` | Dependency-Track projects without an application; assign one |
 

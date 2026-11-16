@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
@@ -9,98 +9,55 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// D82: connectors are Kubernetes resources. The page lists what the server has, with the status the operator
+// wrote; the catalogue helps write a resource and checks it against the server, and never creates one.
 describe('integrations route and connector catalogue', () => {
-  it('renders connectors list and verifies accessibility', async () => {
+  it('lists the server connectors with the operator status, and no invented rows', async () => {
     mockFetch({ loggedIn: true, role: 'admin' });
     const { container } = renderApp('/integrations');
 
-    expect(await screen.findByRole('heading', { name: /Integrations/i })).toBeInTheDocument();
-    expect(await screen.findByRole('table', { name: 'Connectors table' })).toBeInTheDocument();
-    expect(screen.getByText('jira-cloud')).toBeInTheDocument();
-    expect(screen.getByText('github-issues')).toBeInTheDocument();
-    expect(screen.getByText('dtrack-portfolio')).toBeInTheDocument();
-
+    const table = await screen.findByRole('table', { name: 'Connectors table' });
+    expect(within(table).getByText('jira-sec')).toBeInTheDocument();
+    expect(within(table).getByText('Connected')).toBeInTheDocument();
+    // A connector the operator has not checked yet is not shown as connected or as failing.
+    expect(within(table).getByText('Not checked yet')).toBeInTheDocument();
+    expect(within(table).queryByRole('button', { name: 'Check' })).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('switches to API tokens tab and generates a new token', async () => {
+  it('validates a resource against the server and never saves or asks for a secret', async () => {
+    const calls = mockFetch({ loggedIn: true, role: 'admin' });
+    const { container } = renderApp('/integrations');
+
+    await userEvent.click(await screen.findByRole('button', { name: '+ New Connector' }));
+    const catalogue = await screen.findByRole('dialog', { name: 'Integration Catalogue' });
+    await userEvent.click(await within(catalogue).findByText('Jira Cloud'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Configure Jira Cloud' });
+    const yaml = within(dialog).getByLabelText('Connector resource (YAML)');
+    expect((yaml as HTMLTextAreaElement).value).toContain('kind: Connector');
+    expect(within(dialog).queryByLabelText(/token|password|secret/i)).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /save/i })).toBeNull();
+
+    // The example as given lacks defaultProject in this fixture: the server says so.
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Validate' }));
+    expect(await within(dialog).findByText(/Not accepted \(InvalidSpec\).*defaultProject/)).toBeInTheDocument();
+
+    await userEvent.type(yaml, '  jira: {{defaultProject: SEC}');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Validate' }));
+    expect(await within(dialog).findByText(/The server accepts this resource/)).toBeInTheDocument();
+
+    const validations = calls.filter((c) => c.url.includes('/api/v1/connectors/validate'));
+    expect(validations).toHaveLength(2);
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/v1/connectors'))).toBe(false);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('says how tokens are issued instead of inventing one', async () => {
     mockFetch({ loggedIn: true, role: 'admin' });
     renderApp('/integrations');
-
-    const tokensTab = await screen.findByRole('tab', { name: 'API Tokens' });
-    await userEvent.click(tokensTab);
-
-    expect(await screen.findByRole('table', { name: 'API Tokens' })).toBeInTheDocument();
-    expect(screen.getByText('ci-github-actions')).toBeInTheDocument();
-
-    // Open Generate Token Dialog
-    await userEvent.click(screen.getByRole('button', { name: '+ Generate Token' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Generate API Token' });
-    expect(dialog).toBeInTheDocument();
-
-    const descInput = within(dialog).getByLabelText('Token Description');
-    await userEvent.type(descInput, 'k8s-operator-sync');
-
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Generate' }));
-
-    // Shows generated secret
-    expect(await within(dialog).findByText(/rampart_sec_/)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
-
-    // Token appears in table
-    expect(await screen.findByText('k8s-operator-sync')).toBeInTheDocument();
-  });
-
-  it('opens connector catalogue, selects Jira, tests connection, views YAML, and saves connector', async () => {
-    mockFetch({ loggedIn: true, role: 'admin' });
-    const { container } = renderApp('/integrations');
-
-    await screen.findByRole('heading', { name: /Integrations/i });
-    const newBtn = screen.getByRole('button', { name: '+ New Connector' });
-    await userEvent.click(newBtn);
-
-    // Catalogue modal opens
-    const catalogueDialog = await screen.findByRole('dialog', { name: 'Integration Catalogue' });
-    expect(catalogueDialog).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Jira Cloud')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('GitHub Issues')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Dependency-Track')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Slack')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Microsoft Teams')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Generic Webhook')).toBeInTheDocument();
-    expect(within(catalogueDialog).getByText('Email (SMTP)')).toBeInTheDocument();
-
-    expect(await axe(container)).toHaveNoViolations();
-
-    // Select Jira
-    await userEvent.click(within(catalogueDialog).getByText('Jira Cloud'));
-
-    // Config form shows
-    expect(await screen.findByRole('dialog', { name: 'Configure Jira Cloud' })).toBeInTheDocument();
-    const nameInput = screen.getByLabelText(/Connector Name/);
-    await userEvent.clear(nameInput);
-    await userEvent.type(nameInput, 'jira-corp');
-
-    const urlInput = screen.getByLabelText(/Service \/ Webhook URL/);
-    await userEvent.clear(urlInput);
-    await userEvent.type(urlInput, 'https://jira.corp.internal');
-
-    // Test connection
-    const testBtn = screen.getByRole('button', { name: 'Test Connection' });
-    await userEvent.click(testBtn);
-    expect(await screen.findByText(/Connection verified/i)).toBeInTheDocument();
-
-    // Toggle YAML preview
-    const yamlBtn = screen.getByRole('button', { name: 'View YAML' });
-    await userEvent.click(yamlBtn);
-    expect(screen.getByText(/apiVersion: rampart.aspm.dev\/v1alpha1/)).toBeInTheDocument();
-
-    // Save connector
-    const saveBtn = screen.getByRole('button', { name: 'Save Connector' });
-    await userEvent.click(saveBtn);
-
-    // Modal closes and table shows new connector
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(await screen.findByText('jira-corp')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('tab', { name: 'API Tokens' }));
+    expect(await screen.findByText(/not listed or issued from this page yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate/ })).toBeNull();
   });
 });

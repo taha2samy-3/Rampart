@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"time"
 
@@ -30,45 +29,33 @@ func NewSettleChecker(client *dtclient.Client, backoff, maxWait time.Duration) *
 	}
 }
 
-// CheckSettled reads findings twice spaced by backoff. If identical (or metrics lastOccurrence > lastBomImport),
-// returns (settled=true, findingsBytes, nil). If timeout reached, returns what was read with (settled=false).
-func (s *SettleChecker) CheckSettled(ctx context.Context, projectUUID string, lastBomImport int64) (bool, []byte, error) {
-	// 1. Check metrics if available
-	if metrics, err := s.client.GetProjectMetrics(ctx, projectUUID); err == nil && metrics != nil {
-		if lastBomImport > 0 && metrics.LastOccurrence > lastBomImport {
-			// Metrics clearly newer than last BOM import: analysis is complete
-			findings, err := s.client.GetFindings(ctx, projectUUID, true)
-			return true, findings, err
-		}
-	}
-
-	// 2. Double-read findings a backoff apart
-	firstRead, err := s.client.GetFindings(ctx, projectUUID, true)
-	if err != nil {
-		return false, nil, err
-	}
-
+// CheckSettled waits until Dependency-Track has analysed the project's latest BOM, then reads its findings once
+// (docs/23 DT1, D84). Settled means project.lastVulnerabilityAnalysis >= project.lastBomImport: Dependency-Track
+// sets the first at the end of every analysis, including the one a BOM upload starts, and sends BOM_PROCESSED
+// before that analysis runs. A project with no BOM import is settled. When the bound is reached the findings are
+// read anyway and settled is false; the caller marks the run and the mass-close guard still applies.
+//
+// This replaces two earlier signals: ProjectMetrics.lastOccurrence, which Dependency-Track updates only for
+// periodic analysis, and two identical reads, which are also identical before an analysis has started.
+func (s *SettleChecker) CheckSettled(ctx context.Context, projectUUID string, _ int64) (bool, []byte, error) {
 	deadline := time.Now().Add(s.maxWait)
 	for {
+		proj, err := s.client.GetProject(ctx, projectUUID)
+		if err != nil {
+			return false, nil, err
+		}
+		if proj.LastBomImport == 0 || proj.LastVulnerabilityAnalysis >= proj.LastBomImport {
+			findings, err := s.client.GetFindings(ctx, projectUUID, true)
+			return err == nil, findings, err
+		}
+		if time.Now().After(deadline) {
+			findings, err := s.client.GetFindings(ctx, projectUUID, true)
+			return false, findings, err
+		}
 		select {
 		case <-ctx.Done():
-			return false, firstRead, ctx.Err()
+			return false, nil, ctx.Err()
 		case <-time.After(s.backoff):
 		}
-
-		secondRead, err := s.client.GetFindings(ctx, projectUUID, true)
-		if err != nil {
-			return false, firstRead, err
-		}
-
-		if bytes.Equal(firstRead, secondRead) {
-			return true, secondRead, nil
-		}
-
-		if time.Now().After(deadline) {
-			// Time bound reached: return what was read
-			return false, secondRead, nil
-		}
-		firstRead = secondRead
 	}
 }

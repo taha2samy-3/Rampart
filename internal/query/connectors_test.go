@@ -60,14 +60,18 @@ func TestConnectorsAPI_ReadDescribeValidate(t *testing.T) {
 	if code, out := call(http.MethodPost, "/api/v1/connectors/validate", valid); code != http.StatusOK || out["valid"] != true {
 		t.Fatalf("a catalogue example must validate: %d %v", code, out)
 	}
+	wrapped, _ := json.Marshal(map[string]string{"resource": valid})
+	if code, out := call(http.MethodPost, "/api/v1/connectors/validate", string(wrapped)); code != http.StatusOK || out["valid"] != true {
+		t.Fatalf("the UI's JSON form must validate too: %d %v", code, out)
+	}
 	for name, body := range map[string]string{
 		"missing channel":  "kind: Connector\nmetadata: {name: s}\nspec: {type: slack, slack: {tokenSecretRef: {name: x, key: token}}}",
 		"private address":  "kind: Connector\nmetadata: {name: w}\nspec: {type: webhook, webhook: {url: http://10.0.0.5/hook}}",
 		"a Secret first":   "kind: Secret\nmetadata: {name: s}\nstringData: {token: xoxb-secret}",
 		"unsupported type": "kind: Connector\nmetadata: {name: g}\nspec: {type: gitlab}",
 	} {
-		if code, out := call(http.MethodPost, "/api/v1/connectors/validate", body); code != http.StatusUnprocessableEntity || out["valid"] == true {
-			t.Errorf("%s: want 422, got %d %v", name, code, out)
+		if code, out := call(http.MethodPost, "/api/v1/connectors/validate", body); code != http.StatusOK || out["valid"] != false || out["error"] == "" {
+			t.Errorf("%s: want valid=false with the reason, got %d %v", name, code, out)
 		}
 	}
 	// Writing is not offered.

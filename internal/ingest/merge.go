@@ -2194,6 +2194,11 @@ func (m *MemoryStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, id
 	return 0, nil
 }
 
+// SupersedeHeldCloses: the in-memory store keeps no held closes (D83 is a PostgreSQL behaviour).
+func (m *MemoryStore) SupersedeHeldCloses(ctx context.Context, tenantID uuid.UUID, scope domain.CloseScope, byRunID uuid.UUID) (int, error) {
+	return 0, nil
+}
+
 func (m *MemoryStore) SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

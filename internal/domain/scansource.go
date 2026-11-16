@@ -54,6 +54,9 @@ type HeldClose struct {
 const (
 	HeldCloseDecisionConfirmed = "confirmed"
 	HeldCloseDecisionDiscarded = "discarded"
+	// HeldCloseDecisionSuperseded: a newer run of the same scope completed, so the hold no longer describes the
+	// scope and is closed without action (D83).
+	HeldCloseDecisionSuperseded = "superseded"
 )
 
 // TrustRule defines CI OIDC federation rules for a ScanSource (D22).

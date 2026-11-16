@@ -41,9 +41,20 @@ func (d *defaultDoer) Do(req *http.Request) ([]byte, int, http.Header, error) {
 		return nil, 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	// A response over the cap fails instead of being cut: a cut finding list would read as findings that
+	// disappeared, and the close step would close them (docs/23 K6, D84; docs/10 §5).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
+	if err == nil && int64(len(body)) > MaxResponseBytes {
+		return nil, resp.StatusCode, resp.Header, ErrResponseTooLarge
+	}
 	return body, resp.StatusCode, resp.Header, err
 }
+
+// MaxResponseBytes bounds one Dependency-Track response.
+const MaxResponseBytes = 64 << 20
+
+// ErrResponseTooLarge is returned instead of a truncated body.
+var ErrResponseTooLarge = errors.New("dependency-track: response larger than the limit; refused rather than cut")
 
 // Config configures the Dependency-Track client.
 type Config struct {
@@ -85,16 +96,19 @@ func NewClient(cfg Config) *Client {
 
 // Project represents a Dependency-Track project.
 type Project struct {
-	UUID          string     `json:"uuid"`
-	Name          string     `json:"name"`
-	Version       string     `json:"version,omitempty"`
-	Classifier    string     `json:"classifier,omitempty"`
-	Active        bool       `json:"active"`
-	Purl          string     `json:"purl,omitempty"`
-	LastBomImport int64      `json:"lastBomImport,omitempty"` // epoch ms
-	Parent        *ParentRef `json:"parent,omitempty"`
-	Tags          []Tag      `json:"tags,omitempty"`
-	Properties    []Property `json:"properties,omitempty"`
+	UUID          string `json:"uuid"`
+	Name          string `json:"name"`
+	Version       string `json:"version,omitempty"`
+	Classifier    string `json:"classifier,omitempty"`
+	Active        bool   `json:"active"`
+	Purl          string `json:"purl,omitempty"`
+	LastBomImport int64  `json:"lastBomImport,omitempty"` // epoch ms
+	// LastVulnerabilityAnalysis is set by Dependency-Track when an analysis of the project ends, for every analysis
+	// level including the one after a BOM upload (VulnerabilityAnalysisTask, 4.14.6; docs/23 DT1). Epoch ms.
+	LastVulnerabilityAnalysis int64      `json:"lastVulnerabilityAnalysis,omitempty"`
+	Parent                    *ParentRef `json:"parent,omitempty"`
+	Tags                      []Tag      `json:"tags,omitempty"`
+	Properties                []Property `json:"properties,omitempty"`
 }
 
 type ParentRef struct {

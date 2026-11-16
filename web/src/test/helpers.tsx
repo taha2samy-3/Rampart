@@ -271,6 +271,33 @@ export function mockFetch(sc: Scenario): Calls {
       const found = (sc.acceptances ?? []).find((a) => a.id === parts[4]);
       return found ? json(found) : json({ title: 'Not found', status: 404 }, 404);
     }
+    // Connectors are resources (D82): listed, described and validated, never created here.
+    if (path === '/api/v1/connectors') {
+      return json({ items: [
+        { name: 'jira-sec', type: 'jira', direction: 'bidirectional', enabled: true, managed_by: 'resource',
+          status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connector verified successfully' }] } },
+        { name: 'slack-appsec', type: 'slack', direction: 'outbound', enabled: true, managed_by: 'resource',
+          status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'PendingVerification', message: 'Connector registered, connection not yet tested' }] } },
+      ] });
+    }
+    if (path === '/api/v1/connectors/catalogue') {
+      return json({ items: [
+        { type: 'jira', name: 'Jira Cloud', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Opens Jira Cloud issues.',
+          config_key: 'jira', config_schema: { type: 'object' },
+          secrets: [{ field: 'credentialsSecretRef', holds: 'email:apiToken', purpose: 'calls the Jira API' }],
+          example: 'apiVersion: rampart.aspm.dev/v1alpha1\nkind: Connector\nmetadata: {name: jira-sec}\nspec:\n  type: jira\n' },
+        { type: 'slack', name: 'Slack', kind: 'notifier', directions: ['outbound'], description: 'Posts notifications.',
+          config_key: 'slack', config_schema: { type: 'object' },
+          secrets: [{ field: 'tokenSecretRef', holds: 'a bot token', purpose: 'posts messages' }],
+          example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
+      ] });
+    }
+    if (path === '/api/v1/connectors/validate' && init?.method === 'POST') {
+      const resource = (JSON.parse(String(init.body ?? '{}')) as { resource?: string }).resource ?? '';
+      return json(resource.includes('defaultProject')
+        ? { valid: true }
+        : { valid: false, reason: 'InvalidSpec', error: 'connector: invalid specification: jira defaultProject is required' });
+    }
     if (path === '/api/v1/held-closes') {
       return json({ items: sc.heldCloses ?? [] });
     }

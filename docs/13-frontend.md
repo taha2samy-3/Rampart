@@ -67,7 +67,7 @@ Left navigation, in this order:
 | **Integrations** | Catalogue (search, support level, what each needs), Connectors (Jira, GitHub, Slack, Dependency-Track …), Webhooks, API tokens. Every connector form is generated from the integration's config schema, so a new integration needs no frontend change |
 | **Administration** | Users, Teams, Access bindings, Identity providers, Audit log, Tenant settings, Feeds status |
 
-Objects managed by a CRD show a "Managed by Kubernetes" badge with the namespace/name, are read-only in the UI, and offer "View YAML" and "Copy kubectl command". Objects created in the UI offer "Export as YAML" so teams can move them to GitOps.
+Objects managed by a CRD show a "Managed by Kubernetes" badge with the namespace/name, are read-only in the UI, and offer "View YAML" and "Copy kubectl command". Objects created in the UI offer "Export as YAML" so teams can move them to GitOps. **Connectors are never created in the UI** (D82): they carry secrets, and the operator is the only reader of Secrets (D1); the catalogue produces a resource and validates it against the server.
 
 ## 5. Key screens in detail
 

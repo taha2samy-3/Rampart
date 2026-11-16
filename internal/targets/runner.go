@@ -390,6 +390,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		mux.Handle("/", ui.Handler(ui.Options{HSTS: strings.HasPrefix(r.cfg.Server.PublicURL, "https://")}))
 	}
 
+	ratelimit.SetTrustedProxies(r.cfg.Server.TrustedProxies) // whose X-Forwarded-For is believed (D84)
 	rlMiddleware := ratelimit.NewMiddleware(r.cfg.Limits, storeBackend, authn)
 
 	httpServer := &http.Server{

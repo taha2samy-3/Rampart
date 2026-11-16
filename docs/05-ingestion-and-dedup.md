@@ -101,7 +101,9 @@ Guarantees:
 - Two runs on the same scope are serialised; an older run arriving late is marked `stale` and changes nothing.
 - A finding reported by two sources stays open until both stop reporting it.
 - `not_affected`, `risk_accepted`, `out_of_scope` and `duplicate` are never reopened by a rescan; they show "no longer detected" when absent.
-- A run with parse errors never closes anything. A run that would close more than half of a scope is held for confirmation.
+- A run with parse errors never closes anything. A run that would close more than half of a scope is held for confirmation (D22, D71, D83):
+
+  ![Held close](images/held-close.svg)
 - Runs from untracked branches (pull requests) are ephemeral: they feed the CI gate and never change the inventory.
 - A retried batch cannot double-count, because counters are recomputed from rows.
 

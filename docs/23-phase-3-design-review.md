@@ -63,6 +63,7 @@ The review answers three questions:
 - **Basis**: docs 04, 11 and 15; D27 (`ingest-gateway` serves the write path and its callbacks).
 
 ### C3 (P1) Rate limits must hold across replicas and must know the real client address
+- **Status (D84):** the client address behind trusted proxies is done; shared limits across replicas and a per-connector cap are not.
 - **Now** (D73): in-memory token buckets per process. Unauthenticated callers are keyed by client IP; webhooks by `(ip, connector)`.
 - **Problems**:
   1. With N replicas the effective limit is N times the configured one. Doc 07 §4 planned Valkey for this, with in-process buckets only in monolithic mode.
@@ -91,6 +92,7 @@ The review answers three questions:
 - **Basis**: D22's rule "clients may tighten, never loosen", applied to limits.
 
 ### C5 (P1) Decide who may create a connector before building the catalogue dialog
+- **Status: decided and built as D82 (2026-11-16): resources only, not the UI proposal below.** The user chose to keep connectors as Kubernetes resources; the reasons are in D82. The proposal below is kept as the alternative that was considered.
 - **Now**: doc 20 §9.3 item 8 left this open ("decide whether the UI or API may create connectors … and write it down"), and no D-section decided it. docs/22 part 3 plans a setup dialog that takes URLs and credentials. The dialog in the working tree has three problems (section 5, K7):
   - it reports a successful connection without calling the server;
   - it marks the new connector `Connected=True` in the browser only;
@@ -118,6 +120,7 @@ The review answers three questions:
 - **Basis**: doc 19 §3 and §8.
 
 ### C7 (P2) Write how D70 part B was resolved into docs/16
+- **Status: done (D85),** from the code. B6, B10 and the B3 summary ticket are recorded as not built.
 - **Now**: D70 part B (twelve items) still reads "known to be wrong … needs redesign", and part C still reads "not built". docs/21 §0 and commit `10484a9` say both are done.
 - **Problem**: the normative document does not say what was chosen:
   - the `ticketing` fields and defaults;
@@ -162,6 +165,7 @@ The review answers three questions:
 ## 2. Other Phase 3 decisions
 
 ### H1 (P1) Confirming a held close must run the close step of D13
+- **Status: done (D83, 2026-11-16).** Step 1 was in fact done by the code; the other-source rule and supersession were missing and are built. The run status of a held run is left for a separate decision.
 - **Now** (D71 §4): for each held finding, check whether a newer run of the same scope saw it again; otherwise move the open absent findings to `fixed`.
 - **Problems**:
   - D13 keeps a finding open while **another source** still reports it. The confirm checks only the same scope.
@@ -183,6 +187,7 @@ The review answers three questions:
 - **Basis**: D22, D30; OpenID Connect Core §10.1.1; the `jwks-rsa` library's `jwksRequestsPerMinute` option as an example of the limit; GitHub's OIDC reference (define conditions beyond the repository).
 
 ### E1 (P1) Exports
+- **Status (D84):** CSV defused; a cut export says so. OCSF class left open after reading the 1.3.0 schema. SBOM export and the asynchronous large export not built.
 - **OCSF class**: D76 writes class 2001 (Security Finding). ADR 0003, research/03 §8 and 01 G4 chose 2007 (Application Security Posture Finding), and 2001 is deprecated in favour of 2002, 2003 and 2004. Use 2002 for `sca` and `container` findings and 2007 for code findings, or 2007 for everything. Check the class against the OCSF version targeted, and write that version in `metadata.version`.
 - **CSV**: defuse cells that start with `=`, `+`, `-`, `@`, a tab or a CR, as D46 does for the audit export.
 - **Size**: docs 02 §4, 11 and 13 say a long export answers `202` with an operation and a signed link. D76 streams through the API and stops at 50,000 rows without telling the client. Return `X-Next-Cursor` or a problem response when the stream stops, and use the operation path for anything larger.
@@ -230,6 +235,9 @@ Correct the status in docs/21 and docs/09.
   - Part 1 uses `/api/v1/dtrack/...` instead of doc 11's `/sources/{id}/unmapped` and `/sources/{id}/map`.
 
 ## 3. Dependency-Track: can it be built from the documents as written?
+
+![Dependency-Track sync and settling](images/dependency-track-sync.svg)
+
 
 **Short answer: yes for the overall shape, not yet for four details.** The following parts of the design are sound:
 - the division of work;
@@ -328,6 +336,7 @@ Use doc 11's `GET /sources/{id}/unmapped` and `POST /sources/{id}/map`, which se
 **The goal, as the user stated it:** when a new tool appears, it can be installed and run as a connector without changing the core, whatever kind of tool it is. Doc 19 already designs exactly this: four tiers, one set of contracts, a registry, forms from `ConfigSchema`, `IntegrationPackage`, and gRPC and WebAssembly plugins. **The code does not follow doc 19 yet.** Today every connector is compiled into the core, behind type switches in seven files. The findings, with the evidence for each:
 
 ### K1 (P1) The built-in tracker, notifier and source adapters in the registry are placeholders
+- **Status: placeholders removed (D82).** Registering the real implementations is §6.
 `internal/integrations/builtin_adapters.go`:
 - `JiraTrackerAdapter.Create` returns a fixed key `RAMPART-101` and the URL `https://jira.example.com/browse/…` (lines 57-70).
 - `GitHubTrackerAdapter.Create` returns issue `42` (lines 133-141).
@@ -386,6 +395,7 @@ A form generated from these schemas would build connectors the server refuses.
 **Basis**: doc 10 §8 and §9; D74 ("Milestone 3.4 implements the production integration").
 
 ### K6 (P1) The Dependency-Track code that exists repeats DT1 to DT3, and cuts large answers silently
+- **Status (D84):** no more silent cut; settle uses the verified signal (DT1). The asset key (DT3), River jobs and the wiring (K5) remain.
 - **Settle** (`sync/settle.go:36-44`): uses `ProjectMetrics.LastOccurrence` and then double reads, with a default bound of 10 seconds. That is DT1.
 - **Asset key** (`sync/syncer.go:115`): `dtrack://<sourceID>/<projectUUID>`. That is DT3.
 - **Response cap** (`client/client.go:44`): every response is read with `io.ReadAll(io.LimitReader(resp.Body, 10 MiB))`. A project whose finding list is larger is cut at 10 MiB **with no error**. The rest of the list never arrives, and depending on how the parser handles the broken end, findings may be closed as absent.
@@ -400,6 +410,7 @@ A form generated from these schemas would build connectors the server refuses.
 **Basis**: doc 10 §5 ("the run closes nothing if any page of the pull failed") and §9; D25; D35; ADR 0002.
 
 ### K7 (P2) The catalogue dialog in the working tree promises what the server never did
+- **Status: fixed (D82).** The dialog validates against the server and never saves; the invented connectors, checks and tokens are gone.
 `web/src/routes/integrations/ConnectorCatalogueDialog.tsx` (uncommitted):
 - The catalogue is a fixed list in the component (line 15), not `GET /api/v1/integrations`.
 - "Test connection" waits 700 ms and prints "Connection verified: Remote endpoint returned HTTP 200 OK with valid credentials" without calling anything (lines 112-118).

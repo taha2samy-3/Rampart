@@ -330,6 +330,11 @@ status: {matchedFindings: 14, state: Active}
 ## 4. Integrations
 
 ### `Connector`
+
+![Connector lifecycle](images/connector-lifecycle.svg)
+
+Created only as a resource (D82); the operator validates it with the allowlist scoped to its tenant and type (D77) and is the only reader of its Secret (D1); callbacks arrive on `/hooks/{type}/{connectorId}` (D78).
+
 ```yaml
 kind: Connector
 metadata: {name: jira-sec}

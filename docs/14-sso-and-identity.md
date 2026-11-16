@@ -129,6 +129,10 @@ The operator validates discovery or metadata and reports `Ready=False` with the 
 
 ## 8. Machine identity
 
+![CI federation](images/ci-federation.svg)
+
+The exchange and the token's binding to its run are D72, D80 and D81 in [16](16-implementation-decisions.md); the paragraph below is the first design, which the exchange endpoint replaced (D22).
+
 **CI OIDC federation (preferred for pipelines).** The pipeline requests an ID token from its CI provider and sends it as `Authorization: Bearer` to `/ingest/v1`. A `ScanSource` declares what it trusts:
 
 ```yaml

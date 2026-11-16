@@ -81,6 +81,8 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [Deployment modes](docs/images/deployment-modes.svg) | [SSO login flow](docs/images/sso-flow.svg) |
 | [Frontend layout](docs/images/frontend-layout.svg) | [Domain model](docs/images/domain-model.svg) |
 | [Risk score](docs/images/risk-score.svg) | [Integration tiers](docs/images/integration-tiers.svg) |
+| [Connector lifecycle](docs/images/connector-lifecycle.svg) | [CI federation](docs/images/ci-federation.svg) |
+| [Held close](docs/images/held-close.svg) | [Dependency-Track sync](docs/images/dependency-track-sync.svg) |
 
 ## Six decisions in one paragraph
 

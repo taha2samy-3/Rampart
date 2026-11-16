@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"rampart/internal/domain"
 	"rampart/internal/ingest"
+	"rampart/internal/store"
 )
 
 // Tests the mass-close guard scenarios on real PostgreSQL with RLS (docs/21 Section 3.2):
@@ -269,5 +271,102 @@ func TestHeldClose_PostgresScenarios(t *testing.T) {
 	fStillOpen, _ := app.GetFindingsByKeys(ctx, tenant, []string{comeBackKey})
 	if fStillOpen[comeBackKey].State != domain.StateOpen {
 		t.Fatalf("discarded close must not alter finding state")
+	}
+}
+
+// D83: a newer completed run of the same scope supersedes a pending hold: confirming it closes nothing. A run's
+// close step also supersedes older holds of its scope. And a confirmed hold never closes a finding another source
+// still reports (D13).
+func TestHeldClose_SupersededAndOtherSources(t *testing.T) {
+	ctx := context.Background()
+	app, sys := setupStores(t, ctx)
+	tenant := newTenant(t, ctx, sys, "supersede")
+	appID := uuid.New()
+	if err := sys.SaveApplication(ctx, domain.Application{ID: appID, TenantID: tenant, Slug: "shop", Name: "Shop"}); err != nil {
+		t.Fatal(err)
+	}
+	asset := &domain.Asset{ID: uuid.New(), TenantID: tenant, ApplicationID: &appID, Type: domain.AssetRepository, Key: "shop-repo", Active: true}
+	if err := app.CreateAsset(ctx, asset); err != nil {
+		t.Fatal(err)
+	}
+	srcTrivy, _ := sys.SaveScanSource(ctx, tenant, "ci-trivy", "trivy", nil)
+	srcGrype, _ := sys.SaveScanSource(ctx, tenant, "ci-grype", "grype", nil)
+	scope := ingest.CloseScope{TenantID: tenant, ScanSourceID: srcTrivy, ScannerFamily: "trivy", AssetID: asset.ID, Track: "main"}
+	other := ingest.CloseScope{TenantID: tenant, ScanSourceID: srcGrype, ScannerFamily: "trivy", AssetID: asset.ID, Track: "main"}
+	eng := ingest.NewEngine(app)
+
+	newRun := func(src uuid.UUID, at time.Time) uuid.UUID {
+		id := uuid.New()
+		if err := app.CreateIngestRun(ctx, &domain.IngestRun{ID: id, TenantID: tenant, ScanSourceID: src, ApplicationID: appID, AssetID: asset.ID,
+			Track: "main", Status: domain.RunCompleted, ScannerFamily: "trivy", CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	rec := func(i int, at time.Time) ingest.StagedRecord {
+		key := fmt.Sprintf("s-%02d", i)
+		return ingest.StagedRecord{FindingKey: key, Category: domain.CategorySAST, RuleID: "R" + key, Title: key, Severity: domain.SeverityHigh,
+			ToolSeverity: "HIGH", ContentHash: key, SeenAt: at, Location: domain.Location{Code: &domain.CodeLocation{FilePath: key + ".go", StartLine: 1}}}
+	}
+	base := time.Now().UTC().Add(-3 * time.Hour)
+	var all []ingest.StagedRecord
+	for i := 0; i < 30; i++ {
+		all = append(all, rec(i, base))
+	}
+	if _, err := eng.MergeBatch(ctx, scope, newRun(srcTrivy, base), appID, all); err != nil {
+		t.Fatal(err)
+	}
+	// Another source reports finding 0 as well, so D13 keeps it open whatever trivy says.
+	if _, err := eng.MergeBatch(ctx, other, newRun(srcGrype, base.Add(time.Minute)), appID, all[:1]); err != nil {
+		t.Fatal(err)
+	}
+
+	// A run that reports nothing is held (30 absent > 50% and > 20).
+	heldRun := newRun(srcTrivy, base.Add(time.Hour))
+	closeRes, err := eng.CloseScopeStepWithGuard(ctx, scope, heldRun, true)
+	if err != nil || !closeRes.HeldForConfirmation {
+		t.Fatalf("expected a hold: %+v %v", closeRes, err)
+	}
+	hold := &domain.HeldClose{ID: domain.NewID(), TenantID: tenant, IngestRunID: heldRun, Scope: scope, FindingIDs: closeRes.HeldFindingIDs, CreatedAt: time.Now().UTC()}
+	if err := app.CreateHeldClose(ctx, tenant, hold); err != nil {
+		t.Fatal(err)
+	}
+
+	// Confirming closes the absent findings, but not the one grype still reports.
+	n, err := app.ApplyHeldClose(ctx, tenant, hold.ID, "user:lead")
+	if err != nil || n != 29 {
+		t.Fatalf("confirm: want 29 closed (one still reported by grype), got %d, %v", n, err)
+	}
+	if f, _ := app.GetFindingsByKeys(ctx, tenant, []string{"s-00"}); f["s-00"] == nil || f["s-00"].State != domain.StateOpen {
+		t.Fatalf("a finding another source still reports must stay open: %+v", f["s-00"])
+	}
+
+	// A second hold, then a newer completed run of the scope: confirming the hold closes nothing.
+	heldRun2 := newRun(srcTrivy, base.Add(2*time.Hour))
+	hold2 := &domain.HeldClose{ID: domain.NewID(), TenantID: tenant, IngestRunID: heldRun2, Scope: scope, FindingIDs: closeRes.HeldFindingIDs, CreatedAt: time.Now().UTC()}
+	if err := app.CreateHeldClose(ctx, tenant, hold2); err != nil {
+		t.Fatal(err)
+	}
+	newer := newRun(srcTrivy, base.Add(150*time.Minute))
+	if err := app.RecordRunScope(ctx, &domain.IngestRunScope{IngestRunID: newer, TenantID: tenant, ScanSourceID: srcTrivy, ScannerFamily: "trivy", AssetID: asset.ID, Track: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.ApplyHeldClose(ctx, tenant, hold2.ID, "user:lead"); !errors.Is(err, store.ErrHeldCloseSuperseded) {
+		t.Fatalf("a hold older than a completed run of its scope must be superseded, got %v", err)
+	}
+	if got, _ := app.GetHeldClose(ctx, tenant, hold2.ID); got == nil || got.Decision != domain.HeldCloseDecisionSuperseded {
+		t.Fatalf("the hold must be marked superseded: %+v", got)
+	}
+
+	// The close step of a newer run supersedes older pending holds of its scope, and not its own.
+	hold3 := &domain.HeldClose{ID: domain.NewID(), TenantID: tenant, IngestRunID: newRun(srcTrivy, base.Add(160*time.Minute)), Scope: scope, FindingIDs: []uuid.UUID{}, CreatedAt: time.Now().UTC()}
+	if err := app.CreateHeldClose(ctx, tenant, hold3); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := app.SupersedeHeldCloses(ctx, tenant, scope, uuid.New()); err != nil || n != 1 {
+		t.Fatalf("supersede: want 1, got %d, %v", n, err)
+	}
+	if n, _ := app.SupersedeHeldCloses(ctx, tenant, other, uuid.New()); n != 0 {
+		t.Fatal("holds of another scope must not be touched")
 	}
 }

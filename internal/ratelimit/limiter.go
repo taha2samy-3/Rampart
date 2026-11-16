@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -123,12 +124,58 @@ func (l *Limiter) pruneLocked(now time.Time) {
 
 // ClientIP extracts the client IP address from an HTTP request (ignoring spoofable headers unless behind trusted proxies).
 func ClientIP(r *http.Request) string {
-	// RemoteAddr is host:port
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
+	if err != nil || host == "" {
+		host = r.RemoteAddr
 	}
-	return r.RemoteAddr
+	proxies := trustedProxies.Load()
+	if proxies == nil || len(*proxies) == 0 || !inNets(net.ParseIP(host), *proxies) {
+		return host // the peer is the client, or an untrusted peer whose X-Forwarded-For could be forged
+	}
+	// Behind trusted proxies: walk X-Forwarded-For from the right, skipping our own proxies; the first address
+	// that is not one of them is the client (D84). The leftmost entries are whatever the client claimed.
+	var hops []string
+	for _, h := range r.Header.Values("X-Forwarded-For") {
+		for _, p := range strings.Split(h, ",") {
+			hops = append(hops, strings.TrimSpace(p))
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := net.ParseIP(hops[i])
+		if ip == nil {
+			break
+		}
+		if !inNets(ip, *proxies) {
+			return ip.String()
+		}
+	}
+	return host
+}
+
+var trustedProxies atomic.Pointer[[]*net.IPNet]
+
+// SetTrustedProxies sets the reverse proxies whose X-Forwarded-For is believed (server.trustedProxies, D84).
+// Invalid entries are skipped; configuration validation refuses them at startup.
+func SetTrustedProxies(cidrs []string) {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		if _, n, err := net.ParseCIDR(strings.TrimSpace(c)); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	trustedProxies.Store(&nets)
+}
+
+func inNets(ip net.IP, nets []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // QuotaStore abstracts the persistence of replica-shared quotas.

@@ -362,6 +362,11 @@ River queues: `dtrack-sync` (project and portfolio syncs), `dtrack-push` (BOM fo
 
 ## 8. Verified against Dependency-Track 4.14.6 (2026-11-13) and still open
 
+![Dependency-Track sync and settling](images/dependency-track-sync.svg)
+
+The settle rule in this picture replaces the one in the table below (D84, docs/23 DT1).
+
+
 Read from the Java sources of the `4.14.6` tag (`src/main/java/org/dependencytrack/`); the live OpenAPI document at `/api/openapi.json` was not fetched. Dependency-Track **5.x exists** (5.2.1 at that date): this document and the plan target 4.x, and compatibility with 5.x is checked before milestone 3.4 starts.
 
 | Item | Result |

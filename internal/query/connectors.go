@@ -15,7 +15,8 @@ import (
 
 // Connectors are configuration resources (D82): they are created by kubectl, GitOps or `rampart apply -f`, never
 // through this API. These handlers read connectors, describe the types, and validate a resource before the user
-// applies it. Nothing here writes a connector or receives a secret value.
+// applies it. Nothing here writes a connector or receives a secret value. A dry run always answers 200 with
+// {valid, reason, error}: the request succeeded, the resource is what was judged.
 
 // SetSSRFAllowlist sets the platform allowlist the dry-run validation applies, scoped to the caller's tenant (D77).
 func (a *API) SetSSRFAllowlist(al *domain.PlatformSSRFAllowlist) { a.ssrfAllowlist = al }
@@ -105,10 +106,17 @@ func (a *API) handleValidateConnector(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusRequestEntityTooLarge, "payload-too-large", "The resource is larger than 64 KiB")
 		return
 	}
+	// The UI's client sends JSON, {"resource": "<yaml>"}; kubectl-style callers send the YAML itself.
+	var wrapped struct {
+		Resource *string `json:"resource"`
+	}
+	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Resource != nil {
+		raw = []byte(*wrapped.Resource)
+	}
 	doc := strings.SplitN(string(raw), "\n---\n", 2)[0] // the Connector; a Secret template after it is ignored
 	jsonDoc, err := yaml.YAMLToJSON([]byte(doc))
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, ValidateConnectorResult{Reason: "InvalidSpec", Error: "not YAML or JSON: " + err.Error()})
+		writeJSON(w, http.StatusOK, ValidateConnectorResult{Reason: "InvalidSpec", Error: "not YAML or JSON: " + err.Error()})
 		return
 	}
 	var res struct {
@@ -119,17 +127,17 @@ func (a *API) handleValidateConnector(w http.ResponseWriter, r *http.Request) {
 		Spec domain.ConnectorSpec `json:"spec"`
 	}
 	if err := json.Unmarshal(jsonDoc, &res); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, ValidateConnectorResult{Reason: "InvalidSpec", Error: err.Error()})
+		writeJSON(w, http.StatusOK, ValidateConnectorResult{Reason: "InvalidSpec", Error: err.Error()})
 		return
 	}
 	if res.Kind != "Connector" {
-		writeJSON(w, http.StatusUnprocessableEntity, ValidateConnectorResult{Reason: "InvalidSpec",
+		writeJSON(w, http.StatusOK, ValidateConnectorResult{Reason: "InvalidSpec",
 			Error: "the first document must be a Connector; send the Secret with kubectl, never here"})
 		return
 	}
 	conn := domain.Connector{TenantID: tenantID, Name: res.Metadata.Name, Type: res.Spec.Type, Spec: res.Spec}
 	if err := conn.ValidateWithAllowlist(a.ssrfAllowlist.ScopedTo(tenantID, conn.Type)); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, ValidateConnectorResult{Reason: connectorReason(err), Error: err.Error()})
+		writeJSON(w, http.StatusOK, ValidateConnectorResult{Reason: connectorReason(err), Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, ValidateConnectorResult{Valid: true})

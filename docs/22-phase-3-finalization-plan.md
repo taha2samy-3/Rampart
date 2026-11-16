@@ -70,6 +70,8 @@ flowchart TD
   - Selection drawer showing grouped findings and one-click ticket dispatch.
 
 ### Part 3: Integration Catalogue & Schema-Generated Connector Forms
+> **Changed by D82 (2026-11-16):** connectors are created only as resources. The catalogue produces and validates a resource; it does not take credentials or save a connector. The plan below is superseded where it says otherwise.
+
 - **Frontend UI (`web/src/routes/integrations/IntegrationsRoute.tsx`):**
   - Extend "+ New Connector" to open an **Integration Catalogue** modal featuring:
     - Jira Cloud (Bidirectional issue sync)

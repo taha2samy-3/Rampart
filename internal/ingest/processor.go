@@ -259,6 +259,14 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			return Result{Stats: stats}, fmt.Errorf("%s: %w", ErrCodeCloseFailed, err)
 		}
 		closed += res.Closed
+		// D83: this run now describes the scope, so an older pending hold of it is no longer a decision to take.
+		if sup, ok := p.store.(interface {
+			SupersedeHeldCloses(ctx context.Context, tenantID uuid.UUID, scope domain.CloseScope, byRunID uuid.UUID) (int, error)
+		}); ok {
+			if _, err := sup.SupersedeHeldCloses(ctx, run.TenantID, f.scope, run.ID); err != nil {
+				slog.Warn("ingest: failed to supersede older held closes", "error", err, "run_id", run.ID)
+			}
+		}
 		if res.HeldForConfirmation { // D22: a held close is reported, not applied
 			status, reason = domain.RunCompletedWithErrors, "close_held"
 			heldClose := &domain.HeldClose{

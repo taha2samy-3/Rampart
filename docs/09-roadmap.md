@@ -53,9 +53,9 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 3.1: Connectors CRD, store, safe client (SSRF guard), notifiers, router, Check() verification (D69) | built; tested on PostgreSQL, envtest, and CI |
 | Phase 3.2: Trackers (Jira, GitHub), inbound webhooks, ticket outbox, comment/close lifecycle (D70) | built; tested on PostgreSQL, verified against Jira & GitHub specs. Inbound webhooks moved to `/hooks/{type}/{connectorId}` on the gateway (D78); SSRF allowlist scoped per tenant and connector type (D77) |
 | Phase 3.3: CI OIDC federation (D22, D72), mass-close guard settings (D71), rate limits & quotas (D73) | built; fuzzed, tested on PostgreSQL and envtest |
-| Phase 3.4: Dependency-Track upstream source, FPF streaming parser, sync & debounce state machine (D74) | built; tested on PostgreSQL with live simulation |
-| Phase 3.5: Integration SDK, CEL mapping engine, parser conformance kit, Wave 2 native parsers (D75) | built; fuzzed and tested across 8 scanner families |
-| Phase 3.6: Groups, views, streaming exports, SSE live updates, NVD/CODEOWNERS, Grafana dashboards (D76) | built; tested on PostgreSQL, Playwright, Helm lint, and CI |
+| Phase 3.4: Dependency-Track upstream source, FPF streaming parser, sync & debounce state machine (D74) | **in part**: FPF parser, client, settle rule (D84); the sync and webhook are not wired into the server (docs/23 K5) |
+| Phase 3.5: Integration SDK, CEL mapping engine, parser conformance kit, Wave 2 native parsers (D75) | **in part**: 8 native parsers built and tested; `IntegrationPackage`, declarative connectors, GitLab and Generic JSON parsers missing; connectors catalogue from the Go types (D82) |
+| Phase 3.6: Groups, views, streaming exports, SSE live updates, NVD/CODEOWNERS, Grafana dashboards (D76) | **in part**: groups, views, exports (CSV defused, D84), SSE, dashboards built; NVD not synced; SBOM export missing |
 
 ## Left for the MVP
 

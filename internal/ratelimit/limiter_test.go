@@ -2,6 +2,8 @@ package ratelimit
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -162,5 +164,32 @@ func BenchmarkLimiter_RejectedCallZeroDB(b *testing.B) {
 		if allowed {
 			b.Fatal("should not be allowed")
 		}
+	}
+}
+
+// D84: X-Forwarded-For is believed only from a trusted proxy, and read from the right.
+func TestClientIPTrustsOnlyConfiguredProxies(t *testing.T) {
+	defer SetTrustedProxies(nil)
+	req := func(remote, xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	SetTrustedProxies(nil)
+	if got := ClientIP(req("203.0.113.7:4000", "1.2.3.4")); got != "203.0.113.7" {
+		t.Errorf("no trusted proxy: a forwarded header must be ignored, got %s", got)
+	}
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	if got := ClientIP(req("10.1.2.3:4000", "198.51.100.9")); got != "198.51.100.9" {
+		t.Errorf("behind the ingress: want the client, got %s", got)
+	}
+	if got := ClientIP(req("10.1.2.3:4000", "6.6.6.6, 198.51.100.9, 10.4.4.4")); got != "198.51.100.9" {
+		t.Errorf("a forged leftmost entry must not be believed, got %s", got)
+	}
+	if got := ClientIP(req("203.0.113.7:4000", "1.2.3.4")); got != "203.0.113.7" {
+		t.Errorf("an untrusted peer's header must be ignored, got %s", got)
 	}
 }

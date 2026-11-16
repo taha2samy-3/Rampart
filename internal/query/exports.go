@@ -46,10 +46,16 @@ func (a *API) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	findings, err := querier.QueryFindings(r.Context(), tenantID, parsedQuery, "-score", exportLimit, nil)
+	// One more than the limit tells whether the export was cut; the client is told so (D84), never left to guess.
+	findings, err := querier.QueryFindings(r.Context(), tenantID, parsedQuery, "-score", exportLimit+1, nil)
 	if err != nil {
 		writeJSONProblem(w, http.StatusInternalServerError, "https://rampart.aspm.dev/problems/internal", err.Error())
 		return
+	}
+	if len(findings) > exportLimit {
+		findings = findings[:exportLimit]
+		w.Header().Set("X-Export-Truncated", "true")
+		w.Header().Set("X-Export-Limit", fmt.Sprintf("%d", exportLimit))
 	}
 
 	switch format {
@@ -78,15 +84,17 @@ func (a *API) streamCSV(w http.ResponseWriter, findings []*domain.Finding) {
 
 	for _, f := range findings {
 		locStr := f.Location.PrimaryPath()
+		// Titles, rules and paths come from scanners: a cell a spreadsheet would run as a formula is defused, as
+		// the audit export does (D46, D84; CWE-1236).
 		row := []string{
 			f.ID.String(),
-			f.RuleID,
-			f.RuleScannerFamily,
-			f.Title,
+			csvSafe(f.RuleID),
+			csvSafe(f.RuleScannerFamily),
+			csvSafe(f.Title),
 			string(f.Severity),
 			string(f.Category),
 			string(f.State),
-			locStr,
+			csvSafe(locStr),
 			fmt.Sprintf("%d", f.RiskScore),
 			f.FirstSeen.Format(time.RFC3339),
 			f.LastSeen.Format(time.RFC3339),

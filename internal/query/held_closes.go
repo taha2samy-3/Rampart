@@ -2,11 +2,13 @@ package query
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/store"
 )
 
 // handleListHeldCloses lists the mass-closes held for review (D22, Section 3.2).
@@ -59,6 +61,10 @@ func (a *API) handleConfirmHeldClose(w http.ResponseWriter, r *http.Request) {
 
 	actor := actorOf(user)
 	closed, err := a.store.ApplyHeldClose(r.Context(), tenantID, id, actor)
+	if errors.Is(err, store.ErrHeldCloseSuperseded) { // D83: a newer run of the scope decided it; nothing closed
+		problem(w, http.StatusConflict, "conflict-version", err.Error())
+		return
+	}
 	if err != nil {
 		problem(w, http.StatusBadRequest, "bad-request", err.Error())
 		return

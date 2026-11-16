@@ -19,6 +19,33 @@ type HeldCloses interface {
 	ListHeldCloses(ctx context.Context, tenantID uuid.UUID, decision string) ([]domain.HeldClose, error)
 	DecideHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, decision string, decidedBy string) error
 	ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, decidedBy string) (int, error)
+	SupersedeHeldCloses(ctx context.Context, tenantID uuid.UUID, scope domain.CloseScope, byRunID uuid.UUID) (int, error)
+}
+
+// ErrHeldCloseSuperseded is returned by ApplyHeldClose when a newer run of the same scope has completed: the hold
+// is marked superseded and nothing is closed (D83).
+var ErrHeldCloseSuperseded = errors.New("held close superseded by a newer run of the same scope; nothing was closed")
+
+// SupersedeHeldCloses marks every pending hold of a scope, other than one made by byRunID, as superseded. It is
+// called when a run of that scope completes its close step, held or not: a newer run describes the scope, so an
+// older hold is no longer a decision anyone should take, and the "held close pending" alert stops (D83).
+func (s *PostgresStore) SupersedeHeldCloses(ctx context.Context, tenantID uuid.UUID, scope domain.CloseScope, byRunID uuid.UUID) (int, error) {
+	scopeJSON, err := json.Marshal(scope)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	err = s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		res, err := tx.Exec(ctx, `
+			UPDATE held_close SET decision = $4, decided_by = $5, decided_at = now()
+			WHERE tenant_id = $1 AND scope = $2::jsonb AND ingest_run_id <> $3 AND (decision IS NULL OR decision = '')`,
+			tenantID, scopeJSON, byRunID, domain.HeldCloseDecisionSuperseded, "system:run:"+byRunID.String())
+		if err == nil {
+			n = int(res.RowsAffected())
+		}
+		return err
+	})
+	return n, err
 }
 
 func (s *PostgresStore) CreateHeldClose(ctx context.Context, tenantID uuid.UUID, hc *domain.HeldClose) error {
@@ -164,6 +191,22 @@ func (s *PostgresStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, 
 			return fmt.Errorf("store: locking scope failed: %w", err)
 		}
 
+		// D83: a run of the same scope that completed after the held run describes the scope now; the hold is
+		// superseded and closes nothing.
+		var newer bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM ingest_run_scope s JOIN ingest_run r ON r.id = s.ingest_run_id
+				WHERE s.tenant_id = $1 AND s.scan_source_id = $2 AND s.scanner_family = $3 AND s.asset_id = $4 AND s.track = $5
+				  AND r.id <> $6 AND r.status IN ('completed', 'completed_with_errors')
+				  AND r.created_at > (SELECT created_at FROM ingest_run WHERE id = $6))`,
+			tenantID, scope.ScanSourceID, scope.ScannerFamily, scope.AssetID, scope.Track, ingestRunID).Scan(&newer); err != nil {
+			return err
+		}
+		if newer {
+			return errSupersededCommit // nothing in this transaction is kept; the mark is written below
+		}
+
 		for _, fid := range findingIDs {
 			var state domain.FindingState
 			err := tx.QueryRow(ctx, `SELECT state FROM finding WHERE tenant_id = $1 AND id = $2`, tenantID, fid).Scan(&state)
@@ -205,6 +248,17 @@ func (s *PostgresStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, 
 				return err
 			}
 
+			// D13: a finding stays open while another source still reports it; only its occurrences in this scope
+			// stop being present.
+			var stillReported bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM occurrence WHERE tenant_id = $1 AND finding_id = $2 AND present)`,
+				tenantID, fid).Scan(&stillReported); err != nil {
+				return err
+			}
+			if stillReported {
+				continue
+			}
+
 			// Close finding
 			resFixed := domain.ResolutionFixed
 			_, err = tx.Exec(ctx, `
@@ -241,5 +295,15 @@ func (s *PostgresStore) ApplyHeldClose(ctx context.Context, tenantID uuid.UUID, 
 			tenantID, id, domain.HeldCloseDecisionConfirmed, decidedBy, now)
 		return err
 	})
+	if errors.Is(err, errSupersededCommit) {
+		if derr := s.DecideHeldClose(ctx, tenantID, id, domain.HeldCloseDecisionSuperseded, decidedBy); derr != nil {
+			return 0, derr
+		}
+		return 0, ErrHeldCloseSuperseded
+	}
 	return closedCount, err
 }
+
+// errSupersededCommit carries "superseded" out of the transaction, which then rolls back; the mark is written in
+// its own transaction by DecideHeldClose.
+var errSupersededCommit = errors.New("superseded")

@@ -130,6 +130,9 @@ type ServerConfig struct {
 	HTTPAddr  string `json:"http_addr" yaml:"httpAddr"`
 	OpsAddr   string `json:"ops_addr" yaml:"opsAddr"`
 	PublicURL string `json:"public_url" yaml:"publicUrl"`
+	// TrustedProxies are the CIDRs of the reverse proxies in front of the server (D84). X-Forwarded-For is read only
+	// when the direct peer is one of them; otherwise it is ignored, because anyone can send it.
+	TrustedProxies []string `json:"trusted_proxies" yaml:"trustedProxies"`
 }
 
 type DatabaseConfig struct {
@@ -446,6 +449,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: %w", err)
 		}
 	}
+	for _, cidr := range c.Server.TrustedProxies {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("config: server.trustedProxies: %q is not a CIDR", cidr)
+		}
+	}
 	if _, err := c.Connectors.SSRFAllowlist.ToPlatformSSRFAllowlist(); err != nil {
 		return fmt.Errorf("config: connectors: %w", err)
 	}
@@ -477,6 +485,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := get("SERVER_OPS_ADDR"); v != "" {
 		cfg.Server.OpsAddr = v
+	}
+	if v := get("SERVER_TRUSTED_PROXIES"); v != "" {
+		cfg.Server.TrustedProxies = splitList(v)
 	}
 	if v := get("SERVER_PUBLIC_URL"); v != "" {
 		cfg.Server.PublicURL = v

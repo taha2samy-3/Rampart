@@ -608,6 +608,22 @@ const server = http.createServer((req, res) => {
     }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
     if (p === '/api/v1/connectors') return json(res, { items: CONNECTORS });
+    // D82: the catalogue and the dry run. The real server builds the catalogue from the Go types and validates with
+    // the operator's own rules; the mock answers enough for the page to be exercised.
+    if (p === '/api/v1/connectors/catalogue') return json(res, { items: [
+      { type: 'jira', name: 'Jira Cloud', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Opens Jira Cloud issues for findings.',
+        config_key: 'jira', config_schema: { type: 'object' }, secrets: [{ field: 'credentialsSecretRef', holds: 'email:apiToken', purpose: 'calls the Jira API' }],
+        example: 'apiVersion: rampart.aspm.dev/v1alpha1\nkind: Connector\nmetadata: {name: jira-sec, namespace: <tenant-namespace>}\nspec:\n  type: jira\n  jira:\n    url: https://example.atlassian.net\n    credentialsSecretRef: {name: jira-sec-creds, key: token}\n    defaultProject: SEC\n' },
+    ] });
+    if (p === '/api/v1/connectors/validate' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const resource = JSON.parse(body || '{}').resource ?? '';
+        json(res, /kind:\s*Connector/.test(resource) ? { valid: true } : { valid: false, reason: 'InvalidSpec', error: 'the first document must be a Connector' });
+      });
+      return;
+    }
     if (p === '/api/v1/dtrack/unmapped') return json(res, { projects: DTRACK_PROJECTS });
     if (p === '/api/v1/held-closes') return json(res, { items: HELD_CLOSES });
     if (p === '/api/v1/groups') return json(res, { groups: GROUPS });

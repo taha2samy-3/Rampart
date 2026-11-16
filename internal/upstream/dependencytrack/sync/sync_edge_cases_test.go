@@ -3,11 +3,9 @@ package sync_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,73 +90,62 @@ func TestMappingEngine_CELFailureAndFallbacks(t *testing.T) {
 	}
 }
 
-// TestSettleChecker_NeverSettles_Timeout verifies that a project whose finding counts
-// fluctuate indefinitely reaches timeout and returns settled=false.
-func TestSettleChecker_NeverSettles_Timeout(t *testing.T) {
-	ctx := context.Background()
-
-	var counter int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/finding") {
-			// Fluctuate body content on every call
-			c := atomic.AddInt64(&counter, 1)
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `[{"vulnId":"CVE-%d"}]`, c)
-			return
+// D84 (docs/23 DT1): settled means the project's last analysis is not older than its last BOM import, read from
+// the project itself. Metrics and identical double reads are no longer signals.
+func dtProjectServer(t *testing.T, project func(n int) string) *httptest.Server {
+	t.Helper()
+	calls := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/finding"):
+			_, _ = w.Write([]byte(`[{"vulnId":"CVE-2021-44228"}]`))
+		case strings.Contains(r.URL.Path, "/project/"):
+			calls++
+			_, _ = w.Write([]byte(project(calls)))
+		default:
+			http.NotFound(w, r)
 		}
-		if strings.Contains(r.URL.Path, "/metrics") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		http.NotFound(w, r)
 	}))
+}
+
+func TestSettleChecker_NeverSettles_Timeout(t *testing.T) {
+	srv := dtProjectServer(t, func(int) string {
+		return `{"uuid":"p","name":"p","lastBomImport":2000,"lastVulnerabilityAnalysis":1000}` // analysis older than the BOM
+	})
 	defer srv.Close()
-
-	cli := dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "test-key"})
-
-	checker := dtsync.NewSettleChecker(cli, 10*time.Millisecond, 50*time.Millisecond)
-	settled, _, err := checker.CheckSettled(ctx, "proj-fluctuating", 0)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 10*time.Millisecond, 60*time.Millisecond)
+	settled, data, err := checker.CheckSettled(context.Background(), "p", 0)
+	if err != nil || settled {
+		t.Fatalf("an analysis older than the BOM is not settled: settled=%v err=%v", settled, err)
 	}
-	if settled {
-		t.Fatal("expected settled to be false when findings never match")
+	if !strings.Contains(string(data), "CVE-2021-44228") {
+		t.Fatal("at the bound the findings are still read, and the caller marks the run unsettled")
 	}
 }
 
-// TestSettleChecker_ImmediateSettle verifies fast settling when metrics match or findings match.
 func TestSettleChecker_ImmediateSettle(t *testing.T) {
-	ctx := context.Background()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/finding") {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[{"vulnId":"CVE-2021-44228"}]`))
-			return
-		}
-		if strings.Contains(r.URL.Path, "/metrics") {
-			w.WriteHeader(http.StatusOK)
-			// Metrics lastOccurrence is newer than lastBomImport
-			_, _ = w.Write([]byte(`{"lastOccurrence": 2000, "critical": 1}`))
-			return
-		}
-		http.NotFound(w, r)
-	}))
+	srv := dtProjectServer(t, func(int) string {
+		return `{"uuid":"p","name":"p","lastBomImport":1000,"lastVulnerabilityAnalysis":2000}`
+	})
 	defer srv.Close()
-
-	cli := dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "test-key"})
-
-	checker := dtsync.NewSettleChecker(cli, 10*time.Millisecond, 200*time.Millisecond)
-	// lastBomImport is 1000, metrics is 2000 -> settles immediately via metrics!
-	settled, data, err := checker.CheckSettled(ctx, "proj-steady", 1000)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 10*time.Millisecond, 200*time.Millisecond)
+	settled, data, err := checker.CheckSettled(context.Background(), "p", 0)
+	if err != nil || !settled || !strings.Contains(string(data), "CVE-2021-44228") {
+		t.Fatalf("settled=%v err=%v data=%s", settled, err, data)
 	}
-	if !settled {
-		t.Fatal("expected settled=true")
-	}
-	if !strings.Contains(string(data), "CVE-2021-44228") {
-		t.Fatalf("unexpected findings data: %s", string(data))
+}
+
+func TestSettleChecker_SettlesWhenTheAnalysisEnds(t *testing.T) {
+	srv := dtProjectServer(t, func(n int) string {
+		if n < 3 { // the first reads come before the analysis of the new BOM has ended
+			return `{"uuid":"p","name":"p","lastBomImport":2000,"lastVulnerabilityAnalysis":1000}`
+		}
+		return `{"uuid":"p","name":"p","lastBomImport":2000,"lastVulnerabilityAnalysis":2500}`
+	})
+	defer srv.Close()
+	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 5*time.Millisecond, time.Second)
+	if settled, _, err := checker.CheckSettled(context.Background(), "p", 0); err != nil || !settled {
+		t.Fatalf("settled=%v err=%v", settled, err)
 	}
 }
 

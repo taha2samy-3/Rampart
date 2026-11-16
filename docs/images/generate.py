@@ -540,6 +540,134 @@ def integration_tiers():
     s.save("integration-tiers.svg")
 
 
-for fn in (system_context, architecture, ingestion, crds, dtrack, lifecycle, deployment, sso, frontend, domain, risk, integration_tiers):
+# ---------------------------------------------------------------- 13. connector lifecycle (D77, D78, D82)
+def connector_lifecycle():
+    s = Svg(1200, 760, "Connector lifecycle",
+            "A connector is a resource. The operator is the only reader of its Secret; the UI reads and validates, and never writes.")
+    s.frame(40, 90, 300, 250, "Git · kubectl · rampart apply -f", "ext")
+    s.box(60, 130, 260, 76, "Connector", ["type · config", "secret references only"], "ext")
+    s.box(60, 236, 260, 76, "Secret", ["the values", "never in the API or the UI"], "ext")
+    s.box(410, 130, 310, 182, "operator", ["validates the resource", "allowlist scoped to tenant + type (D77)",
+                                           "copies the Secret, encrypted", "runs Check() → Connected"], "control")
+    s.arrow([(320, 168), (410, 168)], "control")
+    s.arrow([(320, 274), (410, 274)], "control")
+    s.box(800, 130, 360, 182, "PostgreSQL", ["connector rows (row-level security)", "secret_material (AES-256-GCM)",
+                                             "status: Ready · Connected · reason"], "data")
+    s.arrow([(720, 221), (800, 221)], "control", label="write", lpos=(760, 211))
+
+    s.frame(40, 368, 680, 130, "Read path", "read")
+    s.box(60, 404, 260, 76, "Web UI catalogue", ["edit a resource, copy it", "no Save, no secret field"], "ext")
+    s.box(410, 404, 290, 76, "query-api", ["GET /connectors · /catalogue", "POST /connectors/validate (dry run)"], "read")
+    s.arrow([(320, 442), (410, 442)], "read", both=True)
+    s.arrow([(700, 442), (980, 442), (980, 312)], "read", label="reads; never writes a connector (D82)", lpos=(840, 432))
+
+    s.frame(40, 526, 1120, 110, "Sending", "write")
+    s.box(410, 556, 290, 64, "notify · ticket sweeper", ["SafeClient.Scoped(tenant, type)"], "write", 13, 12)
+    s.box(800, 556, 340, 64, "Jira · GitHub · Slack · Teams · email · webhook", ["checked before sending and at dial time"], "ext", 13, 12)
+    s.arrow([(1100, 312), (1100, 350), (1180, 350), (1180, 520), (555, 520), (555, 556)], "line", dash="5 4",
+            label="config + its own secret, per call", lpos=(880, 512))
+    s.arrow([(700, 588), (800, 588)], "write")
+
+    s.frame(40, 654, 1120, 90, "Receiving (two-way Jira and GitHub only)", "control")
+    s.box(800, 676, 340, 56, "Jira · GitHub webhook", ["signed with the connector's webhook secret"], "ext", 13, 11)
+    s.box(410, 676, 290, 56, "ingest-gateway", ["POST /hooks/{type}/{connectorId}  (D78)"], "write", 13, 11)
+    s.arrow([(800, 704), (700, 704)], "control")
+    s.text(60, 700, "tenant read from the row, never the path;", 12, 400, MUTED, "start")
+    s.text(60, 718, "a resolution becomes a request, never a decision (D27)", 12, 400, MUTED, "start")
+    s.save("connector-lifecycle.svg")
+
+
+# ---------------------------------------------------------------- 14. CI federation (D72, D80, D81)
+def ci_federation():
+    s = Svg(1200, 600, "CI federation",
+            "A pipeline exchanges its own OIDC token for a 15-minute ingest token bound to its run. No stored secret.")
+    s.box(40, 110, 210, 110, "CI job", ["GitHub Actions or GitLab CI", "ID token: repository_id,", "ref, sha, jti"], "ext", 14, 11)
+    s.box(310, 110, 250, 110, "ingest-gateway", ["POST /ingest/v1/t/{tenant}/token", "RFC 8693 token exchange"], "write", 14, 11)
+    s.arrow([(250, 165), (310, 165)], "write")
+    s.box(620, 96, 260, 138, "verify", ["RS256 / ES256 only", "issuer must have a trust rule", "keys fetched SSRF-safe, cached",
+                                        "audience rampart:<host>:<tenant>", "immutable ids · jti once"], "control", 14, 11)
+    s.arrow([(560, 165), (620, 165)], "control")
+    s.box(940, 96, 220, 138, "ingest token", ["role ingest · 15 minutes", "bound to the scan source", "bind: repo · ref · sha (D80)",
+                                              "options: min_sev · no_close"], "core", 14, 11)
+    s.arrow([(880, 165), (940, 165)], "control")
+
+    s.frame(40, 270, 1120, 300, "What the token can do (red: refused)", "data")
+    s.box(70, 316, 330, 104, "upload a report", ["POST /reports · /sbom (direct)", "POST /uploads (presigned)",
+                                                 "context must match the token;", "empty fields are filled from it"], "write", 14, 11)
+    s.box(440, 312, 330, 104, "parse and merge", ["the token's options travel on the upload", "and reach the parse worker (D81)",
+                                                  "closing only on tracked refs (D10)"], "write", 14, 11)
+    s.arrow([(400, 364), (440, 364)], "write")
+    s.box(810, 312, 320, 104, "query-api", ["POST /api/v1/gate only", "every other route answers 403 (D81)"], "read", 14, 11)
+    s.box(70, 446, 330, 96, "branch=main from a feature branch", ["403: the ref is the token's"], "warn", 14, 11)
+    s.box(440, 446, 330, 96, "another repository or commit", ["403: refused, nothing stored"], "warn", 14, 11)
+    s.box(810, 446, 320, 96, "list findings or export", ["403: an ingest token writes,", "it does not read the tenant"], "warn", 14, 11)
+    s.arrow([(1050, 234), (1050, 252), (370, 252), (370, 316)], "line", dash="5 4", label="used as Bearer rpt_… on the calls below", lpos=(640, 246))
+    s.save("ci-federation.svg")
+
+
+# ---------------------------------------------------------------- 15. held close (D71, D83)
+def held_close():
+    s = Svg(1200, 600, "Held close",
+            "A run that would close too much is held for a person. A newer run of the same scope makes the hold obsolete.")
+    s.box(40, 170, 220, 84, "run close step", ["absent > maxClosePercent", "and > minHeldClose"], "write", 14, 11)
+    s.box(330, 170, 200, 84, "pending", ["nothing closed yet", "maintainer notified"], "control")
+    s.arrow([(260, 212), (330, 212)], "control", label="hold", lpos=(295, 202))
+    s.box(660, 92, 240, 64, "discarded", ["nothing changes"], "data")
+    s.box(660, 180, 240, 64, "confirmed", ["closes what is still absent"], "good")
+    s.box(660, 268, 240, 64, "superseded", ["a newer run decided it (D83)"], "data", dash="5 4")
+    s.arrow([(530, 192), (660, 124)], "line", label="discard", lpos=(585, 150))
+    s.arrow([(530, 212), (660, 212)], "write", label="confirm", lpos=(595, 204))
+    s.arrow([(530, 232), (660, 300)], "line", dash="5 4", label="newer run", lpos=(585, 284))
+    s.text(940, 196, "A run's close step also supersedes", 12, 400, MUTED, "start")
+    s.text(940, 214, "older pending holds of its scope,", 12, 400, MUTED, "start")
+    s.text(940, 232, "so the 'held close pending' alert clears.", 12, 400, MUTED, "start")
+
+    s.frame(40, 360, 1120, 210, "On confirm, under the scope's advisory lock", "control")
+    steps = [("1. newer run?", ["a run of the scope completed", "after the held run", "yes → superseded, 409"]),
+             ("2. came back?", ["the finding was seen again", "in a later run", "yes → kept open"]),
+             ("3. mark absent", ["this scope's occurrences", "become not present", "(D13 step 1)"]),
+             ("4. other source?", ["another scanner still", "reports the finding", "yes → kept open (D13)"]),
+             ("5. close", ["state fixed", "closed_by_rescan event", "audited"])]
+    for i, (t, l) in enumerate(steps):
+        x = 60 + i * 218
+        s.box(x, 404, 196, 136, t, l, "ext", 14, 11)
+        if i < len(steps) - 1:
+            s.arrow([(x + 196, 472), (x + 218, 472)], "control")
+    s.save("held-close.svg")
+
+
+# ---------------------------------------------------------------- 16. Dependency-Track sync, as Dependency-Track behaves (D84)
+def dtrack_sync():
+    s = Svg(1200, 620, "Dependency-Track sync and settling",
+            "BOM_PROCESSED arrives before the analysis. Rampart waits for the analysis, read from the project, then reads once.")
+    s.frame(40, 90, 1120, 170, "Dependency-Track 4.x (order read from the 4.14.6 sources)", "data")
+    dt = [("BOM uploaded", ["by the pipeline (v1)"]), ("BOM processed", ["BOM_PROCESSED sent"]),
+          ("vulnerability analysis", ["runs after the notification"]), ("analysis ends", ["sets lastVulnerabilityAnalysis"])]
+    for i, (t, l) in enumerate(dt):
+        x = 70 + i * 270
+        s.box(x, 140, 230, 90, t, l, "data")
+        if i < 3:
+            s.arrow([(x + 230, 185), (x + 270, 185)])
+    s.text(1060, 108, "no 'analysis complete' event exists", 12, 500, MUTED, "end")
+
+    s.frame(40, 300, 1120, 290, "Rampart sync target (designed; not wired into the server yet, docs/23 K5)", "write", dash="4 4")
+    s.box(70, 350, 230, 96, "/hooks/dependency-track/{id}", ["Bearer secret, constant time", "payload only a hint"], "write", 13, 11)
+    s.arrow([(455, 230), (455, 280), (185, 280), (185, 350)], "control", label="webhook", lpos=(320, 272))
+    s.box(340, 350, 230, 96, "trailing debounce", ["a burst gives at most", "one more sync"], "write", 13, 11)
+    s.arrow([(300, 398), (340, 398)], "write")
+    s.box(610, 350, 250, 96, "wait until settled", ["lastVulnerabilityAnalysis", "≥ lastBomImport (D84)", "bound reached → unsettled"], "control", 13, 11)
+    s.arrow([(570, 398), (610, 398)], "write")
+    s.box(900, 350, 230, 96, "read findings once", ["not paged in 4.x", "over the cap → run fails"], "read", 13, 11)
+    s.arrow([(860, 398), (900, 398)], "write")
+    s.box(340, 480, 520, 80, "map project → application, merge, close with the mass-close guard",
+          ["asset key per D10: dtrack://<connector>/<project name>, version as asset_version"], "write", 13, 11)
+    s.arrow([(1015, 446), (1015, 520), (860, 520)], "write")
+    s.box(70, 480, 230, 80, "schedule every 30 min", ["picks up analyses that", "raised no event"], "control", 13, 11)
+    s.arrow([(300, 520), (340, 520)], "control")
+    s.save("dependency-track-sync.svg")
+
+
+for fn in (system_context, architecture, ingestion, crds, dtrack, lifecycle, deployment, sso, frontend, domain, risk, integration_tiers,
+           connector_lifecycle, ci_federation, held_close, dtrack_sync):
     fn()
 print("ok", sorted(os.listdir(OUT)))
