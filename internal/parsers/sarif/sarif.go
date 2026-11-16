@@ -190,7 +190,9 @@ func mapResultToRawFinding(
 	title := ""
 	multiline := strings.Contains(strings.TrimSpace(res.Message.Text), "\n")
 	switch {
-	case res.Message.Text != "" && !(multiline && hasRule && ruleMeta.ShortDescription.Text != ""):
+	case multiline && hasRule && ruleMeta.ShortDescription.Text != "":
+		title = ruleMeta.ShortDescription.Text
+	case res.Message.Text != "":
 		title = res.Message.Text
 	case hasRule && ruleMeta.ShortDescription.Text != "":
 		title = ruleMeta.ShortDescription.Text
