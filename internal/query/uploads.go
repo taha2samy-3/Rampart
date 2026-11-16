@@ -183,7 +183,7 @@ func (a *API) handleDirectUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sourceID = domain.NewID()
 	}
-	app := r.FormValue("application")
+	app := firstNonEmptyStr(r.FormValue("app"), r.FormValue("application"))
 	track := r.FormValue("track")
 	if track == "" {
 		track = "main"
@@ -203,8 +203,9 @@ func (a *API) handleDirectUpload(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:    now,
 		Track:        track,
 		Context: domain.UploadContext{
-			Repository: app,
-			Branch:     track,
+			Application: app,
+			Repository:  app,
+			Branch:      track,
 		},
 		Stats: domain.IngestStats{
 			Parsed: 1,

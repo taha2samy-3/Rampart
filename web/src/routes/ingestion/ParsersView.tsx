@@ -255,7 +255,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
               <div className="border-t border-rule pt-3">
                 <h4 className="mb-1 text-12 font-semibold text-ink">Upload via CLI:</h4>
                 <CommandLine
-                  command={`rampart upload --source default report.${parserFormat(selectedParser.id).toLowerCase().includes('xml') ? 'xml' : 'json'}`}
+                  command={`rampart upload --parser ${selectedParser.id.replace(/^builtin:/, '')} --app <application> --source default report.${parserFormat(selectedParser.id).toLowerCase().includes('xml') ? 'xml' : 'json'}`}
                 />
               </div>
 

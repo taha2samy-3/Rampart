@@ -241,7 +241,11 @@ func runUpload(args []string) error {
 	imageDigest := fs.String("image-digest", "", "Container image digest")
 	environment := fs.String("environment", "", "Environment, for example production")
 	scanner := fs.String("scanner", "", "Scanner name when the report does not say")
-	format := fs.String("format", "", "Report format hint")
+	format := fs.String("format", "", "Report format/parser hint")
+	parser := fs.String("parser", "", "Report format/parser name (e.g. trivy, sarif, semgrep, cyclonedx, snyk, gitleaks, spdx, checkov)")
+	app := fs.String("app", "", "Application slug or name")
+	application := fs.String("application", "", "Application slug or name (alias for --app)")
+	requireParser := fs.Bool("require-parser", false, "Require an explicit parser name (fails if omitted)")
 	buildID := fs.String("build-id", ci.BuildID, "Build id")
 	pipelineURL := fs.String("pipeline-url", ci.PipelineURL, "Pipeline URL")
 	token := fs.String("token", "", "API token")
@@ -252,8 +256,14 @@ func runUpload(args []string) error {
 	}
 
 	if len(files) < 1 {
-		return fmt.Errorf("usage: rampart upload <file> [--source <id>] [--server <url>]")
+		return fmt.Errorf("usage: rampart upload <file> [--parser <name>] [--app <name>] [--source <id>] [--server <url>]")
 	}
+
+	chosenParser := firstNonEmptyCLI(*parser, *format)
+	if *requireParser && chosenParser == "" {
+		return fmt.Errorf("missing required flag: --parser (or --format)")
+	}
+	chosenApp := firstNonEmptyCLI(*app, *application)
 
 	filePath := files[0]
 	fileData, err := os.ReadFile(filePath)
@@ -268,8 +278,12 @@ func runUpload(args []string) error {
 	}
 	ref := firstNonEmptyCLI(*branch, *track, ci.Ref, "main")
 	_ = w.WriteField("branch", ref)
-	for k, v := range map[string]string{"commit": *commit, "repository": *repository, "imageRef": *imageRef, "imageDigest": *imageDigest,
-		"environment": *environment, "scanner": *scanner, "format": *format, "buildId": *buildID, "pipelineUrl": *pipelineURL} {
+	for k, v := range map[string]string{
+		"commit": *commit, "repository": *repository, "imageRef": *imageRef, "imageDigest": *imageDigest,
+		"environment": *environment, "scanner": *scanner, "format": chosenParser, "parser": chosenParser,
+		"application": chosenApp, "app": chosenApp,
+		"buildId": *buildID, "pipelineUrl": *pipelineURL,
+	} {
 		if v != "" {
 			_ = w.WriteField(k, v)
 		}
@@ -344,6 +358,8 @@ func runSBOMUpload(args []string) error {
 	fs := flag.NewFlagSet("sbom upload", flag.ContinueOnError)
 	server := fs.String("server", "", "Rampart server URL")
 	source := fs.String("source", "", "Scan source ID")
+	app := fs.String("app", "", "Application slug or name")
+	application := fs.String("application", "", "Application slug or name (alias for --app)")
 	token := fs.String("token", "", "API token")
 
 	files, err := parseFlexibleFlags(fs, args)
@@ -352,7 +368,7 @@ func runSBOMUpload(args []string) error {
 	}
 
 	if len(files) < 1 {
-		return fmt.Errorf("usage: rampart sbom upload <file>")
+		return fmt.Errorf("usage: rampart sbom upload <file> [--app <name>]")
 	}
 
 	filePath := files[0]
@@ -363,8 +379,15 @@ func runSBOMUpload(args []string) error {
 
 	targetServer := resolveServer(*server)
 	reqURL := strings.TrimRight(targetServer, "/") + "/ingest/v1/sbom"
+	params := url.Values{}
 	if *source != "" {
-		reqURL += "?source=" + url.QueryEscape(*source)
+		params.Set("source", *source)
+	}
+	if chosenApp := firstNonEmptyCLI(*app, *application); chosenApp != "" {
+		params.Set("application", chosenApp)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		reqURL += "?" + encoded
 	}
 
 	req, err := http.NewRequest("POST", reqURL, bytes.NewReader(data))

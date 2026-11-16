@@ -153,6 +153,7 @@ type SBOMComponent struct {
 
 // UploadContext represents the canonical context payload supplied at upload time (D10).
 type UploadContext struct {
+	Application  string    `json:"application,omitempty"`
 	Repository   string    `json:"repository,omitempty"`
 	Branch       string    `json:"branch,omitempty"`
 	Commit       string    `json:"commit,omitempty"`

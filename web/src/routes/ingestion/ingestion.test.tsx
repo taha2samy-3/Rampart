@@ -157,7 +157,7 @@ describe('ingest runs', () => {
     const dialog = screen.getByRole('dialog', { name: 'SARIF 2.1.0 Parser' });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText('builtin:sarif')).toBeInTheDocument();
-    expect(within(dialog).getByText('rampart upload --source default report.json')).toBeInTheDocument();
+    expect(within(dialog).getByText('rampart upload --parser sarif --app <application> --source default report.json')).toBeInTheDocument();
     await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]!);
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SARIF 2.1.0 Parser' })).toBeNull());
 

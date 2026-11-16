@@ -165,6 +165,21 @@ spec:
 	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--expect", "semgrep"); err == nil {
 		t.Error("the gate needs a commit or an image digest")
 	}
+
+	// 7. Test upload with explicit --parser and --app
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--parser", "sarif", "--app", "custom-app"); err != nil {
+		t.Fatalf("upload with explicit --parser and --app failed: %v", err)
+	}
+
+	// 8. Test --require-parser flag
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--require-parser"); err == nil {
+		t.Error("expected error when --require-parser is set without --parser")
+	}
+
+	// 9. Test upload with unknown --parser fails explicitly
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--parser", "unknown-scanner-xyz"); err == nil {
+		t.Error("expected error when unknown --parser is requested")
+	}
 }
 
 func TestCLIMigrateValidation(t *testing.T) {

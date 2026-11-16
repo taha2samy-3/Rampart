@@ -436,7 +436,7 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		appID, err := ResolveApplication(r.Context(), st, tenantID, asset, "")
+		appID, err := ResolveApplication(r.Context(), st, tenantID, asset, upload.Context.Application)
 		if err != nil {
 			return err
 		}
@@ -539,12 +539,13 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		get = r.URL.Query().Get
 	}
 
-	declaredApp := firstNonEmpty(get("app"), get("application"))
+	declaredApp := strings.TrimSpace(firstNonEmpty(get("app"), get("application")))
 	scannerOverride := strings.ToLower(strings.TrimSpace(get("scanner")))
-	formatHint := get("format")
+	formatHint := strings.TrimSpace(firstNonEmpty(get("format"), get("parser")))
 	// D10: the canonical upload context decides asset, version and track. The file
 	// name is never an asset key.
 	uploadCtx := domain.UploadContext{
+		Application: declaredApp,
 		Repository:  firstNonEmpty(get("repository"), get("repo")),
 		Branch:      firstNonEmpty(get("branch"), get("track")),
 		Commit:      get("commit"),
@@ -604,6 +605,17 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	parsers := g.parsers
 	selectedParser := parsers.byName(r.Context(), tenantID, formatHint)
 	if selectedParser == nil {
+		if formatHint != "" {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":   "https://rampart.aspm.dev/problems/unsupported-format",
+				"title":  "Unsupported or unknown parser",
+				"status": http.StatusBadRequest,
+				"detail": fmt.Sprintf("Unknown parser %q. Specify a valid parser (e.g. trivy, sarif, semgrep, cyclonedx, snyk, gitleaks, spdx, checkov)", formatHint),
+			})
+			return
+		}
 		var score int
 		selectedParser, score = parsers.detect(r.Context(), tenantID, head, filename, contentType)
 		if selectedParser == nil || score < 40 {

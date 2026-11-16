@@ -1,8 +1,9 @@
 import { useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { listParsers, qk, toProblem, uploadReport } from '@/api';
+import { listApplications, listParsers, qk, toProblem, uploadReport } from '@/api';
 import { Button, Dialog, DialogClose, DialogContent, Input, ProblemMessage, useToast } from '@/components';
+import { useAccess } from '@/app/useAccess';
 import { cn } from '@/lib/cn';
 
 export interface UploadDialogProps {
@@ -27,6 +28,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
   const qc = useQueryClient();
+  const { can } = useAccess();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -47,6 +49,13 @@ function UploadForm({ onDone }: { onDone: () => void }) {
     queryFn: ({ signal }) => listParsers(signal).catch(() => []),
   });
   const parsers = parsersQuery.data ?? [];
+
+  const appsQuery = useQuery({
+    queryKey: qk.applications.list(),
+    queryFn: ({ signal }) => listApplications(signal).catch(() => []),
+    staleTime: 60_000,
+  });
+  const accessibleApps = (appsQuery.data ?? []).filter((a) => can(a.id, 'triager'));
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -151,12 +160,24 @@ function UploadForm({ onDone }: { onDone: () => void }) {
         <label htmlFor={ids.app} className="mb-1 block text-12 font-medium text-ink">
           {t('ingestion.uploadApplication')}
         </label>
-        <Input
+        <select
           id={ids.app}
           value={app}
           onChange={(e) => setApp(e.target.value)}
-          placeholder={t('ingestion.uploadApplicationPlaceholder')}
-        />
+          className="h-8 w-full rounded-ctl border border-rule bg-surface px-2.5 text-13 text-ink focus:border-accent focus:outline-none"
+        >
+          <option value="">{t('ingestion.uploadChooseApplication') || 'Choose an application...'}</option>
+          {accessibleApps.map((a) => (
+            <option key={a.id} value={a.slug || a.id}>
+              {a.name} ({a.slug || a.id})
+            </option>
+          ))}
+        </select>
+        {accessibleApps.length === 0 && !appsQuery.isLoading && (
+          <p className="mt-1 text-11 text-crimson">
+            {t('ingestion.noAccessibleApps') || 'No applications available with triager role in this tenant.'}
+          </p>
+        )}
       </div>
 
       <div>
