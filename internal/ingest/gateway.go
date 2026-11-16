@@ -261,6 +261,11 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 		problemJSON(w, http.StatusBadRequest, "validation", "Invalid JSON request", "")
 		return
 	}
+	// D80: a federated token states the repository, branch and commit; the request may not state others.
+	if err := BindUploadContext(caller.Scopes, &req.Context); err != nil {
+		problemJSON(w, http.StatusForbidden, "forbidden", "The upload context does not match the CI token", err.Error())
+		return
+	}
 	if req.SizeBytes <= 0 {
 		problemJSON(w, http.StatusBadRequest, "validation", "sizeBytes is required", "The size is signed into the upload URL, so declare the exact size of the report.")
 		return
@@ -551,6 +556,11 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	}
 	scanFinished := parseScanFinished(get("scanFinished"))
 	uploadCtx.ScanFinished = scanFinished
+	// D80: a federated token states the repository, branch and commit; the request may not state others.
+	if err := BindUploadContext(caller.Scopes, &uploadCtx); err != nil {
+		problemJSON(w, http.StatusForbidden, "forbidden", "The upload context does not match the CI token", err.Error())
+		return
+	}
 
 	sourceParam := get("source")
 	if caller.ScanSourceID != nil && *caller.ScanSourceID != domain.NilID && sourceParam == "" {

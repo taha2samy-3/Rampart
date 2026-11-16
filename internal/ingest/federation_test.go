@@ -792,3 +792,68 @@ func FuzzFederationToken(f *testing.F) {
 		mux.ServeHTTP(rec, req)
 	})
 }
+
+// D80: a federated token is bound to the run that exchanged it. An upload that states another branch, repository or
+// commit is refused on both the direct and the presigned path; one that leaves them empty gets the token's.
+func TestFederation_UploadContextIsTheTokens(t *testing.T) {
+	gw, memStore, idp, tenant, _ := setupFederationGateway(t)
+	gw.SetAuthenticator(auth.NewAuthenticatorWithStore(memStore))
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	std := jwt.Claims{
+		Issuer: idp.server.URL, Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+		Subject: "repo:acme/backend:ref:refs/heads/feature-x", Expiry: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+		ID: uuid.New().String(),
+	}
+	claims := map[string]any{
+		"repository_id": "12345", "repository_owner_id": "67890", "repository": "acme/backend",
+		"ref": "refs/heads/feature-x", "sha": sha,
+	}
+	rec, res := exchangeToken(mux, tenant.Slug, url.Values{
+		"grant_type": {ingest.GrantTypeTokenExchange}, "subject_token_type": {ingest.TokenTypeJWT}, "subject_token": {idp.signRSA(claims, std)},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange: %d %s", rec.Code, rec.Body.String())
+	}
+	tok := res["access_token"].(string)
+
+	upload := func(query string) *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(http.MethodPost, "/ingest/v1/reports?format=sarif&"+query, strings.NewReader(`{"runs":[]}`))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+	for name, q := range map[string]string{
+		"a feature-branch run claiming main": "branch=main",
+		"another repository":                 "repository=https://github.com/acme/payments",
+		"another commit":                     "commit=fedcba9876543210",
+	} {
+		if w := upload(q); w.Code != http.StatusForbidden {
+			t.Errorf("%s: want 403, got %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+	for name, q := range map[string]string{
+		"nothing stated":           "",
+		"the same values":          "branch=feature-x&repository=git@github.com:Acme/backend.git&commit=" + sha[:10],
+		"the ref in its long form": "branch=refs/heads/feature-x",
+		"the repository as a URL":  "repository=https://github.com/acme/backend",
+	} {
+		if w := upload(q); w.Code == http.StatusForbidden {
+			t.Errorf("%s: refused: %s", name, w.Body.String())
+		}
+	}
+
+	// The presigned path checks the same binding when the upload is created.
+	body := `{"sizeBytes":10,"context":{"branch":"main"}}`
+	req, _ := http.NewRequest(http.MethodPost, "/ingest/v1/uploads", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden && w.Code != http.StatusNotImplemented {
+		t.Fatalf("presigned create with branch=main: want 403, got %d: %s", w.Code, w.Body.String())
+	}
+}

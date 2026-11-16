@@ -367,7 +367,11 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			ownerID := claimStr(verifiedClaims, "repository_owner_id")
 			repo := claimStr(verifiedClaims, "repository")
 
-			// D22 requires matching both repository_id and repository_owner_id (Audit point 6)
+			// D22 requires matching both repository_id and repository_owner_id (Audit point 6). A rule without them
+			// matches nothing (validation refuses one; this keeps a bad stored row from matching every repository).
+			if rule.RepositoryID == "" || rule.RepositoryOwnerID == "" {
+				continue
+			}
 			if rule.RepositoryID != "" && rule.RepositoryID != repoID {
 				continue
 			}
@@ -384,7 +388,10 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			nsID := claimStr(verifiedClaims, "namespace_id")
 			projPath := claimStr(verifiedClaims, "project_path")
 
-			// D22 requires matching both project_id and namespace_id
+			// D22 requires matching both project_id and namespace_id; a rule without them matches nothing.
+			if rule.ProjectID == "" || rule.NamespaceID == "" {
+				continue
+			}
 			if rule.ProjectID != "" && rule.ProjectID != projID {
 				continue
 			}
@@ -438,6 +445,8 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if closeOld := r.Form.Get("close_old_findings"); closeOld == "false" {
 		scopes = append(scopes, "no_close")
 	}
+	// D80: the token is bound to the run that exchanged it: its repository, ref and commit.
+	scopes = append(scopes, federationBindings(matchedRule.Rule.Provider, iss, verifiedClaims)...)
 
 	// 11. Issue short-lived API token (role: ingest, 15 minutes, bound to scanSourceID)
 	subject := claimStr(verifiedClaims, "repository")

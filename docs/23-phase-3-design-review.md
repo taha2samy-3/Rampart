@@ -174,6 +174,7 @@ The review answers three questions:
 - **Basis**: D13 (rules and SQL), D18, D22.
 
 ### H2 (P1) Federation: the upload context comes from the token
+- **Status: the binding is done (D80, 2026-11-16).** Items 1 to 3 below are not built yet. Also found: the presigned path ignores the `min_sev` and `no_close` scopes; it needs the options stored on `upload`.
 - **Missing** in D72: a rule that a federated upload's `repository`, `branch`/`ref` and `commit` **are** the token's, and that a different value in the request is refused. The ref is the client's to state (D30). Without this rule, a feature-branch run can upload with `branch=main` and close `main`'s findings.
 - **Also**:
   1. Check ingest as a scope, not as rank 5 below `viewer`: any check `role >= ingest` admits every viewer.
