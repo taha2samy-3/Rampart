@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
-import { acceptance, finding, findingGroup, heldClose, mockFetch, renderApp } from '@/test/helpers';
+import { acceptance, app, finding, findingGroup, heldClose, mockFetch, renderApp } from '@/test/helpers';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -252,8 +252,8 @@ describe('held mass-closes on workflow page', () => {
 
 describe('finding groups on workflow page', () => {
   it('lists finding groups and displays findings in inspector when selected', async () => {
-    const grp = findingGroup(1, { id: 'grp-1', name: 'Log4j Remediation Squad', member_count: 2 });
-    mockFetch({ loggedIn: true, role: 'maintainer', groups: [grp], groupFindings: { 'grp-1': ['f-1', 'f-2'] } });
+    const grp = findingGroup(1, { id: 'grp-1', name: 'Log4j Remediation Squad', member_count: 2, application_id: 'app-1' });
+    mockFetch({ loggedIn: true, role: 'maintainer', apps: [app(1)], groups: [grp], groupFindings: { 'grp-1': ['f-1', 'f-2'] } });
     const { container } = renderApp('/workflow?tab=groups');
 
     expect(await screen.findByRole('grid', { name: 'Finding groups table' })).toBeInTheDocument();
@@ -266,28 +266,49 @@ describe('finding groups on workflow page', () => {
     expect(within(detail).getByRole('heading', { name: 'Log4j Remediation Squad' })).toBeInTheDocument();
     expect(await within(detail).findByText('f-1')).toBeInTheDocument();
     expect(within(detail).getByText('f-2')).toBeInTheDocument();
-    expect(within(detail).getByRole('button', { name: 'Delete Group' })).toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: 'Delete group' })).toBeInTheDocument();
 
     expect(await axe(container)).toHaveNoViolations();
   });
 
   it('creates a new finding group with name and description', async () => {
-    const calls = mockFetch({ loggedIn: true, role: 'maintainer', groups: [] });
+    const calls = mockFetch({ loggedIn: true, role: 'maintainer', apps: [app(1)], groups: [] });
     renderApp('/workflow?tab=groups');
 
     expect(await screen.findByText('No finding groups yet')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'New Group' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'New group' })[0]!);
 
-    const dialog = await screen.findByRole('dialog', { name: 'Create Finding Group' });
-    await userEvent.type(within(dialog).getByLabelText(/Group Name/), 'Sprint 42 Vulnerabilities');
+    const dialog = await screen.findByRole('dialog', { name: 'New group' });
+    await userEvent.type(within(dialog).getByLabelText('Name'), 'Sprint 42 Vulnerabilities');
     await userEvent.type(within(dialog).getByLabelText('Description'), 'Consolidated ticketing for sprint 42');
 
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Create Group' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create group' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/groups')).toBe(true));
     const createCall = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/groups');
     expect(JSON.parse(createCall!.body!)).toMatchObject({
       name: 'Sprint 42 Vulnerabilities',
       description: 'Consolidated ticketing for sprint 42',
+      application_id: 'app-1',
     });
+  });
+
+  // D90: a maintainer of the group's application opens one ticket for the whole group; a triager cannot.
+  it('opens one ticket for a group, and shows its state', async () => {
+    const grp = findingGroup(1, { id: 'grp-1', application_id: 'app-1' });
+    const calls = mockFetch({ loggedIn: true, role: 'maintainer', apps: [app(1)], groups: [grp] });
+    renderApp('/workflow?tab=groups&sel=grp-1');
+    const detail = await screen.findByRole('complementary', { name: 'Finding group details' });
+    expect(await within(detail).findByText(/No ticket/)).toBeInTheDocument();
+    await userEvent.click(await within(detail).findByRole('button', { name: 'Open one ticket for the group' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/groups/grp-1/ticket')).toBe(true));
+  });
+
+  it('a triager sees the ticket but cannot open it', async () => {
+    const grp = findingGroup(1, { id: 'grp-1', application_id: 'app-1', ticket: { status: 'done', external_ref: 'SEC-12', url: 'https://jira.example/browse/SEC-12' } });
+    mockFetch({ loggedIn: true, role: 'triager', apps: [app(1)], groups: [grp] });
+    renderApp('/workflow?tab=groups&sel=grp-1');
+    const detail = await screen.findByRole('complementary', { name: 'Finding group details' });
+    expect(await within(detail).findByText(/Open as SEC-12/)).toBeInTheDocument();
+    expect(within(detail).queryByRole('button', { name: /ticket/ })).toBeNull();
   });
 });

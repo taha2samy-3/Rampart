@@ -130,7 +130,7 @@ type mockSyncer struct {
 	calls []string
 }
 
-func (s *mockSyncer) SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string) error {
+func (s *mockSyncer) EnqueueDTrackProject(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, projectUUID)

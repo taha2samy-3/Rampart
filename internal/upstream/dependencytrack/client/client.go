@@ -105,10 +105,12 @@ type Project struct {
 	LastBomImport int64  `json:"lastBomImport,omitempty"` // epoch ms
 	// LastVulnerabilityAnalysis is set by Dependency-Track when an analysis of the project ends, for every analysis
 	// level including the one after a BOM upload (VulnerabilityAnalysisTask, 4.14.6; docs/23 DT1). Epoch ms.
-	LastVulnerabilityAnalysis int64      `json:"lastVulnerabilityAnalysis,omitempty"`
-	Parent                    *ParentRef `json:"parent,omitempty"`
-	Tags                      []Tag      `json:"tags,omitempty"`
-	Properties                []Property `json:"properties,omitempty"`
+	LastVulnerabilityAnalysis int64 `json:"lastVulnerabilityAnalysis,omitempty"`
+	// IsLatest marks the latest version of a project (DT 4.12 and later); nil when the server does not send it.
+	IsLatest   *bool      `json:"isLatest,omitempty"`
+	Parent     *ParentRef `json:"parent,omitempty"`
+	Tags       []Tag      `json:"tags,omitempty"`
+	Properties []Property `json:"properties,omitempty"`
 }
 
 type ParentRef struct {
@@ -333,6 +335,34 @@ func (c *Client) GetFindings(ctx context.Context, projectUUID string, includeSup
 		return nil, fmt.Errorf("unexpected status %d fetching findings for %s", code, projectUUID)
 	}
 	return body, nil
+}
+
+// GetFindingsCounted reads the finding list once, with the count Dependency-Track states in X-Total-Count (-1 when
+// absent). The endpoint is not paged (docs/23 DT2): it returns every finding, so the caller checks what it parsed
+// against the count instead of looping.
+func (c *Client) GetFindingsCounted(ctx context.Context, projectUUID string, includeSuppressed bool) ([]byte, int, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/finding/project/%s?suppressed=%t", c.baseURL, url.PathEscape(projectUUID), includeSuppressed)
+	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	body, code, header, err := c.doer.Do(req)
+	if err != nil {
+		return nil, 0, sanitizeError(err)
+	}
+	if code == http.StatusNotFound {
+		return nil, 0, ErrNotFound
+	}
+	if code != http.StatusOK {
+		return nil, 0, fmt.Errorf("unexpected status %d fetching findings for %s", code, projectUUID)
+	}
+	total := -1
+	if h := header.Get("X-Total-Count"); h != "" {
+		if n, err := strconv.Atoi(h); err == nil {
+			total = n
+		}
+	}
+	return body, total, nil
 }
 
 // GetProjectMetrics retrieves the current metrics for a project from /api/v1/metrics/project/{uuid}/current.

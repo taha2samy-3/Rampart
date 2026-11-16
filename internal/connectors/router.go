@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"rampart/internal/integrations/declarative"
 	"strings"
 	"sync"
 	"time"
@@ -394,6 +395,9 @@ func (r *NotificationRouter) buildNotifier(ctx context.Context, tenantID uuid.UU
 		}
 		return NewEmailNotifier(conn.Spec.Email.SMTP, conn.Spec.Email.From, conn.Spec.Email.To, username, password), nil
 
+	case domain.ConnectorTypePlugin:
+		return r.buildPluginNotifier(ctx, tenantID, conn)
+
 	default:
 		return nil, nil
 	}
@@ -466,4 +470,61 @@ func matchesRouting(rule *domain.NotificationRoutingRule, msg NotificationMessag
 		}
 	}
 	return true
+}
+
+// buildPluginNotifier builds a notifier from the connector's IntegrationPackage (D94). The package declares its
+// secrets and its egress; the client is the SSRF-safe one scoped to the tenant, so a declared host that resolves to
+// a private address is still refused.
+func (r *NotificationRouter) buildPluginNotifier(ctx context.Context, tenantID uuid.UUID, conn domain.Connector) (Notifier, error) {
+	if conn.Spec.Plugin == nil {
+		return nil, nil
+	}
+	pkgs, ok := r.store.(domain.IntegrationPackages)
+	if !ok {
+		return nil, fmt.Errorf("connector %q: the store does not keep integration packages", conn.Name)
+	}
+	rec, err := pkgs.GetIntegrationPackage(ctx, tenantID, conn.Spec.Plugin.Name)
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: IntegrationPackage %q: %w", conn.Name, conn.Spec.Plugin.Name, err)
+	}
+	if rec.Error != "" {
+		return nil, fmt.Errorf("connector %q: IntegrationPackage %q does not validate: %s", conn.Name, rec.Name, rec.Error)
+	}
+	spec, err := declarative.Parse(rec.Spec)
+	if err != nil {
+		return nil, err
+	}
+	if spec.Kind != "notifier" {
+		return nil, nil
+	}
+	cfg, err := spec.ValidateConfig(conn.Spec.Plugin.Config)
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: %w", conn.Name, err)
+	}
+	secrets := map[string]string{}
+	for _, n := range spec.SecretNames() {
+		if r.secretResolver == nil {
+			return nil, fmt.Errorf("connector %q requires secretResolver for secret %q", conn.Name, n)
+		}
+		b, err := r.secretResolver.GetSecretMaterial(ctx, tenantID, domain.ConnectorSecretStorageKey(conn.Name, n))
+		if err != nil {
+			return nil, fmt.Errorf("connector %q failed to resolve secret %q: %w", conn.Name, n, err)
+		}
+		secrets[n] = string(b)
+	}
+	n, err := declarative.NewNotifier(spec, cfg, secrets, r.client.Scoped(tenantID, conn.Type))
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: %w", conn.Name, err)
+	}
+	return pluginNotifier{n}, nil
+}
+
+// pluginNotifier gives a declarative notifier the canonical message as the fields its templates read.
+type pluginNotifier struct{ n *declarative.Notifier }
+
+func (p pluginNotifier) Send(ctx context.Context, msg NotificationMessage) error {
+	return p.n.Send(ctx, map[string]string{
+		"id": msg.ID, "title": msg.Title, "summary": msg.Summary, "severity": msg.Severity, "url": msg.URL,
+		"appName": msg.AppName, "findingId": msg.FindingID, "timestamp": msg.Timestamp.UTC().Format(time.RFC3339),
+	})
 }

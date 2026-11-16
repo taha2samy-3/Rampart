@@ -6,18 +6,21 @@ import {
   createFindingGroup,
   deleteFindingGroup,
   getFindingGroup,
+  listApplications,
   listFindingGroups,
   removeGroupMembers,
+  requestGroupTicket,
   qk,
   toProblem,
 } from '@/api';
-import type { FindingGroup } from '@/api/types';
+import type { AppSummary, FindingGroup, GroupTicket } from '@/api/types';
 import {
   Button,
   Dialog,
   DialogContent,
   EmptyState,
   ProblemMessage,
+  Select,
   Skeleton,
   Table,
   TBody,
@@ -47,6 +50,8 @@ export function GroupsView({
   });
   const rows = q.data ?? [];
   const selected = rows.find((r) => r.id === search.sel);
+  const appsQ = useQuery({ queryKey: qk.applications.list(), queryFn: ({ signal }) => listApplications(signal) });
+  const appName = (id?: string) => (id ? appsQ.data?.find((a) => a.id === id)?.name ?? 'an application' : 'Whole tenant');
 
   let list: React.ReactNode;
   if (q.isPending) {
@@ -75,11 +80,11 @@ export function GroupsView({
         title="No finding groups yet"
         action={
           <Button variant="secondary" onClick={() => setCreateOpen(true)}>
-            Create Finding Group
+            New group
           </Button>
         }
       >
-        Group findings across scans to manage remediation initiatives, track root causes together, or dispatch correlation tickets.
+        A group gathers findings of one application that are fixed together, and can be tracked by one ticket.
       </EmptyState>
     );
   } else {
@@ -91,14 +96,14 @@ export function GroupsView({
             <col />
             <col className="w-[160px]" />
             <col className="w-[110px]" />
-            <col className="w-[100px]" />
+            <col className="w-[140px]" />
           </colgroup>
           <THead className="sticky top-0 z-10">
             <tr role="row">
               <Th>Group</Th>
-              <Th>Owner</Th>
+              <Th>Application</Th>
               <Th>Findings</Th>
-              <Th align="end">Created</Th>
+              <Th>Ticket</Th>
             </tr>
           </THead>
           <TBody>
@@ -126,13 +131,9 @@ export function GroupsView({
                     </span>
                   )}
                 </Td>
-                <Td className="truncate text-12 text-ink-2">
-                  {r.owner ? r.owner.replace(/^user:/, '') : '—'}
-                </Td>
+                <Td className="truncate text-12 text-ink-2">{appName(r.application_id)}</Td>
                 <Td className="text-ink-2">{r.member_count ?? 0} findings</Td>
-                <Td align="end" className="text-ink-2" title={r.created_at ? absoluteDate(r.created_at) : undefined}>
-                  {r.created_at ? absoluteDate(r.created_at) : '—'}
-                </Td>
+                <Td className="truncate text-12 text-ink-2">{ticketShort(r.ticket)}</Td>
               </Tr>
             ))}
           </TBody>
@@ -165,11 +166,11 @@ export function GroupsView({
               onClick={() => set({ tab: 'groups', sel: undefined })}
               className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
             >
-              Finding Groups
+              Finding groups
             </button>
           </div>
           <Button variant="secondary" onClick={() => setCreateOpen(true)}>
-            New Group
+            New group
           </Button>
         </div>
         {list}
@@ -177,30 +178,48 @@ export function GroupsView({
       <div className="min-h-[200px] shrink-0 basis-2/5 border-t border-rule bg-chrome tablet:min-h-0 tablet:w-[360px] tablet:basis-auto tablet:border-s tablet:border-t-0">
         <aside aria-label="Finding group details" className="h-full overflow-y-auto">
           {selected ? (
-            <GroupDetail key={selected.id} group={selected} onDeleted={() => set({ sel: undefined })} />
+            <GroupDetail key={selected.id} group={selected} appName={appName(selected.application_id)} onDeleted={() => set({ sel: undefined })} />
           ) : (
-            <EmptyState title="Select a group">
-              Choose a finding group from the list to view its member findings, correlate root causes, or manage membership.
-            </EmptyState>
+            <EmptyState title="Select a group">Its findings and its ticket show here.</EmptyState>
           )}
         </aside>
       </div>
-      <CreateGroupDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <CreateGroupDialog open={createOpen} onOpenChange={setCreateOpen} apps={appsQ.data ?? []} />
     </div>
   );
 }
 
+/** The ticket column: what a person needs to know in a few words. */
+export function ticketShort(t: GroupTicket | undefined): string {
+  if (!t) return 'None';
+  if (t.status === 'reserved') return 'Being opened';
+  if (t.status === 'failed') return 'Could not open';
+  return t.external_ref || 'Open';
+}
+
 function GroupDetail({
   group,
+  appName,
   onDeleted,
 }: {
   group: FindingGroup;
+  appName: string;
   onDeleted: () => void;
 }) {
   const toast = useToast();
   const qc = useQueryClient();
-  const { canAnywhere } = useAccess();
-  const isMaintainer = canAnywhere('maintainer');
+  const { can, canAnywhere } = useAccess();
+  // The server decides; the screen offers only what the role on the group's application allows (D90).
+  const isMaintainer = group.application_id ? can(group.application_id, 'maintainer') : canAnywhere('admin');
+  const isTriager = group.application_id ? can(group.application_id, 'triager') : canAnywhere('triager');
+
+  const ticketMutation = useMutation({
+    mutationFn: () => requestGroupTicket(group.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.groups.all() });
+      toast.info('Ticket requested. It opens on your tracker within a minute.');
+    },
+  });
 
   const detailQuery = useQuery({
     queryKey: qk.groups.one(group.id),
@@ -225,8 +244,10 @@ function GroupDetail({
     },
   });
 
-  const findings = detailQuery.data?.findings_ids ?? [];
-  const problem = deleteMutation.isError ? toProblem(deleteMutation.error) : null;
+  const findings = detailQuery.data?.finding_ids ?? [];
+  const ticket = detailQuery.data?.group.ticket ?? group.ticket;
+  const failed = deleteMutation.isError ? deleteMutation.error : ticketMutation.isError ? ticketMutation.error : null;
+  const problem = failed ? toProblem(failed) : null;
 
   return (
     <article aria-label="Finding group detail" className="px-4 py-3">
@@ -234,6 +255,8 @@ function GroupDetail({
       {group.description && <p className="mt-1 text-13 text-ink-2">{group.description}</p>}
 
       <dl className="m-0 mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
+        <dt className="text-ink-2">Application</dt>
+        <dd className="m-0">{appName}</dd>
         <dt className="text-ink-2">Owner</dt>
         <dd className="m-0">{group.owner ? group.owner.replace(/^user:/, '') : '—'}</dd>
         <dt className="text-ink-2">Findings</dt>
@@ -242,8 +265,25 @@ function GroupDetail({
         <dd className="m-0">{group.created_at ? absoluteDate(group.created_at) : '—'}</dd>
       </dl>
 
+      <section className="mt-5" aria-labelledby="group-ticket">
+        <h3 id="group-ticket" className="m-0 mb-1 text-13 font-semibold">
+          Ticket
+        </h3>
+        <p className="m-0 text-13 text-ink-2">{ticketSentence(ticket)}</p>
+        {ticket?.status === 'done' && ticket.url && (
+          <a href={ticket.url} target="_blank" rel="noreferrer" className="text-13 text-accent hover:underline">
+            Open {ticket.external_ref} in the tracker
+          </a>
+        )}
+        {isMaintainer && (!ticket || ticket.status === 'failed') && findings.length > 0 && (
+          <Button className="mt-2" loading={ticketMutation.isPending} onClick={() => ticketMutation.mutate()}>
+            {ticket ? 'Try the ticket again' : 'Open one ticket for the group'}
+          </Button>
+        )}
+      </section>
+
       <section className="mt-5">
-        <h3 className="m-0 mb-2 text-13 font-semibold">Group Findings ({findings.length})</h3>
+        <h3 className="m-0 mb-2 text-13 font-semibold">Findings ({findings.length})</h3>
         {detailQuery.isPending && (
           <div className="flex flex-col gap-1 py-2">
             <Skeleton className="h-4 w-3/4" />
@@ -267,7 +307,7 @@ function GroupDetail({
                 >
                   {fId}
                 </Link>
-                {isMaintainer && (
+                {isTriager && (
                   <button
                     type="button"
                     onClick={() => removeMemberMutation.mutate(fId)}
@@ -297,7 +337,7 @@ function GroupDetail({
               }
             }}
           >
-            Delete Group
+            Delete group
           </Button>
         </div>
       )}
@@ -308,19 +348,34 @@ function GroupDetail({
 function CreateGroupDialog({
   open,
   onOpenChange,
+  apps,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  apps: AppSummary[];
 }) {
+  const { can, canAnywhere } = useAccess();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  // Only applications where the caller is a maintainer; the whole tenant only for an admin (D90).
+  const choices = [
+    ...apps.filter((a) => can(a.id, 'maintainer')).map((a) => ({ value: a.id, label: a.name })),
+    ...(canAnywhere('admin') ? [{ value: 'tenant', label: 'Whole tenant' }] : []),
+  ];
+  const [appChoice, setAppChoice] = useState('');
+  const app = appChoice || choices[0]?.value || '';
   const nameId = useId();
   const descId = useId();
   const toast = useToast();
   const qc = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: () => createFindingGroup({ name: name.trim(), description: description.trim() || undefined }),
+    mutationFn: () =>
+      createFindingGroup({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        application_id: app && app !== 'tenant' ? app : undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.groups.all() });
       toast.info('Finding group created');
@@ -334,7 +389,7 @@ function CreateGroupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="Create Finding Group" description="Group findings across scans to manage them together.">
+      <DialogContent title="New group" description="Findings of one application that are fixed together.">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -344,14 +399,14 @@ function CreateGroupDialog({
         >
           <div className="flex flex-col gap-1.5">
             <label htmlFor={nameId} className="text-13 font-medium">
-              Group Name <span className="text-critical">*</span>
+              Name
             </label>
             <input
               id={nameId}
               type="text"
               required
               maxLength={255}
-              placeholder="e.g. Critical Spring4Shell Remediation"
+              placeholder="Spring4Shell in payments"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="rounded-ctl border border-rule bg-surface px-3 py-1.5 text-13 text-ink focus:outline-none focus:ring-1 focus:ring-accent"
@@ -365,14 +420,23 @@ function CreateGroupDialog({
             <textarea
               id={descId}
               rows={3}
-              placeholder="Explain the purpose or remediation context for this group..."
+              placeholder="Why these findings belong together"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="resize-y rounded-ctl border border-rule bg-surface px-3 py-1.5 text-13 text-ink focus:outline-none focus:ring-1 focus:ring-accent"
             />
           </div>
 
-          {problem && <ProblemMessage problem={problem} title="Failed to create group" />}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-13 font-medium">Application</span>
+            {choices.length === 0 ? (
+              <p className="m-0 text-13 text-ink-2">You are not a maintainer of any application, so you cannot create a group.</p>
+            ) : (
+              <Select label="Application" value={app} onValueChange={setAppChoice} options={choices} />
+            )}
+          </div>
+
+          {problem && <ProblemMessage problem={problem} title="The group was not created" />}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -385,12 +449,20 @@ function CreateGroupDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" variant="primary" loading={mutation.isPending} disabled={!name.trim()}>
-              Create Group
+            <Button type="submit" variant="primary" loading={mutation.isPending} disabled={!name.trim() || !app}>
+              Create group
             </Button>
           </div>
         </form>
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The ticket, in a sentence for the detail pane. */
+export function ticketSentence(t: GroupTicket | undefined): string {
+  if (!t) return 'No ticket. One ticket can track every finding of the group.';
+  if (t.status === 'reserved') return 'Requested; the server opens it on your tracker within a minute.';
+  if (t.status === 'failed') return `It could not be opened${t.error ? `: ${t.error}` : '.'}`;
+  return `Open as ${t.external_ref || 'a ticket'}, linked to every finding of the group.`;
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"rampart/internal/integrations/declarative"
 	"strings"
 	"time"
 
@@ -163,6 +164,11 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, cr *ApplicationCR
 	return status, nil
 }
 
+// dtrackSourceSaver stores the Dependency-Track part of a ScanSource (D92); clearing the connector clears it.
+type dtrackSourceSaver interface {
+	SaveDTrackSource(ctx context.Context, tenantID, sourceID uuid.UUID, connector string, spec json.RawMessage, schedule time.Duration) error
+}
+
 // ScanSourceReconciler handles reconciliation of ScanSource custom resources and secret synchronization.
 type ScanSourceReconciler struct {
 	store       apply.ConfigStore
@@ -222,10 +228,27 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		}
 	}
 
+	dtSpec, dtSchedule, isDT, dtErr := domain.DTrackSourceInput{Type: cr.Spec.Type, Connector: cr.Spec.Connector,
+		Schedule: cr.Spec.Schedule, DependencyTrack: cr.Spec.DependencyTrack}.Check()
+	if dtErr != nil {
+		status.SetCondition("Ready", "False", "InvalidDependencyTrack", dtErr.Error())
+		return status, nil
+	}
+
 	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily, cr.Spec.IngestionPolicy)
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
 		return status, err
+	}
+	// Saved every time, so removing the connector turns the source back into an upload source.
+	if saver, ok := r.store.(dtrackSourceSaver); ok {
+		if err := saver.SaveDTrackSource(ctx, tenant.ID, sourceID, cr.Spec.Connector, dtSpec, dtSchedule); err != nil {
+			status.SetCondition("Ready", "False", "StorageError", err.Error())
+			return status, err
+		}
+	} else if isDT {
+		status.SetCondition("Ready", "False", "StorageError", "store does not support Dependency-Track sources")
+		return status, fmt.Errorf("store does not support Dependency-Track sources")
 	}
 
 	if len(cr.Spec.TrustRules) > 0 {
@@ -629,6 +652,10 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 		return status, nil
 	}
 
+	if conn.Type == domain.ConnectorTypePlugin {
+		return r.reconcilePlugin(ctx, cr, tenant.ID, conn)
+	}
+
 	// Secret synchronization (D69: Secrets read from secret_material, synced from K8s secrets)
 	var secretBytes []byte
 	secRef := extractConnectorSecretRef(&cr.Spec)
@@ -800,4 +827,70 @@ func (r *ConnectorReconciler) Finalize(ctx context.Context, cr *ConnectorCR) (*C
 		return nil, false, err
 	}
 	return nil, true, nil
+}
+
+// reconcilePlugin handles a Connector that uses an IntegrationPackage (D94). The secret names come from the
+// package's declaration, not from per-type code: each declared secret must be supplied, and each is stored under
+// connector:<name>:<secret>. A declarative notifier has no probe, so Connected stays Unknown until a delivery.
+func (r *ConnectorReconciler) reconcilePlugin(ctx context.Context, cr *ConnectorCR, tenantID uuid.UUID, conn domain.Connector) (*ConnectorStatus, error) {
+	status := &cr.Status
+	fail := func(reason, msg string) (*ConnectorStatus, error) {
+		status.SetCondition("Connected", "False", reason, msg)
+		status.SetCondition("Ready", "False", reason, msg)
+		return status, nil
+	}
+	pkgs, ok := r.store.(domain.IntegrationPackages)
+	if !ok {
+		return fail("StorageError", "the store does not keep integration packages")
+	}
+	rec, err := pkgs.GetIntegrationPackage(ctx, tenantID, conn.Spec.Plugin.Name)
+	if err != nil || rec == nil {
+		return fail("UnknownIntegration", fmt.Sprintf("no IntegrationPackage %q in this tenant", conn.Spec.Plugin.Name))
+	}
+	if rec.Error != "" {
+		return fail("PackageInvalid", fmt.Sprintf("IntegrationPackage %q does not validate: %s", rec.Name, rec.Error))
+	}
+	spec, err := declarative.Parse(rec.Spec)
+	if err != nil {
+		return fail("PackageInvalid", err.Error())
+	}
+	if _, err := spec.ValidateConfig(conn.Spec.Plugin.Config); err != nil {
+		return fail("InvalidSpec", err.Error())
+	}
+	declared := map[string]bool{}
+	for _, n := range spec.SecretNames() {
+		declared[n] = true
+		if _, ok := conn.Spec.Plugin.Secrets[n]; !ok {
+			return fail("InvalidSpec", fmt.Sprintf("plugin.secrets.%s is required by IntegrationPackage %q", n, rec.Name))
+		}
+	}
+	for n := range conn.Spec.Plugin.Secrets {
+		if !declared[n] {
+			return fail("InvalidSpec", fmt.Sprintf("plugin.secrets.%s is not declared by IntegrationPackage %q", n, rec.Name))
+		}
+	}
+	if r.secrets != nil && r.secretStore != nil {
+		for n, ref := range conn.Spec.Plugin.Secrets {
+			b, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, ref.Name, ref.Key)
+			if err != nil {
+				return fail("SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s for %s: %v", ref.Name, ref.Key, n, err))
+			}
+			if err := r.secretStore.SaveSecretMaterial(ctx, tenantID, domain.ConnectorSecretStorageKey(conn.Name, n), b); err != nil {
+				status.SetCondition("Ready", "False", "SecretSyncFailed", err.Error())
+				return status, err
+			}
+		}
+	}
+	status.ObservedGeneration = cr.Metadata.Generation
+	status.SetCondition("Connected", "Unknown", "NotProbed", "A declarative notifier has no check request; the first delivery tests it")
+	status.SetCondition("Ready", "True", "Reconciled", fmt.Sprintf("uses %s %s", rec.Name, rec.Version))
+	conn.Status = domain.ConnectorStatus{ObservedGeneration: status.ObservedGeneration}
+	for _, c := range status.Conditions {
+		conn.Status.Conditions = append(conn.Status.Conditions, domain.ConnectorCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message, LastTransitionTime: c.LastTransitionTime})
+	}
+	if err := r.store.SaveConnector(ctx, tenantID, conn); err != nil {
+		status.SetCondition("Ready", "False", "StorageError", err.Error())
+		return status, err
+	}
+	return status, nil
 }

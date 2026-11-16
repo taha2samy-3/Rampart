@@ -24,17 +24,29 @@ type DTrackStore interface {
 }
 
 // LookupScanSource finds the tenant and name of a ScanSource by its UUID.
+// The caller of the webhook is not signed in, so there is no tenant: the lookup runs with
+// app.webhook_scan_source_id set for this one transaction, which the webhook_lookup policy (migration 40) uses to
+// show that single row to the application role (as D78 does for connectors). Before it, the query ran with no
+// tenant and row-level security hid every row, so every webhook answered 404 (docs/23 K5).
 func (s *PostgresStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) (uuid.UUID, string, error) {
 	var tenantID uuid.UUID
 	var name string
-	err := s.pool.QueryRow(ctx, `SELECT tenant_id, name FROM scan_source WHERE id = $1`, sourceID).Scan(&tenantID, &name)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.webhook_scan_source_id', $1, true)`, sourceID.String()); err != nil {
+		return uuid.Nil, "", err
+	}
+	err = tx.QueryRow(ctx, `SELECT tenant_id, name FROM scan_source WHERE id = $1 AND disabled_at IS NULL`, sourceID).Scan(&tenantID, &name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, "", ErrNotFound
 	}
 	if err != nil {
 		return uuid.Nil, "", err
 	}
-	return tenantID, name, nil
+	return tenantID, name, tx.Commit(ctx)
 }
 
 // EnqueueDTrackSync implements trailing-edge debouncing state transition (docs/21 §4.3).
@@ -60,7 +72,10 @@ func (s *PostgresStore) EnqueueDTrackSync(ctx context.Context, tenantID, sourceI
 			return fmt.Errorf("checking dtrack_sync: %w", err)
 		}
 
-		if state == string(domain.DTrackSyncStateSyncing) {
+		// A sync whose worker died leaves 'syncing' for ever; one not touched for an hour is taken as idle (D92).
+		var stale bool
+		_ = tx.QueryRow(ctx, `SELECT updated_at < NOW() - interval '1 hour' FROM dtrack_sync WHERE tenant_id = $1 AND project_uuid = $2`, tenantID, projectUUID).Scan(&stale)
+		if state == string(domain.DTrackSyncStateSyncing) && !stale {
 			// Already running: mark dirty so another sync will run after completion
 			_, upErr := tx.Exec(ctx, `UPDATE dtrack_sync SET dirty = TRUE, updated_at = NOW() WHERE tenant_id = $1 AND project_uuid = $2`, tenantID, projectUUID)
 			if upErr != nil {
@@ -167,9 +182,10 @@ func (s *PostgresStore) UpsertDTrackProject(ctx context.Context, proj domain.DTr
 			purl = EXCLUDED.purl,
 			active = EXCLUDED.active,
 			last_bom_import = EXCLUDED.last_bom_import,
-			application_id = EXCLUDED.application_id,
-			mapping_rule = EXCLUDED.mapping_rule,
-			unmapped_reason = EXCLUDED.unmapped_reason,
+			-- A project a person mapped by hand keeps that mapping; the rules decide only the others (D92).
+			application_id = CASE WHEN dtrack_project.mapping_rule = 'manual_ui_mapping' THEN dtrack_project.application_id ELSE EXCLUDED.application_id END,
+			mapping_rule = CASE WHEN dtrack_project.mapping_rule = 'manual_ui_mapping' THEN dtrack_project.mapping_rule ELSE EXCLUDED.mapping_rule END,
+			unmapped_reason = CASE WHEN dtrack_project.mapping_rule = 'manual_ui_mapping' THEN NULL ELSE EXCLUDED.unmapped_reason END,
 			updated_at = NOW()`
 
 		var lastBom *time.Time

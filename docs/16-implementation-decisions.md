@@ -1602,3 +1602,269 @@ Sources:
 4. Optional integrity: a `sha256` alongside the file, or a cosign signature checked against a key named in the mirror spec.
 
 Refs: D19, D39, D86, D88; docs/19; docs/23 §6.
+
+## D90. Finding groups belong to an application, and a group or a correlation group gets one ticket (docs/23 C8)
+
+**Found.** The group endpoints (D76) checked nothing but a login. Anyone in the tenant could create or delete any group and put any application's findings in it. A group had no application, so docs 03, 07 and 12, which give it one, could not be applied. "One ticket per correlation group" (D24) and `POST /groups/{id}/ticket` (doc 11) did not exist.
+
+**Decision.**
+- **Scope.** `finding_group.application_id` (migration 38). Null means a tenant-wide group, which only an admin may create or delete. Otherwise:
+
+  | Action | Needs |
+  |---|---|
+  | read | viewer |
+  | create, delete | maintainer on the group's application |
+  | add a finding | triager on the finding's application; the finding must exist and belong to the group's application (422 otherwise) |
+  | remove a finding | triager on its application; a finding that no longer exists needs the group's own role |
+  | `POST /groups/{id}/ticket` | maintainer on every application in the group |
+
+  One call adds or removes at most 500 findings.
+- **Group ticket.** `POST /groups/{id}/ticket` answers 202. It reserves the ticket on the group row (`ticket_status = reserved`); a second request answers 409 until the first fails. The ticket sweeper opens it: the tracker is never called inside a request (D70).
+  - The issue's ID is the group's, so the retry's label search (`FindingLabel`) finds the group's issue, never a member's own.
+  - Severity is the worst member's; the body lists the members, worst first, at most 50.
+  - On success the ticket is linked to every member in `ticket_finding`, and each member's timeline gets a `ticket_created` event.
+  - Retries, backoff, giving up, and treating a 4xx as fatal are the same as for single tickets. A group with no open finding, or a tenant with no tracker, fails at once with the reason stored on the group (`ticket.error`) and may be requested again.
+- **One ticket per correlation group.** Before opening a ticket for a reserved finding, the sweeper asks for an open ticket on the same tracker. That ticket must already track another finding with the same `correlation_key` in the same application. If there is one, the finding is linked to it (event status `linked_correlated`). Two tools reporting the same issue therefore make one ticket. The key is read by the store query, because `GetFinding` does not load it.
+
+**Why maintainer for the ticket, and on every application.** Opening an external ticket speaks for the team that owns the code (doc 07 gives groups to the scope's maintainer). A group that spans applications must not let the owner of one open a ticket on another team's behalf.
+
+**Limits, stated:**
+- A webhook about a group ticket carries the group's label, so `ticketBelongs` ignores it (`ignored_unknown_ticket`). Closing a group's issue in the tracker does not change its members; members still close one by one, by a rescan or by triage.
+- The GitHub issue body links to `/findings/{id}` with the group's id. The group page is the right target; this is to correct when the tracker contract carries a link (docs/23 §6.2).
+- Reads are not narrowed per application, as for findings (D48 "not built: restricting reads").
+
+**Tested:**
+- `TestFindingGroups_ScopedByApplication`: every row of the table, the 409, and an empty group.
+- `TestGroupAndCorrelationTickets_OnPostgreSQL`:
+  - two correlated findings make one tracker call, and both are linked;
+  - a group makes one call and both members are linked;
+  - the application role cannot read the outbox across tenants;
+  - a done ticket is not opened again.
+
+Refs: docs 03, 07, 11, 12; D24, D48, D70, D76; docs/23 C8.
+
+## D91. Live updates: one stream, fed by triggers, fanned out by a poller on each replica (docs/23 S1)
+
+**Found.** `GET /api/v1/events` (D76) sent a `connected` message and heartbeats, and nothing else; no code produced an event. Docs 11 and 13 name `GET /stream?topics=`. Nothing filtered by scope, capped streams, or resumed after a drop.
+
+**Decision.**
+- **One path:** `GET /api/v1/stream?topics=ingests,findings,operations` (all topics when omitted; an unknown topic is 400). `/api/v1/events` is removed, and the UI moved with it.
+- **Producer: statement-level triggers write `live_event`** (migration 39):
+  - `finding` insert or update → topic `findings`, with the application;
+  - `ingest_run` insert or update → `ingests`, with the application;
+  - `held_close`, `risk_acceptance` and `finding_group` changes, and a new `notification` → `operations`.
+
+  A trigger writes at most one row per (tenant, topic, application) per transaction: a merge that upserts 100k findings one statement at a time writes one row per application. Rows are coalesced only within the writer's own transaction (`xact = pg_current_xact_id()`). Coalescing with another transaction's row would hide a change committed after the client had refetched for that row.
+
+  **Why triggers.** Every writer is covered, including ones added later, VEX imports, sweepers and the rescore after a feed sync. No handler has to remember to publish.
+- **Fan-out: each replica polls once for all its streams** (`LiveHub`, every 2 s, as the system role).
+  - **Why not LISTEN/NOTIFY.** It needs a direct connection (D4) and does not pass through PgBouncer in transaction mode. A poll costs one indexed query per replica every 2 s, whatever the number of streams.
+  - **Out-of-order commits.** Ids come from a sequence, so a row can commit below one already seen. The hub's cursor advances only over a run with no hole, and rows above a hole are remembered so they are not delivered twice. A hole still open after 2 minutes is taken as a rolled-back transaction and skipped.
+  - Rows older than 1 hour are pruned.
+- **What a stream sends:** one message per (topic, application) per poll, carrying the topic and application id and no data. The client refetches with its own permissions, so a message cannot leak what the caller may not read.
+  - Rows of other tenants never reach the stream.
+  - Rows for an application the caller's scope does not reach are dropped (`scope.allows`, D48). Today every member reads every application, so this is the hook for when reads are narrowed.
+- **Resuming.**
+  - The SSE id is `<row id>.<unix time>`.
+  - On reconnect, `Last-Event-ID` (or `last_event_id` in the query, for a client reconnecting by hand) replays the tenant's rows after it, under row-level security.
+  - An id older than the retention, or a replay of 1000 rows or more, gets `event: reset`: the client refetches everything instead of trusting a gap.
+  - A stream that falls 64 polls behind also gets `reset`.
+- **Limits.**
+  - At most 5 streams per user per replica (429 with `Retry-After`).
+  - Every write has a 10 s deadline through `http.ResponseController`. This also lifts any server `WriteTimeout` for the stream, so a long stream is not cut. A stuck client is dropped.
+  - A stream ends after 30 minutes with `event: reconnect`, so a revoked session or token stops receiving at the next reconnect.
+  - A heartbeat comment is sent every 15 s.
+- **Without the system role** no hub runs and `/stream` answers 503 with `Retry-After`. The UI then polls every 30 s (docs/13 §3) and stops polling when the stream opens.
+
+**Limits, stated:**
+- The per-user cap is per replica, not global. Five streams on each of N replicas is bounded by N, and rate limiting covers opening them.
+- `live_event` RLS is enabled but not forced, so a migration run by the owner that touches findings does not fail on the trigger. The application and system roles are bound as everywhere.
+
+**Tested:**
+- `TestLiveStream`: 503 without a hub; the old path is gone; unknown topic; another tenant's rows and an unsubscribed topic not sent; two rows coalesced into one message with the newest id; an expired `Last-Event-ID` gets `reset`; the sixth stream gets 429.
+- `TestLiveHubOutOfOrderIDs`: ids 1, 3, then 2 are each delivered once; a hole is skipped after the wait.
+- `TestLiveEvents_OnPostgreSQL`: 50 findings in one transaction write one row; a tenant replays only its own rows; pruning.
+- Vitest `useLiveEvents.test.ts`: the path, and what each topic invalidates.
+
+Refs: docs 11, 13 §3; D4, D48, D76; docs/23 S1.
+
+## D92. Dependency-Track runs in the server: River jobs, a schedule, the webhook, one asset key, decisions as requests (docs/23 K5, K6, DT1–DT6)
+
+**Found.** Nothing outside `internal/upstream/dependencytrack` used the sync or the webhook (K5). In detail:
+- The webhook was never mounted.
+- `LookupScanSource` ran with no tenant, so row-level security hid every row.
+- The `ScanSource` could not name a connector.
+- The syncer's `MergeEngine` interface did not match `ingest.Engine`, so it could not have been wired as written.
+- A sync wrote occurrences under a run id that had no `ingest_run` row, which the foreign key refuses.
+- Syncs were bare goroutines.
+- The asset key was `dtrack://<sourceID>/<projectUUID>` (DT3).
+- DT's analysis on a finding was dropped.
+- A hand mapping was overwritten by the next sync.
+
+**Decision.**
+- **Configuration (doc 10 §8).** `ScanSource.spec` gains `connector`, `schedule` and `dependencyTrack` (migration 40: `scan_source.connector`, `dtrack_spec`, `schedule_seconds`).
+  - The operator and `rampart apply` share one check (`domain.DTrackSourceInput.Check`).
+  - The block is decoded strictly. The doc 10 §8 fields this version does not build are refused **by name, with the reason**: `policyViolations`, `sbom`, `manage`, `allowedCIDRs`, `authority`, `sbomForwarding`, `initialSync`, `closeOnInactive`, and triage modes `export` and `bidirectional`. A configuration therefore never claims what the server does not do.
+  - `schedule` is a duration or `*/N * * * *`: default 30 min, at least 5 min. Other cron forms are refused rather than misread.
+  - The CRD keeps the block as `x-kubernetes-preserve-unknown-fields`, because the operator validates it and its errors name the field.
+- **Jobs (K6, ADR 0002, D25).** A sync is a `dtrack_sync` job on the `dtrack-sync` River queue: 4 workers, 5 attempts, 15 min timeout. It survives restarts, its number is bounded, and it takes its turn.
+  - The `dtrack_sync` debounce row lets one sync of a project run at a time and turns a burst of events into one trailing job. River is not asked for uniqueness, because its uniqueness covers running jobs and would drop that trailing job.
+  - A row still `syncing` an hour after its last touch (a worker that died) is taken as idle.
+- **Schedule.** Every minute, one replica (advisory lock) enqueues the portfolio sync of each source whose schedule has passed. This is v1, not a fallback, because DT sends nothing when an analysis ends (DT1). The portfolio sync records every project with its mapping and enqueues the mapped ones; the debounce keeps one job per project.
+- **Webhook.**
+  - `POST /hooks/dependency-track/{scanSourceId}` is on the gateway like D78's hooks. It answers only when the source has `webhook.enabled`.
+  - The source is found through the `webhook_lookup` policy on `scan_source`: `app.webhook_scan_source_id` is set for the one transaction, as D78 does for connectors.
+  - The bearer secret is the source's `secretRef` with key `webhook`, compared in constant time.
+  - A body over 512 KiB is refused, not cut.
+  - The webhook only enqueues ("thin event, fat fetch").
+- **The client** is built per job from the Connector: URL, and the API key from `connector:<name>:apiKey`. It goes through the SSRF-safe client scoped to the tenant and the type (D77).
+- **Asset key (DT3, D10):** `dtrack://<connector>/<project name>`.
+  - With `versions: latest` (default) only the project version DT marks `isLatest` is synced, on track `main`. A DT older than 4.12 does not send `isLatest`, so its projects are recorded as filtered out with that reason: use `versions: all`, where each version is a track.
+  - Filters: `onlyActive`, `tags`, `nameRegex` and `classifiers`. A filtered project is recorded with the reason, not silently skipped.
+- **Settle (DT1).**
+  - A job waits up to 2 min for `lastVulnerabilityAnalysis >= lastBomImport`.
+  - If not settled, it reschedules itself in 5 min instead of holding a worker.
+  - Once the import is 30 min old, it reads anyway and the run ends `completed_with_errors` / `analysis_unsettled`. The mass-close guard always applies.
+- **Reading findings (DT2).** The list is read once, with a cap that fails rather than cuts (D84). The count parsed must equal `X-Total-Count`, and a record that does not parse fails the run. Otherwise the run fails before anything is merged or closed (`ErrCountMismatch`).
+- **A sync is an ingest run.** It creates `ingest_run` (`scanner_family dependency-track`, format `dependency-track/api`), merges with the scorer, and closes with the mass-close guard. A held close becomes a `held_close` row as for uploads (D22). The run appears on the Runs page.
+- **Mapping.**
+  - The seven rules of doc 10 §3 come from the block.
+  - A project mapped by hand (`POST /sources/{id}/map`) keeps that mapping across syncs: rule 3 reads it and the upsert never overwrites it.
+  - Rule 4 matches an asset whose key is the project's purl.
+- **Decisions (DT5).** With `triageSync.mode: import` (default), DT's analysis on a finding is stored in `dtrack_decision`.
+  - It is written to the finding's timeline (`upstream_decision`) once, when it first appears or changes.
+  - By default it is a **request**: listed as pending at `GET /sources/{id}/decisions`, and applied only when a person decides the finding.
+  - With `trustUpstreamDecisions: true` it is applied as a triage decision by `dependency-track:<connector>`. The exception is `risk_accepted`, which needs an owner and an expiry (docs/01 C5) and so always stays a request.
+  - `mode: off` ignores DT's analysis.
+- **API (DT6).**
+  - `GET /sources`: Dependency-Track sources with real state, namely last portfolio sync and error, project, unmapped and pending-decision counts, and the last project error.
+  - `GET /sources/{id}/unmapped`.
+  - `POST /sources/{id}/map {project_uuid, application_id}`: needs maintainer on the application; only that source's unmapped projects; enqueues a sync of the project.
+  - `GET /sources/{id}/decisions`.
+  - The `/api/v1/dtrack/...` routes are removed.
+- **Gate (DT4, option b).** In this version the gate does not wait for Dependency-Track. `expect: [dependency-track]` answers with that reason instead of waiting: a DT sync run is started by DT's schedule or webhook, not by the build, and carries no commit. Flow A (Rampart uploads the BOM and holds DT's token) is what can tie a sync to a build; it is Phase 5.
+
+**Still to test against a running DT** (DT7, CI with testcontainers): that `lastVulnerabilityAnalysis` moves after an upload with a read-only key, the `BOM_PROCESSED` field names, whether project paging starts at 0 or 1, and DT 5.x.
+
+**Tested:**
+- `TestParseDTrackSourceSpec`: what is accepted; every not-built field refused by name; schedules.
+- `TestSyncer_SyncProject_MappedAndUnmapped`:
+  - the DT3 key;
+  - an older version filtered out;
+  - a short read against `X-Total-Count` merges and closes nothing;
+  - the close step runs with the guard.
+- Settle tests: not settled reads nothing; `ReadAnyway`.
+- `TestDue`: the schedule.
+- Webhook tests: enqueue, not goroutines.
+- `TestDTrackAPI_UnmappedProjectsAndMapping`: the source routes; viewer refused; another source's project 404.
+- `TestDTrackWiring_OnPostgreSQL`:
+  - the webhook lookup with no tenant;
+  - the block round-trips;
+  - the system role lists all sources;
+  - a hand mapping survives an upsert;
+  - a decision is new once, and new again when changed;
+  - debounce, and a sync stuck for two hours is taken as idle.
+
+Refs: docs 10 §3, §5, §8, §9; D10, D22, D23, D25, D74, D77, D78, D84; docs/23 K5, K6, DT1–DT7.
+
+## D93. Charts for applications: what the market shows, drawn in the workbench's own rules
+
+**Asked.** Charts for the applications that show the vulnerabilities clearly. The owner asked that they follow the best charts in the market.
+
+**What the market converges on** (searched 2026-11-16; vendor docs and guides). Invicti, Checkmarx, Mend, JupiterOne, GitLab's dashboard epic, Apiiro, and the AppSec metrics guides all show the same charts:
+1. open findings over time, by severity;
+2. time to fix by severity (Metabase recommends the median);
+3. SLA compliance by band;
+4. velocity: new against fixed, to show whether fixing keeps up (GitLab);
+5. the age of what is open, with past 90 days as its own problem;
+6. the riskiest applications.
+
+They also agree that trends say more than snapshots.
+
+**Decision.** The application page gains numbers 1, 4 and 5. Numbers 2 and 3 become bars, and number 6 is the list's own bar. The data comes from `GET /api/v1/applications/{id}/trend?days=30|90|180`, which returns, per day: open findings by band, new, and fixed, plus the age buckets of what is open. `AppBandTrend` and `AppAging` compute these from the finding table.
+
+| Chart | Form, and why |
+|---|---|
+| Open findings over time | **Small multiples**, one panel per band, sharing the day axis and the hover. The validator (dataviz skill) fails the band colours as a categorical set: critical and high are ΔE 9.5 apart in dark mode, and low reads grey. Four coloured lines on one plot would ask the reader to tell them apart by colour. A panel names its band with its shape, its count today, the change over the period and its peak. Pointing at a day in any panel reads that day for all four in one line; arrow keys do the same. The numbers are in a table under the chart. |
+| Arriving and fixed | Weekly bars: new above the line in ink, fixed below in the resolved teal. Position carries the meaning, not colour. The caption says whether fixing keeps up ("23 more arrived than were fixed"). |
+| How long open findings have waited | Four bars: under 30, 30–90, 90–180 and over 180 days. The two past 90 are set darker, because they are the backlog, not the flow. |
+| Time to fix | One bar per band on a shared scale, named with its shape and its value in words. |
+| Deadlines | One bar: resolved in time, resolved late, still open past the deadline. These are not risk bands, so they are ink from light to dark, each part named below. |
+| Applications list | The "open findings" cell is a bar of the bands, worst first, on **one scale for every row** so the rows compare. Segments are separated by a 2 px gap, and the counts are written under the bar. |
+
+**Rules kept** (docs/13 §6):
+- colour only for risk;
+- no tiles, cards or pills;
+- sentence case;
+- every chart's numbers readable as text;
+- light and dark checked in a browser (Chromium screenshots against the dev mock).
+
+The hover marker is drawn in HTML, so the stretched plot does not squash it.
+
+**Limit, stated.** A finding is counted in the band it has today. Bands are not stored per day, so a re-scored finding moves its whole history. The chart says so under it. The `trend_daily` read model of docs/12 would keep each day's band.
+
+**Tested:**
+- `TestAppBandTrend_OnPostgreSQL`: counts by band per day; a fixed finding leaves the count; new per day; age buckets.
+- Vitest `overview.test.tsx`: the page shows the panels' sentence, the velocity caption, the age rows and the named parts of the bars, with axe clean.
+
+Sources:
+- appsecsanta.com/aspm-tools/appsec-metrics-guide
+- invicti.com/blog/web-security/appsec-kpis-that-matter
+- docs.invicti.com/appsec/dashboard
+- gitlab.com/groups/gitlab-org/-/epics/16517
+- docs.checkmarx.com (Vulnerabilities Dashboard)
+- docs.jupiterone.io/features/vulnerability-management/executive-dashboard
+- metabase.com/dashboards/vulnerability-management
+- apiiro.com/blog/5-top-appsec-metrics-new-dashboards
+
+## D94. Plugins, slice one: a notifier installed as data, and feed plugins that push (docs/23 §6, D89)
+
+**Asked.** Any tool should be addable as a plugin, and vulnerability databases should be plugins too (D89). The full design (docs/23 §6.8) has seven steps. This decision builds the slice that passes its acceptance test, and the feed half of D89. The remaining steps are listed with what replaces them for now.
+
+**Built:**
+1. **`IntegrationPackage`, namespaced, data only** (CRD; migration 41 `integration_package`; operator reconciler; `rampart apply`).
+   - `runtime: declarative`, `kind: notifier`: a templated HTTP request, the secrets it needs, the hosts it may reach, and a CEL `expect`. The engine is `internal/integrations/declarative`.
+   - **Refused, by name:** `tracker`, `source` and `parser` kinds (their engines are not built), and `wasm` and `grpc` runtimes (code is tier 2, and never allowed in a tenant namespace).
+   - A package that does not validate is stored with its error and never used, so the UI can say why.
+2. **Templates are logic-free.** `{{ message.x }}`, `{{ config.x }}` and `{{ secrets.x }}`, with no filters or loops (docs/19 §6). A field that does not exist is refused at apply time. JSON bodies are rendered by walking the decoded document and re-encoding it, so a value cannot escape its string. Message text is refused in headers.
+3. **Egress is enforced twice.** The rendered URL must be https, and its host must be in `egress` (names or `*.domain`; IP addresses refused). The request then goes through the SSRF-safe client scoped to the tenant (D77). A declared host that resolves to a private address is still refused, and so are cross-host redirects (docs/19 §11). `localhost` is accepted as a name: reaching it still needs the platform's loopback allowance.
+4. **`Connector.spec.type: plugin`** with `plugin: {name, config, secrets}`.
+   - The operator checks the package exists and validates, and checks `config` against its `configSchema`.
+   - It requires every declared secret and refuses undeclared ones, and syncs each as `connector:<name>:<secret>`. The secret names come from the descriptor, not from per-type code (§6.4).
+   - `Connected` stays `Unknown`/`NotProbed`: a declarative notifier has no check request, and claiming "connected" would be false.
+   - The router builds the notifier from the package, so routing rules apply as for built-ins.
+5. **Catalogue and UI.**
+   - The connector catalogue gains "Installed package", with a complete, applied-in-test example.
+   - `GET /api/v1/integration-packages` lists packages with what they may reach, what they need, which connectors use them, and their error.
+   - The Integrations page shows them. A plugin connector reads "Package <name>".
+   - The connector status pills were replaced by plain words (docs/13 §6).
+6. **Feed plugins push** (D89).
+   - A `ClusterFeedMirror` custom feed takes `pushTokenFile` instead of `url` (intel-jsonl only; an OSV zip is pulled).
+   - `POST /api/v1/feeds/{name}` compares the bearer with that file in constant time. It gives one answer for an unknown feed and a wrong token. It parses the whole file and refuses it whole on one bad line (422), and stages it in `feed_push` (migration 42, max 64 MiB).
+   - The feed syncer loads it as the system role on its next round. The API never writes the intelligence tables (D19); a test proves the application role cannot.
+   - The Helm chart's `feeds.plugins[]` creates one CronJob per plugin. The CronJob has no database credentials and no service account token, and gets only `RAMPART_FEED_PUSH_URL` and `RAMPART_FEED_TOKEN`. The chart mounts the token into Rampart at `/var/run/rampart/feeds/<name>/token` and, with network policies on, allows the plugin's pods to the API port.
+7. **The contract** for authors is docs/25 (both formats, every field, the answers, what is not built).
+
+**Not built in this slice (docs/23 §6.8), and what stands in for them:**
+- Step 1, one contract per kind: the built-in notifiers still implement `connectors.Notifier`. A plugin notifier implements the same interface, so the router has one dispatch path.
+- Step 3, notifications as River jobs: delivery is still inline (K4).
+- `/hooks/{integration}/{id}` for packages.
+- Declarative trackers and sources.
+- `GET /api/v1/integrations` across all kinds: parsers stay at `GET /api/v1/parsers`.
+- Tier 2 (gRPC, WebAssembly, OCI packages with cosign).
+
+**Why a tenant may install a package.** It is data: it can reach only the hosts it declares and those the tenant's allowlist permits. It reads only its own connector's secrets. It cannot run code. This is the tier docs/19 §2 gives to tenant administrators.
+
+**Tested:**
+- `TestDeclarativeNotifier`: doc 19's Google Chat example sends; a title with quotes and a brace is escaped; a 500 fails `expect`; a secret pointing at an undeclared host sends nothing; a missing secret is refused.
+- `TestParseRefusals`: twelve refusals, by name; config schema checks.
+- `TestIntegrationPackageAndPluginConnector`: install; a code runtime refused; a connector `Ready` with its secret synced under its name; `UnknownIntegration`, `PackageInvalid`, and a missing declared secret.
+- **`TestPluginNotifierDeliversThroughThePackage`, the acceptance test of §6.8:** a message reaches a fake receiver through a package with no tool-specific code; an undeclared host gets nothing.
+- `TestListIntegrationPackages`: the API, with tenant isolation.
+- `TestFeedPush`: token, unknown feed, a bad line refused whole, a good file staged.
+- `TestFeedPush_OnPostgreSQL`: the application role stages, the syncer loads; the application role cannot write the exploitation table.
+- Catalogue examples apply.
+- Vitest: the Integrations page lists packages, their reach, their user, and an error.
+- `helm template` (offline) renders with and without a plugin; `helm lint` passes.
+
+Refs: docs/19 §2, §6, §7, §11; docs/23 §6; docs/25; D19, D39, D77, D82, D88, D89.

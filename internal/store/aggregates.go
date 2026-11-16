@@ -265,3 +265,79 @@ func (s *PostgresStore) Trend(ctx context.Context, tenantID uuid.UUID, days int)
 	})
 	return out, err
 }
+
+// BandTrendPoint is one day of an application's open findings, counted by risk band.
+type BandTrendPoint struct {
+	Day   time.Time      `json:"-"`
+	Bands map[string]int `json:"-"`
+	New   int            `json:"-"` // first seen that day
+	Fixed int            `json:"-"` // resolved as fixed that day
+}
+
+// AgeBuckets counts an application's open findings by how long they have been open (docs/06 section 4: past 90
+// days is its own problem).
+type AgeBuckets struct {
+	Under30 int `json:"under_30"`
+	To90    int `json:"d30_90"`
+	To180   int `json:"d90_180"`
+	Over180 int `json:"over_180"`
+}
+
+// AppAging counts the application's active findings by age.
+func (s *PostgresStore) AppAging(ctx context.Context, tenantID, appID uuid.UUID) (AgeBuckets, error) {
+	var a AgeBuckets
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE first_seen >= now() - interval '30 days'),
+			count(*) FILTER (WHERE first_seen < now() - interval '30 days' AND first_seen >= now() - interval '90 days'),
+			count(*) FILTER (WHERE first_seen < now() - interval '90 days' AND first_seen >= now() - interval '180 days'),
+			count(*) FILTER (WHERE first_seen < now() - interval '180 days')
+			FROM finding WHERE tenant_id = $1 AND application_id = $2 AND state IN `+activeStates, tenantID, appID).
+			Scan(&a.Under30, &a.To90, &a.To180, &a.Over180)
+	})
+	return a, err
+}
+
+// AppBandTrend is the application's open inventory at the end of each of the last days days, by band (the charts
+// of the application page). A finding is counted in the band it has now: bands are not stored per day, so a
+// finding re-scored into another band moves its whole history with it. The trend_daily read model would keep
+// the band of each day; until then the chart says so.
+func (s *PostgresStore) AppBandTrend(ctx context.Context, tenantID, appID uuid.UUID, days int) ([]BandTrendPoint, error) {
+	days = max(7, min(days, 180))
+	var out []BandTrendPoint
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			WITH days AS (
+				SELECT generate_series(date_trunc('day', now()) - ($3::int - 1) * interval '1 day', date_trunc('day', now()), interval '1 day') AS d
+			)
+			SELECT d.d,
+				count(f.id) FILTER (WHERE f.risk_band = 'critical'),
+				count(f.id) FILTER (WHERE f.risk_band = 'high'),
+				count(f.id) FILTER (WHERE f.risk_band = 'medium'),
+				count(f.id) FILTER (WHERE f.risk_band = 'low'),
+				(SELECT count(*) FROM finding n WHERE n.tenant_id = $1 AND n.application_id = $2
+					AND n.first_seen >= d.d AND n.first_seen < d.d + interval '1 day'),
+				(SELECT count(*) FROM finding x WHERE x.tenant_id = $1 AND x.application_id = $2 AND x.resolution = 'fixed'
+					AND x.resolved_at >= d.d AND x.resolved_at < d.d + interval '1 day')
+			FROM days d
+			LEFT JOIN finding f ON f.tenant_id = $1 AND f.application_id = $2
+				AND f.first_seen < d.d + interval '1 day'
+				AND (f.resolved_at IS NULL OR f.resolved_at >= d.d + interval '1 day')
+			GROUP BY d.d ORDER BY d.d`, tenantID, appID, days)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p BandTrendPoint
+			var c, h, m, l int
+			if err := rows.Scan(&p.Day, &c, &h, &m, &l, &p.New, &p.Fixed); err != nil {
+				return err
+			}
+			p.Bands = map[string]int{"critical": c, "high": h, "medium": m, "low": l}
+			out = append(out, p)
+		}
+		return rows.Err()
+	})
+	return out, err
+}

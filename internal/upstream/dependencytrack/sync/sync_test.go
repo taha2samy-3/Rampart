@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -293,17 +294,18 @@ func (e *mockMergeEngine) MergeBatchWithOptions(ctx context.Context, scope inges
 	return ingest.MergeOutcome{Created: len(records)}, nil
 }
 
-func (e *mockMergeEngine) CloseScopeStepWithGuard(ctx context.Context, scope ingest.CloseScope, currentRunID uuid.UUID, guardPolicy *domain.IngestionPolicy) (int, error) {
+func (e *mockMergeEngine) CloseScopeStepWithGuard(ctx context.Context, scope ingest.CloseScope, currentRunID uuid.UUID, guard bool) (ingest.CloseScopeResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.closedScope = true
-	return 0, nil
+	e.closedScope = guard // the close step always runs with the mass-close guard
+	return ingest.CloseScopeResult{}, nil
 }
 
 func TestSyncer_SyncProject_MappedAndUnmapped(t *testing.T) {
 	tenantID := uuid.New()
 	sourceID := uuid.New()
 	appID := uuid.New()
+	latest, notLatest := true, false
 
 	findingsJSON := `[
 		{
@@ -316,7 +318,7 @@ func TestSyncer_SyncProject_MappedAndUnmapped(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/project/mapped-proj-1":
 			_ = json.NewEncoder(w).Encode(dtclient.Project{
-				UUID: "mapped-proj-1", Name: "payments-api", Version: "1.0.0", Active: true,
+				UUID: "mapped-proj-1", Name: "payments-api", Version: "1.0.0", Active: true, IsLatest: &latest,
 			})
 		case "/api/v1/project/mapped-proj-1/property":
 			_ = json.NewEncoder(w).Encode([]dtclient.Property{
@@ -324,8 +326,27 @@ func TestSyncer_SyncProject_MappedAndUnmapped(t *testing.T) {
 			})
 		case "/api/v1/project/unmapped-proj-2":
 			_ = json.NewEncoder(w).Encode(dtclient.Project{
-				UUID: "unmapped-proj-2", Name: "orphan-proj", Version: "1.0.0", Active: true,
+				UUID: "unmapped-proj-2", Name: "orphan-proj", Version: "1.0.0", Active: true, IsLatest: &latest,
 			})
+		case "/api/v1/project/old-version":
+			_ = json.NewEncoder(w).Encode(dtclient.Project{
+				UUID: "old-version", Name: "payments-api", Version: "0.9.0", Active: true, IsLatest: &notLatest,
+			})
+		case "/api/v1/project/old-version/property":
+			_ = json.NewEncoder(w).Encode([]dtclient.Property{
+				{Group: "integrations", Name: "rampart.application", Value: "payments-app"},
+			})
+		case "/api/v1/project/miscounted":
+			_ = json.NewEncoder(w).Encode(dtclient.Project{
+				UUID: "miscounted", Name: "cart", Version: "2", Active: true, IsLatest: &latest,
+			})
+		case "/api/v1/project/miscounted/property":
+			_ = json.NewEncoder(w).Encode([]dtclient.Property{
+				{Group: "integrations", Name: "rampart.application", Value: "payments-app"},
+			})
+		case "/api/v1/finding/project/miscounted":
+			w.Header().Set("X-Total-Count", "2") // DT says two; one arrives
+			_, _ = w.Write([]byte(findingsJSON))
 		case "/api/v1/project/unmapped-proj-2/property":
 			_ = json.NewEncoder(w).Encode([]dtclient.Property{})
 		case "/api/v1/finding/project/mapped-proj-1":
@@ -372,8 +393,8 @@ func TestSyncer_SyncProject_MappedAndUnmapped(t *testing.T) {
 		t.Error("expected scope closure to be executed")
 	}
 
-	// Verify asset was created
-	assetKey := "dtrack://" + sourceID.String() + "/mapped-proj-1"
+	// The asset is keyed by connector and project name (D10, docs/23 DT3), not by source or project UUID.
+	assetKey := "dtrack://dtrack/payments-api"
 	if _, ok := st.assets[assetKey]; !ok {
 		t.Errorf("expected asset %q to be created", assetKey)
 	}
@@ -392,5 +413,14 @@ func TestSyncer_SyncProject_MappedAndUnmapped(t *testing.T) {
 	unmappedList, err := st.ListUnmappedDTrackProjects(ctx, tenantID, sourceID)
 	if err != nil || len(unmappedList) != 1 || unmappedList[0].ProjectUUID != "unmapped-proj-2" {
 		t.Fatalf("expected 1 unmapped project recorded, got %+v", unmappedList)
+	}
+
+	// With versions: latest (the default) an older version is recorded but not merged.
+	if err := syncer.SyncProject(ctx, tenantID, sourceID, "old-version"); err != nil || eng.mergedBatches != 1 {
+		t.Fatalf("an older version is filtered out: %v, %d batches", err, eng.mergedBatches)
+	}
+	// Fewer findings than X-Total-Count fails the run before anything is merged or closed (docs/23 DT2).
+	if err := syncer.SyncProject(ctx, tenantID, sourceID, "miscounted"); !errors.Is(err, dtsync.ErrCountMismatch) || eng.mergedBatches != 1 {
+		t.Fatalf("a short read must fail and close nothing: %v, %d batches", err, eng.mergedBatches)
 	}
 }

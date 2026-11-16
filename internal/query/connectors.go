@@ -5,6 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"rampart/internal/auth"
+	"rampart/internal/integrations/declarative"
+	"sort"
 	"strings"
 	"time"
 
@@ -153,4 +156,60 @@ func connectorReason(err error) string {
 	default:
 		return "InvalidSpec"
 	}
+}
+
+// PackageItem is an installed IntegrationPackage as the UI shows it (D94).
+type PackageItem struct {
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"`
+	Runtime     string   `json:"runtime"`
+	Version     string   `json:"version"`
+	Description string   `json:"description,omitempty"`
+	Egress      []string `json:"egress"`
+	Secrets     []string `json:"secrets"`
+	Config      []string `json:"config"`
+	Error       string   `json:"error,omitempty"`
+	UsedBy      []string `json:"used_by"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+// handleListPackages handles GET /api/v1/integration-packages: the tools installed in the tenant as data, what they
+// may reach, what they need, which connectors use them, and the error of one that does not validate.
+func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	items := []PackageItem{}
+	pkgs, ok := a.store.(domain.IntegrationPackages)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		return
+	}
+	list, err := pkgs.ListIntegrationPackages(r.Context(), tenantID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to list the packages")
+		return
+	}
+	conns, _ := a.store.ListConnectors(r.Context(), tenantID)
+	for _, p := range list {
+		it := PackageItem{Name: p.Name, Kind: p.Kind, Runtime: p.Runtime, Version: p.Version, Error: p.Error,
+			Egress: []string{}, Secrets: []string{}, Config: []string{}, UsedBy: []string{}, UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339)}
+		if spec, err := declarative.Parse(p.Spec); err == nil {
+			it.Description, it.Egress, it.Secrets = spec.Description, spec.Egress, spec.SecretNames()
+			if spec.ConfigSchema != nil {
+				for k := range spec.ConfigSchema.Properties {
+					it.Config = append(it.Config, k)
+				}
+				sort.Strings(it.Config)
+			}
+		}
+		for _, c := range conns {
+			if c.Type == domain.ConnectorTypePlugin && c.Spec.Plugin != nil && c.Spec.Plugin.Name == p.Name {
+				it.UsedBy = append(it.UsedBy, c.Name)
+			}
+		}
+		items = append(items, it)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

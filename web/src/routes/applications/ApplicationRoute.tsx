@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { getApplication, qk, toProblem } from '@/api';
+import { getApplication, getApplicationTrend, qk, toProblem } from '@/api';
 import type { ApplicationPage } from '@/api/types';
-import { BandShape, EmptyState, ProblemMessage, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
+import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks } from '@/components';
+import type { ChartBand } from '@/components';
 import { openText } from '@/lib/apps';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
@@ -62,13 +63,17 @@ function Page({ app }: { app: ApplicationPage }) {
           <Link to="/findings" search={{ q: `app:${app.slug} state:open,under_investigation,affected` }} className="mt-1 inline-block text-13">{t('apps.seeAll')}</Link>
         </section>
 
+        <RiskOverTime id={app.id} />
+
         <section className="mt-6" aria-labelledby="app-deadlines">
           <h2 id="app-deadlines" className="mb-1 text-14 font-semibold">{t('apps.deadlines')}</h2>
           <p className="m-0 text-13">
             {app.sla.adherence === undefined ? t('apps.noDeadlines') : t('apps.adherence', { percent: Math.round(app.sla.adherence * 100) })}
           </p>
           {app.sla.adherence !== undefined && (
-            <p className="m-0 mt-1 text-13 text-ink-2">{t('apps.standing', { within: app.sla.within, late: app.sla.late, breached: app.sla.breached })}</p>
+            <div className="mt-2">
+              <DeadlineBar within={app.sla.within} late={app.sla.late} breached={app.sla.breached} />
+            </div>
           )}
         </section>
 
@@ -77,11 +82,14 @@ function Page({ app }: { app: ApplicationPage }) {
           {app.mttr.length === 0 ? (
             <p className="m-0 text-13 text-ink-2">{t('apps.mttrEmpty')}</p>
           ) : (
-            <ul className="m-0 list-none p-0 text-13">
-              {app.mttr.map((m) => (
-                <li key={m.band} className="py-0.5">{t('apps.mttrLine', { band: t(`apps.band_${m.band}`, { count: '' }).trim(), days: m.days.toFixed(1), count: m.fixed })}</li>
-              ))}
-            </ul>
+            <BandBars
+              rows={app.mttr.map((m) => ({ band: m.band as ChartBand, value: m.days }))}
+              unit="days"
+              describe={(r) => {
+                const m = app.mttr.find((x) => x.band === r.band)!;
+                return `${m.days.toFixed(1)} days on average, ${m.fixed} fixed`;
+              }}
+            />
           )}
         </section>
 
@@ -143,5 +151,56 @@ function Page({ app }: { app: ApplicationPage }) {
         </section>
       </article>
     </div>
+  );
+}
+
+/**
+ * The application over time (D93): open findings by band, what arrived against what was fixed, and how long the
+ * open ones have waited. The three answer whether the risk of this application is going down.
+ */
+function RiskOverTime({ id }: { id: string }) {
+  const [days, setDays] = useState(90);
+  const q = useQuery({ queryKey: qk.applications.trend(id, days), queryFn: ({ signal }) => getApplicationTrend(id, days, signal), retry: false });
+  return (
+    <>
+      <section className="mt-6" aria-labelledby="app-trend">
+        <div className="mb-2 flex items-baseline gap-3">
+          <h2 id="app-trend" className="text-14 font-semibold">Open findings over time</h2>
+          <Select
+            label="Period"
+            className="ms-auto"
+            value={String(days)}
+            onValueChange={(v) => setDays(Number(v))}
+            options={[
+              { value: '30', label: 'Last 30 days' },
+              { value: '90', label: 'Last 90 days' },
+              { value: '180', label: 'Last 180 days' },
+            ]}
+          />
+        </div>
+        {q.isPending ? (
+          <Skeleton className="h-40 w-full" />
+        ) : q.isError ? (
+          <ProblemMessage problem={toProblem(q.error)} title="The trend could not be read" onRetry={() => void q.refetch()} />
+        ) : (
+          <>
+            <BandTrendPanels points={q.data.points} days={q.data.days} />
+            <p className="m-0 mt-1 text-12 text-ink-2">Each finding is counted in the band it has today.</p>
+          </>
+        )}
+      </section>
+      {q.isSuccess && (
+        <>
+          <section className="mt-6" aria-labelledby="app-velocity">
+            <h2 id="app-velocity" className="mb-1 text-14 font-semibold">Arriving and fixed</h2>
+            <VelocityBars weeks={toWeeks(q.data.points)} />
+          </section>
+          <section className="mt-6" aria-labelledby="app-age">
+            <h2 id="app-age" className="mb-1 text-14 font-semibold">How long open findings have waited</h2>
+            <AgeBars aging={q.data.aging} />
+          </section>
+        </>
+      )}
+    </>
   );
 }

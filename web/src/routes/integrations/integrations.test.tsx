@@ -20,7 +20,7 @@ describe('integrations route and connector catalogue', () => {
     expect(within(table).getByText('jira-sec')).toBeInTheDocument();
     expect(within(table).getByText('Connected')).toBeInTheDocument();
     // A connector the operator has not checked yet is not shown as connected or as failing.
-    expect(within(table).getByText('Not checked yet')).toBeInTheDocument();
+    expect(within(table).getAllByText('Not checked yet').length).toBe(2);
     expect(within(table).queryByRole('button', { name: 'Check' })).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -59,5 +59,18 @@ describe('integrations route and connector catalogue', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'API Tokens' }));
     expect(await screen.findByText(/not listed or issued from this page yet/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Generate/ })).toBeNull();
+  });
+
+  // D94: a tool installed as data shows what it may reach, what uses it, and why it is not used when it is refused.
+  it('lists installed packages and the plugin connector that uses one', async () => {
+    mockFetch({ loggedIn: true, role: 'admin' });
+    const { container } = renderApp('/integrations');
+    const connectors = await screen.findByRole('table', { name: 'Connectors table' });
+    expect(within(connectors).getByText('Package google-chat')).toBeInTheDocument();
+    const pkgs = await screen.findByRole('table', { name: 'Installed packages' });
+    expect(within(pkgs).getByText('chat.googleapis.com')).toBeInTheDocument();
+    expect(within(pkgs).getByText('chat-sec')).toBeInTheDocument();
+    expect(within(pkgs).getByText(/Not used: runtime "wasm"/)).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

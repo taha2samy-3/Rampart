@@ -516,13 +516,34 @@ const server = http.createServer((req, res) => {
     }
     if (p === '/api/v1/notifications/read' && req.method === 'POST') { res.writeHead(204); return res.end(); }
     if (p === '/api/v1/applications') return json(res, { items: APP_ROWS });
+    // D93: one application over time. Deterministic, so screenshots and tests are stable: a critical spike that is
+    // worked down, highs that creep up, a steady medium/low backlog, and new against fixed per day.
+    const at = /^\/api\/v1\/applications\/([^/]+)\/trend$/.exec(p);
+    if (at) {
+      const n = Math.min(180, Math.max(7, Number(url.searchParams.get('days')) || 90));
+      const points = Array.from({ length: n }, (_, i) => {
+        const t = i / (n - 1);
+        const d = new Date(Date.now() - (n - 1 - i) * 86_400_000).toISOString().slice(0, 10);
+        const wave = Math.sin(i / 4);
+        return {
+          day: d,
+          critical: Math.max(0, Math.round(1 + 7 * Math.exp(-((t - 0.35) ** 2) / 0.02) + (t > 0.8 ? 1 : 0))),
+          high: Math.round(6 + 7 * t + 1.5 * wave),
+          medium: Math.round(22 - 6 * t + 2 * Math.sin(i / 7)),
+          low: Math.round(14 + 2 * Math.sin(i / 9)),
+          new: Math.max(0, Math.round(2 + 2 * Math.sin(i / 3) + (i % 11 === 0 ? 5 : 0))),
+          fixed: Math.max(0, Math.round(2 + 1.8 * Math.cos(i / 4) + (i % 13 === 0 ? 4 : 0))),
+        };
+      });
+      return json(res, { days: n, points, aging: { under_30: 18, d30_90: 14, d90_180: 9, over_180: 4 } });
+    }
     const am = /^\/api\/v1\/applications\/([^/]+)\/summary$/.exec(p);
     if (am) {
       const a = APP_ROWS.find((x) => x.id === am[1]);
       if (!a) return problem(res, 404, 'Application not found', 'No such application.');
       return json(res, {
         ...a, sla: { within: 14, late: 3, breached: a.sla_breached, adherence: 14 / (17 + a.sla_breached) },
-        mttr: [{ band: 'critical', days: 3.2, fixed: 3 }, { band: 'high', days: 11.8, fixed: 9 }],
+        mttr: [{ band: 'critical', days: 3.2, fixed: 3 }, { band: 'high', days: 11.8, fixed: 9 }, { band: 'medium', days: 27.5, fixed: 14 }, { band: 'low', days: 41.0, fixed: 6 }],
         coverage: [
           { asset_id: 'as-1', asset: `github.com/acme/${a.slug}`, scanner: 'semgrep', last_scan: day(0.2) },
           { asset_id: 'as-1', asset: `github.com/acme/${a.slug}`, scanner: 'gitleaks', last_scan: day(0.2) },
@@ -607,7 +628,15 @@ const server = http.createServer((req, res) => {
       }
     }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
-    if (p === '/api/v1/connectors') return json(res, { items: CONNECTORS });
+    if (p === '/api/v1/connectors') return json(res, { items: [...CONNECTORS, { name: 'chat-sec', type: 'plugin', direction: 'outbound', enabled: true, managed_by: 'resource',
+      spec: { plugin: { name: 'google-chat' } }, status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'NotProbed', message: 'A declarative notifier has no check request; the first delivery tests it' }] } }] });
+    // D94: tools installed as data.
+    if (p === '/api/v1/integration-packages') return json(res, { items: [
+      { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Posts to a Google Chat space', egress: ['chat.googleapis.com'],
+        secrets: ['webhookUrl'], config: [], used_by: ['chat-sec'], updated_at: new Date().toISOString() },
+      { name: 'redmine', kind: 'tracker', runtime: 'declarative', version: '0.3.0', egress: [], secrets: [], config: [], used_by: [],
+        error: 'kind "tracker": declarative trackers are not built yet; use a built-in tracker (Jira, GitHub)', updated_at: new Date().toISOString() },
+    ] });
     // D82: the catalogue and the dry run. The real server builds the catalogue from the Go types and validates with
     // the operator's own rules; the mock answers enough for the page to be exercised.
     if (p === '/api/v1/connectors/catalogue') return json(res, { items: [
@@ -624,7 +653,23 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
-    if (p === '/api/v1/dtrack/unmapped') return json(res, { projects: DTRACK_PROJECTS });
+    // Dependency-Track sources (D92): one source, synced 12 minutes ago, one project unmapped, one decision waiting.
+    // GET /api/v1/stream (D91): open, with a heartbeat, so the UI does not fall back to polling in the mock.
+    if (p === '/api/v1/stream') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.write('retry: 5000\n\n');
+      const beat = setInterval(() => res.write(': ping\n\n'), 15_000);
+      req.on('close', () => clearInterval(beat));
+      return;
+    }
+    if (p === '/api/v1/sources') return json(res, { sources: [{ id: 'src-dt', name: 'dtrack-portfolio', connector: 'dtrack', schedule_seconds: 1800,
+      webhook_enabled: true, trust_upstream_decisions: false, last_portfolio_sync_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+      projects: 14, unmapped: DTRACK_PROJECTS.length, pending_decisions: 1 }] });
+    if (p === '/api/v1/sources/src-dt/unmapped') return json(res, { projects: DTRACK_PROJECTS, count: DTRACK_PROJECTS.length });
+    if (p === '/api/v1/sources/src-dt/decisions') return json(res, { decisions: [{ finding_id: ALL[0]?.finding.id ?? 'f-1', source_id: 'src-dt',
+      state: 'not_affected', justification: 'code_not_reachable', applied: false, seen_at: new Date(Date.now() - 3 * 3600_000).toISOString() }] });
+    if (p === '/api/v1/sources/src-dt/map' && req.method === 'POST') return json(res, { status: 'mapped', sync_queued: true });
+    if (/^\/api\/v1\/groups\/[^/]+\/ticket$/.test(p) && req.method === 'POST') return json(res, { ticket: { status: 'reserved' } }, 202);
     if (p === '/api/v1/held-closes') return json(res, { items: HELD_CLOSES });
     if (p === '/api/v1/groups') return json(res, { groups: GROUPS });
     if (p === '/api/v1/views') return json(res, { views: VIEWS });

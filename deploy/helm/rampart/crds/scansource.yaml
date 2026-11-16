@@ -88,6 +88,16 @@ spec:
                     required:
                       - issuer
                       - provider
+                connector:
+                  type: string
+                  description: Name of a Connector of type dependencyTrack in this namespace; makes the source an apiPull source (docs/10 §8, D92).
+                schedule:
+                  type: string
+                  description: Portfolio sync interval, a duration such as 30m or the cron form "*/N * * * *"; default 30m, at least 5m.
+                dependencyTrack:
+                  type: object
+                  description: Projects, mapping, pull, webhook and triageSync (docs/10 §8). Validated by the operator, which refuses fields this version does not build.
+                  x-kubernetes-preserve-unknown-fields: true
               required:
                 - scannerFamily
             status:

@@ -309,6 +309,22 @@ export interface Overview {
   top_apps: AppSummary[];
   coverage_gaps: AppSummary[];
 }
+/** One day of an application (GET /api/v1/applications/{id}/trend). */
+export interface AppTrendPoint {
+  day: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  new: number;
+  fixed: number;
+}
+export interface AgeBuckets {
+  under_30: number;
+  d30_90: number;
+  d90_180: number;
+  over_180: number;
+}
 export interface TrendPoint {
   day: string;
   value: number;
@@ -393,14 +409,27 @@ export interface FindingGroup {
   name: string;
   description?: string;
   owner?: string;
+  /** absent: a tenant-wide group (admin only, D90) */
+  application_id?: string;
   member_count?: number;
+  ticket?: GroupTicket;
   created_at?: string;
   updated_at?: string;
 }
 
+/** A group's one ticket: reserved by the API, opened by the sweeper (D90). */
+export interface GroupTicket {
+  status: 'reserved' | 'done' | 'failed';
+  attempts?: number;
+  error?: string;
+  requested_by?: string;
+  external_ref?: string;
+  url?: string;
+}
+
 export interface FindingGroupDetail {
   group: FindingGroup;
-  findings_ids: string[];
+  finding_ids: string[];
 }
 
 /** Ingestion Parser Descriptor (docs/19 §2, docs/13 §9) */
@@ -429,11 +458,28 @@ export interface ConnectorSummary {
   type: string; // jira, github, slack, msteams, dependency-track, webhook, email
   direction: 'outbound' | 'inbound' | 'bidirectional';
   enabled: boolean;
+  /** the resource's spec as the server stores it; for a plugin connector, the package it uses (D94) */
+  spec?: { plugin?: { name: string } };
   status: {
     conditions?: ConnectorCondition[];
     last_check_time?: string;
     account_id?: string;
   };
+}
+
+/** An installed IntegrationPackage: a tool described as data (GET /api/v1/integration-packages, D94). */
+export interface IntegrationPackageItem {
+  name: string;
+  kind: string;
+  runtime: string;
+  version: string;
+  description?: string;
+  egress: string[];
+  secrets: string[];
+  config: string[];
+  error?: string;
+  used_by: string[];
+  updated_at: string;
 }
 
 /** Inventory asset summary (docs/13, docs/21) */
@@ -464,6 +510,33 @@ export interface VulnerabilityRow {
 }
 
 /** Dependency-Track project record (docs/10 §3, §13) */
+/** A Dependency-Track source and its real state (GET /api/v1/sources, D92). */
+export interface SourceStatus {
+  id: string;
+  name: string;
+  connector: string;
+  schedule_seconds: number;
+  webhook_enabled: boolean;
+  trust_upstream_decisions: boolean;
+  last_portfolio_sync_at?: string;
+  last_portfolio_error?: string;
+  projects: number;
+  unmapped: number;
+  pending_decisions: number;
+  last_project_error?: string;
+}
+
+/** What Dependency-Track decided about a finding (D92, docs/23 DT5). */
+export interface UpstreamDecision {
+  finding_id: string;
+  source_id: string;
+  state: string;
+  justification?: string;
+  detail?: string;
+  applied: boolean;
+  seen_at: string;
+}
+
 export interface DTrackProjectRecord {
   tenant_id: string;
   source_id: string;

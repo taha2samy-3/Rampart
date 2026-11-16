@@ -15,3 +15,4 @@ export * from './Tabs';
 export * from './Toast';
 export * from './Tooltip';
 export * from './icons';
+export * from './charts';

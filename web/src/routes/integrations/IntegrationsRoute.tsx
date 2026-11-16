@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { get, qk } from '@/api';
-import type { ConnectorSummary } from '@/api/types';
+import type { ConnectorSummary, IntegrationPackageItem } from '@/api/types';
 import {
   Button,
   EmptyState,
@@ -18,7 +18,6 @@ import {
   TabsTrigger,
   TabsContent,
 } from '@/components';
-import { cn } from '@/lib/cn';
 import { ConnectorCatalogueDialog } from './ConnectorCatalogueDialog';
 
 export function IntegrationsRoute() {
@@ -38,6 +37,12 @@ export function IntegrationsRoute() {
   });
 
   const connectors = connectorsQuery.data ?? [];
+  const packagesQuery = useQuery({
+    queryKey: qk.connectors.packages(),
+    queryFn: async ({ signal }): Promise<IntegrationPackageItem[]> =>
+      (await get<{ items?: IntegrationPackageItem[] }>('/api/v1/integration-packages', { signal })).items ?? [],
+  });
+  const packages = packagesQuery.data ?? [];
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
@@ -101,25 +106,13 @@ export function IntegrationsRoute() {
                   return (
                     <Tr key={c.name} className="h-12">
                       <Td className="font-medium text-ink">{c.name}</Td>
-                      <Td className="font-mono text-12 text-ink-2 capitalize">{c.type}</Td>
+                      <Td className="text-12 text-ink-2">
+                        {c.type === 'plugin' && c.spec?.plugin?.name ? `Package ${c.spec.plugin.name}` : c.type}
+                      </Td>
                       <Td className="text-12 text-ink-2 capitalize">{c.direction}</Td>
-                      <Td>
-                        <span
-                          className={cn(
-                            'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-11 font-medium',
-                            state === 'ok' && 'bg-success/15 text-success',
-                            state === 'failing' && 'bg-critical/15 text-critical',
-                            state === 'unknown' && 'bg-surface-2 text-ink-2',
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              'size-1.5 rounded-full',
-                              state === 'ok' ? 'bg-success' : state === 'failing' ? 'bg-critical' : 'bg-ink-3',
-                            )}
-                          />
-                          {state === 'ok' ? 'Connected' : state === 'failing' ? 'Failing' : 'Not checked yet'}
-                        </span>
+                      <Td className={state === 'failing' ? 'font-medium text-ink' : 'text-ink-2'}>
+                        {/* plain words, no pill: colour is for risk (docs/13 §6) */}
+                        {state === 'ok' ? 'Connected' : state === 'failing' ? 'Failing' : 'Not checked yet'}
                       </Td>
                       <Td className="text-12 text-ink-2">
                         {connected?.message || '—'}
@@ -130,6 +123,54 @@ export function IntegrationsRoute() {
               </TBody>
             </Table>
           )}
+          <section aria-labelledby="pkg-heading" className="mt-6 flex flex-col gap-2">
+            <h2 id="pkg-heading" className="text-16 font-semibold">
+              Installed packages
+            </h2>
+            <p className="max-w-[72ch] text-13 text-ink-2">
+              A package describes a tool as data: the request it sends, the secrets it needs and the hosts it may reach.
+              Apply an IntegrationPackage in your namespace, then a Connector of type plugin that names it. No Rampart
+              release is needed.
+            </p>
+            {packagesQuery.isError ? (
+              <p role="alert" className="text-13 text-ink-2">The packages could not be loaded.</p>
+            ) : packages.length === 0 ? (
+              <p className="text-13 text-ink-2">
+                None installed. The connector catalogue has an example under Installed package.
+              </p>
+            ) : (
+              <Table aria-label="Installed packages">
+                <THead>
+                  <tr>
+                    <Th>Package</Th>
+                    <Th>What it is</Th>
+                    <Th>May reach</Th>
+                    <Th>Used by</Th>
+                    <Th>State</Th>
+                  </tr>
+                </THead>
+                <TBody>
+                  {packages.map((p) => (
+                    <Tr key={p.name}>
+                      <Td>
+                        <span className="text-13 font-medium text-ink">{p.name}</span>
+                        {p.description && <span className="block text-12 text-ink-2">{p.description}</span>}
+                      </Td>
+                      <Td className="text-13 text-ink-2">
+                        {p.runtime} {p.kind} {p.version}
+                        {p.secrets.length > 0 && <span className="block text-12">needs {p.secrets.join(', ')}</span>}
+                      </Td>
+                      <Td className="font-mono text-12 text-ink-2">{p.egress.join(', ') || 'nothing'}</Td>
+                      <Td className="text-13 text-ink-2">{p.used_by.length ? p.used_by.join(', ') : 'no connector'}</Td>
+                      <Td className={p.error ? 'whitespace-normal text-13 font-medium text-ink' : 'text-13 text-ink-2'}>
+                        {p.error ? `Not used: ${p.error}` : 'Installed'}
+                      </Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            )}
+          </section>
           {/* Connector Catalogue Modal */}
           <ConnectorCatalogueDialog
             open={catalogueOpen}

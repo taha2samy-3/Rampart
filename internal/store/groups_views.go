@@ -20,6 +20,11 @@ type GroupStore interface {
 	AddGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error
 	RemoveGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error
 	ListGroupFindings(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error)
+	// GroupMemberApplications returns the distinct applications of the group's findings (D90).
+	GroupMemberApplications(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error)
+	// RequestGroupTicket reserves the group's ticket for the sweeper. It returns false when a ticket is already
+	// reserved or open; a failed one may be requested again (D90).
+	RequestGroupTicket(ctx context.Context, tenantID, groupID uuid.UUID, requestedBy string) (bool, error)
 }
 
 // ViewStore defines persistence for saved views (docs/21 §6.2).
@@ -39,26 +44,40 @@ func (s *PostgresStore) CreateFindingGroup(ctx context.Context, g *domain.Findin
 	g.UpdatedAt = g.CreatedAt
 
 	return s.withTenantTx(ctx, g.TenantID, func(tx pgx.Tx) error {
-		query := `INSERT INTO finding_group (id, tenant_id, name, description, owner, created_at, updated_at)
-		          VALUES ($1, $2, $3, $4, $5, $6, $7)`
-		_, err := tx.Exec(ctx, query, g.ID, g.TenantID, g.Name, g.Description, g.Owner, g.CreatedAt, g.UpdatedAt)
+		query := `INSERT INTO finding_group (id, tenant_id, name, description, owner, application_id, created_at, updated_at)
+		          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+		_, err := tx.Exec(ctx, query, g.ID, g.TenantID, g.Name, g.Description, g.Owner, g.ApplicationID, g.CreatedAt, g.UpdatedAt)
 		return err
 	})
+}
+
+// groupCols reads a group with its member count and its ticket (D90).
+const groupCols = `g.id, g.tenant_id, g.name, COALESCE(g.description, ''), COALESCE(g.owner, ''),
+	g.created_at, g.updated_at,
+	(SELECT COUNT(*) FROM finding_group_member m WHERE m.tenant_id = g.tenant_id AND m.group_id = g.id),
+	g.application_id, g.ticket_status, g.ticket_attempts, COALESCE(g.ticket_error, ''), COALESCE(g.ticket_requested_by, ''),
+	g.ticket_id, COALESCE(t.external_ref, ''), COALESCE(t.url, '')
+	FROM finding_group g LEFT JOIN ticket t ON t.tenant_id = g.tenant_id AND t.id = g.ticket_id`
+
+func scanGroup(row pgx.Row) (domain.FindingGroup, error) {
+	var g domain.FindingGroup
+	var status *string
+	var tk domain.GroupTicket
+	err := row.Scan(&g.ID, &g.TenantID, &g.Name, &g.Description, &g.Owner, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount,
+		&g.ApplicationID, &status, &tk.Attempts, &tk.Error, &tk.RequestedBy, &tk.TicketID, &tk.ExternalRef, &tk.URL)
+	if err == nil && status != nil {
+		tk.Status = *status
+		g.Ticket = &tk
+	}
+	return g, err
 }
 
 // GetFindingGroup fetches a finding group by ID with member count.
 func (s *PostgresStore) GetFindingGroup(ctx context.Context, tenantID, id uuid.UUID) (*domain.FindingGroup, error) {
 	var g domain.FindingGroup
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		query := `SELECT g.id, g.tenant_id, g.name, COALESCE(g.description, ''), COALESCE(g.owner, ''),
-		                 g.created_at, g.updated_at,
-		                 (SELECT COUNT(*) FROM finding_group_member m WHERE m.tenant_id = g.tenant_id AND m.group_id = g.id)
-		          FROM finding_group g
-		          WHERE g.tenant_id = $1 AND g.id = $2`
-		err := tx.QueryRow(ctx, query, tenantID, id).Scan(
-			&g.ID, &g.TenantID, &g.Name, &g.Description, &g.Owner,
-			&g.CreatedAt, &g.UpdatedAt, &g.MemberCount,
-		)
+		var err error
+		g, err = scanGroup(tx.QueryRow(ctx, `SELECT `+groupCols+` WHERE g.tenant_id = $1 AND g.id = $2`, tenantID, id))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -74,21 +93,14 @@ func (s *PostgresStore) GetFindingGroup(ctx context.Context, tenantID, id uuid.U
 func (s *PostgresStore) ListFindingGroups(ctx context.Context, tenantID uuid.UUID) ([]domain.FindingGroup, error) {
 	var groups []domain.FindingGroup
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		query := `SELECT g.id, g.tenant_id, g.name, COALESCE(g.description, ''), COALESCE(g.owner, ''),
-		                 g.created_at, g.updated_at,
-		                 (SELECT COUNT(*) FROM finding_group_member m WHERE m.tenant_id = g.tenant_id AND m.group_id = g.id)
-		          FROM finding_group g
-		          WHERE g.tenant_id = $1
-		          ORDER BY g.created_at DESC`
-		rows, err := tx.Query(ctx, query, tenantID)
+		rows, err := tx.Query(ctx, `SELECT `+groupCols+` WHERE g.tenant_id = $1 ORDER BY g.created_at DESC`, tenantID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
-
 		for rows.Next() {
-			var g domain.FindingGroup
-			if err := rows.Scan(&g.ID, &g.TenantID, &g.Name, &g.Description, &g.Owner, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
+			g, err := scanGroup(rows)
+			if err != nil {
 				return err
 			}
 			groups = append(groups, g)
@@ -99,6 +111,42 @@ func (s *PostgresStore) ListFindingGroups(ctx context.Context, tenantID uuid.UUI
 		return nil, err
 	}
 	return groups, nil
+}
+
+// GroupMemberApplications returns the distinct applications of the group's findings.
+func (s *PostgresStore) GroupMemberApplications(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
+	var out []uuid.UUID
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT DISTINCT f.application_id FROM finding_group_member m
+			JOIN finding f ON f.tenant_id = m.tenant_id AND f.id = m.finding_id
+			WHERE m.tenant_id = $1 AND m.group_id = $2`, tenantID, groupID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out = append(out, id)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// RequestGroupTicket reserves the group's ticket; a reserved or done one is left as it is.
+func (s *PostgresStore) RequestGroupTicket(ctx context.Context, tenantID, groupID uuid.UUID, requestedBy string) (bool, error) {
+	var n int64
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE finding_group SET ticket_status = 'reserved', ticket_attempts = 0, ticket_next_at = NOW(),
+				ticket_error = NULL, ticket_requested_by = $3, updated_at = NOW()
+			WHERE tenant_id = $1 AND id = $2 AND (ticket_status IS NULL OR ticket_status = 'failed')`, tenantID, groupID, requestedBy)
+		n = tag.RowsAffected()
+		return err
+	})
+	return n > 0, err
 }
 
 // DeleteFindingGroup deletes a finding group and its memberships.

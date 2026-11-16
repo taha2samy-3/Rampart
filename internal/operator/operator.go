@@ -19,6 +19,7 @@ type Operator struct {
 	idps        *IdentityProviderReconciler
 	clusterIdps *ClusterIdentityProviderReconciler
 	connectors  *ConnectorReconciler
+	packages    *IntegrationPackageReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -40,6 +41,7 @@ func NewOperatorWithAllowlist(store apply.ConfigStore, secrets SecretProvider, s
 		idps:        NewIdentityProviderReconciler(store),
 		clusterIdps: NewClusterIdentityProviderReconciler(store),
 		connectors:  NewConnectorReconciler(store, secrets, secretStore, allowlist),
+		packages:    NewIntegrationPackageReconciler(store),
 	}
 }
 
@@ -130,4 +132,10 @@ func (m *MockSecretProvider) GetSecret(ctx context.Context, namespace, name, key
 		return val, nil
 	}
 	return nil, fmt.Errorf("secret %q not found", lookupKey)
+}
+
+// ReconcileIntegrationPackage installs an IntegrationPackage (D94).
+func (op *Operator) ReconcileIntegrationPackage(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling integration package", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.packages.Reconcile(ctx, cr)
 }

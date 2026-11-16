@@ -152,6 +152,24 @@ func ProcessTickets(ctx context.Context, st TicketStore, tr domain.TrackerResolv
 			}
 		}
 
+		// D90: one ticket per correlation group. Another finding with the same correlation key in the same
+		// application already has an open ticket on this tracker: link this finding to it instead of opening a second.
+		if co, ok := st.(store.GroupTicketOutbox); ok { // the store reads the key itself: GetFinding does not load it
+			if ref, url, cerr := co.CorrelatedTicket(ctx, p.TenantID, p.FindingID, connName); cerr == nil && ref != "" {
+				if err := st.CompleteTicket(ctx, p.TenantID, p.FindingID, connName, ref, url); err != nil {
+					log.Error("tickets: linking to the correlation group's ticket failed", "tenant", p.TenantID, "finding", p.FindingID, "ticket", ref, "error", err)
+					continue
+				}
+				opened++
+				to, _ := json.Marshal(map[string]string{"action": "create_ticket", "status": "linked_correlated", "ticket_id": ref, "url": url, "connector": connName})
+				_ = st.RecordFindingEvents(ctx, p.TenantID, []*domain.FindingEvent{{
+					ID: domain.NewID(), FindingID: p.FindingID, At: now, Actor: "system:policy", Type: "ticket_created",
+					Note: fmt.Sprintf("Linked to ticket %s, which tracks the same issue reported by another tool", ref), To: to,
+				}})
+				continue
+			}
+		}
+
 		appName := f.ApplicationID.String()
 		if app, aerr := st.GetApplication(ctx, p.TenantID, f.ApplicationID); aerr == nil && app != nil && app.Name != "" {
 			appName = app.Name
@@ -266,6 +284,11 @@ func RunTicketSweeper(ctx context.Context, st TicketStore, tr domain.TrackerReso
 		}
 		if o, f := ProcessTickets(ctx, st, tr, time.Now().UTC(), log); o+f > 0 {
 			log.Info("tickets processed", "opened", o, "failed", f)
+		}
+		if gs, ok := st.(GroupTicketStore); ok {
+			if o, f := ProcessGroupTickets(ctx, gs, tr, time.Now().UTC(), log); o+f > 0 {
+				log.Info("group tickets processed", "opened", o, "failed", f)
+			}
 		}
 	}
 	pass()

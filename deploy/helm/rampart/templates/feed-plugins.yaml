@@ -1,0 +1,69 @@
+{{- /*
+docs/16 D89, D94: a feed plugin is a container of its own that fetches one vulnerability database (a licensed
+feed, an in-house list) and posts it to Rampart as intel-jsonl. It gets no database credentials and no service
+account token: all it holds is its feed's push token, and the API checks the file before staging it. Its pods do
+not carry Rampart's selector labels, so the default-deny policy that confines Rampart does not cut the plugin off
+from the source it reads; restrict its egress with your own NetworkPolicy.
+
+The same Secret is mounted into Rampart at /var/run/rampart/feeds/<name>/token (see deployment.yaml); name that
+file as pushTokenFile of the feed in the ClusterFeedMirror.
+*/}}
+{{- range .Values.feeds.plugins }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,40}$" .name) }}{{ fail (printf "feeds.plugins name %q must be lowercase [a-z0-9-]" .name) }}{{ end }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "rampart.fullname" $ }}-feed-{{ .name }}
+  labels:
+    {{- include "rampart.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: feed-plugin
+    rampart.aspm.dev/feed: {{ .name }}
+spec:
+  schedule: {{ .schedule | default "0 */6 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: rampart-feed-plugin
+            app.kubernetes.io/instance: {{ $.Release.Name }}
+            rampart.aspm.dev/feed: {{ .name }}
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            {{- toYaml $.Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: plugin
+              image: {{ required (printf "feeds.plugins %s: image is required" .name) .image | quote }}
+              {{- with .args }}
+              args: {{ toYaml . | nindent 16 }}
+              {{- end }}
+              env:
+                - name: RAMPART_FEED_PUSH_URL
+                  value: "http://{{ include "rampart.fullname" $ }}:{{ $.Values.service.port }}/api/v1/feeds/{{ .name }}"
+                - name: RAMPART_FEED_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ required (printf "feeds.plugins %s: tokenSecret is required" .name) .tokenSecret }}
+                      key: token
+                {{- with .env }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              resources:
+                {{- toYaml (.resources | default (dict "requests" (dict "cpu" "50m" "memory" "64Mi") "limits" (dict "memory" "512Mi"))) | nindent 16 }}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - {name: tmp, emptyDir: {}}
+{{- end }}

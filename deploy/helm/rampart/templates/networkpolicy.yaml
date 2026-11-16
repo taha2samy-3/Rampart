@@ -38,6 +38,17 @@ spec:
       ports:
         - port: ops
           protocol: TCP
+    {{- if .Values.feeds.plugins }}
+    # Feed plugins post their files to the API (D94).
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rampart-feed-plugin
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
   egress:
     # DNS
     - to:

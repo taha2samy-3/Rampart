@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"rampart/internal/integrations/declarative"
 	"strings"
 	"sync"
 	"time"
@@ -260,8 +261,13 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			Type            string                  `json:"type"`
 			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
 			TrustRules      []domain.TrustRule      `json:"trustRules"`
+			domain.DTrackSourceInput
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
+		dtSpec, dtSchedule, isDT, dtErr := spec.DTrackSourceInput.Check()
+		if dtErr != nil {
+			return "", fmt.Errorf("apply: %w", dtErr)
+		}
 
 		namespace := defaultNamespace(header.Metadata.Namespace)
 		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
@@ -284,6 +290,15 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily, spec.IngestionPolicy)
 		if err != nil {
 			return "", err
+		}
+		if saver, ok := a.store.(interface {
+			SaveDTrackSource(ctx context.Context, tenantID, sourceID uuid.UUID, connector string, spec json.RawMessage, schedule time.Duration) error
+		}); ok {
+			if err := saver.SaveDTrackSource(ctx, tenant.ID, id, spec.Connector, dtSpec, dtSchedule); err != nil {
+				return "", err
+			}
+		} else if isDT {
+			return "", fmt.Errorf("apply: store does not support Dependency-Track sources")
 		}
 
 		if len(spec.TrustRules) > 0 {
@@ -573,6 +588,29 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("connector.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
+	case "integrationpackage":
+		// D94: as the operator does; a package that does not validate is refused here instead of stored.
+		tenant, err := a.store.GetTenantByNamespace(ctx, header.Metadata.Namespace)
+		if err != nil {
+			return "", err
+		}
+		if tenant == nil {
+			return "", fmt.Errorf("apply: no tenant lists namespace %q", header.Metadata.Namespace)
+		}
+		spec, err := declarative.Parse(header.Spec)
+		if err != nil {
+			return "", fmt.Errorf("apply: %w", err)
+		}
+		pkgs, ok := a.store.(domain.IntegrationPackages)
+		if !ok {
+			return "", fmt.Errorf("apply: the store does not keep integration packages")
+		}
+		if err := pkgs.SaveIntegrationPackage(ctx, domain.IntegrationPackageRecord{TenantID: tenant.ID, Name: header.Metadata.Name,
+			Kind: spec.Kind, Runtime: spec.Runtime, Version: spec.Version, Spec: header.Spec}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("integrationpackage.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedKind, header.Kind)
 	}
@@ -622,19 +660,20 @@ func defaultNamespace(ns string) string {
 
 // MemoryConfigStore provides an in-memory implementation of ConfigStore.
 type MemoryConfigStore struct {
-	mu           sync.RWMutex
-	orphaned     map[string]bool
-	disabled     map[string]bool
-	withData     map[uuid.UUID]bool
-	purged       map[uuid.UUID]bool
-	tenants      map[string]domain.Tenant
-	applications map[string]domain.Application
-	scanSources  map[string]uuid.UUID
-	namespaces   map[string]uuid.UUID
-	policies     map[string]PolicyObject
-	idps         map[string]domain.IdentityProvider
-	connectors   map[string]domain.Connector
-	trustRules   map[uuid.UUID][]domain.TrustRuleRecord
+	domain.PackageMap // installed IntegrationPackages (D94)
+	mu                sync.RWMutex
+	orphaned          map[string]bool
+	disabled          map[string]bool
+	withData          map[uuid.UUID]bool
+	purged            map[uuid.UUID]bool
+	tenants           map[string]domain.Tenant
+	applications      map[string]domain.Application
+	scanSources       map[string]uuid.UUID
+	namespaces        map[string]uuid.UUID
+	policies          map[string]PolicyObject
+	idps              map[string]domain.IdentityProvider
+	connectors        map[string]domain.Connector
+	trustRules        map[uuid.UUID][]domain.TrustRuleRecord
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.

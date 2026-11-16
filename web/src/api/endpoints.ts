@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -202,8 +202,11 @@ export async function listFindingGroups(signal?: AbortSignal): Promise<FindingGr
 }
 export const getFindingGroup = (id: string, signal?: AbortSignal) =>
   get<FindingGroupDetail>(`/api/v1/groups/${encodeURIComponent(id)}`, { signal });
-export const createFindingGroup = (body: { name: string; description?: string }) =>
+export const createFindingGroup = (body: { name: string; description?: string; application_id?: string }) =>
   post<FindingGroup>('/api/v1/groups', body);
+/** Reserves the group's one ticket; the server opens it on the tenant's tracker shortly after (D90). */
+export const requestGroupTicket = (id: string) =>
+  post<{ group_id: string; ticket: { status: string } }>(`/api/v1/groups/${encodeURIComponent(id)}/ticket`, {});
 export const deleteFindingGroup = (id: string) => del<void>(`/api/v1/groups/${encodeURIComponent(id)}`);
 export const addGroupMembers = (id: string, findingIds: string[]) =>
   post<void>(`/api/v1/groups/${encodeURIComponent(id)}/members`, { finding_ids: findingIds });
@@ -219,15 +222,28 @@ export const findingsExportUrl = (format: 'csv' | 'json' | 'ocsf', q?: string) =
   return `/api/v1/findings/export?${p.toString()}`;
 };
 
-// --- Dependency-Track Integration (docs/10 §3, §13) ---
-export async function listUnmappedDTrackProjects(signal?: AbortSignal): Promise<DTrackProjectRecord[]> {
-  const raw = await get<{ projects?: DTrackProjectRecord[] | null }>('/api/v1/dtrack/unmapped', { signal });
+/** One application's open findings per day and band, new and fixed per day, and the age of what is open (D93). */
+export const getApplicationTrend = (id: string, days: number, signal?: AbortSignal) =>
+  get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
+
+// --- Upstream sources: Dependency-Track (docs/10 §3, docs/16 D92) ---
+export async function listSources(signal?: AbortSignal): Promise<SourceStatus[]> {
+  const raw = await get<{ sources?: SourceStatus[] | null }>('/api/v1/sources', { signal });
+  return raw.sources ?? [];
+}
+export async function listUnmappedProjects(sourceId: string, signal?: AbortSignal): Promise<DTrackProjectRecord[]> {
+  const raw = await get<{ projects?: DTrackProjectRecord[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/unmapped`, { signal });
   return raw.projects ?? [];
 }
-export const mapDTrackProject = (projectUuid: string, applicationId: string) =>
-  post<{ status: string; project_uuid: string; application_id: string }>(`/api/v1/dtrack/projects/${encodeURIComponent(projectUuid)}/map`, {
-    application_id: applicationId,
-  });
+export const mapSourceProject = (sourceId: string, projectUuid: string, applicationId: string) =>
+  post<{ status: string; project_uuid: string; application_id: string; sync_queued: boolean }>(
+    `/api/v1/sources/${encodeURIComponent(sourceId)}/map`,
+    { project_uuid: projectUuid, application_id: applicationId },
+  );
+export async function listSourceDecisions(sourceId: string, signal?: AbortSignal): Promise<UpstreamDecision[]> {
+  const raw = await get<{ decisions?: UpstreamDecision[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/decisions`, { signal });
+  return raw.decisions ?? [];
+}
 
 // --- Parsers Catalogue (docs/19 §2, docs/13 §9) ---
 export async function listParsers(signal?: AbortSignal): Promise<ParserDescriptor[]> {

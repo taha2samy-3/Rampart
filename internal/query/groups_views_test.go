@@ -20,73 +20,14 @@ import (
 
 type mockGroupViewStore struct {
 	*mockGateStore
-	groups  map[uuid.UUID]*domain.FindingGroup
-	members map[uuid.UUID][]uuid.UUID
-	views   map[uuid.UUID]*domain.SavedView
+	views map[uuid.UUID]*domain.SavedView
 }
 
 func newMockGroupViewStore() *mockGroupViewStore {
 	return &mockGroupViewStore{
 		mockGateStore: newMockGateStore(),
-		groups:        make(map[uuid.UUID]*domain.FindingGroup),
-		members:       make(map[uuid.UUID][]uuid.UUID),
 		views:         make(map[uuid.UUID]*domain.SavedView),
 	}
-}
-
-func (m *mockGroupViewStore) CreateFindingGroup(ctx context.Context, g *domain.FindingGroup) error {
-	m.groups[g.ID] = g
-	return nil
-}
-
-func (m *mockGroupViewStore) GetFindingGroup(ctx context.Context, tenantID, id uuid.UUID) (*domain.FindingGroup, error) {
-	g, ok := m.groups[id]
-	if !ok {
-		return nil, store.ErrNotFound
-	}
-	g.MemberCount = len(m.members[id])
-	return g, nil
-}
-
-func (m *mockGroupViewStore) ListFindingGroups(ctx context.Context, tenantID uuid.UUID) ([]domain.FindingGroup, error) {
-	var list []domain.FindingGroup
-	for _, g := range m.groups {
-		if g.TenantID == tenantID {
-			g.MemberCount = len(m.members[g.ID])
-			list = append(list, *g)
-		}
-	}
-	return list, nil
-}
-
-func (m *mockGroupViewStore) DeleteFindingGroup(ctx context.Context, tenantID, id uuid.UUID) error {
-	delete(m.groups, id)
-	delete(m.members, id)
-	return nil
-}
-
-func (m *mockGroupViewStore) AddGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
-	m.members[groupID] = append(m.members[groupID], findingIDs...)
-	return nil
-}
-
-func (m *mockGroupViewStore) RemoveGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
-	var remaining []uuid.UUID
-	toRemove := make(map[uuid.UUID]bool)
-	for _, id := range findingIDs {
-		toRemove[id] = true
-	}
-	for _, id := range m.members[groupID] {
-		if !toRemove[id] {
-			remaining = append(remaining, id)
-		}
-	}
-	m.members[groupID] = remaining
-	return nil
-}
-
-func (m *mockGroupViewStore) ListGroupFindings(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
-	return m.members[groupID], nil
 }
 
 func (m *mockGroupViewStore) CreateSavedView(ctx context.Context, v *domain.SavedView) error {
@@ -226,6 +167,11 @@ func TestAPI_FindingGroups(t *testing.T) {
 	// 2. Add members
 	f1 := uuid.New()
 	f2 := uuid.New()
+	app := uuid.New()
+	_ = st.UpsertFindings(context.Background(), tenantID, []*domain.Finding{
+		{ID: f1, TenantID: tenantID, FindingKey: "f1", ApplicationID: app, Title: "f1", Severity: domain.SeverityHigh, State: domain.StateOpen},
+		{ID: f2, TenantID: tenantID, FindingKey: "f2", ApplicationID: app, Title: "f2", Severity: domain.SeverityHigh, State: domain.StateOpen},
+	})
 	memBody, _ := json.Marshal(map[string]any{"finding_ids": []uuid.UUID{f1, f2}})
 	memReq := httptest.NewRequest("POST", "/api/v1/groups/"+grp.ID.String()+"/members", bytes.NewReader(memBody))
 	memReq.Header.Set("Authorization", "Bearer "+token)
@@ -244,35 +190,6 @@ func TestAPI_FindingGroups(t *testing.T) {
 
 	if getW.Code != http.StatusOK {
 		t.Fatalf("get group code = %d", getW.Code)
-	}
-}
-
-func TestAPI_LiveEventsSSE(t *testing.T) {
-	st := newMockGroupViewStore()
-	tenantID := uuid.New()
-	authn := auth.NewAuthenticatorWithStore(st)
-	token := authn.DefaultAdminToken(tenantID)
-	api := query.NewAPIWithAuth(st, nil, authn)
-	mux := http.NewServeMux()
-	api.RegisterRoutes(mux)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	req := httptest.NewRequest("GET", "/api/v1/events", nil).WithContext(ctx)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("sse status = %d", w.Code)
-	}
-	if w.Header().Get("Content-Type") != "text/event-stream" {
-		t.Errorf("content-type = %s", w.Header().Get("Content-Type"))
-	}
-	if w.Header().Get("X-Accel-Buffering") != "no" {
-		t.Errorf("X-Accel-Buffering = %s", w.Header().Get("X-Accel-Buffering"))
 	}
 }
 

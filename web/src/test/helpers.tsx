@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role } from '@/api/types';
+import type { CorrelatedRef, DTrackProjectRecord, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role, SourceStatus, UpstreamDecision } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -50,6 +50,10 @@ export interface Scenario {
   audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
   groups?: FindingGroup[] | 'error';
   groupFindings?: Record<string, string[]>;
+  /** GET /api/v1/sources (Dependency-Track sources, D92), and per source its unmapped projects and decisions. */
+  dtSources?: SourceStatus[];
+  dtUnmapped?: Record<string, DTrackProjectRecord[]>;
+  dtDecisions?: Record<string, UpstreamDecision[]>;
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
   taxonomies?: { id: string; name: string; version: string }[];
   taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error';
@@ -213,6 +217,10 @@ export function mockFetch(sc: Scenario): Calls {
       if (sc.apps === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list applications', status: 500, request_id: 'req_apps' }, 500);
       return json({ items: sc.apps?.length ? sc.apps : null });
     }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/trend')) {
+      const points = Array.from({ length: 14 }, (_, i) => ({ day: `2026-11-${String(i + 1).padStart(2, '0')}`, critical: i % 3, high: 4 + (i % 2), medium: 6, low: 2, new: i % 4, fixed: 1 + (i % 3) }));
+      return json({ days: 14, points, aging: { under_30: 5, d30_90: 3, d90_180: 1, over_180: 1 } });
+    }
     if (path.startsWith('/api/v1/applications/') && path.endsWith('/summary')) {
       const page = sc.appPages?.[path.split('/')[4] ?? ''];
       return page ? json(page) : json({ type: 'https://rampart.aspm.dev/problems/not-found', title: 'Application not found', status: 404 }, 404);
@@ -222,11 +230,18 @@ export function mockFetch(sc: Scenario): Calls {
       return json(sc.overview ?? overviewData());
     }
     if (path === '/api/v1/views') return json({ views: [] });
+    if (path === '/api/v1/sources') return json({ sources: sc.dtSources ?? [] });
+    if (path.startsWith('/api/v1/sources/')) {
+      const [, , , , sid = '', what] = path.split('/');
+      if (what === 'unmapped') return json({ projects: sc.dtUnmapped?.[sid] ?? [], count: 0 });
+      if (what === 'decisions') return json({ decisions: sc.dtDecisions?.[sid] ?? [] });
+      if (what === 'map') return json({ status: 'mapped', sync_queued: true });
+    }
     if (path === '/api/v1/groups') {
       if (sc.groups === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
       if (init?.method === 'POST') {
         const b = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
-        return json(findingGroup(9, { name: b.name, description: b.description }), 201);
+        return json(findingGroup(9, { name: b.name, description: b.description, application_id: b.application_id }), 201);
       }
       return json({ groups: sc.groups ?? [] });
     }
@@ -236,12 +251,15 @@ export function mockFetch(sc: Scenario): Calls {
       if (parts.length === 6 && parts[5] === 'members') {
         return json(null, 204);
       }
+      if (parts.length === 6 && parts[5] === 'ticket') {
+        return json({ group_id: grpId, ticket: { status: 'reserved' } }, 202);
+      }
       if (init?.method === 'DELETE') {
         return json(null, 204);
       }
       const grp = (Array.isArray(sc.groups) ? sc.groups : []).find((g) => g.id === grpId) ?? findingGroup(1, { id: grpId });
       const fIds = sc.groupFindings?.[grpId] ?? ['f-1', 'f-2'];
-      return json({ group: grp, findings_ids: fIds });
+      return json({ group: grp, finding_ids: fIds });
     }
     if (path === '/api/v1/metrics/trend') return json({ metric: 'open', points: sc.trend ?? [] });
     if (path === '/api/v1/settings') return json({ riskAcceptanceApproval: false, riskAcceptanceMaxDays: 90 });
@@ -278,6 +296,17 @@ export function mockFetch(sc: Scenario): Calls {
           status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connector verified successfully' }] } },
         { name: 'slack-appsec', type: 'slack', direction: 'outbound', enabled: true, managed_by: 'resource',
           status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'PendingVerification', message: 'Connector registered, connection not yet tested' }] } },
+        { name: 'chat-sec', type: 'plugin', direction: 'outbound', enabled: true, managed_by: 'resource', spec: { plugin: { name: 'google-chat' } },
+          status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'NotProbed', message: 'A declarative notifier has no check request; the first delivery tests it' }] } },
+      ] });
+    }
+    // D94: tools installed as data.
+    if (path === '/api/v1/integration-packages') {
+      return json({ items: [
+        { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Google Chat spaces', egress: ['chat.googleapis.com'],
+          secrets: ['webhookUrl'], config: [], used_by: ['chat-sec'], updated_at: '2026-11-16T10:00:00Z' },
+        { name: 'acme-wasm', kind: 'parser', runtime: 'wasm', version: '0.1.0', egress: [], secrets: [], config: [], used_by: [],
+          error: 'runtime "wasm": code runtimes are tier 2', updated_at: '2026-11-16T10:00:00Z' },
       ] });
     }
     if (path === '/api/v1/connectors/catalogue') {

@@ -1,10 +1,44 @@
 import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { qk } from '@/api/keys';
 
+/** The one live stream (docs/11 `GET /stream`, docs/13 §3, docs/16 D91). */
+export const STREAM_URL = '/api/v1/stream?topics=ingests,findings,operations';
+/** While the stream is down the UI polls at this interval (docs/13 §3). */
+export const POLL_MS = 30_000;
+
 /**
- * Connects to the Server-Sent Events (SSE) stream at /api/v1/events (docs/21 §6.4).
- * Automatically invalidates relevant React Query caches when real-time events arrive.
+ * What each topic invalidates. A message names a topic and an application and carries no data: the pages
+ * refetch with the user's own permissions.
+ */
+export function invalidateTopic(qc: QueryClient, topic: string) {
+  const inv = (queryKey: readonly unknown[]) => void qc.invalidateQueries({ queryKey });
+  switch (topic) {
+    case 'findings':
+      inv(qk.findings.all());
+      inv(qk.overview());
+      inv(qk.applications.list());
+      inv(qk.groups.all());
+      break;
+    case 'ingests':
+      inv(qk.runs.all());
+      inv(qk.overview());
+      break;
+    case 'operations':
+      inv(qk.acceptances.all());
+      inv(qk.heldCloses.all());
+      inv(qk.notifications());
+      inv(qk.groups.all());
+      break;
+    default: // reset: the stream could not say what changed
+      void qc.invalidateQueries();
+  }
+}
+
+/**
+ * Keeps the open pages current. The browser's EventSource reconnects by itself and sends Last-Event-ID; when the
+ * server refuses (401, 429, 503) the source closes and this hook reconnects with backoff, passing the last id in
+ * the query, and polls while it waits.
  */
 export function useLiveEvents(enabled = true) {
   const qc = useQueryClient();
@@ -13,93 +47,58 @@ export function useLiveEvents(enabled = true) {
     if (!enabled || typeof window === 'undefined' || typeof EventSource === 'undefined') {
       return;
     }
-
     let es: EventSource | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    let lastId = '';
+    let backoff = 5_000;
+    let stopped = false;
 
-    function cleanup() {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+    const startPolling = () => {
+      if (!poll) poll = setInterval(() => invalidateTopic(qc, 'findings'), POLL_MS);
+    };
+    const stopPolling = () => {
+      if (poll) clearInterval(poll);
+      poll = null;
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      const url = lastId ? `${STREAM_URL}&last_event_id=${encodeURIComponent(lastId)}` : STREAM_URL;
+      es = new EventSource(url);
+      es.onopen = () => {
+        backoff = 5_000;
+        stopPolling();
+      };
+      for (const topic of ['findings', 'ingests', 'operations', 'reset']) {
+        es.addEventListener(topic, (ev) => {
+          const id = (ev as MessageEvent).lastEventId;
+          if (id) lastId = id;
+          invalidateTopic(qc, topic);
+        });
       }
-      if (es) {
-        es.close();
-        es = null;
-      }
-    }
-
-    function connect() {
-      cleanup();
-      try {
-        es = new EventSource('/api/v1/events');
-
-        es.onmessage = (event) => {
-          if (!event.data) return;
-          try {
-            const data = JSON.parse(event.data);
-            handleEvent(data);
-          } catch {
-            // Non-JSON heartbeat or ping
-          }
-        };
-
-        const invalidateFindings = () => {
-          void qc.invalidateQueries({ queryKey: qk.findings.all() });
-          void qc.invalidateQueries({ queryKey: qk.overview() });
-        };
-
-        es.addEventListener('run_completed', () => {
-          void qc.invalidateQueries({ queryKey: qk.runs.all() });
-          invalidateFindings();
-        });
-
-        es.addEventListener('finding_updated', invalidateFindings);
-        es.addEventListener('findings_updated', invalidateFindings);
-
-        es.addEventListener('notification', () => {
-          void qc.invalidateQueries({ queryKey: qk.notifications() });
-        });
-
-        es.addEventListener('acceptance_updated', () => {
-          void qc.invalidateQueries({ queryKey: qk.acceptances.all() });
-          void qc.invalidateQueries({ queryKey: qk.heldCloses.all() });
-        });
-
-        es.onerror = () => {
-          if (es) {
-            es.close();
-            es = null;
-          }
-          if (timer) {
-            clearTimeout(timer);
-          }
-          // Reconnect with 5-second backoff
-          timer = setTimeout(connect, 5000);
-        };
-      } catch {
-        if (timer) {
-          clearTimeout(timer);
+      // The server ends a stream after a while so the session is checked again; reconnect at once.
+      es.addEventListener('reconnect', () => {
+        es?.close();
+        connect();
+      });
+      es.onerror = () => {
+        startPolling();
+        if (es && es.readyState === EventSource.CLOSED) {
+          es = null;
+          retry = setTimeout(connect, backoff);
+          backoff = Math.min(backoff * 2, 5 * 60_000);
         }
-        timer = setTimeout(connect, 10000);
-      }
-    }
-
-    function handleEvent(data: Record<string, unknown>) {
-      const type = data.type || data.event || data.kind;
-      if (type === 'run_completed' || type === 'ingest') {
-        void qc.invalidateQueries({ queryKey: qk.runs.all() });
-        void qc.invalidateQueries({ queryKey: qk.findings.all() });
-        void qc.invalidateQueries({ queryKey: qk.overview() });
-      } else if (type === 'finding_updated' || type === 'findings_updated' || type === 'triage') {
-        void qc.invalidateQueries({ queryKey: qk.findings.all() });
-        void qc.invalidateQueries({ queryKey: qk.overview() });
-      } else if (type === 'notification') {
-        void qc.invalidateQueries({ queryKey: qk.notifications() });
-      }
-    }
+        // Otherwise the browser is already reconnecting with Last-Event-ID.
+      };
+    };
 
     connect();
-
-    return cleanup;
+    return () => {
+      stopped = true;
+      if (retry) clearTimeout(retry);
+      stopPolling();
+      es?.close();
+    };
   }, [enabled, qc]);
 }

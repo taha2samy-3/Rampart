@@ -48,6 +48,8 @@ var (
 	gvkClusterRiskPolicy = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterRiskPolicy"}
 	gvkClusterSLAPolicy  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSLAPolicy"}
 	gvkClusterFeedMirror = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterFeedMirror"}
+	// D94: tier-1 integrations installed as data in a tenant namespace.
+	gvkIntegrationPackage = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "IntegrationPackage"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -161,6 +163,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	clusterRisk := policyCR(gvkClusterRiskPolicy, NewClusterRiskPolicyReconciler(cfg.Store))
 	clusterSLA := policyCR(gvkClusterSLAPolicy, NewClusterSLAPolicyReconciler(cfg.Store))
 	feedMirror := policyCR(gvkClusterFeedMirror, NewClusterFeedMirrorReconciler(cfg.Store))
+	pkgR := NewIntegrationPackageReconciler(cfg.Store)
+	packages := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkIntegrationPackage, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
 
 	gen := builder.WithPredicates(predicate.GenerationChangedPredicate{}) // status writes do not retrigger
 	// Cluster policies belong to no namespace and wait for no tenant.
@@ -181,7 +185,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}} {
+	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}, "integrationpackage": {gvkIntegrationPackage, packages}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

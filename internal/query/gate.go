@@ -133,6 +133,13 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 	// The newest run of each expected input.
 	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 	for _, want := range req.Expect {
+		// D92 (docs/23 DT4, option b): in this version the gate does not wait for Dependency-Track. A DT sync run is
+		// started by DT's schedule or webhook, not by the build, and carries no commit, so no run can be tied to this
+		// build. The gate says so instead of waiting for a run that never comes.
+		if w := strings.ToLower(strings.TrimSpace(want)); w == "dependency-track" || w == "dtrack" {
+			resp.Reasons = append(resp.Reasons, "dependency-track is not awaited by the gate in this version: its sync runs are not tied to a build (D92)")
+			continue
+		}
 		var run *domain.IngestRun
 		for _, r := range runs {
 			if a.runMatches(ctx, tenantID, r, want) {

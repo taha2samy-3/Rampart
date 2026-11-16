@@ -47,6 +47,8 @@ type API struct {
 	intel         IntelSource
 	scorer        *scoring.Scorer
 	gw            *ingest.Gateway
+	live          *LiveHub
+	dtEnqueue     DTrackEnqueuer
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -159,6 +161,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("PATCH /api/v1/settings", a.handlePatchSettings)
 	routes.HandleFunc("GET /api/v1/applications", a.handleListApplications)
 	routes.HandleFunc("GET /api/v1/applications/{id}/summary", a.handleApplicationSummary)
+	routes.HandleFunc("GET /api/v1/applications/{id}/trend", a.handleApplicationTrend)
 	routes.HandleFunc("GET /api/v1/hierarchy", a.handleListHierarchy)
 	routes.HandleFunc("GET /api/v1/dashboards/overview", a.handleOverview)
 	routes.HandleFunc("GET /api/v1/notifications", a.handleListNotifications)
@@ -175,7 +178,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/runs", a.handleListRuns)
 	routes.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
-	routes.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleGetAssetSBOM) // alias per doc 11
+	routes.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleApplicationSBOM) // merged, CycloneDX or SPDX (doc 11, D95)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)
@@ -191,8 +194,10 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
 
 	// Dependency-Track integration & unmapped projects (docs/10 §3, §13)
-	routes.HandleFunc("GET /api/v1/dtrack/unmapped", a.handleListUnmappedDTrackProjects)
-	routes.HandleFunc("POST /api/v1/dtrack/projects/{uuid}/map", a.handleMapDTrackProject)
+	routes.HandleFunc("GET /api/v1/sources", a.handleListSources)
+	routes.HandleFunc("GET /api/v1/sources/{id}/unmapped", a.handleListUnmapped)
+	routes.HandleFunc("POST /api/v1/sources/{id}/map", a.handleMapProject)
+	routes.HandleFunc("GET /api/v1/sources/{id}/decisions", a.handleListDecisions)
 
 	// Saved views & finding groups (docs/21 §6.1, §6.2)
 	routes.HandleFunc("GET /api/v1/views", a.handleListViews)
@@ -204,10 +209,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("DELETE /api/v1/groups/{id}", a.handleDeleteGroup)
 	routes.HandleFunc("POST /api/v1/groups/{id}/members", a.handleAddGroupMembers)
 	routes.HandleFunc("DELETE /api/v1/groups/{id}/members", a.handleRemoveGroupMembers)
+	routes.HandleFunc("POST /api/v1/groups/{id}/ticket", a.handleGroupTicket)
 
 	// Exports & Live SSE (docs/21 §6.3, §6.4)
 	routes.HandleFunc("GET /api/v1/findings/export", a.handleExportFindings)
-	routes.HandleFunc("GET /api/v1/events", a.handleEventsSSE)
+	routes.HandleFunc("GET /api/v1/stream", a.handleStream)
 
 	// Parsers catalogue & descriptors (docs/19 §2, docs/13 §9)
 	routes.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
@@ -215,6 +221,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	// Connectors are resources (D82): listed, described and validated here, never created.
 	routes.HandleFunc("GET /api/v1/connectors", a.handleListConnectors)
 	routes.HandleFunc("GET /api/v1/connectors/catalogue", a.handleConnectorCatalogue)
+	routes.HandleFunc("GET /api/v1/integration-packages", a.handleListPackages)
+	routes.HandleFunc("POST /api/v1/feeds/{name}", a.handleFeedPush)
 	routes.HandleFunc("POST /api/v1/connectors/validate", a.handleValidateConnector)
 
 	routes.HandleFunc("GET /api/v1/openapi.json", a.handleOpenAPI)
@@ -541,6 +549,10 @@ func (a *API) handleGetAssetSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Has("format") { // a standard document (D95)
+		a.exportAssetSBOM(w, r, tenantID, assetID)
+		return
+	}
 	sbom, comps, err := a.store.GetSBOM(r.Context(), tenantID, assetID)
 	if err != nil || sbom == nil {
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"SBOM not found for asset"}`, http.StatusNotFound)

@@ -627,6 +627,7 @@ func (e *Engine) closeScope(
 
 // MemoryStore provides a thread-safe, in-memory store for unit tests and local execution.
 type MemoryStore struct {
+	domain.PackageMap     // installed IntegrationPackages (D94)
 	mu                    sync.RWMutex
 	findings              map[string]*domain.Finding
 	occurrences           map[string]*domain.Occurrence
@@ -658,6 +659,8 @@ type MemoryStore struct {
 	trustRules            map[uuid.UUID][]domain.TrustRuleRecord
 	federationJTIs        map[string]time.Time
 	quotaUsage            map[string]int64
+	groups                map[uuid.UUID]*domain.FindingGroup
+	groupMembers          map[uuid.UUID][]uuid.UUID
 }
 
 type memBinding struct {
@@ -697,6 +700,8 @@ func NewMemoryStore() *MemoryStore {
 		trustRules:            make(map[uuid.UUID][]domain.TrustRuleRecord),
 		federationJTIs:        make(map[string]time.Time),
 		quotaUsage:            make(map[string]int64),
+		groups:                make(map[uuid.UUID]*domain.FindingGroup),
+		groupMembers:          make(map[uuid.UUID][]uuid.UUID),
 	}
 }
 
@@ -2320,31 +2325,127 @@ func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) 
 }
 
 func (m *MemoryStore) CreateFindingGroup(ctx context.Context, g *domain.FindingGroup) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if g.ID == uuid.Nil {
+		g.ID = uuid.New()
+	}
+	g.CreatedAt = time.Now()
+	g.UpdatedAt = g.CreatedAt
+	cp := *g
+	m.groups[g.ID] = &cp
 	return nil
 }
 
 func (m *MemoryStore) GetFindingGroup(ctx context.Context, tenantID, id uuid.UUID) (*domain.FindingGroup, error) {
-	return &domain.FindingGroup{ID: id, TenantID: tenantID, Name: "default-group"}, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	g, ok := m.groups[id]
+	if !ok || g.TenantID != tenantID {
+		return nil, store.ErrNotFound
+	}
+	cp := *g
+	cp.MemberCount = len(m.groupMembers[id])
+	return &cp, nil
 }
 
 func (m *MemoryStore) ListFindingGroups(ctx context.Context, tenantID uuid.UUID) ([]domain.FindingGroup, error) {
-	return nil, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.FindingGroup
+	for id, g := range m.groups {
+		if g.TenantID == tenantID {
+			cp := *g
+			cp.MemberCount = len(m.groupMembers[id])
+			out = append(out, cp)
+		}
+	}
+	return out, nil
 }
 
 func (m *MemoryStore) DeleteFindingGroup(ctx context.Context, tenantID, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if g, ok := m.groups[id]; ok && g.TenantID == tenantID {
+		delete(m.groups, id)
+		delete(m.groupMembers, id)
+	}
 	return nil
 }
 
 func (m *MemoryStore) AddGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if g, ok := m.groups[groupID]; !ok || g.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	have := map[uuid.UUID]bool{}
+	for _, id := range m.groupMembers[groupID] {
+		have[id] = true
+	}
+	for _, id := range findingIDs {
+		if !have[id] {
+			have[id] = true
+			m.groupMembers[groupID] = append(m.groupMembers[groupID], id)
+		}
+	}
 	return nil
 }
 
 func (m *MemoryStore) RemoveGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID, findingIDs []uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	drop := map[uuid.UUID]bool{}
+	for _, id := range findingIDs {
+		drop[id] = true
+	}
+	var keep []uuid.UUID
+	for _, id := range m.groupMembers[groupID] {
+		if !drop[id] {
+			keep = append(keep, id)
+		}
+	}
+	m.groupMembers[groupID] = keep
 	return nil
 }
 
 func (m *MemoryStore) ListGroupFindings(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
-	return nil, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if g, ok := m.groups[groupID]; !ok || g.TenantID != tenantID {
+		return nil, nil
+	}
+	return append([]uuid.UUID(nil), m.groupMembers[groupID]...), nil
+}
+
+func (m *MemoryStore) GroupMemberApplications(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[uuid.UUID]bool{}
+	var out []uuid.UUID
+	for _, fid := range m.groupMembers[groupID] {
+		for _, f := range m.findings {
+			if f.TenantID == tenantID && f.ID == fid && !seen[f.ApplicationID] {
+				seen[f.ApplicationID] = true
+				out = append(out, f.ApplicationID)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *MemoryStore) RequestGroupTicket(ctx context.Context, tenantID, groupID uuid.UUID, requestedBy string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.groups[groupID]
+	if !ok || g.TenantID != tenantID {
+		return false, nil
+	}
+	if g.Ticket != nil && g.Ticket.Status != "failed" {
+		return false, nil
+	}
+	g.Ticket = &domain.GroupTicket{Status: "reserved", RequestedBy: requestedBy}
+	return true, nil
 }
 
 func (m *MemoryStore) CreateSavedView(ctx context.Context, v *domain.SavedView) error {

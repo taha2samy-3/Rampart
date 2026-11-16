@@ -100,8 +100,14 @@ describe('applications', () => {
     expect(screen.getByText(/2 critical, 5 high, 1 low\./)).toBeInTheDocument();
     expect(screen.getByText('Highest risk score: 870. 7 critical or high.')).toBeInTheDocument();
     expect(screen.getByText('60% of findings were resolved within their deadline in the last 90 days.')).toBeInTheDocument();
-    expect(screen.getByText('3 resolved in time, 1 resolved late, 1 still open past the deadline.')).toBeInTheDocument();
-    expect(screen.getByText(/high: 6.5 days on average, from 4 fixed/)).toBeInTheDocument();
+    // D93: the deadlines and the time to fix are bars whose parts are named in words beside them
+    expect(screen.getByText('resolved in time')).toBeInTheDocument();
+    expect(screen.getByText('still open past the deadline')).toBeInTheDocument();
+    expect(screen.getByText('6.5 days on average, 4 fixed')).toBeInTheDocument();
+    // the trend: one panel per band and the arrivals against the fixes, with the numbers in words
+    expect(await screen.findByText(/^Today: \d+ critical, \d+ high/)).toBeInTheDocument();
+    expect(screen.getByText(/new and \d+ fixed in \d+ weeks/)).toBeInTheDocument();
+    expect(screen.getByText('Over 180 days')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'SQL injection in order search' })).toBeInTheDocument();
     expect(within(screen.getByRole('table', { name: 'Coverage' })).getByText('semgrep')).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();

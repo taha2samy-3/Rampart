@@ -114,12 +114,14 @@ func TestSettleChecker_NeverSettles_Timeout(t *testing.T) {
 	})
 	defer srv.Close()
 	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 10*time.Millisecond, 60*time.Millisecond)
-	settled, data, err := checker.CheckSettled(context.Background(), "p", 0)
-	if err != nil || settled {
-		t.Fatalf("an analysis older than the BOM is not settled: settled=%v err=%v", settled, err)
+	settled, data, _, err := checker.CheckSettled(context.Background(), "p", 0)
+	if err != nil || settled || data != nil {
+		t.Fatalf("an analysis older than the BOM is not settled, and nothing is read yet: settled=%v err=%v", settled, err)
 	}
-	if !strings.Contains(string(data), "CVE-2021-44228") {
-		t.Fatal("at the bound the findings are still read, and the caller marks the run unsettled")
+	// Past the bound the syncer reads anyway and marks the run unsettled (D92).
+	data, _, err = checker.ReadAnyway(context.Background(), "p", true)
+	if err != nil || !strings.Contains(string(data), "CVE-2021-44228") {
+		t.Fatal("past the bound the findings are read")
 	}
 }
 
@@ -129,7 +131,7 @@ func TestSettleChecker_ImmediateSettle(t *testing.T) {
 	})
 	defer srv.Close()
 	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 10*time.Millisecond, 200*time.Millisecond)
-	settled, data, err := checker.CheckSettled(context.Background(), "p", 0)
+	settled, data, _, err := checker.CheckSettled(context.Background(), "p", 0)
 	if err != nil || !settled || !strings.Contains(string(data), "CVE-2021-44228") {
 		t.Fatalf("settled=%v err=%v data=%s", settled, err, data)
 	}
@@ -144,7 +146,7 @@ func TestSettleChecker_SettlesWhenTheAnalysisEnds(t *testing.T) {
 	})
 	defer srv.Close()
 	checker := dtsync.NewSettleChecker(dtclient.NewClient(dtclient.Config{BaseURL: srv.URL, APIKey: "k"}), 5*time.Millisecond, time.Second)
-	if settled, _, err := checker.CheckSettled(context.Background(), "p", 0); err != nil || !settled {
+	if settled, _, _, err := checker.CheckSettled(context.Background(), "p", 0); err != nil || !settled {
 		t.Fatalf("settled=%v err=%v", settled, err)
 	}
 }

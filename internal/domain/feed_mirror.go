@@ -56,9 +56,12 @@ const (
 // CustomFeed is one licensed or in-house source.
 type CustomFeed struct {
 	Name      string `json:"name"` // source label shown in the score's reason; lowercase, [a-z0-9-]
-	URL       string `json:"url"`
+	URL       string `json:"url,omitempty"`
 	Format    string `json:"format"`
 	TokenFile string `json:"tokenFile,omitempty"` // sent as Authorization: Bearer
+	// PushTokenFile makes the feed a push feed (D89, D94): a feed plugin posts the file to POST /api/v1/feeds/{name}
+	// with this token as its bearer token, instead of Rampart pulling a URL. The query-api pods mount the file.
+	PushTokenFile string `json:"pushTokenFile,omitempty"`
 }
 
 // ParseFeedMirrorSpec validates a ClusterFeedMirror. What this version does not do is refused with the reason, not
@@ -99,7 +102,17 @@ func ParseFeedMirrorSpec(raw []byte) (*FeedMirrorSpec, error) {
 			return nil, fmt.Errorf("clusterfeedmirror: custom[%d].name %q must be unique, lowercase [a-z0-9-], and not a built-in feed's name", i, c.Name)
 		}
 		seen[c.Name] = true
-		if !httpURL(c.URL) {
+		switch {
+		case c.PushTokenFile != "" && c.URL != "":
+			return nil, fmt.Errorf("clusterfeedmirror: custom %s: url (pull) or pushTokenFile (push), not both", c.Name)
+		case c.PushTokenFile != "":
+			if c.Format != CustomFeedIntelJSONL {
+				return nil, fmt.Errorf("clusterfeedmirror: custom %s: a push feed is intel-jsonl; an OSV zip is pulled from a url", c.Name)
+			}
+			if err := checkTokenFile("custom "+c.Name+" push", c.PushTokenFile); err != nil {
+				return nil, err
+			}
+		case !httpURL(c.URL):
 			return nil, fmt.Errorf("clusterfeedmirror: custom %s.url must be an http(s) URL, got %q", c.Name, c.URL)
 		}
 		if c.Format != CustomFeedOSVZip && c.Format != CustomFeedIntelJSONL {

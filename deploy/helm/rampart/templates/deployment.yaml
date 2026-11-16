@@ -163,7 +163,22 @@ spec:
             - name: secrets
               mountPath: /etc/rampart/secrets
               readOnly: true
+            {{- if .Values.feeds.plugins }}
+            - name: feed-push-tokens
+              mountPath: /var/run/rampart/feeds
+              readOnly: true
+            {{- end }}
       volumes:
+        {{- if .Values.feeds.plugins }}
+        - name: feed-push-tokens
+          projected:
+            sources:
+              {{- range .Values.feeds.plugins }}
+              - secret:
+                  name: {{ .tokenSecret }}
+                  items: [{key: token, path: {{ .name }}/token}]
+              {{- end }}
+        {{- end }}
         - name: tmp
           emptyDir: {}
         - name: secrets

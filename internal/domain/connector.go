@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -102,6 +103,9 @@ const (
 	ConnectorTypeEmail           ConnectorType = "email"
 	ConnectorTypeWebhook         ConnectorType = "webhook"
 	ConnectorTypeDependencyTrack ConnectorType = "dependencyTrack"
+	// ConnectorTypePlugin uses an IntegrationPackage installed in the tenant (docs/19 §7, docs/16 D94): the tool is
+	// described as data, so adding one needs no release.
+	ConnectorTypePlugin ConnectorType = "plugin"
 
 	// Deferred post-Phase 3 connector types
 	ConnectorTypeGitLab      ConnectorType = "gitlab"
@@ -226,6 +230,15 @@ type ConnectorSpec struct {
 	Email           *EmailConnectorConfig           `json:"email,omitempty"`
 	Webhook         *WebhookConnectorConfig         `json:"webhook,omitempty"`
 	DependencyTrack *DependencyTrackConnectorConfig `json:"dependencyTrack,omitempty"`
+	Plugin          *PluginConnectorConfig          `json:"plugin,omitempty"`
+}
+
+// PluginConnectorConfig names the IntegrationPackage, the config validated against its configSchema, and the
+// Kubernetes Secret key that supplies each secret the package declares (D94).
+type PluginConnectorConfig struct {
+	Name    string                  `json:"name"`
+	Config  json.RawMessage         `json:"config,omitempty"`
+	Secrets map[string]SecretKeyRef `json:"secrets,omitempty"`
 }
 
 // ConnectorCheckInfo is what a connector's Check learns besides "it works" (D87): the account the connector acts as,
@@ -420,6 +433,19 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		}
 		if err := ValidateConnectorURLWithAllowlist(c.Spec.DependencyTrack.URL, allowlist); err != nil {
 			return fmt.Errorf("%w: invalid dependencyTrack url: %w", ErrConnectorInvalid, err)
+		}
+	case ConnectorTypePlugin:
+		// The package is checked by the caller that can read it (the operator, the router); here only the shape.
+		if c.Spec.Plugin == nil || strings.TrimSpace(c.Spec.Plugin.Name) == "" {
+			return fmt.Errorf("%w: plugin.name is required: the IntegrationPackage this connector uses", ErrConnectorInvalid)
+		}
+		for name, ref := range c.Spec.Plugin.Secrets {
+			if strings.TrimSpace(ref.Name) == "" || strings.TrimSpace(ref.Key) == "" {
+				return fmt.Errorf("%w: plugin.secrets.%s needs a secretRef name and key", ErrConnectorInvalid, name)
+			}
+		}
+		if c.Spec.Direction != "" && c.Spec.Direction != DirectionOutbound {
+			return fmt.Errorf("%w: a plugin connector is outbound in this version", ErrConnectorInvalid)
 		}
 	default:
 		return fmt.Errorf("%w: unrecognized connector type %q", ErrConnectorInvalid, c.Type)

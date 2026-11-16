@@ -26,7 +26,7 @@ type dtrackMockStore struct {
 func (m *dtrackMockStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
 	var out []domain.DTrackProjectRecord
 	for _, p := range m.unmappedProjects {
-		if p.TenantID == tenantID {
+		if p.TenantID == tenantID && p.SourceID == sourceID {
 			out = append(out, p)
 		}
 	}
@@ -77,7 +77,7 @@ func TestDTrackAPI_UnmappedProjectsAndMapping(t *testing.T) {
 	api.RegisterRoutes(mux)
 
 	// 1. List unmapped projects with adminToken -> 200 OK
-	reqList := httptest.NewRequest("GET", "/api/v1/dtrack/unmapped", nil)
+	reqList := httptest.NewRequest("GET", "/api/v1/sources/"+sourceID.String()+"/unmapped", nil)
 	reqList.Header.Set("Authorization", "Bearer "+adminToken)
 	recList := httptest.NewRecorder()
 	mux.ServeHTTP(recList, reqList)
@@ -102,8 +102,10 @@ func TestDTrackAPI_UnmappedProjectsAndMapping(t *testing.T) {
 
 	// 2. Viewer cannot map project -> 403 Forbidden
 	appID := uuid.New()
-	mapBody, _ := json.Marshal(map[string]any{"application_id": appID})
-	reqViewerMap := httptest.NewRequest("POST", "/api/v1/dtrack/projects/"+projUUID+"/map", bytes.NewReader(mapBody))
+	_ = st.CreateApplication(context.Background(), &domain.Application{ID: appID, TenantID: tenantID, Name: "payments", Slug: "payments"})
+	mapPath := "/api/v1/sources/" + sourceID.String() + "/map"
+	mapBody, _ := json.Marshal(map[string]any{"project_uuid": projUUID, "application_id": appID})
+	reqViewerMap := httptest.NewRequest("POST", mapPath, bytes.NewReader(mapBody))
 	reqViewerMap.Header.Set("Authorization", "Bearer "+viewerToken)
 	reqViewerMap.Header.Set("Content-Type", "application/json")
 	recViewerMap := httptest.NewRecorder()
@@ -114,7 +116,17 @@ func TestDTrackAPI_UnmappedProjectsAndMapping(t *testing.T) {
 	}
 
 	// 3. Admin maps project -> 200 OK
-	reqAdminMap := httptest.NewRequest("POST", "/api/v1/dtrack/projects/"+projUUID+"/map", bytes.NewReader(mapBody))
+	// A project of another source is not mapped through this one (docs/23 DT6: the route names the source).
+	otherPath := "/api/v1/sources/" + uuid.NewString() + "/map"
+	reqOther := httptest.NewRequest("POST", otherPath, bytes.NewReader(mapBody))
+	reqOther.Header.Set("Authorization", "Bearer "+adminToken)
+	recOther := httptest.NewRecorder()
+	mux.ServeHTTP(recOther, reqOther)
+	if recOther.Code != http.StatusNotFound {
+		t.Fatalf("another source's project: %d", recOther.Code)
+	}
+
+	reqAdminMap := httptest.NewRequest("POST", mapPath, bytes.NewReader(mapBody))
 	reqAdminMap.Header.Set("Authorization", "Bearer "+adminToken)
 	reqAdminMap.Header.Set("Content-Type", "application/json")
 	recAdminMap := httptest.NewRecorder()

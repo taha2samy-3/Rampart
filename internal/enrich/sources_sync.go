@@ -55,6 +55,7 @@ type optionalSource struct {
 	url    string
 	token  string
 	format string // custom feeds only
+	push   bool   // a feed plugin pushes the file (D94); there is no url to pull
 }
 
 // optionalSources resolves the sources the mirror switches on. With egress deny, a source without its own URL is
@@ -97,7 +98,7 @@ func optionalSources(m *domain.FeedMirrorSpec) (srcs []optionalSource, keep []st
 			errs = append(errs, fmt.Errorf("%s: %w", c.Name, err))
 			continue
 		}
-		srcs = append(srcs, optionalSource{name: c.Name, url: c.URL, token: tok, format: c.Format})
+		srcs = append(srcs, optionalSource{name: c.Name, url: c.URL, token: tok, format: c.Format, push: c.PushTokenFile != ""})
 	}
 	return srcs, keep, errs
 }
@@ -156,6 +157,8 @@ func redact(u string) string {
 // syncOptional runs one source and returns the number of records it wrote.
 func (s *FeedSyncer) syncOptional(ctx context.Context, cfg FeedConfig, src optionalSource) (int, error) {
 	switch {
+	case src.push:
+		return s.syncPushed(ctx, src)
 	case src.name == SourceExploitDB:
 		return s.syncRows(ctx, cfg, src, maxSourceBytes, ParseExploitDB)
 	case src.name == SourceMetasploit:
@@ -477,4 +480,23 @@ func (s *FeedSyncer) syncOptionalAll(ctx context.Context, cfg FeedConfig, m *dom
 		log.Info("feed synced", "feed", src.name, "records", n)
 	}
 	return errs
+}
+
+// syncPushed loads the file a feed plugin last pushed (D94). The API checked the token and the whole file before
+// staging it; it is parsed again here, because this is the writer. Nothing staged yet is not an error: the feed's
+// earlier rows stay (the source is in keep).
+func (s *FeedSyncer) syncPushed(ctx context.Context, src optionalSource) (int, error) {
+	var body []byte
+	err := s.pool.QueryRow(ctx, `SELECT body FROM feed_push WHERE feed = $1`, src.name).Scan(&body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	rows, err := ParseIntelJSONL(bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	return s.ReplaceExploitation(ctx, src.name, rows)
 }

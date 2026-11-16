@@ -202,6 +202,44 @@ stringData:
   apiKey: <odt_api_key>
 `,
 	}, DependencyTrackConnectorConfig{}},
+	{ConnectorCatalogueEntry{
+		Type: ConnectorTypePlugin, Name: "Installed package", Kind: "notifier", ConfigKey: "plugin",
+		Directions:  []ConnectorDirection{DirectionOutbound},
+		Description: "Any tool described by an IntegrationPackage installed in this namespace: a request template, the secrets it needs and the hosts it may reach. A new tool needs no Rampart release (docs/19 §6, D94). This version runs declarative notifiers.",
+		Secrets:     []CatalogueSecret{{Field: "secrets.<name>", Holds: "each secret the package declares", Purpose: "read by the package's templates as {{ secrets.<name> }}"}},
+		Example: `apiVersion: rampart.aspm.dev/v1alpha1
+kind: Connector
+metadata: {name: chat-sec, namespace: <tenant-namespace>}
+spec:
+  type: plugin
+  plugin:
+    name: google-chat
+    secrets:
+      webhookUrl: {name: chat-sec-hook, key: url}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: IntegrationPackage
+metadata: {name: google-chat, namespace: <tenant-namespace>}
+spec:
+  kind: notifier
+  runtime: declarative
+  version: 1.0.0
+  secrets: [{name: webhookUrl}]
+  egress: [chat.googleapis.com]
+  send:
+    request:
+      method: POST
+      url: "{{ secrets.webhookUrl }}"
+      json: {text: "*{{ message.title }}*  {{ message.summary }}  <{{ message.url }}|Open in Rampart>"}
+    expect: "status == 200"
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: chat-sec-hook, namespace: <tenant-namespace>}
+stringData:
+  url: <https://chat.googleapis.com/v1/spaces/...>
+`,
+	}, PluginConnectorConfig{}},
 }
 
 // ConnectorCatalogue lists the connector types this build supports, with their schemas (D82).

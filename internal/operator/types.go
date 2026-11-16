@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"encoding/json"
 	"time"
 
 	"rampart/internal/domain"
@@ -121,6 +122,10 @@ type ScanSourceSpec struct {
 	SecretRef       *SecretRef              `json:"secretRef,omitempty"`
 	IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy,omitempty"`
 	TrustRules      []domain.TrustRule      `json:"trustRules,omitempty"`
+	// Connector, Schedule and DependencyTrack make the source pull from Dependency-Track (docs/10 §8, D92).
+	Connector       string          `json:"connector,omitempty"`
+	Schedule        string          `json:"schedule,omitempty"`
+	DependencyTrack json.RawMessage `json:"dependencyTrack,omitempty"`
 }
 
 type ScanSourceStatus struct {

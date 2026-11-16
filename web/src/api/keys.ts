@@ -20,6 +20,7 @@ export const qk = {
   applications: {
     list: () => ['applications', 'list'] as const,
     one: (id: string) => ['applications', 'one', id] as const,
+    trend: (id: string, days: number) => ['applications', 'trend', id, days] as const,
   },
   overview: () => ['overview'] as const,
   trend: (metric: string, days: number) => ['trend', metric, days] as const,
@@ -50,6 +51,7 @@ export const qk = {
   connectors: {
     all: () => ['connectors'] as const,
     list: () => ['connectors', 'list'] as const,
+    packages: () => ['connectors', 'packages'] as const,
   },
   inventory: {
     all: () => ['inventory'] as const,
@@ -61,7 +63,9 @@ export const qk = {
   },
   dtrack: {
     all: () => ['dtrack'] as const,
-    unmapped: () => ['dtrack', 'unmapped'] as const,
+    sources: () => ['dtrack', 'sources'] as const,
+    unmapped: (source: string) => ['dtrack', 'unmapped', source] as const,
+    decisions: (source: string) => ['dtrack', 'decisions', source] as const,
   },
   parsers: {
     all: () => ['parsers'] as const,

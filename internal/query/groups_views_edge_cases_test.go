@@ -113,6 +113,7 @@ func TestFindingGroups_EdgeCases(t *testing.T) {
 		_ = json.Unmarshal(createW.Body.Bytes(), &grp)
 
 		fID := uuid.New()
+		_ = st.UpsertFindings(context.Background(), tenantID, []*domain.Finding{{ID: fID, TenantID: tenantID, FindingKey: "k-dedup", ApplicationID: uuid.New(), Title: "x", Severity: domain.SeverityHigh, State: domain.StateOpen}})
 		// Add duplicate IDs in request
 		memBody, _ := json.Marshal(map[string]any{"finding_ids": []uuid.UUID{fID, fID, fID}})
 		addReq := httptest.NewRequest("POST", "/api/v1/groups/"+grp.ID.String()+"/members", bytes.NewReader(memBody))
@@ -259,11 +260,12 @@ func TestExports_EdgeCases(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
 
-		req := httptest.NewRequest("GET", "/api/v1/events", nil).WithContext(ctx)
+		api.SetLiveHub(query.NewLiveHub(&fakeLiveSource{}, nil))
+		req := httptest.NewRequest("GET", "/api/v1/stream", nil).WithContext(ctx)
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 
-		mux.ServeHTTP(w, req)
+		mux.ServeHTTP(w, req) // returns when the context ends
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK for SSE stream, got %d", w.Code)
 		}

@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 37
+  minSchemaVersion: 42
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -99,6 +99,15 @@ feeds:
   epssUrl: ""
   osvBaseUrl: ""
   osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
+  # Feed plugins (docs/16 D89, D94): one CronJob per plugin, each a container that fetches a vulnerability database
+  # and posts it as intel-jsonl to /api/v1/feeds/<name>. tokenSecret holds key "token"; the same Secret is mounted
+  # into Rampart at /var/run/rampart/feeds/<name>/token, which the ClusterFeedMirror names as pushTokenFile.
+  plugins: []
+  #  - name: vulndb
+  #    image: registry.example.com/vulndb-to-intel:1.0.0
+  #    schedule: "0 */6 * * *"
+  #    tokenSecret: rampart-feed-vulndb
+  #    env: [{name: VULNDB_API_KEY, valueFrom: {secretKeyRef: {name: vulndb-licence, key: apiKey}}}]
 
 # Retention (docs/16 D53): how long each kind of data is kept, in days; 0 keeps it for ever. The server removes
 # tenant data every interval as the application role. The partitioned event and audit logs are maintained by the

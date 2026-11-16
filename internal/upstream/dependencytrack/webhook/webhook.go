@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/store"
@@ -22,9 +23,16 @@ type SecretResolver interface {
 	GetSecretMaterial(ctx context.Context, tenantID uuid.UUID, key string) ([]byte, error)
 }
 
-// ProjectSyncer triggers a project sync pass.
+// ProjectSyncer schedules a project sync. In the server it is the dtrack-sync River queue (D92): a sync survives a
+// restart, is bounded in number, and takes its turn with other tenants' work (D25). It was a bare goroutine with
+// context.Background() (docs/23 K6).
 type ProjectSyncer interface {
-	SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string) error
+	EnqueueDTrackProject(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string, delay time.Duration) error
+}
+
+// SourceConfig says whether a source has turned its webhook on. A store without it accepts the webhook.
+type SourceConfig interface {
+	GetDTrackSource(ctx context.Context, tenantID, sourceID uuid.UUID) (*store.DTrackSource, error)
 }
 
 // Handler handles incoming Dependency-Track webhook notifications.
@@ -109,6 +117,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A source that has not turned the webhook on does not answer it (docs/10 §8 webhook.enabled).
+	if sc, ok := h.store.(SourceConfig); ok {
+		src, err := sc.GetDTrackSource(ctx, tenantID, sourceID)
+		if err != nil || src == nil || !src.Spec.Webhook.Enabled {
+			http.Error(w, "source not found", http.StatusNotFound)
+			return
+		}
+	}
+
 	// 3. Authenticate Bearer secret in constant time (docs/21 §4.3)
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -138,9 +155,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Read body bounded to MaxWebhookBodyBytes
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxWebhookBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxWebhookBodyBytes+1))
 	if err != nil {
 		http.Error(w, "failed reading body", http.StatusBadRequest)
+		return
+	}
+	if len(body) > MaxWebhookBodyBytes {
+		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -178,14 +199,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if shouldStart && h.syncer != nil {
-			go func(proj string) {
-				_ = h.syncer.SyncProject(context.Background(), tenantID, sourceID, proj)
-			}(pUUID)
+			if err := h.syncer.EnqueueDTrackProject(ctx, tenantID, sourceID, pUUID, 0); err != nil {
+				h.logger.Error("failed enqueuing dtrack sync job", "project", pUUID, "error", err)
+			}
 		}
 	}
 
 	// 7. Acknowledge with 202 Accepted
-	w.WriteHeader(http.StatusAccepted)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write([]byte(`{"status":"accepted"}`))
 }

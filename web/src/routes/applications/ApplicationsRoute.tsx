@@ -4,10 +4,9 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { listApplications, qk, toProblem } from '@/api';
 import type { AppSummary } from '@/api/types';
-import { BandShape, EmptyState, ProblemMessage, ScoreBar, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
-import { openText, worstBand } from '@/lib/apps';
+import { BandMixBar, EmptyState, ProblemMessage, ScoreBar, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
+import { openText } from '@/lib/apps';
 import { absoluteDate, shortAge } from '@/lib/format';
-import { toBand } from '@/lib/band';
 
 /** Applications, the riskiest first (docs/13). A row opens the application page. */
 export function ApplicationsRoute() {
@@ -18,6 +17,8 @@ export function ApplicationsRoute() {
   }, [t]);
   const q = useQuery({ queryKey: qk.applications.list(), queryFn: ({ signal }) => listApplications(signal) });
   const rows = q.data ?? [];
+  // one scale for every row, so the bars compare across applications (D93)
+  const maxOpen = Math.max(1, ...rows.map((a) => a.open.critical + a.open.high + a.open.medium + a.open.low));
 
   let body: React.ReactNode;
   if (q.isPending) {
@@ -55,7 +56,7 @@ export function ApplicationsRoute() {
         </THead>
         <TBody>
           {rows.map((a, i) => (
-            <AppRow key={a.id} app={a} index={i} onOpen={() => void navigate({ to: '/applications/$id', params: { id: a.id } })} />
+            <AppRow key={a.id} app={a} index={i} maxOpen={maxOpen} onOpen={() => void navigate({ to: '/applications/$id', params: { id: a.id } })} />
           ))}
         </TBody>
       </Table>
@@ -69,9 +70,8 @@ export function ApplicationsRoute() {
   );
 }
 
-function AppRow({ app, index, onOpen }: { app: AppSummary; index: number; onOpen: () => void }) {
+function AppRow({ app, index, maxOpen, onOpen }: { app: AppSummary; index: number; maxOpen: number; onOpen: () => void }) {
   const { t } = useTranslation();
-  const worst = worstBand(app.open);
   const text = openText(app.open, t);
   return (
     <Tr
@@ -92,11 +92,9 @@ function AppRow({ app, index, onOpen }: { app: AppSummary; index: number; onOpen
           {app.internet_facing ? `, ${t('apps.internetFacing')}` : ''}
         </span>
       </Td>
-      <Td className="@max-[700px]/list:hidden">
-        <span className="flex items-center gap-2">
-          {worst && <BandShape band={toBand(worst)} size={12} />}
-          <span className={text ? '' : 'text-ink-2'}>{text || t('apps.noOpen')}</span>
-        </span>
+      <Td className="py-0 @max-[700px]/list:hidden">
+        <BandMixBar open={app.open} max={maxOpen} label={text || t('apps.noOpen')} />
+        <span className={`mt-1 block truncate text-[11.5px] leading-4 ${text ? '' : 'text-ink-2'}`}>{text || t('apps.noOpen')}</span>
       </Td>
       <Td>
         <span className="flex items-center gap-2">

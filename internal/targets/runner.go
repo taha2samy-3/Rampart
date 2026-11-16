@@ -15,6 +15,9 @@ import (
 	"rampart/internal/operator"
 	"rampart/internal/scoring"
 	"rampart/internal/secrets"
+	dtclient "rampart/internal/upstream/dependencytrack/client"
+	dtservice "rampart/internal/upstream/dependencytrack/service"
+	dtwebhook "rampart/internal/upstream/dependencytrack/webhook"
 	"rampart/internal/workflow"
 	"strings"
 	"time"
@@ -227,9 +230,13 @@ func (r *Runner) Run(ctx context.Context) error {
 	trackerResolver := connectors.NewDefaultTrackerResolver(storeBackend, secretResolver, safeClient, r.cfg.Server.PublicURL)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
+	// The dtrack-sync worker is registered with River now; its handler is set once the service exists (D92).
+	dtWorker := &jobs.DTrackSyncWorker{}
+	var dtHandler *dtwebhook.Handler
+	var dtEnqueuer query.DTrackEnqueuer
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
-		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse))
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, dtWorker))
 		if err != nil {
 			return fmt.Errorf("initializing river job queue: %w", err)
 		}
@@ -243,6 +250,23 @@ func (r *Runner) Run(ctx context.Context) error {
 		}()
 		queue = riverQ
 		r.logger.Info("river job queue started (PostgreSQL backed)")
+
+		// Dependency-Track (docs/10, D92, docs/23 K5): syncs run as dtrack_sync jobs, a schedule starts the portfolio
+		// syncs, and the webhook only enqueues. The schedule lists every tenant's sources, so it needs the system role.
+		dtEngine := ingest.NewEngine(storeBackend)
+		dtEngine.SetScorer(scorer)
+		httpFor := func(tenantID uuid.UUID) (dtclient.HTTPDoer, *domain.PlatformSSRFAllowlist) {
+			return safeClient.Scoped(tenantID, domain.ConnectorTypeDependencyTrack), allowlist.ScopedTo(tenantID, domain.ConnectorTypeDependencyTrack)
+		}
+		if sysStore != nil && secretResolver != nil {
+			dtService := dtservice.New(pgStore, sysStore, secretResolver, httpFor, dtEngine, riverQ, r.logger)
+			dtWorker.Handle = dtService.Handle
+			go dtService.RunScheduler(ctx, sysStore.Pool())
+			dtHandler = dtwebhook.NewHandler(pgStore, secretResolver, riverQ)
+			dtEnqueuer = riverQ
+		} else {
+			r.logger.Warn("dependency-track: the sync needs the system database role (database.systemUrl); DT sources are not synced")
+		}
 	}
 
 	// D4: declarative configuration (tenants, namespaces, sources) is written by rampart_system.
@@ -262,6 +286,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
+	if dtEnqueuer != nil {
+		queryAPI.SetDTrackEnqueuer(dtEnqueuer)
+	}
 	queryAPI.SetSSRFAllowlist(allowlist) // the connector dry-run validation applies the same scoped allowlist (D77, D82)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
@@ -284,6 +311,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		} else {
 			r.logger.Warn("tickets: the ticket sweeper needs the system database role (database.systemUrl); critical findings are reserved but no ticket will be opened")
 		}
+	}
+	// Live updates (D91): every replica polls live_event once for all its streams. It reads across tenants, so it
+	// needs the system role; without it /api/v1/stream answers 503 and the UI polls.
+	if sysStore != nil {
+		hub := query.NewLiveHub(sysStore, r.logger)
+		queryAPI.SetLiveHub(hub)
+		go hub.Run(ctx)
 	}
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
 	if pgStore != nil {
@@ -374,6 +408,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		// Public callbacks live under /hooks on the write path (docs/04, 11, 15; D78), addressed by the connector id.
 		mux.Handle("POST /hooks/jira/{id}", inboundHandler)
 		mux.Handle("POST /hooks/github/{id}", inboundHandler)
+		if dtHandler != nil { // addressed by the ScanSource id; the bearer secret is the source's (docs/10 §8)
+			mux.Handle("POST /hooks/dependency-track/{id}", dtHandler)
+		}
 	}
 
 	if isAll || contains(targetList, "query-api") {

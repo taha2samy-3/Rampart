@@ -44,3 +44,15 @@ export function dueShort(iso: string | undefined | null, now = Date.now()): { te
   if (days === 0) return { text: 'today', late: false };
   return days > 0 ? { text: `in ${days}d`, late: false } : { text: `${-days}d late`, late: true };
 }
+
+/** Recent times at the scale of a sync schedule: "just now", "12 min ago", "3 h ago", then days. */
+export function sinceShort(iso: string | undefined | null, now = Date.now()): string {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  const min = Math.floor((now - t) / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 24 * 60) return `${Math.floor(min / 60)} h ago`;
+  return relativeDays(iso, now);
+}

@@ -42,6 +42,11 @@ Sketch of the v1 schema. Final DDL lives in `internal/store/migrations` (goose).
 > | Policy `webhook_lookup` on `connector`: one row by id for inbound webhooks (35) | D78 |
 > | `cluster_policy.kind` admits `feeds` for `ClusterFeedMirror` (36) | D86 |
 > | `vulnerability_exploitation` (source, exploited, maturity none/poc/weaponized), written by the system role, each source replaces its rows (37) | D88 |
+> | `finding_group.application_id` (null = tenant-wide, admin only) and the group's ticket reservation (`ticket_status`, `ticket_attempts`, `ticket_next_at`, `ticket_error`, `ticket_requested_by`, `ticket_id`); index `finding (tenant_id, application_id, correlation_key)` for one ticket per correlation group. `group_by` and the key are still not stored: groups are made by hand (38) | D90 |
+> | `live_event` (topic ingests/findings/operations, application, `xact`), written by statement triggers on `finding`, `ingest_run`, `held_close`, `risk_acceptance`, `notification`, `finding_group`; one row per (tenant, topic, application) per transaction; pruned after an hour (39) | D91 |
+> | `scan_source.connector`, `dtrack_spec`, `schedule_seconds`, `last_portfolio_sync_at`, `last_portfolio_error`; policy `webhook_lookup` on `scan_source`; `dtrack_decision` (DT's analysis per finding, `applied`) (40) | D92 |
+> | `integration_package` (tenant, name, kind, runtime, version, spec, error) (41) | D94 |
+> | `feed_push` (feed, body, sha256, records), global; written by the application role, loaded by the system role (42) | D94 |
 >
 > From schema version 6 on, each decision in 16 names its migration; `internal/store/migrations` is the DDL.
 

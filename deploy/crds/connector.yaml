@@ -45,6 +45,7 @@ spec:
                     - email
                     - webhook
                     - dependencyTrack
+                    - plugin
                 direction:
                   type: string
                   enum:
@@ -226,6 +227,26 @@ spec:
                       type: object
                       additionalProperties:
                         type: string
+                plugin:
+                  type: object
+                  description: An IntegrationPackage of this namespace, its config and the Secret key for each secret it declares (docs/16 D94).
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                    config:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    secrets:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        required: [name, key]
+                        properties:
+                          name:
+                            type: string
+                          key:
+                            type: string
                 dependencyTrack:
                   type: object
                   properties:

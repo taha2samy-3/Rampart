@@ -1,6 +1,7 @@
 package query
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -108,6 +109,62 @@ func (a *API) handleApplicationSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+type bandTrender interface {
+	AppBandTrend(ctx context.Context, tenantID, appID uuid.UUID, days int) ([]store.BandTrendPoint, error)
+	AppAging(ctx context.Context, tenantID, appID uuid.UUID) (store.AgeBuckets, error)
+}
+
+// handleApplicationTrend is GET /api/v1/applications/{id}/trend?days=90: the application's open findings per day
+// and per band, for the charts of the application page.
+func (a *API) handleApplicationTrend(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	bt, ok := a.store.(bandTrender)
+	if !ok {
+		problem(w, http.StatusNotImplemented, "unsupported", "Aggregates need PostgreSQL")
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		problem(w, http.StatusNotFound, "not-found", "Application not found")
+		return
+	}
+	if app, err := a.store.GetApplication(r.Context(), tenantID, id); err != nil || app == nil {
+		problem(w, http.StatusNotFound, "not-found", "Application not found")
+		return
+	}
+	days := 90
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v >= 7 && v <= 180 {
+		days = v
+	}
+	pts, err := bt.AppBandTrend(r.Context(), tenantID, id, days)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to compute the trend")
+		return
+	}
+	type point struct {
+		Day      string `json:"day"`
+		Critical int    `json:"critical"`
+		High     int    `json:"high"`
+		Medium   int    `json:"medium"`
+		Low      int    `json:"low"`
+		New      int    `json:"new"`
+		Fixed    int    `json:"fixed"`
+	}
+	out := make([]point, 0, len(pts))
+	for _, p := range pts {
+		out = append(out, point{Day: p.Day.UTC().Format("2006-01-02"), Critical: p.Bands["critical"], High: p.Bands["high"], Medium: p.Bands["medium"], Low: p.Bands["low"], New: p.New, Fixed: p.Fixed})
+	}
+	aging, err := bt.AppAging(r.Context(), tenantID, id)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to compute the ages")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "points": out, "aging": aging})
 }
 
 func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
