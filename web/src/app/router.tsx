@@ -1,6 +1,6 @@
 import {
   createRootRoute, createRoute, createRouter, createMemoryHistory, Outlet, redirect,
-  useLocation, useNavigate, lazyRouteComponent, type RouterHistory,
+  useLocation, useNavigate, type RouterHistory,
 } from '@tanstack/react-router';
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,16 +17,16 @@ import { NAV_ITEMS } from './nav';
 import { useApp } from './session';
 import { Shell } from './Shell';
 
-const ApplicationRoute = lazyRouteComponent(() => import('@/routes/applications/ApplicationRoute'), 'ApplicationRoute');
-const ApplicationsRoute = lazyRouteComponent(() => import('@/routes/applications/ApplicationsRoute'), 'ApplicationsRoute');
-const AdministrationRoute = lazyRouteComponent(() => import('@/routes/administration/AdministrationRoute'), 'AdministrationRoute');
-const ComplianceRoute = lazyRouteComponent(() => import('@/routes/compliance/ComplianceRoute'), 'ComplianceRoute');
-const IngestionRoute = lazyRouteComponent(() => import('@/routes/ingestion/IngestionRoute'), 'IngestionRoute');
-const IntegrationsRoute = lazyRouteComponent(() => import('@/routes/integrations/IntegrationsRoute'), 'IntegrationsRoute');
-const InventoryRoute = lazyRouteComponent(() => import('@/routes/inventory/InventoryRoute'), 'InventoryRoute');
-const OverviewRoute = lazyRouteComponent(() => import('@/routes/overview/OverviewRoute'), 'OverviewRoute');
-const VulnerabilitiesRoute = lazyRouteComponent(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute'), 'VulnerabilitiesRoute');
-const WorkflowRoute = lazyRouteComponent(() => import('@/routes/workflow/WorkflowRoute'), 'WorkflowRoute');
+const ApplicationRoute = lazy(() => import('@/routes/applications/ApplicationRoute').then((m) => ({ default: m.ApplicationRoute })));
+const ApplicationsRoute = lazy(() => import('@/routes/applications/ApplicationsRoute').then((m) => ({ default: m.ApplicationsRoute })));
+const AdministrationRoute = lazy(() => import('@/routes/administration/AdministrationRoute').then((m) => ({ default: m.AdministrationRoute })));
+const ComplianceRoute = lazy(() => import('@/routes/compliance/ComplianceRoute').then((m) => ({ default: m.ComplianceRoute })));
+const IngestionRoute = lazy(() => import('@/routes/ingestion/IngestionRoute').then((m) => ({ default: m.IngestionRoute })));
+const IntegrationsRoute = lazy(() => import('@/routes/integrations/IntegrationsRoute').then((m) => ({ default: m.IntegrationsRoute })));
+const InventoryRoute = lazy(() => import('@/routes/inventory/InventoryRoute').then((m) => ({ default: m.InventoryRoute })));
+const OverviewRoute = lazy(() => import('@/routes/overview/OverviewRoute').then((m) => ({ default: m.OverviewRoute })));
+const VulnerabilitiesRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute').then((m) => ({ default: m.VulnerabilitiesRoute })));
+const WorkflowRoute = lazy(() => import('@/routes/workflow/WorkflowRoute').then((m) => ({ default: m.WorkflowRoute })));
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
