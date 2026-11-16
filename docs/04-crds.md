@@ -407,12 +407,12 @@ OIDC or SAML configuration per tenant or platform-wide. Full reference: [14-sso-
 kind: ClusterFeedMirror
 metadata: {name: airgap}
 spec:
-  nvd:  {url: https://mirror.internal/nvd/,  schedule: "0 2 * * *"}
-  osv:  {url: https://mirror.internal/osv/,  schedule: "0 3 * * *"}
-  epss: {url: https://mirror.internal/epss/, schedule: "0 4 * * *"}
-  kev:  {url: https://mirror.internal/kev/known_exploited_vulnerabilities.json, schedule: "0 */6 * * *"}
-  cwe:  {url: https://mirror.internal/cwe/cwec_latest.xml.zip, schedule: "0 5 * * 0"}
-  egress: deny                                   # deny all other outbound calls
+  nvd:  {url: https://mirror.internal/nvd/rest/json/cves/2.0}
+  osv:  {url: https://mirror.internal/osv}
+  epss: {url: https://mirror.internal/epss/epss_scores-current.csv.gz}
+  kev:  {url: https://mirror.internal/kev/known_exploited_vulnerabilities.json}
+  egress: deny                                   # a feed without a mirror is not read at all
+# Built (D86): every feed runs every feeds.interval; a per-feed schedule and the cwe feed are refused with the reason.
 status: {nvd: {lastSync: ..., records: 285000}, kev: {lastSync: ..., records: 1340}}
 ```
 

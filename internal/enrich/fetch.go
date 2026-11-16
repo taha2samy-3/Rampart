@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"rampart/internal/domain"
 	"strings"
 	"time"
 
@@ -38,9 +39,16 @@ type FeedConfig struct {
 	EPSSURL       string
 	OSVBaseURL    string
 	OSVEcosystems []string // empty: OSV is not synced (it is large, so it is opt-in)
-	Interval      time.Duration
-	HTTPClient    *http.Client
-	TempDir       string
+	// NVD (D86): on by default. The API key raises NIST's limit from 5 to 50 requests per 30 seconds.
+	NVDURL       string
+	NVDAPIKey    string
+	NVDDisabled  bool
+	NVDPageDelay time.Duration // tests only; zero picks the delay NIST asks for
+	// Mirror returns the ClusterFeedMirror in force, read at the start of every round (D86); nil when none.
+	Mirror     func(ctx context.Context) (*domain.FeedMirrorSpec, error)
+	Interval   time.Duration
+	HTTPClient *http.Client
+	TempDir    string
 	// OnSynced runs after a round that changed the feeds, so findings can be re-scored (docs/16 D28).
 	OnSynced func(ctx context.Context)
 }
@@ -51,6 +59,9 @@ func (c *FeedConfig) defaults() {
 	}
 	if c.EPSSURL == "" {
 		c.EPSSURL = DefaultEPSSURL
+	}
+	if c.NVDURL == "" {
+		c.NVDURL = DefaultNVDURL
 	}
 	if c.OSVBaseURL == "" {
 		c.OSVBaseURL = DefaultOSVBaseURL
@@ -64,6 +75,39 @@ func (c *FeedConfig) defaults() {
 }
 
 // get downloads url, refusing bodies over max bytes, and returns the body.
+// applyMirror points each feed at its mirror. With egress deny, a feed that has no mirror is not read at all; it
+// reports whether KEV and EPSS are to be skipped (NVD and OSV are switched off in the config itself).
+func (c *FeedConfig) applyMirror(m *domain.FeedMirrorSpec, log *slog.Logger) (skipKEV, skipEPSS bool) {
+	if m == nil {
+		return false, false
+	}
+	deny := m.Egress == "deny"
+	if m.KEV != nil {
+		c.KEVURL = m.KEV.URL
+	} else if deny {
+		skipKEV = true
+	}
+	if m.EPSS != nil {
+		c.EPSSURL = m.EPSS.URL
+	} else if deny {
+		skipEPSS = true
+	}
+	if m.NVD != nil {
+		c.NVDURL = m.NVD.URL
+	} else if deny {
+		c.NVDDisabled = true
+	}
+	if m.OSV != nil {
+		c.OSVBaseURL = strings.TrimSuffix(m.OSV.URL, "/")
+	} else if deny {
+		c.OSVEcosystems = nil
+	}
+	if deny {
+		log.Info("feeds: egress deny; feeds without a mirror are not read", "kev", !skipKEV, "epss", !skipEPSS, "nvd", !c.NVDDisabled, "osv", len(c.OSVEcosystems) > 0)
+	}
+	return skipKEV, skipEPSS
+}
+
 func (c *FeedConfig) get(ctx context.Context, url string, max int64) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -108,8 +152,18 @@ func (l *limitedBody) Close() error { return l.c.Close() }
 func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logger) error {
 	cfg.defaults()
 	var errs []error
+	skipKEV, skipEPSS := false, false
+	if cfg.Mirror != nil {
+		m, err := cfg.Mirror(ctx)
+		if err != nil {
+			return fmt.Errorf("feeds: reading the ClusterFeedMirror: %w", err)
+		}
+		skipKEV, skipEPSS = cfg.applyMirror(m, log)
+	}
 
-	if body, err := cfg.get(ctx, cfg.KEVURL, maxKEVBytes); err != nil {
+	if skipKEV {
+		// egress deny without a KEV mirror: not read (D86)
+	} else if body, err := cfg.get(ctx, cfg.KEVURL, maxKEVBytes); err != nil {
 		s.recordFeedError(ctx, "cisa_kev", err)
 		errs = append(errs, fmt.Errorf("kev: %w", err))
 	} else {
@@ -122,7 +176,9 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		}
 	}
 
-	if body, err := cfg.get(ctx, cfg.EPSSURL, maxEPSSBytes); err != nil {
+	if skipEPSS {
+		// egress deny without an EPSS mirror: not read (D86)
+	} else if body, err := cfg.get(ctx, cfg.EPSSURL, maxEPSSBytes); err != nil {
 		s.recordFeedError(ctx, "first_epss", err)
 		errs = append(errs, fmt.Errorf("epss: %w", err))
 	} else {
@@ -144,6 +200,19 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 			errs = append(errs, fmt.Errorf("epss: %w", err))
 		} else {
 			log.Info("feed synced", "feed", "first_epss", "records", n)
+		}
+	}
+
+	if !cfg.NVDDisabled {
+		started := time.Now()
+		n, err := s.syncNVD(ctx, cfg)
+		if err != nil {
+			s.recordFeedError(ctx, "nvd", err)
+			errs = append(errs, fmt.Errorf("nvd: %w", err))
+		} else if err := s.recordNVDSuccess(ctx, started, int64(n)); err != nil {
+			errs = append(errs, err)
+		} else {
+			log.Info("feed synced", "feed", "nvd", "records", n)
 		}
 	}
 

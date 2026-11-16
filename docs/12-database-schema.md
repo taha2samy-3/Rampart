@@ -40,6 +40,7 @@ Sketch of the v1 schema. Final DDL lives in `internal/store/migrations` (goose).
 > | `dtrack_sync`, `dtrack_project`; Dependency-Track-specific instead of the generic `upstream_project` and `upstream_cursor` below, a departure recorded in docs/23 DT6 (32) | D74 |
 > | `finding_group`, `finding_group_member` (without the `application_id`, `group_by` and key below; docs/23 C8), `saved_view` (33) | D76 |
 > | Policy `webhook_lookup` on `connector`: one row by id for inbound webhooks (35) | D78 |
+> | `cluster_policy.kind` admits `feeds` for `ClusterFeedMirror` (36) | D86 |
 >
 > From schema version 6 on, each decision in 16 names its migration; `internal/store/migrations` is the DDL.
 

@@ -187,7 +187,7 @@ The review answers three questions:
 - **Basis**: D22, D30; OpenID Connect Core §10.1.1; the `jwks-rsa` library's `jwksRequestsPerMinute` option as an example of the limit; GitHub's OIDC reference (define conditions beyond the repository).
 
 ### E1 (P1) Exports
-- **Status (D84):** CSV defused; a cut export says so. OCSF class left open after reading the 1.3.0 schema. SBOM export and the asynchronous large export not built.
+- **Status (D84, D86):** CSV defused; a cut export says so; OCSF is class 2007 as ADR 0003 decided, with the 1.5.0 required attributes. SBOM export and the asynchronous large export not built.
 - **OCSF class**: D76 writes class 2001 (Security Finding). ADR 0003, research/03 §8 and 01 G4 chose 2007 (Application Security Posture Finding), and 2001 is deprecated in favour of 2002, 2003 and 2004. Use 2002 for `sca` and `container` findings and 2007 for code findings, or 2007 for everything. Check the class against the OCSF version targeted, and write that version in `metadata.version`.
 - **CSV**: defuse cells that start with `=`, `+`, `-`, `@`, a tab or a CR, as D46 does for the audit export.
 - **Size**: docs 02 §4, 11 and 13 say a long export answers `202` with an operation and a signed link. D76 streams through the API and stops at 50,000 rows without telling the client. Return `X-Next-Cursor` or a problem response when the stream stops, and use the operation path for anything larger.

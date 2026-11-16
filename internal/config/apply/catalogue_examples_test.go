@@ -36,3 +36,15 @@ func TestConnectorCatalogueExamplesApply(t *testing.T) {
 		}
 	}
 }
+
+// D86: a ClusterFeedMirror is applied like the other cluster-wide resources; an unsupported field is refused.
+func TestApply_ClusterFeedMirror(t *testing.T) {
+	ctx := context.Background()
+	applier := apply.NewApplier(apply.NewMemoryConfigStore())
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"ClusterFeedMirror","metadata":{"name":"airgap"},"spec":{"kev":{"url":"https://mirror.internal/kev.json"},"egress":"deny"}}`)); err != nil {
+		t.Fatalf("a valid mirror: %v", err)
+	}
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"ClusterFeedMirror","metadata":{"name":"bad"},"spec":{"kev":{"url":"https://m/kev","schedule":"0 * * * *"}}}`)); err == nil {
+		t.Fatal("a per-feed schedule is not built and must be refused")
+	}
+}

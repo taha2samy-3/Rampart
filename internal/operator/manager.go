@@ -47,6 +47,7 @@ var (
 	gvkRiskPolicy        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "RiskPolicy"}
 	gvkClusterRiskPolicy = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterRiskPolicy"}
 	gvkClusterSLAPolicy  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSLAPolicy"}
+	gvkClusterFeedMirror = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterFeedMirror"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -159,13 +160,15 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	riskPolicies := policyCR(gvkRiskPolicy, NewRiskPolicyReconciler(cfg.Store))
 	clusterRisk := policyCR(gvkClusterRiskPolicy, NewClusterRiskPolicyReconciler(cfg.Store))
 	clusterSLA := policyCR(gvkClusterSLAPolicy, NewClusterSLAPolicyReconciler(cfg.Store))
+	feedMirror := policyCR(gvkClusterFeedMirror, NewClusterFeedMirrorReconciler(cfg.Store))
 
 	gen := builder.WithPredicates(predicate.GenerationChangedPredicate{}) // status writes do not retrigger
 	// Cluster policies belong to no namespace and wait for no tenant.
 	for name, c := range map[string]struct {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
-	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA}} {
+	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
+		"clusterfeedmirror": {gvkClusterFeedMirror, feedMirror}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}

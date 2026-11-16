@@ -114,29 +114,48 @@ func (a *API) streamJSON(w http.ResponseWriter, findings []*domain.Finding) {
 	})
 }
 
-// OCSF Detection Finding mapping (OCSF Class 2001)
+// OCSF export: class 2007, Application Security Posture Finding, schema 1.5.0 (ADR 0003, D86). The required
+// attributes were read from schema.ocsf.io/1.5.0: activity_id, category_uid, class_uid, type_uid, severity_id, time,
+// cloud{provider}, finding_info{uid}, metadata{product, version}; and at least one of application, compliance,
+// remediation or vulnerabilities.
+const ocsfVersion = "1.5.0"
+
 type ocsfFinding struct {
-	ClassUID    int      `json:"class_uid"`    // 2001
-	CategoryUID int      `json:"category_uid"` // 2 (Findings)
-	ActivityID  int      `json:"activity_id"`  // 1 (Create)
-	Time        int64    `json:"time"`         // epoch millis
-	SeverityID  int      `json:"severity_id"`  // 1=Info, 2=Low, 3=Medium, 4=High, 5=Critical
-	Severity    string   `json:"severity"`
-	Status      string   `json:"status"`
-	Message     string   `json:"message"`
-	FindingInfo ocsfInfo `json:"finding_info"`
-	Metadata    ocsfMeta `json:"metadata"`
+	ActivityID      int                 `json:"activity_id"`  // 1 Create: the record states a finding
+	CategoryUID     int                 `json:"category_uid"` // 2 Findings
+	ClassUID        int                 `json:"class_uid"`    // 2007 Application Security Posture Finding
+	TypeUID         int                 `json:"type_uid"`     // class_uid * 100 + activity_id
+	Time            int64               `json:"time"`         // epoch millis
+	SeverityID      int                 `json:"severity_id"`  // 1 Informational … 5 Critical
+	Severity        string              `json:"severity"`
+	StatusID        int                 `json:"status_id"` // 1 New, 2 In Progress, 3 Suppressed, 4 Resolved, 99 Other
+	Status          string              `json:"status"`
+	Message         string              `json:"message"`
+	Cloud           ocsfCloud           `json:"cloud"`
+	FindingInfo     ocsfInfo            `json:"finding_info"`
+	Metadata        ocsfMeta            `json:"metadata"`
+	Application     ocsfApplication     `json:"application"`
+	Vulnerabilities []ocsfVulnerability `json:"vulnerabilities,omitempty"`
+}
+
+// ocsfCloud is required by the class. Rampart does not know where the scanned application is hosted; the provider
+// is stated as unknown rather than guessed.
+type ocsfCloud struct {
+	Provider string `json:"provider"`
 }
 
 type ocsfInfo struct {
-	UID         string   `json:"uid"`
-	Title       string   `json:"title"`
-	Desc        string   `json:"desc"`
-	Types       []string `json:"types"`
-	CreatedTime int64    `json:"created_time"`
+	UID           string   `json:"uid"`
+	Title         string   `json:"title"`
+	Desc          string   `json:"desc,omitempty"`
+	Types         []string `json:"types"`
+	CreatedTime   int64    `json:"created_time"`
+	FirstSeenTime int64    `json:"first_seen_time"`
+	LastSeenTime  int64    `json:"last_seen_time"`
 }
 
 type ocsfMeta struct {
+	Version string `json:"version"`
 	Product struct {
 		Name    string `json:"name"`
 		Vendor  string `json:"vendor_name"`
@@ -144,53 +163,89 @@ type ocsfMeta struct {
 	} `json:"product"`
 }
 
+type ocsfApplication struct {
+	UID string `json:"uid"`
+}
+
+type ocsfVulnerability struct {
+	Title string   `json:"title,omitempty"`
+	CVE   *ocsfUID `json:"cve,omitempty"`
+	CWE   *ocsfUID `json:"cwe,omitempty"`
+}
+
+type ocsfUID struct {
+	UID string `json:"uid"`
+}
+
+// eventTime is when the finding last changed, or when it was last seen if no change time is stored.
+func eventTime(f *domain.Finding) int64 {
+	if !f.UpdatedAt.IsZero() {
+		return f.UpdatedAt.UnixMilli()
+	}
+	return f.LastSeen.UnixMilli()
+}
+
+// toOCSF maps one finding to class 2007.
+func toOCSF(f *domain.Finding) ocsfFinding {
+	sevID := 0
+	switch f.Severity {
+	case domain.SeverityCritical:
+		sevID = 5
+	case domain.SeverityHigh:
+		sevID = 4
+	case domain.SeverityMedium:
+		sevID = 3
+	case domain.SeverityLow:
+		sevID = 2
+	case domain.SeverityInfo:
+		sevID = 1
+	}
+	statusID := 99
+	switch f.State {
+	case domain.StateOpen:
+		statusID = 1
+	case domain.StateUnderInvestigation, domain.StateAffected:
+		statusID = 2
+	case domain.StateRiskAccepted, domain.StateNotAffected, domain.StateOutOfScope, domain.StateDuplicate:
+		statusID = 3
+	case domain.StateFixed:
+		statusID = 4
+	}
+	item := ocsfFinding{
+		ActivityID: 1, CategoryUID: 2, ClassUID: 2007, TypeUID: 2007*100 + 1,
+		Time: eventTime(f), SeverityID: sevID, Severity: string(f.Severity),
+		StatusID: statusID, Status: string(f.State), Message: f.Title,
+		Cloud: ocsfCloud{Provider: "unknown"},
+		FindingInfo: ocsfInfo{
+			UID: f.ID.String(), Title: f.Title, Desc: f.Description,
+			Types:       []string{string(f.Category), f.RuleScannerFamily},
+			CreatedTime: f.FirstSeen.UnixMilli(), FirstSeenTime: f.FirstSeen.UnixMilli(), LastSeenTime: f.LastSeen.UnixMilli(),
+		},
+		Application: ocsfApplication{UID: f.ApplicationID.String()},
+	}
+	item.Metadata.Version = ocsfVersion
+	item.Metadata.Product.Name = "Rampart"
+	item.Metadata.Product.Vendor = "Rampart"
+	item.Metadata.Product.Version = "v1alpha1"
+	if f.VulnerabilityID != nil && *f.VulnerabilityID != "" {
+		item.Vulnerabilities = append(item.Vulnerabilities, ocsfVulnerability{Title: f.Title, CVE: &ocsfUID{UID: *f.VulnerabilityID}})
+	}
+	for _, c := range f.CWEs {
+		item.Vulnerabilities = append(item.Vulnerabilities, ocsfVulnerability{Title: f.Title, CWE: &ocsfUID{UID: fmt.Sprintf("CWE-%d", c)}})
+	}
+	return item
+}
+
 func (a *API) streamOCSF(w http.ResponseWriter, findings []*domain.Finding) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `attachment; filename="findings-ocsf.json"`)
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	ocsfList := make([]ocsfFinding, 0, len(findings))
+	list := make([]ocsfFinding, 0, len(findings))
 	for _, f := range findings {
-		sevID := 3
-		switch f.Severity {
-		case domain.SeverityCritical:
-			sevID = 5
-		case domain.SeverityHigh:
-			sevID = 4
-		case domain.SeverityMedium:
-			sevID = 3
-		case domain.SeverityLow:
-			sevID = 2
-		case domain.SeverityInfo:
-			sevID = 1
-		}
-
-		item := ocsfFinding{
-			ClassUID:    2001,
-			CategoryUID: 2,
-			ActivityID:  1,
-			Time:        f.CreatedAt.UnixMilli(),
-			SeverityID:  sevID,
-			Severity:    string(f.Severity),
-			Status:      string(f.State),
-			Message:     f.Title,
-			FindingInfo: ocsfInfo{
-				UID:         f.ID.String(),
-				Title:       f.Title,
-				Desc:        f.Description,
-				Types:       []string{string(f.Category), f.RuleScannerFamily},
-				CreatedTime: f.FirstSeen.UnixMilli(),
-			},
-		}
-		item.Metadata.Product.Name = "Rampart ASPM"
-		item.Metadata.Product.Vendor = "Rampart"
-		item.Metadata.Product.Version = "1.0.0"
-
-		ocsfList = append(ocsfList, item)
+		list = append(list, toOCSF(f))
 	}
-
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"class":    "Security Finding (OCSF 2001)",
-		"findings": ocsfList,
+		"class":    "Application Security Posture Finding (OCSF 2007, schema 1.5.0)",
+		"findings": list,
 	})
 }

@@ -205,10 +205,13 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("riskpolicy.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "clusterriskpolicy", "clusterslapolicy":
+	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror":
 		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
 		if lk == "clusterslapolicy" {
 			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
+		}
+		if lk == "clusterfeedmirror" { // D86: where the feeds are read from; kept with the cluster-wide configuration
+			kind, parse = "feeds", func(b []byte) error { _, err := domain.ParseFeedMirrorSpec(b); return err }
 		}
 		obj := PolicyObject{Name: header.Metadata.Name, Spec: header.Spec}
 		if err := parse(header.Spec); err != nil {

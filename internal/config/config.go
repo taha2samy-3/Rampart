@@ -166,6 +166,10 @@ type FeedsConfig struct {
 	EPSSURL       string        `json:"epss_url" yaml:"epssUrl"`
 	OSVBaseURL    string        `json:"osv_base_url" yaml:"osvBaseUrl"`
 	OSVEcosystems []string      `json:"osv_ecosystems" yaml:"osvEcosystems"`
+	// NVD CVE API 2.0 (D86): on by default; the key file raises NIST's rate limit; the URL can be a mirror.
+	NVDURL        string `json:"nvd_url" yaml:"nvdUrl"`
+	NVDAPIKeyFile string `json:"nvd_api_key_file" yaml:"nvdApiKeyFile"`
+	NVDDisabled   bool   `json:"nvd_disabled" yaml:"nvdDisabled"`
 }
 
 type IngestConfig struct {
@@ -599,6 +603,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v := get("FEEDS_OSV_BASE_URL"); v != "" {
 		cfg.Feeds.OSVBaseURL = v
+	}
+	if v := get("FEEDS_NVD_URL"); v != "" {
+		cfg.Feeds.NVDURL = v
+	}
+	if v := get("FEEDS_NVD_API_KEY_FILE"); v != "" {
+		cfg.Feeds.NVDAPIKeyFile = v
+	}
+	if v := get("FEEDS_NVD_DISABLED"); v != "" {
+		cfg.Feeds.NVDDisabled = strings.ToLower(v) == "true" || v == "1"
 	}
 	if v := get("FEEDS_OSV_ECOSYSTEMS"); v != "" {
 		cfg.Feeds.OSVEcosystems = nil

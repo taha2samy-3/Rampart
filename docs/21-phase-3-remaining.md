@@ -12,7 +12,7 @@ Written 2026-11-13, after commit `9e1caa7`. It lists only what is **not** done, 
 | 3.3 CI federation, mass-close guard settings, quotas | done (D71, D72, D73) |
 | 3.4 Dependency-Track | **in part**: parser, client, settle rule (D84) and mapping exist; the sync and its webhook are not wired into the server (docs/23 K5) |
 | 3.5 SDK, mapping engine, parsers wave 2 | **in part** (D75): eight native parsers; `IntegrationPackage`, declarative trackers and notifiers, GitLab and Generic JSON parsers are missing; the mapping engine has no production caller; the placeholder adapters were removed (D82) |
-| 3.6 groups, views, exports, live updates, enrichment, dashboards | **in part** (D76): NVD is not synced (D84), SBOM export and inventory views are missing, groups have no application scope (docs/23 C8) |
+| 3.6 groups, views, exports, live updates, enrichment, dashboards | **in part** (D76): NVD synced and `ClusterFeedMirror` built (D86); SBOM export and inventory views are missing; groups have no application scope (docs/23 C8) |
 
 ### Working rules for every item
 1. **Verify the unverified fact first** (a vendor page, a running instance), and write the result in the decision it belongs to before writing code.

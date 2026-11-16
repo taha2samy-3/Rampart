@@ -2367,12 +2367,27 @@ func (s *PostgresStore) SaveClusterPolicy(ctx context.Context, kind string, p ap
 			kind, p.Name, spec, applied, p.Error == "", nonEmpty(p.Error), p.Generation); err != nil {
 			return err
 		}
-		if !changed {
+		if !changed || kind == "feeds" { // a feed mirror changes where feeds are read, not any score (D86)
 			return nil
 		}
 		_, err := tx.Exec(ctx, `UPDATE application SET rescore_needed = TRUE`)
 		return err
 	})
+}
+
+// GetClusterFeedMirror returns the ClusterFeedMirror in force (D86): the one named default, else the first by
+// name, as for other policies (D41); nil when there is none. Only a spec that passed validation is in force.
+func (s *PostgresStore) GetClusterFeedMirror(ctx context.Context) (*domain.FeedMirrorSpec, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT applied_spec FROM cluster_policy WHERE kind = 'feeds' AND applied_spec IS NOT NULL
+		ORDER BY (name = 'default') DESC, name LIMIT 1`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return domain.ParseFeedMirrorSpec(raw)
 }
 
 // DeleteClusterPolicy removes a cluster policy; every tenant is re-scored against what is left.

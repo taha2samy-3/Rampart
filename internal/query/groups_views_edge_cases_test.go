@@ -215,7 +215,7 @@ func TestExports_EdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("export OCSF conforms to OCSF Finding 2001 class structure", func(t *testing.T) {
+	t.Run("export OCSF conforms to OCSF Finding 2007 class structure", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/v1/findings/export?format=ocsf", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
@@ -235,8 +235,8 @@ func TestExports_EdgeCases(t *testing.T) {
 		}
 
 		rec := rawFindings[0].(map[string]any)
-		if rec["class_uid"] != float64(2001) {
-			t.Fatalf("expected class_uid 2001, got %v", rec["class_uid"])
+		if rec["class_uid"] != float64(2007) {
+			t.Fatalf("expected class_uid 2007, got %v", rec["class_uid"])
 		}
 		if rec["category_uid"] != float64(2) {
 			t.Fatalf("expected category_uid 2, got %v", rec["category_uid"])

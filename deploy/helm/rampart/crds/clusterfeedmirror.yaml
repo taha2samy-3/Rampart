@@ -1,0 +1,90 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterfeedmirrors.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterFeedMirror
+    listKind: ClusterFeedMirrorList
+    plural: clusterfeedmirrors
+    singular: clusterfeedmirror
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                Where the vulnerability-intelligence feeds are read from (docs/04, docs/16 D86). The one named default is in
+                force, else the first by name. With egress deny, a feed without a mirror is not read at all (air-gapped
+                installs). A per-feed schedule and the cwe feed are not built and are refused with the reason.
+              properties:
+                nvd:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused. Every feed runs every feeds.interval."}
+                osv:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                epss:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                kev:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                cwe:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: Not built; refused.
+                egress:
+                  type: string
+                  enum: [allow, deny]
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

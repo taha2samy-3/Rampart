@@ -341,6 +341,15 @@ func (r *Runner) Run(ctx context.Context) error {
 			fc := enrich.FeedConfig{
 				KEVURL: r.cfg.Feeds.KEVURL, EPSSURL: r.cfg.Feeds.EPSSURL, OSVBaseURL: r.cfg.Feeds.OSVBaseURL,
 				OSVEcosystems: r.cfg.Feeds.OSVEcosystems, Interval: r.cfg.Feeds.Interval,
+				NVDURL: r.cfg.Feeds.NVDURL, NVDDisabled: r.cfg.Feeds.NVDDisabled,
+				Mirror: sysStore.GetClusterFeedMirror, // the ClusterFeedMirror resource, read every round (D86)
+			}
+			if r.cfg.Feeds.NVDAPIKeyFile != "" { // the key is a file, like every other secret (D34)
+				if key, kerr := readSecretFile(r.cfg.Feeds.NVDAPIKeyFile); kerr == nil {
+					fc.NVDAPIKey = strings.TrimSpace(string(key))
+				} else {
+					r.logger.Warn("feeds.nvdApiKeyFile could not be read; NVD is synced at the keyless rate", "err", kerr)
+				}
 			}
 			fc.OnSynced = func(c context.Context) {
 				// New aliases first: a finding keyed by a GHSA id moves to its CVE's key, then everything is re-scored (D50).

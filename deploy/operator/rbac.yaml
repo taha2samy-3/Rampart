@@ -26,6 +26,8 @@ rules:
       - clusterriskpolicies/status
       - clusterslapolicies
       - clusterslapolicies/status
+      - clusterfeedmirrors
+      - clusterfeedmirrors/status
       - connectors
       - connectors/status
       - tenants/finalizers
@@ -35,6 +37,7 @@ rules:
       - riskpolicies/finalizers
       - clusterriskpolicies/finalizers
       - clusterslapolicies/finalizers
+      - clusterfeedmirrors/finalizers
       - connectors/finalizers
     verbs:
       - get

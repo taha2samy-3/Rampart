@@ -55,7 +55,7 @@ What is built and tested, against the phases below. Everything marked built has 
 | Phase 3.3: CI OIDC federation (D22, D72), mass-close guard settings (D71), rate limits & quotas (D73) | built; fuzzed, tested on PostgreSQL and envtest |
 | Phase 3.4: Dependency-Track upstream source, FPF streaming parser, sync & debounce state machine (D74) | **in part**: FPF parser, client, settle rule (D84); the sync and webhook are not wired into the server (docs/23 K5) |
 | Phase 3.5: Integration SDK, CEL mapping engine, parser conformance kit, Wave 2 native parsers (D75) | **in part**: 8 native parsers built and tested; `IntegrationPackage`, declarative connectors, GitLab and Generic JSON parsers missing; connectors catalogue from the Go types (D82) |
-| Phase 3.6: Groups, views, streaming exports, SSE live updates, NVD/CODEOWNERS, Grafana dashboards (D76) | **in part**: groups, views, exports (CSV defused, D84), SSE, dashboards built; NVD not synced; SBOM export missing |
+| Phase 3.6: Groups, views, streaming exports, SSE live updates, NVD/CODEOWNERS, Grafana dashboards (D76) | **in part**: groups, views, exports (CSV defused D84, OCSF 2007 D86), SSE, dashboards built; NVD synced and `ClusterFeedMirror` built (D86); SBOM export missing |
 
 ## Left for the MVP
 

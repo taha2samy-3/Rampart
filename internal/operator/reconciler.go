@@ -322,6 +322,14 @@ func NewClusterSLAPolicyReconciler(store apply.ConfigStore) *PolicyReconciler {
 	}}
 }
 
+// NewClusterFeedMirrorReconciler reconciles ClusterFeedMirror resources (D86).
+func NewClusterFeedMirrorReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "feeds", cluster: true, label: "ClusterFeedMirror", parse: func(b []byte) error {
+		_, err := domain.ParseFeedMirrorSpec(b)
+		return err
+	}}
+}
+
 func parseRisk(b []byte) error {
 	_, err := risk.ParseRiskPolicySpec(b)
 	return err

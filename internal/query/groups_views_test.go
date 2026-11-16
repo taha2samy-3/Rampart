@@ -326,7 +326,7 @@ func TestAPI_Exports(t *testing.T) {
 	if wOCSF.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("expected application/json, got %s", wOCSF.Header().Get("Content-Type"))
 	}
-	if !bytes.Contains(wOCSF.Body.Bytes(), []byte(`"class_uid":2001`)) {
+	if !bytes.Contains(wOCSF.Body.Bytes(), []byte(`"class_uid":2007`)) {
 		t.Errorf("ocsf missing class_uid: %s", wOCSF.Body.String())
 	}
 
