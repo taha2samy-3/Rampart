@@ -23,6 +23,21 @@ export function absoluteDate(iso: string | undefined | null, locale?: string): s
   return d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+export function absoluteDateTime(iso: string | undefined | null, locale?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
 /** Short age for a table cell: 4d, 3w, 5mo. */
 export function shortAge(iso: string | undefined | null, now = Date.now()): string {
   if (!iso) return '';

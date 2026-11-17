@@ -26,7 +26,7 @@ import { UploadDialog } from './UploadDialog';
 import { DependencyTrackView } from './DependencyTrackView';
 import { ParsersView } from './ParsersView';
 import { cn } from '@/lib/cn';
-import { absoluteDate, shortAge, shortId } from '@/lib/format';
+import { absoluteDateTime, shortAge, shortId } from '@/lib/format';
 
 export interface IngestionSearch {
   sel?: string;
@@ -165,7 +165,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
                   </Td>
                   <Td className={cn(r.status === 'failed' && 'font-semibold')}>{t(`ingestion.status.${r.status}`)}</Td>
                   <Td className="text-ink-2">{foundText(r)}</Td>
-                  <Td align="end" className="text-ink-2" title={absoluteDate(r.created_at)}>
+                  <Td align="end" className="text-ink-2" title={absoluteDateTime(r.created_at)}>
                     {shortAge(r.created_at)}
                   </Td>
                 </Tr>

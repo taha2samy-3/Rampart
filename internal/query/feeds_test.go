@@ -239,4 +239,20 @@ func TestFeedsAPI(t *testing.T) {
 	if len(allTestResp.Results) < 4 {
 		t.Errorf("expected at least 4 feed probe results, got %d", len(allTestResp.Results))
 	}
+
+	// 5. Test feeds on-demand sync
+	syncReq := httptest.NewRequest("POST", "/api/v1/feeds/sync?feed=cisa_kev", nil)
+	syncReq.Header.Set("Authorization", "Bearer "+token)
+	syncRec := httptest.NewRecorder()
+	mux.ServeHTTP(syncRec, syncReq)
+	if syncRec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted for feed sync, got %d", syncRec.Code)
+	}
+	var syncResp query.FeedSyncResponse
+	if err := json.Unmarshal(syncRec.Body.Bytes(), &syncResp); err != nil {
+		t.Fatalf("failed to parse feed sync response: %v", err)
+	}
+	if syncResp.Status != "started" || syncResp.Feed != "cisa_kev" {
+		t.Errorf("unexpected sync response: %+v", syncResp)
+	}
 }

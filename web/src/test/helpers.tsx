@@ -369,6 +369,10 @@ export function mockFetch(sc: Scenario): Calls {
           example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
       ] });
     }
+    if (path.startsWith('/api/v1/feeds/sync')) {
+      const feedParam = new URL(path, 'http://localhost').searchParams.get('feed') || 'all';
+      return json({ status: 'started', feed: feedParam, message: 'Feed synchronization initiated successfully', started_at: new Date().toISOString() }, 202);
+    }
     if (path.startsWith('/api/v1/feeds/test-connection')) {
       const feedParam = new URL(path, 'http://localhost').searchParams.get('feed');
       const feedsPayload = (sc.feeds && sc.feeds !== 'error' ? (sc.feeds as { mirror?: Record<string, { url?: string }>; items?: Array<{ name: string; url: string }> }) : null);
@@ -376,7 +380,8 @@ export function mockFetch(sc: Scenario): Calls {
       const getUrl = (name: string, def: string) => {
         const item = feedsPayload?.items?.find((i) => i.name === name);
         if (item?.url) return item.url;
-        if (mirror && (mirror as Record<string, { url?: string }>)[name]?.url) return (mirror as Record<string, { url?: string }>)[name].url!;
+        const mirrorEntry = mirror ? (mirror as Record<string, { url?: string }>)[name] : undefined;
+        if (mirrorEntry?.url) return mirrorEntry.url;
         return def;
       };
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { get, post, qk } from '@/api';
-import type { FeedItem, FeedsResponse, FeedTestConnectionResponse, FeedTestResult } from '@/api/types';
+import type { FeedItem, FeedsResponse, FeedTestConnectionResponse, FeedTestResult, FeedSyncResponse } from '@/api/types';
 import {
   Button,
   Dialog,
@@ -30,6 +30,9 @@ export function FeedsView() {
   const [testingFeed, setTestingFeed] = useState<string | null>(null);
   const [testingAll, setTestingAll] = useState(false);
   const [testSummary, setTestSummary] = useState<string | null>(null);
+  const [syncingFeed, setSyncingFeed] = useState<string | null>(null);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<string | null>(null);
 
   const feedsQuery = useQuery({
     queryKey: qk.feeds.list(),
@@ -40,6 +43,29 @@ export function FeedsView() {
   const feedsData = feedsQuery.data;
   const items = useMemo(() => feedsData?.items ?? [], [feedsData?.items]);
   const mirror = feedsData?.mirror;
+
+  const handleSyncNow = async (feedName?: string) => {
+    try {
+      if (feedName) {
+        setSyncingFeed(feedName);
+      } else {
+        setSyncingAll(true);
+      }
+      const queryParam = feedName ? `?feed=${encodeURIComponent(feedName)}` : '';
+      await post<FeedSyncResponse>(`/api/v1/feeds/sync${queryParam}`, {});
+      setSyncSummary(
+        feedName
+          ? `Sync initiated for ${feedName}. Background worker is pulling updates.`
+          : 'Sync initiated for all threat intelligence feeds. Background worker is pulling updates.'
+      );
+      void feedsQuery.refetch();
+    } catch {
+      setSyncSummary('Failed to trigger feed sync.');
+    } finally {
+      setSyncingFeed(null);
+      setSyncingAll(false);
+    }
+  };
 
   const handleTestConnection = async (feedName?: string) => {
     try {
@@ -146,6 +172,24 @@ spec:
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="secondary"
+              onClick={() => handleSyncNow()}
+              disabled={syncingAll || !!syncingFeed}
+              className="flex items-center gap-1.5"
+            >
+              {syncingAll ? (
+                <>
+                  <Spinner size={14} />
+                  <span>{t('feeds.syncing', { defaultValue: 'Syncing...' })}</span>
+                </>
+              ) : (
+                <>
+                  <IconRefresh className="h-4 w-4" />
+                  <span>{t('feeds.syncAll', { defaultValue: 'Sync Now' })}</span>
+                </>
+              )}
+            </Button>
+            <Button
+              variant="secondary"
               onClick={() => handleTestConnection()}
               disabled={testingAll || !!testingFeed}
               className="flex items-center gap-1.5"
@@ -230,6 +274,23 @@ spec:
         </div>
       )}
 
+      {/* Sync Trigger Feedback Banner */}
+      {syncSummary && (
+        <div className="flex items-center justify-between rounded border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-12 text-blue-800 dark:text-blue-300">
+          <div className="flex items-center gap-2">
+            <IconRefresh className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400 animate-spin" />
+            <span className="font-medium">{syncSummary}</span>
+          </div>
+          <button
+            onClick={() => setSyncSummary(null)}
+            className="text-11 text-ink-2 hover:text-ink px-1 font-bold"
+            aria-label="Dismiss sync summary"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -296,6 +357,7 @@ spec:
             {filtered.map((feed: FeedItem) => {
               const probe = testResults[feed.name];
               const isPinging = testingFeed === feed.name;
+              const isSyncing = syncingFeed === feed.name;
 
               return (
                 <Tr key={feed.name} className="h-14">
@@ -393,6 +455,22 @@ spec:
                           <span>Test</span>
                         )}
                       </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={isSyncing || syncingAll}
+                        onClick={() => handleSyncNow(feed.name)}
+                        className="text-11 flex items-center gap-1 px-2.5 py-1"
+                        title={`Trigger immediate sync for ${feed.display_name}`}
+                      >
+                        {isSyncing ? (
+                          <>
+                            <Spinner size={12} />
+                            <span>Syncing...</span>
+                          </>
+                        ) : (
+                          <span>Sync</span>
+                        )}
+                      </Button>
                     </div>
                   </Td>
                 </Tr>
@@ -405,6 +483,7 @@ spec:
       {/* Declarative CRD Dialog */}
       <Dialog open={crdOpen} onOpenChange={setCrdOpen}>
         <DialogContent
+          className="w-[720px] max-w-[95vw]"
           title="Declarative ClusterFeed Specification"
           description="Vulnerability feeds are first-class Kubernetes Custom Resources."
         >
@@ -421,7 +500,7 @@ spec:
               You can inspect, customize, or remove this resource via <code className="font-mono text-12">kubectl</code> or Helm values to configure air-gapped internal mirrors, private feeds, or opt-in ecosystem databases.
             </p>
 
-            <pre className="overflow-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-12 text-ink">
+            <pre className="max-h-64 overflow-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-12 text-ink">
               {crdYaml}
             </pre>
 

@@ -2,11 +2,30 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { getApplicationChanges, qk, toProblem } from '@/api';
-import type { ApplicationChanges, ChangeDay, FindingChange } from '@/api/types';
-import { BandShape, Input, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components';
+import { get, getApplicationChanges, qk, toProblem } from '@/api';
+import type { ApplicationChanges, ChangeDay, FindingChange, FindingRow, Reporter } from '@/api/types';
+import {
+  BandShape,
+  Button,
+  Dialog,
+  DialogContent,
+  Input,
+  ProblemMessage,
+  Select,
+  Skeleton,
+  Table,
+  TBody,
+  Td,
+  Th,
+  THead,
+  Tr,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components';
 import { toBand } from '@/lib/band';
-import { absoluteDate } from '@/lib/format';
+import { absoluteDate, absoluteDateTime } from '@/lib/format';
 
 type Preset = '7' | '30' | '90' | 'custom';
 
@@ -73,6 +92,8 @@ export function ChangesSection({ appId, now = new Date() }: { appId: string; now
 function Body({ data }: { data: ApplicationChanges }) {
   const { t } = useTranslation();
   const s = data.summary;
+  const [selectedChange, setSelectedChange] = useState<FindingChange | null>(null);
+
   return (
     <>
       <p className="m-0 text-13">
@@ -87,11 +108,15 @@ function Body({ data }: { data: ApplicationChanges }) {
           <TabsTrigger value="reopened">{t('apps.tabReopened')} ({s.reopened})</TabsTrigger>
           <TabsTrigger value="open">{t('apps.tabOpen')} ({s.open_at_end})</TabsTrigger>
         </TabsList>
-        <TabsContent value="new"><List rows={data.new} kind="new" cut={data.truncated.includes('new')} /></TabsContent>
-        <TabsContent value="closed"><List rows={data.closed} kind="closed" cut={data.truncated.includes('closed')} /></TabsContent>
-        <TabsContent value="reopened"><List rows={data.reopened} kind="reopened" cut={data.truncated.includes('reopened')} /></TabsContent>
-        <TabsContent value="open"><List rows={data.open} kind="open" cut={data.truncated.includes('open')} /></TabsContent>
+        <TabsContent value="new"><List rows={data.new} kind="new" cut={data.truncated.includes('new')} onSelect={setSelectedChange} /></TabsContent>
+        <TabsContent value="closed"><List rows={data.closed} kind="closed" cut={data.truncated.includes('closed')} onSelect={setSelectedChange} /></TabsContent>
+        <TabsContent value="reopened"><List rows={data.reopened} kind="reopened" cut={data.truncated.includes('reopened')} onSelect={setSelectedChange} /></TabsContent>
+        <TabsContent value="open"><List rows={data.open} kind="open" cut={data.truncated.includes('open')} onSelect={setSelectedChange} /></TabsContent>
       </Tabs>
+
+      {selectedChange && (
+        <FindingDetailModal change={selectedChange} onClose={() => setSelectedChange(null)} />
+      )}
     </>
   );
 }
@@ -125,7 +150,17 @@ export function ChangeBars({ days, label }: { days: ChangeDay[]; label: string }
   );
 }
 
-function List({ rows, kind, cut }: { rows: FindingChange[]; kind: 'new' | 'closed' | 'reopened' | 'open'; cut: boolean }) {
+function List({
+  rows,
+  kind,
+  cut,
+  onSelect,
+}: {
+  rows: FindingChange[];
+  kind: 'new' | 'closed' | 'reopened' | 'open';
+  cut: boolean;
+  onSelect: (f: FindingChange) => void;
+}) {
   const { t } = useTranslation();
   if (rows.length === 0) return <p className="m-0 mt-2 text-13 text-ink-2">{t('apps.changesNone')}</p>;
   const when = kind === 'closed' ? t('apps.colClosed') : kind === 'reopened' ? t('apps.colBack') : t('apps.colSeen');
@@ -143,9 +178,30 @@ function List({ rows, kind, cut }: { rows: FindingChange[]; kind: 'new' | 'close
         </THead>
         <TBody>
           {rows.map((r) => (
-            <Tr key={`${r.id}-${kind}`} className="h-9">
+            <Tr
+              key={`${r.id}-${kind}`}
+              className="h-9 cursor-pointer transition-colors hover:bg-surface-2"
+              onClick={() => onSelect(r)}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect(r);
+                }
+              }}
+            >
               <Td>
-                <Link to="/findings" search={{ sel: r.id }} className="font-mono text-12 font-medium no-underline hover:underline">{r.vulnerability_id || r.rule_id}</Link>
+                <Link
+                  to="/findings"
+                  search={{ sel: r.id }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelect(r);
+                  }}
+                  className="font-mono text-12 font-medium no-underline hover:underline"
+                >
+                  {r.vulnerability_id || r.rule_id}
+                </Link>
                 <span className="block max-w-[34rem] truncate text-12 text-ink-2" title={r.title}>{r.title}</span>
               </Td>
               <Td>
@@ -163,5 +219,143 @@ function List({ rows, kind, cut }: { rows: FindingChange[]; kind: 'new' | 'close
       </Table>
       {cut && <p className="m-0 mt-1 text-12 text-ink-2">{t('apps.changesCut', { count: rows.length })}</p>}
     </>
+  );
+}
+
+interface FindingDetailData extends FindingRow {
+  reported_by?: Reporter[] | null;
+  occurrences?: Array<{ scanner?: string }> | null;
+}
+
+function FindingDetailModal({ change, onClose }: { change: FindingChange; onClose: () => void }) {
+  const q = useQuery({
+    queryKey: ['findings', 'detail', change.id],
+    queryFn: ({ signal }) => get<FindingDetailData>(`/api/v1/findings/${encodeURIComponent(change.id)}`, { signal }),
+    enabled: !!change.id,
+    retry: false,
+  });
+
+  const row = q.data;
+  const f = row?.finding;
+  const loc = f?.location;
+  const where = loc?.purl ?? (loc?.file_path ? (loc.start_line ? `${loc.file_path}:${loc.start_line}` : loc.file_path) : '');
+  const reporters: Reporter[] = row?.reported_by ?? [];
+  const occurrences = row?.occurrences ?? [];
+
+  return (
+    <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        title={change.vulnerability_id || change.rule_id || 'Finding Details'}
+        description={change.title}
+        className="w-[700px] max-w-[95vw]"
+      >
+        <div className="flex flex-col gap-4">
+          {/* Header Badges */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded bg-surface-2 px-2.5 py-1 text-12 font-medium">
+                <BandShape band={toBand(change.risk_band)} size={12} />
+                <span className="capitalize">{change.severity}</span>
+              </span>
+              <span className="rounded bg-surface-2 px-2 py-0.5 text-11 font-mono uppercase text-ink-2">
+                {change.state || 'open'}
+              </span>
+            </div>
+            {row?.risk && (
+              <span className="text-12 font-semibold">
+                Risk Score: <span className="font-mono text-14">{row.risk.total_score}</span>
+              </span>
+            )}
+          </div>
+
+          {/* Where it came from & where it was found */}
+          <div className="rounded-md border border-border bg-surface-2 p-3 text-13">
+            <h4 className="mb-2 text-12 font-semibold uppercase tracking-wider text-ink-2">
+              Source & Location Details
+            </h4>
+            <dl className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-2 text-12">
+              <dt className="text-ink-2">Asset / Service:</dt>
+              <dd className="font-mono font-medium text-ink">{change.asset}</dd>
+
+              <dt className="text-ink-2">Location / Path:</dt>
+              <dd className="break-all font-mono text-ink">
+                {where || 'Repository root / package manifest'}
+              </dd>
+
+              {loc?.component_name && (
+                <>
+                  <dt className="text-ink-2">Component:</dt>
+                  <dd className="font-mono text-ink">
+                    {loc.component_name}
+                    {loc.installed_version ? ` @ ${loc.installed_version}` : ''}
+                    {loc.fixed_version ? ` (Fixed in ${loc.fixed_version})` : ''}
+                  </dd>
+                </>
+              )}
+
+              <dt className="text-ink-2">Detected By:</dt>
+              <dd className="text-ink">
+                {reporters.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {reporters.map((rep) => (
+                      <span key={rep.name || rep.scanner} className="rounded border border-border bg-surface px-1.5 py-0.5 text-11 font-medium">
+                        {rep.name || rep.scanner} {rep.present ? '(Active)' : '(Past)'}
+                      </span>
+                    ))}
+                  </div>
+                ) : occurrences.length > 0 ? (
+                  <span>{occurrences.map((o) => o.scanner).filter(Boolean).join(', ')}</span>
+                ) : (
+                  <span>Automated CI/CD Scanner</span>
+                )}
+              </dd>
+
+              <dt className="text-ink-2">First Seen:</dt>
+              <dd className="text-ink">{absoluteDateTime(change.first_seen || f?.first_seen)}</dd>
+
+              {change.resolved_at && (
+                <>
+                  <dt className="text-ink-2">Resolved At:</dt>
+                  <dd className="text-ink">{absoluteDateTime(change.resolved_at)}</dd>
+                </>
+              )}
+
+              {change.resolution && (
+                <>
+                  <dt className="text-ink-2">Resolution:</dt>
+                  <dd className="capitalize text-ink">{change.resolution}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+
+          {/* Description if available */}
+          {f?.description && (
+            <div className="text-12">
+              <h4 className="mb-1 text-12 font-semibold uppercase tracking-wider text-ink-2">
+                Description & Impact
+              </h4>
+              <p className="max-h-36 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-2.5 text-ink-2">
+                {f.description}
+              </p>
+            </div>
+          )}
+
+          {/* Actions Footer */}
+          <div className="mt-1 flex items-center justify-between border-t border-border pt-3">
+            <Link
+              to="/findings"
+              search={{ sel: change.id }}
+              className="inline-flex items-center gap-1.5 text-13 font-medium text-primary hover:underline"
+            >
+              Open in Findings Explorer →
+            </Link>
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

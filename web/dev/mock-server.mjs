@@ -669,6 +669,10 @@ const server = http.createServer((req, res) => {
       }
     }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
+    if (p === '/api/v1/feeds/sync') {
+      const feedParam = url.searchParams.get('feed') || 'all';
+      return json(res, { status: 'started', feed: feedParam, message: 'Feed synchronization initiated successfully', started_at: new Date().toISOString() }, 202);
+    }
     if (p === '/api/v1/feeds/test-connection') {
       const feedParam = url.searchParams.get('feed');
       const allResults = [

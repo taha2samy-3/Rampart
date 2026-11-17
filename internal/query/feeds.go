@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"rampart/internal/domain"
+	"rampart/internal/enrich"
 )
 
 // FeedItemResponse represents one threat intelligence feed and its live status.
@@ -49,6 +52,18 @@ type FeedTestResult struct {
 type FeedTestConnectionResponse struct {
 	TestedAt time.Time        `json:"tested_at"`
 	Results  []FeedTestResult `json:"results"`
+}
+
+// FeedSyncResponse represents the response when an on-demand feed synchronization is triggered.
+type FeedSyncResponse struct {
+	Status    string    `json:"status"` // started | completed
+	Feed      string    `json:"feed"`   // "all" or specific feed name
+	Message   string    `json:"message"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+type poolGetter interface {
+	Pool() *pgxpool.Pool
 }
 
 const (
@@ -135,6 +150,55 @@ func (a *API) handleTestFeedsConnection(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, FeedTestConnectionResponse{
 		TestedAt: time.Now().UTC(),
 		Results:  results,
+	})
+}
+
+// handleSyncFeeds handles POST /api/v1/feeds/sync.
+// Triggers an on-demand synchronization round for threat intelligence feeds.
+func (a *API) handleSyncFeeds(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.resolveTenant(r); err != nil {
+		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	requestedFeed := strings.TrimSpace(r.URL.Query().Get("feed"))
+	if requestedFeed == "" && r.Method == http.MethodPost {
+		var req struct {
+			Feed string `json:"feed"`
+		}
+		if raw, rerr := io.ReadAll(io.LimitReader(r.Body, 16<<10)); rerr == nil && len(raw) > 0 {
+			_ = json.Unmarshal(raw, &req)
+			requestedFeed = strings.TrimSpace(req.Feed)
+		}
+	}
+
+	target := "all"
+	if requestedFeed != "" {
+		target = requestedFeed
+	}
+
+	// If running against real PostgreSQL pool, trigger sync
+	if pg, ok := a.store.(poolGetter); ok && pg.Pool() != nil {
+		pool := pg.Pool()
+		mirror, _, _ := a.getFeedItemsAndMirror(r.Context())
+		fc := enrich.FeedConfig{
+			Mirror: func(ctx context.Context) (*domain.FeedMirrorSpec, error) {
+				return mirror, nil
+			},
+		}
+		syncer := enrich.NewFeedSyncer(pool)
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			_ = syncer.SyncAll(bgCtx, fc, slog.Default())
+		}()
+	}
+
+	writeJSON(w, http.StatusAccepted, FeedSyncResponse{
+		Status:    "started",
+		Feed:      target,
+		Message:   "Feed synchronization initiated successfully",
+		StartedAt: time.Now().UTC(),
 	})
 }
 

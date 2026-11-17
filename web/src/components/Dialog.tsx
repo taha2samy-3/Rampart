@@ -35,12 +35,14 @@ export function DialogContent({
   children,
   sheet,
   closeLabel = 'Close',
+  className,
 }: {
   title: string;
   description?: string;
   children: React.ReactNode;
   sheet?: boolean;
   closeLabel?: string;
+  className?: string;
 }) {
   return (
     <D.Portal>
@@ -49,21 +51,28 @@ export function DialogContent({
       </D.Close>
       <D.Content
         className={cn(
-          'fixed z-50 border border-rule bg-surface text-ink',
+          'fixed z-50 flex flex-col border border-rule bg-surface text-ink shadow-xl',
           sheet
             ? 'inset-y-0 start-0 w-[280px] max-w-[90vw] border-y-0 border-s-0'
-            : 'start-1/2 top-[18vh] w-[440px] max-w-[92vw] -translate-x-1/2 rounded-ctl rtl:translate-x-1/2',
+            : 'start-1/2 top-1/2 max-h-[90vh] w-[440px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-ctl rtl:translate-x-1/2',
+          className,
         )}
       >
         <InertApp />
-        <div className="flex h-11 items-center justify-between border-b border-rule ps-4 pe-1.5">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-rule ps-4 pe-1.5">
           <D.Title className="text-14 font-semibold">{title}</D.Title>
           <D.Close asChild>
             <IconButton label={closeLabel}><IconX /></IconButton>
           </D.Close>
         </div>
-        {description ? <D.Description className="px-4 pt-3 text-13 text-ink-2">{description}</D.Description> : <D.Description className="sr-only">{title}</D.Description>}
-        <div className="p-4">{children}</div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {description ? (
+            <D.Description className="mb-3 text-13 text-ink-2">{description}</D.Description>
+          ) : (
+            <D.Description className="sr-only">{title}</D.Description>
+          )}
+          {children}
+        </div>
       </D.Content>
     </D.Portal>
   );

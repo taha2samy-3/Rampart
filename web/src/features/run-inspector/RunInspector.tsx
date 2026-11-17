@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { getRun, qk } from '@/api';
 import type { RunRow, RunStatus } from '@/api/types';
 import { EmptyState } from '@/components';
-import { absoluteDate } from '@/lib/format';
+import { absoluteDate, absoluteDateTime } from '@/lib/format';
 import { useAccess } from '@/app/useAccess';
 
 /** The steps of one run, in order (docs/16: queued, parsing, merging, enriching, scoring, completed). */
@@ -126,7 +126,7 @@ export function RunInspector({ run, selectedId }: { run: RunRow | undefined; sel
           <Row label={t('ingestion.environment')} value={ctx.environment} />
           <Row label={t('ingestion.build')} value={ctx.build_id} />
           <Row label={t('ingestion.pipeline')} value={ctx.pipeline_url} mono />
-          <Row label={t('ingestion.colWhen')} value={absoluteDate(run.created_at)} />
+          <Row label={t('ingestion.colWhen')} value={absoluteDateTime(run.created_at)} />
         </dl>
       </section>
 

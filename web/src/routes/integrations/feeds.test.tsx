@@ -92,4 +92,17 @@ describe('vulnerability feeds tab and declarative CRD', () => {
 
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it('triggers on-demand sync when clicking Sync Now button', async () => {
+    mockFetch({ loggedIn: true, role: 'admin' });
+    const { container } = renderApp('/integrations');
+
+    await userEvent.click(await screen.findByRole('tab', { name: /Vulnerability Feeds/i }));
+
+    const syncBtn = await screen.findByRole('button', { name: /Sync Now/i });
+    await userEvent.click(syncBtn);
+
+    expect(await screen.findByText(/Sync initiated/i)).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

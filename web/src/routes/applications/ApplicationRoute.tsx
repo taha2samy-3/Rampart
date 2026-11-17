@@ -66,8 +66,6 @@ function Page({ app }: { app: ApplicationPage }) {
           <Link to="/findings" search={{ q: `app:${app.slug} state:open,under_investigation,affected` }} className="mt-1 inline-block text-13">{t('apps.seeAll')}</Link>
         </section>
 
-        <ChangesSection appId={app.id} />
-
         <ComplianceSummary appId={app.id} />
 
         <RiskOverTime id={app.id} />
@@ -158,6 +156,8 @@ function Page({ app }: { app: ApplicationPage }) {
             <a href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=cyclonedx`} download>{t('apps.vexCdx')}</a>
           </p>
         </section>
+
+        <ChangesSection appId={app.id} />
       </article>
     </div>
   );

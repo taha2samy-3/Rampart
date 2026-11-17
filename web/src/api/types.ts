@@ -615,6 +615,13 @@ export interface FeedTestConnectionResponse {
   results: FeedTestResult[];
 }
 
+export interface FeedSyncResponse {
+  status: string;
+  feed: string;
+  message: string;
+  started_at: string;
+}
+
 export interface FeedsResponse {
   mirror?: FeedMirrorSpec | null;
   items: FeedItem[];
