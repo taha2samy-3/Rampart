@@ -143,7 +143,7 @@ func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	var req ScanComponentRequest
 	if r.Body != nil {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 	if req.Purl == "" {
