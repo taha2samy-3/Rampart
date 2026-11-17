@@ -60,7 +60,7 @@ log "helm install (plain Job for migrations on install, D4)"
 helm install "$REL" "$CHART" "${helm_args[@]}" --create-namespace --wait --wait-for-jobs --timeout 10m
 
 log "Installed objects"
-for crd in tenants applications scansources connectors; do kubectl get crd "$crd.rampart.aspm.dev" >/dev/null || fail "CRD $crd missing"; done
+for crd in tenants applications scansources connectors clusterfeeds; do kubectl get crd "$crd.rampart.aspm.dev" >/dev/null || fail "CRD $crd missing"; done
 kubectl -n "$NS" wait --for=condition=complete "job/$REL-migrate-1" --timeout=60s
 kubectl -n "$NS" rollout status "deploy/$REL" --timeout=120s
 kubectl -n "$NS" get secret "$REL-db-app" "$REL-db-system" "$REL-session" "$REL-objectstore" >/dev/null

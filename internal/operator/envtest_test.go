@@ -294,6 +294,15 @@ func TestRiskPoliciesShowTheirStatus(t *testing.T) {
 	if _, ok := store.Policy("cluster:sla:default"); !ok {
 		t.Fatal("cluster SLA policy not stored")
 	}
+
+	clusterFeed := cr("ClusterFeed", "", "default", map[string]any{"egress": "allow", "storageMode": "full"})
+	if err := c.Create(ctx, clusterFeed); err != nil {
+		t.Fatal(err)
+	}
+	ready(t, c, clusterFeed, "Reconciled")
+	if _, ok := store.Policy("cluster:feeds:default"); !ok {
+		t.Fatal("cluster feed policy not stored")
+	}
 }
 
 func waitNs(t *testing.T, c client.Client, name string) {
