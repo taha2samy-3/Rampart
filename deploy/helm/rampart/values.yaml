@@ -99,8 +99,8 @@ feeds:
   epssUrl: ""
   osvBaseUrl: ""
   osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
-  # Declarative ClusterFeedMirror CRD:
-  # Deploys a cluster-wide ClusterFeedMirror resource. Users can inspect, customize, or remove
+  # Declarative ClusterFeed CRD:
+  # Deploys a cluster-wide ClusterFeed resource. Users can inspect, customize, or remove
   # this CRD instance using kubectl or Helm values to configure internal mirrors, air-gapped setups,
   # or optional feeds.
   defaultMirror:
@@ -117,7 +117,7 @@ feeds:
       url: "https://osv-vulnerabilities.storage.googleapis.com"
   # Feed plugins (docs/16 D89, D94): one CronJob per plugin, each a container that fetches a vulnerability database
   # and posts it as intel-jsonl to /api/v1/feeds/<name>. tokenSecret holds key "token"; the same Secret is mounted
-  # into Rampart at /var/run/rampart/feeds/<name>/token, which the ClusterFeedMirror names as pushTokenFile.
+  # into Rampart at /var/run/rampart/feeds/<name>/token, which the ClusterFeed names as pushTokenFile.
   plugins: []
   #  - name: vulndb
   #    image: registry.example.com/vulndb-to-intel:1.0.0

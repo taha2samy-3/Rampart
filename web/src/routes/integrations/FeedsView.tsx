@@ -60,7 +60,7 @@ export function FeedsView() {
   }, [items]);
 
   const crdYaml = useMemo(() => {
-    return `# Threat Intelligence Feeds CRD (ClusterFeed / ClusterFeedMirror)
+    return `# Threat Intelligence Feeds CRD (ClusterFeed)
 apiVersion: rampart.aspm.dev/v1alpha1
 kind: ClusterFeed
 metadata:
