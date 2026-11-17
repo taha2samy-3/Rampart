@@ -68,10 +68,39 @@ func (a *API) handleInventoryComponents(w http.ResponseWriter, r *http.Request) 
 		problem(w, http.StatusBadRequest, "validation", "q is longer than 200 characters")
 		return
 	}
-	components, total, err := rd.ListInventoryComponents(r.Context(), tenantID, q, limit)
+	appFilter := strings.TrimSpace(r.URL.Query().Get("application"))
+	if appFilter == "" {
+		appFilter = strings.TrimSpace(r.URL.Query().Get("app"))
+	}
+	fetchLimit := limit
+	if appFilter != "" && fetchLimit < inventoryComponentMax {
+		fetchLimit = inventoryComponentMax
+	}
+	components, total, err := rd.ListInventoryComponents(r.Context(), tenantID, q, fetchLimit)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "internal", "Failed to read the packages")
 		return
+	}
+	if appFilter != "" {
+		targetName := appFilter
+		targetSlug := ""
+		if appID, err := uuid.Parse(appFilter); err == nil {
+			if app, err := a.store.GetApplication(r.Context(), tenantID, appID); err == nil && app != nil {
+				targetName = app.Name
+				targetSlug = app.Slug
+			}
+		}
+		filtered := make([]store.InventoryComponent, 0, len(components))
+		for _, c := range components {
+			if strings.EqualFold(c.Application, targetName) || (targetSlug != "" && strings.EqualFold(c.Application, targetSlug)) {
+				filtered = append(filtered, c)
+			}
+		}
+		total = len(filtered)
+		if len(filtered) > limit {
+			filtered = filtered[:limit]
+		}
+		components = filtered
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"components": components, "total": total, "truncated": total > len(components)})
 }

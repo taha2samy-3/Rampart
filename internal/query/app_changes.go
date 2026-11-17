@@ -75,14 +75,26 @@ func (a *API) handleApplicationChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	to, from := today, today.AddDate(0, 0, -29)
-	if v := r.URL.Query().Get("to"); v != "" {
+	if r.URL.Query().Has("to") {
+		v := r.URL.Query().Get("to")
+		if v == "" {
+			problem(w, http.StatusBadRequest, "validation", "to is a day, such as 2026-11-20")
+			return
+		}
 		if to, ok = parseDay(v); !ok {
 			problem(w, http.StatusBadRequest, "validation", "to is a day, such as 2026-11-20")
 			return
 		}
-		from = to.AddDate(0, 0, -29)
+		if !r.URL.Query().Has("from") {
+			from = to.AddDate(0, 0, -29)
+		}
 	}
-	if v := r.URL.Query().Get("from"); v != "" {
+	if r.URL.Query().Has("from") {
+		v := r.URL.Query().Get("from")
+		if v == "" {
+			problem(w, http.StatusBadRequest, "validation", "from is a day, such as 2026-11-01")
+			return
+		}
 		if from, ok = parseDay(v); !ok {
 			problem(w, http.StatusBadRequest, "validation", "from is a day, such as 2026-11-01")
 			return

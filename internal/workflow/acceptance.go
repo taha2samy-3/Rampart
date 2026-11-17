@@ -300,7 +300,7 @@ func (s *Service) resumeSLA(ctx context.Context, f *domain.Finding, ra *domain.R
 	paused := now.Sub(*f.SLAPausedAt)
 	f.SLAPausedAt = nil
 	if ra.RestartSLAOnExpiry {
-		f.SLAStart, f.SLADue, f.SLABreachedAt = &now, nil, nil
+		f.SLAStart, f.SLABreachedAt = &now, nil
 		s.rescore(ctx, f)
 		return
 	}

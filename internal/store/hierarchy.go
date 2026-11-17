@@ -171,7 +171,7 @@ func (s *PostgresStore) HierarchyRollups(ctx context.Context, tenantID uuid.UUID
 				       count(f.id) FILTER (WHERE f.risk_band = 'critical'),
 				       count(f.id) FILTER (WHERE f.risk_band = 'high'),
 				       count(f.id) FILTER (WHERE f.risk_band = 'medium'),
-				       count(f.id) FILTER (WHERE f.risk_band = 'low'),
+				       count(f.id) FILTER (WHERE coalesce(nullif(f.risk_band, ''), 'low') = 'low'),
 				       coalesce(max(f.risk_score), 0),
 				       count(f.id) FILTER (WHERE f.sla_breached_at IS NOT NULL),
 				       (SELECT count(*) FROM asset ast

@@ -146,13 +146,20 @@ const workflowRoute = createRoute({
   },
 });
 
+export interface ApplicationSearch {
+  tab?: 'overview' | 'cves' | 'sbom' | 'attest';
+}
+
 const overviewRoute = createRoute({ getParentRoute: () => appRoute, path: '/overview', component: OverviewRoute });
 const applicationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/applications', component: ApplicationsRoute });
 const applicationRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/applications/$id',
+  validateSearch: (s: Record<string, unknown>): ApplicationSearch => ({
+    tab: ['overview', 'cves', 'sbom', 'attest'].includes(s.tab as string) ? (s.tab as ApplicationSearch['tab']) : undefined,
+  }),
   component: function Application() {
-    return <ApplicationRoute id={applicationRoute.useParams().id} />;
+    return <ApplicationRoute id={applicationRoute.useParams().id} search={applicationRoute.useSearch()} />;
   },
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getApplication, getApplicationTrend, qk, toProblem } from '@/api';
 import type { ApplicationPage } from '@/api/types';
@@ -15,8 +15,10 @@ import { ApplicationAttestSection } from './ApplicationAttestSection';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
+export type AppTab = 'overview' | 'cves' | 'sbom' | 'attest';
+
 /** One application: where it stands, its deadlines, how fast things get fixed, its worst findings and its coverage. */
-export function ApplicationRoute({ id }: { id: string }) {
+export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: string } }) {
   const { t } = useTranslation();
   const q = useQuery({ queryKey: qk.applications.one(id), queryFn: ({ signal }) => getApplication(id, signal), retry: false });
   useEffect(() => {
@@ -40,10 +42,34 @@ export function ApplicationRoute({ id }: { id: string }) {
       </div>
     );
   }
-  return <Page app={q.data} />;
+  return <Page app={q.data} search={search} />;
 }
 
-function Page({ app }: { app: ApplicationPage }) {
+function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string } }) {
+  const navigate = useNavigate();
+  const searchTab = search?.tab && ['overview', 'cves', 'sbom', 'attest'].includes(search.tab)
+    ? (search.tab as AppTab)
+    : undefined;
+  const [tab, setTab] = useState<AppTab>(searchTab || 'overview');
+
+  useEffect(() => {
+    if (searchTab && searchTab !== tab) {
+      setTab(searchTab);
+    }
+  }, [searchTab]);
+
+  const handleTabChange = (val: string) => {
+    const nextTab = val as AppTab;
+    setTab(nextTab);
+    void navigate({
+      search: (prev: Record<string, unknown>) => ({
+        ...prev,
+        tab: nextTab === 'overview' ? undefined : nextTab,
+      }),
+      replace: true,
+    });
+  };
+
   const { t } = useTranslation();
   const text = openText(app.open, t);
   const [now] = useState(() => Date.now()); // the clock the page was opened at
@@ -79,7 +105,7 @@ function Page({ app }: { app: ApplicationPage }) {
 
         {/* Top-Level Tabs Navigation */}
         <section className="mt-6">
-          <Tabs defaultValue="overview">
+          <Tabs value={tab} onValueChange={handleTabChange}>
             <TabsList label={t('apps.sectionsNav', { defaultValue: 'Application Sections' })}>
               <TabsTrigger value="overview">
                 {t('apps.tabOverview', { defaultValue: 'Overview' })}

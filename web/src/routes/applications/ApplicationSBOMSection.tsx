@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { get, listFindings, post, toProblem } from '@/api';
+import { get, listFindings, post, toProblem, ProblemError } from '@/api';
 import { useAccess } from '@/app/useAccess';
 import type { ApplicationPage, FindingRow } from '@/api/types';
 import {
@@ -81,15 +81,18 @@ export function ApplicationSBOMSection({
       try {
         const res = await get<{ components: AppPackage[] }>(`/api/v1/applications/${encodeURIComponent(app.id)}/components`, { signal });
         return res.components ?? [];
-      } catch {
-        // Fallback to tenant inventory filtered by application name
-        const res = await get<{ components: AppPackage[] }>('/api/v1/inventory/components?limit=1000', { signal });
-        return (res.components ?? []).filter(
-          (c) =>
-            c.application_name &&
-            (c.application_name.toLowerCase() === app.name.toLowerCase() ||
-              (app.slug && c.application_name.toLowerCase() === app.slug.toLowerCase()))
-        );
+      } catch (err: unknown) {
+        // Fallback to tenant inventory filtered by application name on 404 only
+        if (err instanceof ProblemError && err.status === 404) {
+          const res = await get<{ components: AppPackage[] }>(`/api/v1/inventory/components?limit=1000&application=${encodeURIComponent(app.id)}`, { signal });
+          return (res.components ?? []).filter(
+            (c) =>
+              c.application_name &&
+              (c.application_name.toLowerCase() === app.name.toLowerCase() ||
+                (app.slug && c.application_name.toLowerCase() === app.slug.toLowerCase()))
+          );
+        }
+        throw err;
       }
     },
   });

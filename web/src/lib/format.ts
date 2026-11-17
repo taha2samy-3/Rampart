@@ -20,7 +20,7 @@ export function absoluteDate(iso: string | undefined | null, locale?: string): s
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 export function absoluteDateTime(iso: string | undefined | null, locale?: string): string {
@@ -35,6 +35,7 @@ export function absoluteDateTime(iso: string | undefined | null, locale?: string
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
+    timeZone: 'UTC',
   });
 }
 

@@ -31,7 +31,7 @@ func emptyBands() map[string]int {
 
 const summaryCols = `a.id, a.slug, a.name, a.business_criticality, a.internet_facing,
 	count(f.id) FILTER (WHERE f.risk_band = 'critical'), count(f.id) FILTER (WHERE f.risk_band = 'high'),
-	count(f.id) FILTER (WHERE f.risk_band = 'medium'), count(f.id) FILTER (WHERE f.risk_band = 'low'),
+	count(f.id) FILTER (WHERE f.risk_band = 'medium'), count(f.id) FILTER (WHERE coalesce(nullif(f.risk_band, ''), 'low') = 'low'),
 	coalesce(max(f.risk_score), 0), count(f.id) FILTER (WHERE f.sla_breached_at IS NOT NULL),
 	(SELECT max(r.created_at) FROM ingest_run r WHERE r.tenant_id = a.tenant_id AND r.application_id = a.id AND r.status IN ('completed', 'completed_with_errors')),
 	(SELECT count(*) FROM asset WHERE asset.tenant_id = a.tenant_id AND asset.application_id = a.id)`
@@ -115,9 +115,9 @@ func (s *PostgresStore) ApplicationDetail(ctx context.Context, tenantID, appID u
 		if d.SLA, err = slaStanding(ctx, tx, tenantID, &appID); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT risk_band, avg(extract(epoch FROM (resolved_at - first_seen)) / 86400)::float8, count(*)
+		rows, err := tx.Query(ctx, `SELECT coalesce(nullif(risk_band, ''), 'low'), avg(extract(epoch FROM (resolved_at - first_seen)) / 86400)::float8, count(*)
 			FROM finding WHERE tenant_id = $1 AND application_id = $2 AND resolution = 'fixed' AND resolved_at >= now() - interval '90 days'
-			GROUP BY risk_band`, tenantID, appID)
+			GROUP BY coalesce(nullif(risk_band, ''), 'low')`, tenantID, appID)
 		if err != nil {
 			return err
 		}
@@ -136,8 +136,8 @@ func (s *PostgresStore) ApplicationDetail(ctx context.Context, tenantID, appID u
 				d.MTTR = append(d.MTTR, m)
 			}
 		}
-		byCat, err := tx.Query(ctx, `SELECT category, risk_band, count(*) FROM finding
-			WHERE tenant_id = $1 AND application_id = $2 AND state IN `+activeStates+` GROUP BY category, risk_band`, tenantID, appID)
+		byCat, err := tx.Query(ctx, `SELECT category, coalesce(nullif(risk_band, ''), 'low'), count(*) FROM finding
+			WHERE tenant_id = $1 AND application_id = $2 AND state IN `+activeStates+` GROUP BY category, coalesce(nullif(risk_band, ''), 'low')`, tenantID, appID)
 		if err != nil {
 			return err
 		}
@@ -203,7 +203,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 	o := &domain.Overview{Open: emptyBands(), Overdue: []domain.OverdueFinding{}, TopApps: []domain.AppSummary{}, Gaps: []domain.AppSummary{}}
 	o.Changes.Since = since
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT risk_band, count(*) FROM finding WHERE tenant_id = $1 AND state IN `+activeStates+` GROUP BY risk_band`, tenantID)
+		rows, err := tx.Query(ctx, `SELECT coalesce(nullif(risk_band, ''), 'low'), count(*) FROM finding WHERE tenant_id = $1 AND state IN `+activeStates+` GROUP BY coalesce(nullif(risk_band, ''), 'low')`, tenantID)
 		if err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 			AND sla_due_date < now() AND sla_paused_at IS NULL`, tenantID).Scan(&o.OverdueTotal); err != nil {
 			return err
 		}
-		od, err := tx.Query(ctx, `SELECT f.id, f.title, f.risk_band, f.severity, f.sla_due_date, a.slug, a.name, f.vulnerability_id, f.rule_id
+		od, err := tx.Query(ctx, `SELECT f.id, f.title, coalesce(nullif(f.risk_band, ''), 'low'), f.severity, f.sla_due_date, a.slug, a.name, f.vulnerability_id, f.rule_id
 			FROM finding f JOIN application a ON a.id = f.application_id AND a.tenant_id = f.tenant_id
 			WHERE f.tenant_id = $1 AND f.state IN `+activeStates+` AND f.sla_due_date < now() AND f.sla_paused_at IS NULL
 			ORDER BY f.sla_due_date ASC, f.risk_score DESC LIMIT 10`, tenantID)
@@ -354,7 +354,7 @@ func (s *PostgresStore) AppBandTrend(ctx context.Context, tenantID, appID uuid.U
 				count(f.id) FILTER (WHERE f.risk_band = 'critical'),
 				count(f.id) FILTER (WHERE f.risk_band = 'high'),
 				count(f.id) FILTER (WHERE f.risk_band = 'medium'),
-				count(f.id) FILTER (WHERE f.risk_band = 'low'),
+				count(f.id) FILTER (WHERE coalesce(nullif(f.risk_band, ''), 'low') = 'low'),
 				(SELECT count(*) FROM finding n WHERE n.tenant_id = $1 AND n.application_id = $2
 					AND n.first_seen >= d.d AND n.first_seen < d.d + interval '1 day'),
 				(SELECT count(*) FROM finding x WHERE x.tenant_id = $1 AND x.application_id = $2 AND x.resolution = 'fixed'

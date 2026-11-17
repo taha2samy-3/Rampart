@@ -91,24 +91,28 @@ describe('Application page: compliance', () => {
 
     it('pins a framework to the top, keeps it after a reload, and unpins it', async () => {
       localStorage.removeItem('rampart.pinnedFrameworks');
+      localStorage.removeItem('rampart.pinnedFrameworks.t1.u1');
       const section = await open(payload);
       await within(section).findByText(/C gaps/);
       await userEvent.click(within(section).getByRole('button', { name: 'Show 2 more' }));
       await userEvent.click(within(section).getByRole('button', { name: 'Pin A meets to the top' }));
       expect(names(section)[0]).toBe('A meets');
       expect(within(section).getByRole('button', { name: 'Unpin A meets' })).toHaveAttribute('aria-pressed', 'true');
-      expect(JSON.parse(localStorage.getItem('rampart.pinnedFrameworks')!)).toEqual(['a-meets']);
+      const saved = localStorage.getItem('rampart.pinnedFrameworks.t1.u1') || localStorage.getItem('rampart.pinnedFrameworks')!;
+      expect(JSON.parse(saved)).toEqual(['a-meets']);
 
       // the next visit starts with it on top, even folded
       const again = await open(payload);
       await within(again).findAllByText(/A meets/);
       expect(names(again)[0]).toBe('A meets');
       await userEvent.click(within(again).getAllByRole('button', { name: 'Unpin A meets' })[0]!);
-      expect(JSON.parse(localStorage.getItem('rampart.pinnedFrameworks')!)).toEqual([]);
+      const cleared = localStorage.getItem('rampart.pinnedFrameworks.t1.u1') || localStorage.getItem('rampart.pinnedFrameworks')!;
+      expect(JSON.parse(cleared)).toEqual([]);
     });
 
     it('survives a damaged saved list', async () => {
       localStorage.setItem('rampart.pinnedFrameworks', '{not json');
+      localStorage.setItem('rampart.pinnedFrameworks.t1.u1', '{not json');
       const section = await open(payload);
       await within(section).findByText(/C gaps/);
       expect(names(section)[0]).toBe('C gaps');

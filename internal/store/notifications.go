@@ -86,7 +86,7 @@ func (s *PostgresStore) WarnSLADueSoon(ctx context.Context, tenantID uuid.UUID, 
 			WHERE tenant_id = $1 AND state IN `+activeStates+`
 			  AND sla_due_date IS NOT NULL AND sla_due_date > $2 AND sla_due_date <= $2 + make_interval(secs => $3)
 			  AND sla_breached_at IS NULL AND sla_paused_at IS NULL AND sla_warned_at IS NULL
-			RETURNING id, title, coalesce(risk_band, ''), sla_due_date`, tenantID, now, within.Seconds())
+			RETURNING id, title, coalesce(nullif(risk_band, ''), 'low'), sla_due_date`, tenantID, now, within.Seconds())
 		if err != nil {
 			return err
 		}

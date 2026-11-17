@@ -1,28 +1,34 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getApplicationCompliance, qk, toProblem } from '@/api';
 import type { AppFramework } from '@/api/types';
+import { useApp } from '@/app/session';
 import { Button, EmptyState, FrameworkMark, ProblemMessage, Skeleton } from '@/components';
 import { absoluteDate } from '@/lib/format';
 
-const PIN_KEY = 'rampart.pinnedFrameworks';
+export const PIN_KEY = 'rampart.pinnedFrameworks';
+
+export function pinStorageKey(tenantId?: string, userId?: string): string {
+  return tenantId && userId ? `rampart.pinnedFrameworks.${tenantId}.${userId}` : PIN_KEY;
+}
+
 /** How many frameworks show before the rest fold away: the pinned ones and then the most urgent. */
 export const VISIBLE = 3;
 
-/** The frameworks a person pinned to the top, kept in this browser (a preference of the viewer, shared by every application). */
-export function readPins(): string[] {
+/** The frameworks a person pinned to the top, kept in this browser (scoped per tenant and user). */
+export function readPins(key: string = PIN_KEY): string[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(PIN_KEY) ?? '[]');
+    const raw = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
   } catch {
     return [];
   }
 }
-function writePins(pins: string[]) {
+export function writePins(pins: string[], key: string = PIN_KEY) {
   try {
-    localStorage.setItem(PIN_KEY, JSON.stringify(pins));
+    localStorage.setItem(key, JSON.stringify(pins));
   } catch {
     /* a private window: the pin lasts until the page is closed */
   }
@@ -54,7 +60,19 @@ export function orderFrameworks(frameworks: AppFramework[], pins: string[]): App
  */
 export function ComplianceSummary({ appId }: { appId: string }) {
   const { t } = useTranslation();
-  const [pins, setPins] = useState(readPins);
+  let key = PIN_KEY;
+  try {
+    const appCtx = useApp();
+    if (appCtx?.session?.tenant?.id && appCtx?.session?.user?.id) {
+      key = pinStorageKey(appCtx.session.tenant.id, appCtx.session.user.id);
+    }
+  } catch {
+    /* fallback if outside AppCtx */
+  }
+  const [pins, setPins] = useState(() => readPins(key));
+  useEffect(() => {
+    setPins(readPins(key));
+  }, [key]);
   const [all, setAll] = useState(false);
   const q = useQuery({ queryKey: qk.applications.compliance(appId), queryFn: ({ signal }) => getApplicationCompliance(appId, signal), retry: false });
   const ordered = useMemo(() => orderFrameworks(q.data?.frameworks ?? [], pins), [q.data, pins]);
@@ -62,7 +80,7 @@ export function ComplianceSummary({ appId }: { appId: string }) {
   const toggle = (id: string) => {
     const next = pins.includes(id) ? pins.filter((p) => p !== id) : [...pins, id];
     setPins(next);
-    writePins(next);
+    writePins(next, key);
   };
   return (
     <section className="mt-6" aria-labelledby="app-compliance">

@@ -266,7 +266,7 @@ func (s *PostgresStore) ApplicationChanges(ctx context.Context, tenantID, appID 
 			}
 		}
 
-		const cols = `f.id, COALESCE(f.vulnerability_id, ''), f.rule_id, f.title, f.category, f.severity, f.risk_band, f.risk_score, f.state,
+		const cols = `f.id, COALESCE(f.vulnerability_id, ''), f.rule_id, f.title, f.category, f.severity, COALESCE(NULLIF(f.risk_band, ''), 'low'), f.risk_score, f.state,
 		              COALESCE(f.resolution, ''), COALESCE(NULLIF(a.display_name, ''), a.key), f.first_seen, f.resolved_at`
 		list := func(query string, args ...any) ([]FindingChange, bool, error) {
 			rows, err := tx.Query(ctx, query, args...)

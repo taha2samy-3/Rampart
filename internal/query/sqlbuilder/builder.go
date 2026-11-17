@@ -225,7 +225,11 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 		}
 	case "risk":
 		for _, v := range term.Values {
-			orClauses = append(orClauses, fmt.Sprintf("risk_band = $%d", curIdx))
+			if v.Raw == "low" {
+				orClauses = append(orClauses, fmt.Sprintf("coalesce(nullif(risk_band, ''), 'low') = $%d", curIdx))
+			} else {
+				orClauses = append(orClauses, fmt.Sprintf("risk_band = $%d", curIdx))
+			}
 			args = append(args, v.Raw)
 			curIdx++
 		}

@@ -236,6 +236,7 @@ func (e *Engine) mergeBatch(
 				Severity:          rec.Severity,
 				ToolSeverity:      rec.ToolSeverity,
 				CVSSVector:        rec.CVSSVector,
+				RiskBand:          domain.SeverityLow,
 				State:             domain.StateOpen,
 				Detection:         domain.DetectionPresent,
 				ContentHash:       rec.ContentHash,
@@ -277,7 +278,7 @@ func (e *Engine) mergeBatch(
 					toScore = append(toScore, targetFinding)
 					if e.scorer != nil && e.scorer.Policy(ctx, scope.TenantID).RestartOnReactivation { // docs/06 section 4
 						start := rec.SeenAt
-						targetFinding.SLAStart, targetFinding.SLABreachedAt, targetFinding.SLADue = &start, nil, nil
+						targetFinding.SLAStart, targetFinding.SLABreachedAt = &start, nil
 					}
 					addEvent(targetFinding, "reactivated", rec.SeenAt)
 					outcome.Fresh = append(outcome.Fresh, freshResult(scope.TenantID, runID, rec))

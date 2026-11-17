@@ -101,7 +101,7 @@ const controlBreaksSQL = `((cardinality(c.cwes) > 0 AND f.cwes && c.cwes) OR f.c
 			      OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.rules) r
 			                 WHERE f.rule_scanner_family = r->>'f'
 			                   AND (f.rule_id = r->>'p' OR ((r->>'w')::boolean AND starts_with(f.rule_id, r->>'p')))))
-			 AND (CASE coalesce(f.risk_band, 'low') WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) >= c.min`
+			 AND (CASE coalesce(nullif(f.risk_band, ''), 'low') WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) >= c.min`
 
 func (s *PostgresStore) ControlCounts(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlCount, error) {
 	out := map[string]ControlCount{}
@@ -132,7 +132,7 @@ func (s *PostgresStore) ControlCounts(ctx context.Context, tenantID uuid.UUID, a
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			WITH c AS (SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(id text, cwes int[], cats text[], rules jsonb, min int))
-			SELECT c.id, coalesce(f.risk_band, 'low'), f.state = 'risk_accepted', count(*)
+			SELECT c.id, coalesce(nullif(f.risk_band, ''), 'low'), f.state = 'risk_accepted', count(*)
 			FROM c JOIN finding f ON f.tenant_id = $1
 			 AND (f.state IN `+activeStates+` OR f.state = 'risk_accepted')
 			 AND ($3::uuid[] IS NULL OR f.application_id = ANY($3))

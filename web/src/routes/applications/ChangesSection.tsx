@@ -53,7 +53,7 @@ export function ChangesSection({
     if (preset === 'custom') return custom;
     return { from: dayString(now, Number(preset) - 1), to: dayString(now) };
   }, [preset, custom, now]);
-  const valid = range.from <= range.to;
+  const valid = Boolean(range.from && range.to && range.from <= range.to);
   const q = useQuery({
     queryKey: qk.applications.changes(appId, range.from, range.to),
     queryFn: ({ signal }) => getApplicationChanges(appId, range, signal),

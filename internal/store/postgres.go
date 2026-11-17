@@ -136,7 +136,7 @@ const findingCols = `id, tenant_id, finding_key, dedup_scope, asset_id, applicat
 	detection, content_hash, weak_fingerprint, first_seen, last_seen,
 	resolved_at, coalesce(resolution, ''), reopened_count, occurrence_count, version, created_at, updated_at,
 	coalesce(justification, ''), coalesce(impact_statement, ''), duplicate_of_id, tags, risk_acceptance_id,
-	risk_band, kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified,
+	coalesce(nullif(risk_band, ''), 'low'), kev, coalesce(epss_bucket, ''), sla_start, sla_due_date, sla_breached_at, sla_paused_at, secret_verified,
 	coalesce(owner, '')`
 
 func scanFinding(row pgx.Row) (*domain.Finding, error) {
@@ -162,6 +162,9 @@ func scanFinding(row pgx.Row) (*domain.Finding, error) {
 		return nil, err
 	}
 	f.Category = domain.FindingCategory(category)
+	if band == "" {
+		band = string(domain.SeverityLow)
+	}
 	f.RiskBand = domain.Severity(band)
 	f.Severity = domain.Severity(severity)
 	f.State = domain.FindingState(state)
