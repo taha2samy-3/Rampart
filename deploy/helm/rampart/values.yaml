@@ -107,6 +107,7 @@ feeds:
     enabled: true
     name: "default"
     egress: "allow"   # allow | deny (air-gapped)
+    storageMode: "lightweight" # lightweight (incremental stream) | full (complete offline vulnerability DB like Dependency-Track)
     kev:
       url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
     epss:
@@ -115,6 +116,10 @@ feeds:
       url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
     osv:
       url: "https://osv-vulnerabilities.storage.googleapis.com"
+    vulnrichment:
+      url: "https://github.com/cisagov/vulnrichment/archive/refs/heads/develop.zip"
+    exploitdb:
+      url: "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
   # Feed plugins (docs/16 D89, D94): one CronJob per plugin, each a container that fetches a vulnerability database
   # and posts it as intel-jsonl to /api/v1/feeds/<name>. tokenSecret holds key "token"; the same Secret is mounted
   # into Rampart at /var/run/rampart/feeds/<name>/token, which the ClusterFeed names as pushTokenFile.

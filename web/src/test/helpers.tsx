@@ -374,6 +374,7 @@ export function mockFetch(sc: Scenario): Calls {
       return json(sc.feeds ?? {
         mirror: {
           egress: 'allow',
+          storageMode: 'lightweight',
           kev: { url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json' },
           epss: { url: 'https://epss.cyentia.com/epss_scores-current.csv.gz' },
           nvd: { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },

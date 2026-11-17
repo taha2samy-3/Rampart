@@ -581,6 +581,7 @@ export interface FeedItem {
 
 export interface FeedMirrorSpec {
   egress?: 'allow' | 'deny';
+  storageMode?: 'lightweight' | 'full' | 'standalone';
   kev?: { url: string };
   epss?: { url: string };
   nvd?: { url: string };

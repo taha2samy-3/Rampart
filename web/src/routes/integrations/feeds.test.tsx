@@ -27,6 +27,7 @@ describe('vulnerability feeds tab and declarative CRD', () => {
     expect(screen.getByText('Total Feeds')).toBeInTheDocument();
     expect(screen.getByText('Synced Records')).toBeInTheDocument();
     expect(screen.getByText('Feed Health')).toBeInTheDocument();
+    expect(screen.getByText('Storage Mode')).toBeInTheDocument();
 
     expect(await axe(container)).toHaveNoViolations();
   });

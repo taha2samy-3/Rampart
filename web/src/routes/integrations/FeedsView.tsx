@@ -66,7 +66,8 @@ kind: ClusterFeed
 metadata:
   name: default
 spec:
-  egress: ${mirror?.egress ?? 'allow'}
+  egress: ${mirror?.egress ?? 'allow'} # allow | deny (air-gapped)
+  storageMode: ${mirror?.storageMode ?? 'lightweight'} # lightweight (stream) | full (offline local DB like Dependency-Track)
   kev:
     url: "${mirror?.kev?.url ?? 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'}"
   epss:
@@ -75,6 +76,10 @@ spec:
     url: "${mirror?.nvd?.url ?? 'https://services.nvd.nist.gov/rest/json/cves/2.0'}"
   osv:
     url: "${mirror?.osv?.url ?? 'https://osv-vulnerabilities.storage.googleapis.com'}"
+  vulnrichment:
+    url: "${mirror?.vulnrichment?.url ?? 'https://github.com/cisagov/vulnrichment/archive/refs/heads/develop.zip'}"
+  exploitdb:
+    url: "${mirror?.exploitdb?.url ?? 'https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv'}"
 `;
   }, [mirror]);
 
@@ -110,7 +115,7 @@ spec:
         </div>
 
         {/* Stats Row */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 pt-2 border-t border-border">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 pt-2 border-t border-border">
           <div className="flex flex-col">
             <span className="text-11 text-ink-2 uppercase tracking-wider">{t('feeds.totalFeeds', { defaultValue: 'Total Feeds' })}</span>
             <span className="text-18 font-semibold text-ink">{items.length}</span>
@@ -131,6 +136,26 @@ spec:
               {mirror?.egress === 'deny' ? 'Air-gapped (Deny)' : 'Standard (Allow)'}
             </span>
           </div>
+          <div className="flex flex-col">
+            <span className="text-11 text-ink-2 uppercase tracking-wider">{t('feeds.storageStrategy', { defaultValue: 'Storage Mode' })}</span>
+            <span className="text-18 font-semibold text-ink capitalize">
+              {mirror?.storageMode === 'full' || mirror?.storageMode === 'standalone' ? 'Full Local DB' : 'Lightweight'}
+            </span>
+          </div>
+        </div>
+
+        {/* Storage Strategy Explanation Banner */}
+        <div className="flex items-center gap-2 rounded bg-surface-2 px-3 py-2 text-12 text-ink-2">
+          <span className="font-medium text-ink">
+            {mirror?.storageMode === 'full' || mirror?.storageMode === 'standalone'
+              ? 'Full Local Mirror Active:'
+              : 'Lightweight Stream Active:'}
+          </span>
+          <span>
+            {mirror?.storageMode === 'full' || mirror?.storageMode === 'standalone'
+              ? 'Vulnerability databases (NVD, OSV, KEV, EPSS) are fully cached and stored offline in PostgreSQL (Dependency-Track style) for zero-latency, isolated operation.'
+              : 'Feeds sync incrementally and scores are streamed daily to keep database footprint minimal. Switch to "storageMode: full" in ClusterFeed if you require a complete offline database mirror.'}
+          </span>
         </div>
       </div>
 
@@ -287,6 +312,16 @@ spec:
             <pre className="overflow-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-12 text-ink">
               {crdYaml}
             </pre>
+
+            <div className="rounded-md border border-border bg-surface p-3 text-12 text-ink-2 flex flex-col gap-1.5">
+              <span className="font-medium text-ink">Storage Strategies:</span>
+              <div>
+                <strong className="text-ink">storageMode: lightweight (Default)</strong>: Synchronizes changes incrementally and daily scores via lightweight streams to save disk and memory.
+              </div>
+              <div>
+                <strong className="text-ink">storageMode: full</strong>: Mirrors and stores the complete open-source and global vulnerability intelligence database locally in PostgreSQL (Dependency-Track style) for strict air-gapped / sovereign environments.
+              </div>
+            </div>
 
             <div className="rounded-md border border-border bg-surface p-3 text-12 text-ink-2 flex flex-col gap-1.5">
               <span className="font-medium text-ink">Kubectl Commands:</span>

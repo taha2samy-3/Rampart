@@ -7,6 +7,7 @@ metadata:
     {{- include "rampart.labels" . | nindent 4 }}
 spec:
   egress: {{ .Values.feeds.defaultMirror.egress | default "allow" | quote }}
+  storageMode: {{ .Values.feeds.defaultMirror.storageMode | default "lightweight" | quote }}
   {{- $kevUrl := or .Values.feeds.defaultMirror.kev.url .Values.feeds.kevUrl }}
   {{- if $kevUrl }}
   kev:

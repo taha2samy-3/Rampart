@@ -104,6 +104,11 @@ func (c *FeedConfig) applyMirror(m *domain.FeedMirrorSpec, log *slog.Logger) (sk
 	} else if deny {
 		c.OSVEcosystems = nil
 	}
+	if (m.StorageMode == "full" || m.StorageMode == "standalone") && len(c.OSVEcosystems) == 0 && !deny {
+		// When full local mirror is requested, sync major open-source ecosystems by default like Dependency-Track.
+		c.OSVEcosystems = []string{"Go", "npm", "PyPI", "Maven"}
+		log.Info("feeds: storageMode full; caching complete open-source vulnerability database locally", "ecosystems", c.OSVEcosystems)
+	}
 	if deny {
 		log.Info("feeds: egress deny; feeds without a mirror are not read", "kev", !skipKEV, "epss", !skipEPSS, "nvd", !c.NVDDisabled, "osv", len(c.OSVEcosystems) > 0)
 	}

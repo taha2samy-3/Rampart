@@ -30,6 +30,9 @@ type FeedMirrorSpec struct {
 	VulnCheckKEV *FeedSource  `json:"vulncheckKev,omitempty"` // VulnCheck KEV: token required (community or commercial)
 	Custom       []CustomFeed `json:"custom,omitempty"`       // licensed or in-house intelligence, in a documented format
 	Egress       string       `json:"egress,omitempty"`       // allow (default) | deny: no feed is read from anywhere but its mirror
+	// StorageMode controls whether vulnerability intelligence is cached incrementally (lightweight, default)
+	// or stored as a full offline local database (full / standalone, like Dependency-Track).
+	StorageMode string `json:"storageMode,omitempty"`
 }
 
 // FeedMirrorSource is one feed's mirror.
@@ -77,7 +80,12 @@ func ParseFeedMirrorSpec(raw []byte) (*FeedMirrorSpec, error) {
 	switch s.Egress {
 	case "", "allow", "deny":
 	default:
-		return nil, fmt.Errorf("clusterfeedmirror: egress must be allow or deny, got %q", s.Egress)
+		return nil, fmt.Errorf("clusterfeed: egress must be allow or deny, got %q", s.Egress)
+	}
+	switch s.StorageMode {
+	case "", "lightweight", "full", "standalone":
+	default:
+		return nil, fmt.Errorf("clusterfeed: storageMode must be lightweight, full, or standalone, got %q", s.StorageMode)
 	}
 	if s.CWE != nil {
 		return nil, fmt.Errorf("clusterfeedmirror: the cwe feed is not synced by this version; remove it")

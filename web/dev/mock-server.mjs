@@ -672,6 +672,7 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/feeds') return json(res, {
       mirror: {
         egress: 'allow',
+        storageMode: 'lightweight',
         kev: { url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json' },
         epss: { url: 'https://epss.cyentia.com/epss_scores-current.csv.gz' },
         nvd: { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },

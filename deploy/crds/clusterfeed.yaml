@@ -102,3 +102,7 @@ spec:
                   type: string
                   enum: [allow, deny]
                   default: allow
+                storageMode:
+                  type: string
+                  enum: [lightweight, full, standalone]
+                  default: lightweight
