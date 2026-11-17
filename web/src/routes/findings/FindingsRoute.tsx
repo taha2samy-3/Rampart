@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { listFindings, qk, toProblem } from '@/api';
+import { get, listFindings, qk, toProblem } from '@/api';
+import type { FindingRow } from '@/api/types';
 import { Button, CommandLine, Dialog, DialogContent, EmptyState, ProblemMessage, Skeleton } from '@/components';
 import { Facets } from '@/features/facets/Facets';
 import { FilterBar } from '@/features/filter-bar/FilterBar';
@@ -113,9 +114,24 @@ export function FindingsRoute({ search, deepLinkId }: { search: FindingsSearch; 
     // A bad filter is the user's to fix; only server faults are retried.
     retry: (n, err) => toProblem(err).status >= 500 && n < 1,
   });
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+  const listItems = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
   const total = query.data?.pages[0]?.total;
-  const selectedRow = rows.find((r) => r.finding.id === selectedId);
+
+  const singleFindingQuery = useQuery({
+    queryKey: ['findings', 'single', selectedId],
+    queryFn: ({ signal }) => get<FindingRow>(`/api/v1/findings/${encodeURIComponent(selectedId!)}`, { signal }),
+    enabled: !!selectedId && !listItems.some((r) => r.finding.id === selectedId),
+    retry: false,
+  });
+
+  const selectedRow = listItems.find((r) => r.finding.id === selectedId) ?? singleFindingQuery.data;
+
+  const rows = useMemo(() => {
+    if (selectedRow && !listItems.some((r) => r.finding.id === selectedRow.finding.id)) {
+      return [selectedRow, ...listItems];
+    }
+    return listItems;
+  }, [listItems, selectedRow]);
   // A decision is offered where the caller's role on the finding's application reaches it (D48).
   const canTriage = can(selectedRow?.finding.application_id, 'triager');
   // Selecting for a bulk change is offered to anyone who may decide somewhere; the server decides each finding

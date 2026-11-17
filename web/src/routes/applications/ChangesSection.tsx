@@ -37,7 +37,15 @@ export const dayString = (now: Date, back = 0) => new Date(Date.UTC(now.getUTCFu
  * the ones that came back, and what was still open at the end, with the numbers of the period before to compare. Snyk
  * calls it "new and resolved issues" and Tenable "discovered and remediated"; the lists are the CVEs themselves.
  */
-export function ChangesSection({ appId, now = new Date() }: { appId: string; now?: Date }) {
+export function ChangesSection({
+  appId,
+  now = new Date(),
+  onSelectFinding,
+}: {
+  appId: string;
+  now?: Date;
+  onSelectFinding?: (f: FindingDetailTarget) => void;
+}) {
   const { t } = useTranslation();
   const [preset, setPreset] = useState<Preset>('30');
   const [custom, setCustom] = useState({ from: dayString(now, 29), to: dayString(now) });
@@ -84,15 +92,22 @@ export function ChangesSection({ appId, now = new Date() }: { appId: string; now
       )}
       {q.isPending && valid && <Skeleton className="h-32 w-full" />}
       {q.isError && <ProblemMessage problem={toProblem(q.error)} title={t('apps.changesFailed')} onRetry={() => void q.refetch()} />}
-      {q.data && <Body data={q.data} />}
+      {q.data && <Body data={q.data} onSelectFinding={onSelectFinding} />}
     </section>
   );
 }
 
-function Body({ data }: { data: ApplicationChanges }) {
+function Body({
+  data,
+  onSelectFinding,
+}: {
+  data: ApplicationChanges;
+  onSelectFinding?: (f: FindingDetailTarget) => void;
+}) {
   const { t } = useTranslation();
   const s = data.summary;
   const [selectedChange, setSelectedChange] = useState<FindingChange | null>(null);
+  const handleSelect = onSelectFinding ?? setSelectedChange;
 
   return (
     <>
@@ -108,13 +123,13 @@ function Body({ data }: { data: ApplicationChanges }) {
           <TabsTrigger value="reopened">{t('apps.tabReopened')} ({s.reopened})</TabsTrigger>
           <TabsTrigger value="open">{t('apps.tabOpen')} ({s.open_at_end})</TabsTrigger>
         </TabsList>
-        <TabsContent value="new"><List rows={data.new} kind="new" cut={data.truncated.includes('new')} onSelect={setSelectedChange} /></TabsContent>
-        <TabsContent value="closed"><List rows={data.closed} kind="closed" cut={data.truncated.includes('closed')} onSelect={setSelectedChange} /></TabsContent>
-        <TabsContent value="reopened"><List rows={data.reopened} kind="reopened" cut={data.truncated.includes('reopened')} onSelect={setSelectedChange} /></TabsContent>
-        <TabsContent value="open"><List rows={data.open} kind="open" cut={data.truncated.includes('open')} onSelect={setSelectedChange} /></TabsContent>
+        <TabsContent value="new"><List rows={data.new} kind="new" cut={data.truncated.includes('new')} onSelect={handleSelect} /></TabsContent>
+        <TabsContent value="closed"><List rows={data.closed} kind="closed" cut={data.truncated.includes('closed')} onSelect={handleSelect} /></TabsContent>
+        <TabsContent value="reopened"><List rows={data.reopened} kind="reopened" cut={data.truncated.includes('reopened')} onSelect={handleSelect} /></TabsContent>
+        <TabsContent value="open"><List rows={data.open} kind="open" cut={data.truncated.includes('open')} onSelect={handleSelect} /></TabsContent>
       </Tabs>
 
-      {selectedChange && (
+      {!onSelectFinding && selectedChange && (
         <FindingDetailModal change={selectedChange} onClose={() => setSelectedChange(null)} />
       )}
     </>
@@ -193,7 +208,10 @@ function List({
               <Td>
                 <Link
                   to="/findings"
-                  search={{ sel: r.id }}
+                  search={{
+                    q: r.vulnerability_id ? `cve:${r.vulnerability_id}` : `rule:${r.rule_id}`,
+                    sel: r.id,
+                  }}
                   onClick={(e) => {
                     e.preventDefault();
                     onSelect(r);
@@ -222,12 +240,27 @@ function List({
   );
 }
 
-interface FindingDetailData extends FindingRow {
+export interface FindingDetailTarget {
+  id: string;
+  vulnerability_id?: string | null;
+  rule_id?: string;
+  title?: string;
+  severity?: string;
+  risk_band?: string;
+  risk_score?: number;
+  state?: string;
+  asset?: string;
+  first_seen?: string;
+  resolved_at?: string | null;
+  resolution?: string;
+}
+
+export interface FindingDetailData extends FindingRow {
   reported_by?: Reporter[] | null;
   occurrences?: Array<{ scanner?: string }> | null;
 }
 
-function FindingDetailModal({ change, onClose }: { change: FindingChange; onClose: () => void }) {
+export function FindingDetailModal({ change, onClose }: { change: FindingDetailTarget; onClose: () => void }) {
   const q = useQuery({
     queryKey: ['findings', 'detail', change.id],
     queryFn: ({ signal }) => get<FindingDetailData>(`/api/v1/findings/${encodeURIComponent(change.id)}`, { signal }),
@@ -242,11 +275,15 @@ function FindingDetailModal({ change, onClose }: { change: FindingChange; onClos
   const reporters: Reporter[] = row?.reported_by ?? [];
   const occurrences = row?.occurrences ?? [];
 
+  const vulnId = change.vulnerability_id || f?.vulnerability_id;
+  const ruleId = change.rule_id || f?.rule_id;
+  const targetQuery = vulnId ? `cve:${vulnId}` : (ruleId ? `rule:${ruleId}` : (change.asset ? `app:${change.asset}` : ''));
+
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        title={change.vulnerability_id || change.rule_id || 'Finding Details'}
-        description={change.title}
+        title={vulnId || ruleId || 'Finding Details'}
+        description={change.title || f?.title || 'Security vulnerability details and provenance'}
         className="w-[700px] max-w-[95vw]"
       >
         <div className="flex flex-col gap-4">
@@ -254,16 +291,21 @@ function FindingDetailModal({ change, onClose }: { change: FindingChange; onClos
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded bg-surface-2 px-2.5 py-1 text-12 font-medium">
-                <BandShape band={toBand(change.risk_band)} size={12} />
-                <span className="capitalize">{change.severity}</span>
+                <BandShape band={toBand(change.risk_band || f?.severity)} size={12} />
+                <span className="capitalize">{change.severity || f?.severity || 'medium'}</span>
               </span>
               <span className="rounded bg-surface-2 px-2 py-0.5 text-11 font-mono uppercase text-ink-2">
-                {change.state || 'open'}
+                {change.state || f?.state || 'open'}
               </span>
+              {vulnId && (
+                <span className="rounded border border-border bg-surface px-2 py-0.5 text-11 font-mono text-accent">
+                  {vulnId}
+                </span>
+              )}
             </div>
-            {row?.risk && (
+            {(row?.risk || change.risk_score !== undefined) && (
               <span className="text-12 font-semibold">
-                Risk Score: <span className="font-mono text-14">{row.risk.total_score}</span>
+                Risk Score: <span className="font-mono text-14">{row?.risk?.total_score ?? change.risk_score}</span>
               </span>
             )}
           </div>
@@ -275,7 +317,7 @@ function FindingDetailModal({ change, onClose }: { change: FindingChange; onClos
             </h4>
             <dl className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-2 text-12">
               <dt className="text-ink-2">Asset / Service:</dt>
-              <dd className="font-mono font-medium text-ink">{change.asset}</dd>
+              <dd className="font-mono font-medium text-ink">{change.asset || 'default-repository'}</dd>
 
               <dt className="text-ink-2">Location / Path:</dt>
               <dd className="break-all font-mono text-ink">
@@ -326,17 +368,56 @@ function FindingDetailModal({ change, onClose }: { change: FindingChange; onClos
                   <dd className="capitalize text-ink">{change.resolution}</dd>
                 </>
               )}
+
+              {/* External Advisory References */}
+              {vulnId && (
+                <>
+                  <dt className="text-ink-2">Security Advisories:</dt>
+                  <dd className="flex flex-wrap gap-2 text-ink">
+                    {vulnId.startsWith('CVE-') && (
+                      <>
+                        <a
+                          href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vulnId)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-accent underline hover:opacity-80"
+                        >
+                          NVD NIST Advisory ↗
+                        </a>
+                        <a
+                          href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${encodeURIComponent(vulnId)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-accent underline hover:opacity-80"
+                        >
+                          MITRE CVE ↗
+                        </a>
+                      </>
+                    )}
+                    {vulnId.startsWith('GHSA-') && (
+                      <a
+                        href={`https://github.com/advisories/${encodeURIComponent(vulnId)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-accent underline hover:opacity-80"
+                      >
+                        GitHub Advisory Database ↗
+                      </a>
+                    )}
+                  </dd>
+                </>
+              )}
             </dl>
           </div>
 
           {/* Description if available */}
-          {f?.description && (
+          {(f?.description || change.title) && (
             <div className="text-12">
               <h4 className="mb-1 text-12 font-semibold uppercase tracking-wider text-ink-2">
                 Description & Impact
               </h4>
               <p className="max-h-36 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-2.5 text-ink-2">
-                {f.description}
+                {f?.description || change.title}
               </p>
             </div>
           )}
@@ -345,8 +426,12 @@ function FindingDetailModal({ change, onClose }: { change: FindingChange; onClos
           <div className="mt-1 flex items-center justify-between border-t border-border pt-3">
             <Link
               to="/findings"
-              search={{ sel: change.id }}
-              className="inline-flex items-center gap-1.5 text-13 font-medium text-primary hover:underline"
+              search={{
+                q: targetQuery || undefined,
+                sel: change.id,
+              }}
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 text-13 font-semibold text-accent hover:underline"
             >
               Open in Findings Explorer →
             </Link>

@@ -22,6 +22,7 @@ export function finding(i: number, band: 'critical' | 'high' | 'medium' | 'low' 
     finding: {
       id: `f-${i}`, application_id: 'b7e1c9a2-0000', title: `Finding ${i}`, severity: band, risk_score: base + 100,
       state: 'open', version: 3, first_seen: '2026-10-01T00:00:00Z', rule_scanner_family: 'semgrep', rule_id: 'r1',
+      vulnerability_id: null as string | null,
       location: { file_path: 'src/a.go', start_line: i },
     },
     risk: { base_severity: band, base_points: base, factors: [{ name: 'KEV', points: 100, reason: 'Known exploited' }], total_score: base + 100, band },

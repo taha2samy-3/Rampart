@@ -63,14 +63,23 @@ function Body({ ov, trend }: { ov: Overview; trend: TrendPoint[] }) {
                 <p className="m-0 mb-1 text-12 text-ink-2">{t('overview.overdueMore', { count: ov.overdue_total, shown: ov.overdue.length })}</p>
               )}
               <ol className="m-0 list-none border-t border-rule p-0 text-13">
-                {ov.overdue.map((f) => (
-                  <li key={f.id} className="flex items-center gap-3 border-b border-rule py-2">
-                    <BandShape band={toBand(f.band)} size={12} />
-                    <Link to="/findings" search={{ sel: f.id }} className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline">{f.title}</Link>
-                    <span className="hidden text-ink-2 sm:inline">{f.app_name}</span>
-                    <span className="font-semibold">{t('overview.overdueBy', { days: Math.max(1, Math.floor((now - Date.parse(f.due)) / DAY)) })}</span>
-                  </li>
-                ))}
+                {ov.overdue.map((f) => {
+                  const fApp = f.app_slug || (f.app_name ? `"${f.app_name}"` : '');
+                  return (
+                    <li key={f.id} className="flex items-center gap-3 border-b border-rule py-2">
+                      <BandShape band={toBand(f.band)} size={12} />
+                      <Link
+                        to="/findings"
+                        search={{ q: fApp ? `app:${fApp}` : undefined, sel: f.id }}
+                        className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline"
+                      >
+                        {f.title}
+                      </Link>
+                      <span className="hidden text-ink-2 sm:inline">{f.app_name}</span>
+                      <span className="font-semibold">{t('overview.overdueBy', { days: Math.max(1, Math.floor((now - Date.parse(f.due)) / DAY)) })}</span>
+                    </li>
+                  );
+                })}
               </ol>
             </>
           )}

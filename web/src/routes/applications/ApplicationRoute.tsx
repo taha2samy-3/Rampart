@@ -4,10 +4,10 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getApplication, getApplicationTrend, qk, toProblem } from '@/api';
 import type { ApplicationPage } from '@/api/types';
-import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks } from '@/components';
+import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components';
 import type { ChartBand } from '@/components';
 import { openText } from '@/lib/apps';
-import { ChangesSection } from './ChangesSection';
+import { ChangesSection, FindingDetailModal, type FindingDetailTarget } from './ChangesSection';
 import { ComplianceSummary } from './ComplianceSummary';
 import { ScanCoverage } from './ScanCoverage';
 import { ApplicationSBOMSection } from './ApplicationSBOMSection';
@@ -47,6 +47,8 @@ function Page({ app }: { app: ApplicationPage }) {
   const { t } = useTranslation();
   const text = openText(app.open, t);
   const [now] = useState(() => Date.now()); // the clock the page was opened at
+  const [selectedFinding, setSelectedFinding] = useState<FindingDetailTarget | null>(null);
+  const appQuerySlug = app.slug || `"${app.name}"`;
   return (
     <div className="h-full overflow-y-auto">
       <article className="mx-auto max-w-[860px] px-6 py-5">
@@ -65,7 +67,7 @@ function Page({ app }: { app: ApplicationPage }) {
             {text || t('apps.noOpen')}.
           </p>
           <p className="m-0 mt-1 text-13 text-ink-2">{t('apps.riskLine', { score: app.risk_score, exposure: app.exposure_count })}</p>
-          <Link to="/findings" search={{ q: `app:${app.slug} state:open,under_investigation,affected` }} className="mt-1 inline-block text-13">{t('apps.seeAll')}</Link>
+          <Link to="/findings" search={{ q: `app:${appQuerySlug} state:open,under_investigation,affected` }} className="mt-1 inline-block text-13">{t('apps.seeAll')}</Link>
         </section>
 
         <ComplianceSummary appId={app.id} />
@@ -112,7 +114,23 @@ function Page({ app }: { app: ApplicationPage }) {
                   <li key={f.id} className="flex items-center gap-3 border-b border-rule py-2">
                     <BandShape band={toBand(f.band)} size={12} />
                     <span className="w-9 text-end text-14 font-semibold tnum">{f.risk_score}</span>
-                    <Link to="/findings" search={{ sel: f.id }} className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline">{f.title}</Link>
+                    <Link
+                      to="/findings"
+                      search={{ q: `app:${appQuerySlug}`, sel: f.id }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedFinding({
+                          id: f.id,
+                          title: f.title,
+                          severity: f.band,
+                          risk_score: f.risk_score,
+                          state: f.state,
+                        });
+                      }}
+                      className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline"
+                    >
+                      {f.title}
+                    </Link>
                     <span className={due.late ? 'font-semibold' : 'text-ink-2'}>{due.text}</span>
                   </li>
                 );
@@ -150,14 +168,38 @@ function Page({ app }: { app: ApplicationPage }) {
           )}
         </details>
 
-        {/* Software Bill of Materials (SBOM) & Packages */}
-        <ApplicationSBOMSection app={app} />
+        {/* Tabbed Governance, SBOM & CVE Sections */}
+        <section className="mt-8 border-t border-rule pt-6" aria-labelledby="app-sub-tabs">
+          <Tabs defaultValue="cves">
+            <TabsList label={t('apps.sectionsNav', { defaultValue: 'Application Sections' })}>
+              <TabsTrigger value="cves">
+                {t('apps.tabCVEs', { defaultValue: 'CVEs & Activity' })}
+              </TabsTrigger>
+              <TabsTrigger value="sbom">
+                {t('apps.tabSBOM', { defaultValue: 'Software Bill of Materials (SBOM)' })}
+              </TabsTrigger>
+              <TabsTrigger value="attest">
+                {t('apps.tabAttest', { defaultValue: 'Compliance Attestations' })}
+              </TabsTrigger>
+            </TabsList>
 
-        {/* Compliance Attestations (Attest) */}
-        <ApplicationAttestSection app={app} />
+            <TabsContent value="cves" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ChangesSection appId={app.id} onSelectFinding={(f) => setSelectedFinding(f)} />
+            </TabsContent>
 
-        {/* Application Changes & CVE Activity Table */}
-        <ChangesSection appId={app.id} />
+            <TabsContent value="sbom" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationSBOMSection app={app} onSelectFinding={(f) => setSelectedFinding(f)} />
+            </TabsContent>
+
+            <TabsContent value="attest" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationAttestSection app={app} />
+            </TabsContent>
+          </Tabs>
+        </section>
+
+        {selectedFinding && (
+          <FindingDetailModal change={selectedFinding} onClose={() => setSelectedFinding(null)} />
+        )}
       </article>
     </div>
   );

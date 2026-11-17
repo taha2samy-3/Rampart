@@ -170,6 +170,28 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 	curIdx := startIdx
 
 	switch field {
+	case "is":
+		for _, v := range term.Values {
+			val := strings.ToLower(v.Raw)
+			switch val {
+			case "open":
+				orClauses = append(orClauses, fmt.Sprintf("state IN ($%d, $%d, $%d)", curIdx, curIdx+1, curIdx+2))
+				args = append(args, "open", "under_investigation", "affected")
+				curIdx += 3
+			case "closed":
+				orClauses = append(orClauses, fmt.Sprintf("state IN ($%d, $%d, $%d, $%d)", curIdx, curIdx+1, curIdx+2, curIdx+3))
+				args = append(args, "fixed", "not_affected", "false_positive", "risk_accepted")
+				curIdx += 4
+			case "fixed":
+				orClauses = append(orClauses, fmt.Sprintf("state = $%d", curIdx))
+				args = append(args, "fixed")
+				curIdx++
+			default:
+				orClauses = append(orClauses, fmt.Sprintf("state = $%d", curIdx))
+				args = append(args, val)
+				curIdx++
+			}
+		}
 	case "state":
 		for _, v := range term.Values {
 			orClauses = append(orClauses, fmt.Sprintf("state = $%d", curIdx))
@@ -260,7 +282,7 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 				args = append(args, uid)
 				curIdx++
 			} else {
-				orClauses = append(orClauses, fmt.Sprintf("application_id IN (SELECT id FROM application WHERE slug = $%d)", curIdx))
+				orClauses = append(orClauses, fmt.Sprintf("application_id IN (SELECT id FROM application WHERE slug = $%d OR name ILIKE $%d)", curIdx, curIdx))
 				args = append(args, v.Raw)
 				curIdx++
 			}
