@@ -2109,3 +2109,29 @@ In `SyncProject` and the portfolio sync the order is: the project's stored manua
 ## D119: what changed in an application
 
 `GET /api/v1/applications/{id}/changes?from=&to=` answers which findings appeared, were closed (and how), came back, and were open at the end of a range of days (both included, UTC, at most 366, default 30), with exact counts, the counts of the range of equal length before it, and a count per day. A finding is "new" by `first_seen`, "closed" by `resolved_at` (any resolution), "came back" by a `reactivated` event, "open at an instant" when first seen before it and not closed by it. Lists are cut at 1,000 and the cut is named. No schema change. docs/28 §12.
+
+## D120: a control is out of compliance only past a deadline; the finding page shows its controls
+
+**Before.** Any open finding that bore on a control made the control `open` ("Not met"). That is stricter than the standards. PCI DSS 6.3.3 gives a month for critical patches and leaves the rest to the entity's own risk ranking; Vanta and Drata mark an item overdue only after its SLA, and an SLA miss can be acknowledged; CISA BOD 22-01 sets a due date per KEV entry (federal agencies only).
+
+**Now.**
+- `compliance.Control.Breaks` decides whether a finding counts against a control. The same rule exists in SQL (`controlBreaksSQL`); `TestControlBreaks_GoAndSQLAgree_OnPostgreSQL` runs both on the same data so they cannot drift.
+- A control with open findings none of which is past its deadline has the new status `at_risk` ("At risk"), with the date the first falls due. Only a finding past its deadline makes the control `open` ("Not met"). The deadline is the finding's SLA due date, or `caps.kevDueDate` where it is earlier (D40/D41).
+- At application level `AppFramework` has `at_risk`, `overdue_findings`, `earliest_due`; the verdict is `meets`, `at_risk`, `gaps` or `partial`.
+- `GET /api/v1/findings/{id}` returns `controls`: the controls of every installed framework that the finding bears on, with status and deadline. The inspector shows them in a Compliance section (nothing is drawn until loaded; overdue is counted in whole days).
+- The application page orders frameworks: pinned, then gaps, then at risk by nearest due date, then partial, then meets; shows 3 and "Show N more". Pins are kept in the browser (`rampart.pinnedFrameworks`).
+
+**No deadline, no clock.** A finding with no deadline at all (no SLA policy applies) cannot be "inside" one, so a control whose open findings have none stays "Not met", as before.
+
+**Known simplification.** The clock starts at `firstSeen` (`startFrom: firstSeen`), not at the release date of the patch as PCI DSS 6.3.3 reads. Rampart has no reliable patch date for every ecosystem; recorded as a limitation.
+
+## D121: threat intelligence feeds as declarative Custom Resources and dedicated UI tab
+
+**Problem.** Threat intelligence feeds (NVD, OSV, CISA KEV, FIRST EPSS) were historically perceived as built-in background processes, with `ClusterFeedMirror` only conceived as a mirror override. Operators need full declarative visibility: feeds should be explicit CRD instances in the Helm chart, inspectable via kubectl, customizable for airgap internal mirrors or private feeds, and removable cleanly.
+
+**Resolution.**
+- The Helm chart renders a default `ClusterFeed` / `ClusterFeedMirror` resource (`feeds.defaultMirror.enabled: true`), establishing declared upstream URLs, egress rules, and optional/custom feed endpoints.
+- The CRD schema and operator support both `ClusterFeed` and `ClusterFeedMirror` kinds with shortNames (`cfm`, `feed`, `feeds`, `clusterfeed`, `clusterfeeds`), ensuring backward and forward compatibility.
+- `GET /api/v1/feeds` queries active mirror configuration and correlated feed states (`records`, `last_sync`, `status`, `error`).
+- A dedicated "Vulnerability Feeds" tab in the Integrations page surfaces feed health, synced record counts, egress policies, and an interactive Declarative CRD specification dialog with copyable manifests and kubectl commands.
+

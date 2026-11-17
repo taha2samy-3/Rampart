@@ -40,6 +40,7 @@ export const qk = {
     all: () => ['findings'] as const,
     events: (id: string) => ['findings', 'events', id] as const,
     sources: (id: string) => ['findings', 'sources', id] as const,
+    controls: (id: string) => ['findings', 'controls', id] as const,
     list: (q: string, sort: string) => ['findings', 'list', { q, sort }] as const,
   },
   vulns: {
@@ -60,6 +61,10 @@ export const qk = {
     all: () => ['connectors'] as const,
     list: () => ['connectors', 'list'] as const,
     packages: () => ['connectors', 'packages'] as const,
+  },
+  feeds: {
+    all: () => ['feeds'] as const,
+    list: () => ['feeds', 'list'] as const,
   },
   inventory: {
     all: () => ['inventory'] as const,

@@ -1,0 +1,79 @@
+{{- if and .Values.feeds.enabled .Values.feeds.defaultMirror.enabled }}
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterFeedMirror
+metadata:
+  name: {{ .Values.feeds.defaultMirror.name | default "default" }}
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  egress: {{ .Values.feeds.defaultMirror.egress | default "allow" | quote }}
+  {{- $kevUrl := or .Values.feeds.defaultMirror.kev.url .Values.feeds.kevUrl }}
+  {{- if $kevUrl }}
+  kev:
+    url: {{ $kevUrl | quote }}
+  {{- end }}
+  {{- $epssUrl := or .Values.feeds.defaultMirror.epss.url .Values.feeds.epssUrl }}
+  {{- if $epssUrl }}
+  epss:
+    url: {{ $epssUrl | quote }}
+  {{- end }}
+  {{- $nvdUrl := or .Values.feeds.defaultMirror.nvd.url .Values.feeds.nvdUrl }}
+  {{- if $nvdUrl }}
+  nvd:
+    url: {{ $nvdUrl | quote }}
+  {{- end }}
+  {{- $osvUrl := or .Values.feeds.defaultMirror.osv.url .Values.feeds.osvBaseUrl }}
+  {{- if $osvUrl }}
+  osv:
+    url: {{ $osvUrl | quote }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.vulnrichment }}
+  {{- if and . .url }}
+  vulnrichment:
+    url: {{ .url | quote }}
+    {{- with .tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.exploitdb }}
+  {{- if and . .url }}
+  exploitdb:
+    url: {{ .url | quote }}
+    {{- with .tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.metasploit }}
+  {{- if and . .url }}
+  metasploit:
+    url: {{ .url | quote }}
+    {{- with .tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.euvd }}
+  {{- if and . .url }}
+  euvd:
+    url: {{ .url | quote }}
+    {{- with .tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.vulncheckKev }}
+  {{- if and . .url }}
+  vulncheckKev:
+    url: {{ .url | quote }}
+    {{- with .tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.feeds.defaultMirror.custom }}
+  custom:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

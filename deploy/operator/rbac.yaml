@@ -28,6 +28,8 @@ rules:
       - clusterslapolicies/status
       - clusterfeedmirrors
       - clusterfeedmirrors/status
+      - clusterfeeds
+      - clusterfeeds/status
       - connectors
       - integrationpackages
       - parsers
@@ -46,6 +48,7 @@ rules:
       - clusterriskpolicies/finalizers
       - clusterslapolicies/finalizers
       - clusterfeedmirrors/finalizers
+      - clusterfeeds/finalizers
       - connectors/finalizers
       - integrationpackages/finalizers
       - parsers/finalizers

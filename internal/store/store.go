@@ -166,6 +166,10 @@ type Store interface {
 	// ReserveAction reserves a side effect (ticket, notification) in action_ledger so a retried
 	// or repeated event cannot create a second ticket. Returns true if newly reserved.
 	ReserveAction(ctx context.Context, tenantID, policyID, findingID uuid.UUID, action string) (bool, error)
+
+	// Feeds and Threat Intelligence (D86, D88)
+	GetClusterFeedMirror(ctx context.Context) (*domain.FeedMirrorSpec, error)
+	ListFeedStates(ctx context.Context) ([]domain.FeedState, error)
 }
 
 // QuotaStore tracks usage counts across replicas per tenant and window (Milestone 3.3).

@@ -26,6 +26,16 @@ type fwStore struct {
 	specs  []store.StoredFramework
 	scopes map[uuid.UUID][]string
 	open   map[string]int // control id -> open findings (in "high")
+	// deadlines, when set, makes the store answer ControlDeadlines (the PostgreSQL store does): control id -> its deadlines.
+	deadlines map[string]store.ControlDeadline
+}
+
+func (s *fwStore) ControlDeadlines(_ context.Context, _ uuid.UUID, _ []uuid.UUID, cs []store.ControlMatch) (map[string]store.ControlDeadline, error) {
+	out := map[string]store.ControlDeadline{}
+	for _, c := range cs {
+		out[c.ID] = s.deadlines[c.ID]
+	}
+	return out, nil
 }
 
 func (s *fwStore) ListComplianceFrameworks(context.Context, uuid.UUID) ([]store.StoredFramework, error) {
@@ -247,11 +257,32 @@ func TestAPI_ApplicationCompliance(t *testing.T) {
 		t.Error("the logo path rides along, so the page needs no second request")
 	}
 
-	// A finding opens a control: gaps, with the count.
+	// A finding opens a control. Open is not out of compliance (PCI DSS 6.3.3, Vanta, Drata): while none is past its
+	// deadline the control is at risk, and only one past its deadline breaks it.
 	s.open["SC-2"] = 3
-	if f := by(read())["b-gaps"]; f.Verdict != "gaps" || f.Open != 1 || f.Findings != 3 || f.Clear != 1 {
-		t.Errorf("b-gaps: %+v", f)
+	later := time.Now().Add(20 * 24 * time.Hour)
+	s.deadlines = map[string]store.ControlDeadline{"SC-2": {Open: 3, Earliest: &later}}
+	if f := by(read())["b-gaps"]; f.Verdict != "at_risk" || f.AtRisk != 1 || f.Open != 0 || f.Findings != 3 || f.Clear != 1 {
+		t.Errorf("b-gaps, no deadline passed: %+v", f)
 	}
+
+	soon, past := time.Now().Add(5*24*time.Hour), time.Now().Add(-2*24*time.Hour)
+	s.deadlines = map[string]store.ControlDeadline{"SC-2": {Open: 3, Overdue: 0, Earliest: &soon}}
+	if f := by(read())["b-gaps"]; f.Verdict != "at_risk" || f.AtRisk != 1 || f.Open != 0 || f.Overdue != 0 || f.EarliestDue == nil || !f.EarliestDue.Equal(soon) || f.Findings != 3 {
+		t.Errorf("open but inside the deadline is at risk, with the first date: %+v", f)
+	}
+	s.deadlines["SC-2"] = store.ControlDeadline{Open: 3, Overdue: 2, Earliest: &past}
+	if f := by(read())["b-gaps"]; f.Verdict != "gaps" || f.Open != 1 || f.AtRisk != 0 || f.Overdue != 2 || !f.EarliestDue.Equal(past) {
+		t.Errorf("one past its deadline breaks the control: %+v", f)
+	}
+	// A breached control wins over an at-risk one in the same framework.
+	s.open["SC-1"] = 1
+	s.deadlines["SC-1"] = store.ControlDeadline{Open: 1, Earliest: &soon}
+	if f := by(read())["b-gaps"]; f.Verdict != "gaps" || f.Open != 1 || f.AtRisk != 1 || !f.EarliestDue.Equal(past) {
+		t.Errorf("breached and at risk together: %+v", f)
+	}
+	s.open["SC-1"], s.deadlines = 0, nil
+	s.open["SC-2"] = 3
 	// The same application is in scope once it lists the scope.
 	s.scopes[appID] = []string{"pci"}
 	if _, ok := by(read())["d-pci-only"]; !ok {

@@ -63,8 +63,8 @@ func TestCompliance_StatusPerControl(t *testing.T) {
 	if pci["6.3.3"].Status != "not_assessed" { // sca/container: this scan was SAST
 		t.Fatalf("a SAST scan is no evidence for patching: %+v", pci["6.3.3"])
 	}
-	if c := pci["6.2.3"]; c.Status != "open" || len(c.Evidence) == 0 {
-		t.Fatalf("6.2.3 has findings and evidence: %+v", c)
+	if c := pci["6.2.3"]; c.Status != "at_risk" || len(c.Evidence) == 0 {
+		t.Fatalf("6.2.3 has open findings inside their deadline (at risk) and evidence: %+v", c)
 	}
 
 	// An application filter and the evidence export.

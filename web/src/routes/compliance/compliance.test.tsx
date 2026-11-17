@@ -15,6 +15,28 @@ const ctl = (id: string, name: string, status: string, b: ReturnType<typeof band
 });
 
 describe('compliance', () => {
+  // Open is not out of compliance: the standards give a time to fix (PCI DSS 6.3.3 a month for a critical patch; Vanta and
+  // Drata count an item overdue past its SLA). A control with open findings inside their deadline is at risk, and says
+  // when the first falls due; only one past its deadline is "Not met".
+  it('reads a control at risk differently from one that is not met', async () => {
+    mockFetch({
+      loggedIn: true, apps: [app(1)],
+      taxonomyStatus: { 'owasp-top10-2021': { status: [
+        { ...ctl('A03:2021', 'Injection', 'open', bands(0, 2, 0, 0), ['semgrep']), overdue: 1, reason: '1 finding is past the deadline, so the control is out of compliance (2 open in all).' },
+        { ...ctl('A06:2021', 'Vulnerable Components', 'at_risk', bands(0, 1, 1, 0), ['trivy']), earliest_due: '2026-12-01T00:00:00Z', reason: '2 open findings count against it, none past its deadline. The first falls due 1 Dec 2026.' },
+      ] } },
+    });
+    renderApp('/compliance');
+    const table = await screen.findByRole('table', { name: 'Controls' });
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows[1]!).getByText('Not met')).toBeInTheDocument();
+    expect(within(rows[1]!).getByText(/1 finding is past the deadline/)).toBeInTheDocument();
+    expect(within(rows[2]!).getByText('At risk')).toBeInTheDocument();
+    expect(within(rows[2]!).getByText(/none past its deadline\. The first falls due 1 Dec 2026/)).toBeInTheDocument();
+    expect(within(rows[2]!).queryByText('Not met')).toBeNull();
+    expect(await axe(table)).toHaveNoViolations();
+  });
+
   it('says per control what is open, what is clear and what was never assessed, and links the findings', async () => {
     const calls = mockFetch({
       loggedIn: true, apps: [app(1)],

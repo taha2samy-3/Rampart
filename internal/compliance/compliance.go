@@ -185,7 +185,8 @@ func CategoriesOf(family string, extra map[string][]string) []string {
 type Status string
 
 const (
-	StatusOpen        Status = "open"         // findings that bear on it are open
+	StatusOpen        Status = "open"         // findings that bear on it are open and at least one is past its deadline: out of compliance
+	StatusAtRisk      Status = "at_risk"      // findings that bear on it are open, none is past its deadline yet: fix them before the first falls due
 	StatusClear       Status = "clear"        // assessed, and none are open
 	StatusNotAssessed Status = "not_assessed" // no scan that could evidence it ran lately
 )
@@ -268,4 +269,65 @@ func (c Control) Query() (q string, exact bool) {
 	}
 	parts = append(parts, "state:open,under_investigation,affected")
 	return strings.Join(parts, " "), exact
+}
+
+// FindingFacts are what a control reads of a finding.
+type FindingFacts struct {
+	CWEs          []int
+	Category      string
+	ScannerFamily string
+	RuleID        string
+	Band          string // the risk band: critical, high, medium, low
+}
+
+func bandRank(b string) int {
+	switch b {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	}
+	return 0
+}
+
+// Breaks says whether an open finding counts against this control: it has one of the weaknesses, or is of one of the
+// categories, or was raised by one of the rules, and its band is at least minSeverity. It is the rule the SQL of
+// ControlCounts applies to every finding of a tenant, written for one finding; a test holds the two to the same
+// answer. A manual control is attested by a person and no finding breaks it.
+func (c Control) Breaks(f FindingFacts) bool {
+	if c.Manual {
+		return false
+	}
+	band := f.Band
+	if band == "" {
+		band = "low"
+	}
+	if bandRank(band) < bandRank(c.MinSeverity) {
+		return false
+	}
+	for _, w := range c.CWEs {
+		for _, x := range f.CWEs {
+			if w == x {
+				return true
+			}
+		}
+	}
+	for _, cat := range c.Categories {
+		if cat == f.Category {
+			return true
+		}
+	}
+	for _, r := range c.Rules {
+		if r.ScannerFamily != f.ScannerFamily {
+			continue
+		}
+		if prefix, wild := strings.CutSuffix(r.RuleID, "*"); f.RuleID == prefix || (wild && strings.HasPrefix(f.RuleID, prefix)) {
+			return true
+		}
+	}
+	return false
 }

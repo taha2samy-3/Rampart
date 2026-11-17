@@ -2412,6 +2412,27 @@ func (s *PostgresStore) GetClusterFeedMirror(ctx context.Context) (*domain.FeedM
 	return domain.ParseFeedMirrorSpec(raw)
 }
 
+// ListFeedStates returns the status of all tracked threat feeds.
+func (s *PostgresStore) ListFeedStates(ctx context.Context) ([]domain.FeedState, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT feed, cursor, last_sync, records, status, error
+		FROM feed_state ORDER BY feed ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing feed states: %w", err)
+	}
+	defer rows.Close()
+
+	var states []domain.FeedState
+	for rows.Next() {
+		var st domain.FeedState
+		if err := rows.Scan(&st.Feed, &st.Cursor, &st.LastSync, &st.Records, &st.Status, &st.Error); err != nil {
+			return nil, err
+		}
+		states = append(states, st)
+	}
+	return states, rows.Err()
+}
+
 // DeleteClusterPolicy removes a cluster policy; every tenant is re-scored against what is left.
 func (s *PostgresStore) DeleteClusterPolicy(ctx context.Context, kind, name string) error {
 	return s.withSystemTx(ctx, func(tx pgx.Tx) error {

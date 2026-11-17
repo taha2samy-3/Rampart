@@ -92,6 +92,14 @@ func bandRank(b string) int {
 	return 0
 }
 
+// controlBreaksSQL is the condition under which a finding f counts against a control c (the CTE of ControlCounts and
+// ControlDeadlines). compliance.Control.Breaks is the same rule for one finding in Go, and a test holds them together.
+const controlBreaksSQL = `((cardinality(c.cwes) > 0 AND f.cwes && c.cwes) OR f.category = ANY(c.cats)
+			      OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.rules) r
+			                 WHERE f.rule_scanner_family = r->>'f'
+			                   AND (f.rule_id = r->>'p' OR ((r->>'w')::boolean AND starts_with(f.rule_id, r->>'p')))))
+			 AND (CASE coalesce(f.risk_band, 'low') WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) >= c.min`
+
 func (s *PostgresStore) ControlCounts(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlCount, error) {
 	out := map[string]ControlCount{}
 	type row struct {
@@ -125,11 +133,7 @@ func (s *PostgresStore) ControlCounts(ctx context.Context, tenantID uuid.UUID, a
 			FROM c JOIN finding f ON f.tenant_id = $1
 			 AND (f.state IN `+activeStates+` OR f.state = 'risk_accepted')
 			 AND ($3::uuid[] IS NULL OR f.application_id = ANY($3))
-			 AND ((cardinality(c.cwes) > 0 AND f.cwes && c.cwes) OR f.category = ANY(c.cats)
-			      OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.rules) r
-			                 WHERE f.rule_scanner_family = r->>'f'
-			                   AND (f.rule_id = r->>'p' OR ((r->>'w')::boolean AND starts_with(f.rule_id, r->>'p')))))
-			 AND (CASE coalesce(f.risk_band, 'low') WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) >= c.min
+			 AND `+controlBreaksSQL+`
 			GROUP BY 1, 2, 3`, tenantID, raw, apps)
 		if err != nil {
 			return err
@@ -269,6 +273,71 @@ func (s *PostgresStore) ComplianceSnapshotDays(ctx context.Context, tenantID uui
 				return err
 			}
 			out = append(out, d)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// ControlDeadline is the time left on the open findings that break one control.
+type ControlDeadline struct {
+	Open     int        // open findings that break it
+	Overdue  int        // of them, past their SLA due date
+	Earliest *time.Time // the soonest SLA due date among them (nil when none has one)
+}
+
+// ComplianceDeadlines tells, for each control, how soon the findings that break it fall due, so a person can fix them
+// before the control is out of compliance by deadline and not only by count. Only the PostgreSQL store implements it.
+type ComplianceDeadlines interface {
+	ControlDeadlines(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlDeadline, error)
+}
+
+// ControlDeadlines reads the open (not accepted) findings that break each control, with their soonest SLA due date.
+func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlDeadline, error) {
+	out := map[string]ControlDeadline{}
+	type row struct {
+		ID    string           `json:"id"`
+		CWEs  []int            `json:"cwes"`
+		Cats  []string         `json:"cats"`
+		Rules []map[string]any `json:"rules"`
+		Min   int              `json:"min"`
+	}
+	body := make([]row, 0, len(controls))
+	for _, c := range controls {
+		r := row{ID: c.ID, CWEs: c.CWEs, Cats: c.Categories, Rules: []map[string]any{}, Min: bandRank(c.MinSeverity)}
+		if r.CWEs == nil {
+			r.CWEs = []int{}
+		}
+		if r.Cats == nil {
+			r.Cats = []string{}
+		}
+		for _, m := range c.Rules {
+			prefix, wild := strings.CutSuffix(m.RuleID, "*")
+			r.Rules = append(r.Rules, map[string]any{"f": m.ScannerFamily, "p": prefix, "w": wild})
+		}
+		body = append(body, r)
+	}
+	raw, _ := json.Marshal(body)
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			WITH c AS (SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(id text, cwes int[], cats text[], rules jsonb, min int))
+			SELECT c.id, count(DISTINCT f.id), count(DISTINCT f.id) FILTER (WHERE f.sla_due_date IS NOT NULL AND f.sla_due_date < NOW()), min(f.sla_due_date)
+			FROM c JOIN finding f ON f.tenant_id = $1
+			 AND f.state IN `+activeStates+`
+			 AND ($3::uuid[] IS NULL OR f.application_id = ANY($3))
+			 AND `+controlBreaksSQL+`
+			GROUP BY c.id`, tenantID, raw, apps)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var d ControlDeadline
+			if err := rows.Scan(&id, &d.Open, &d.Overdue, &d.Earliest); err != nil {
+				return err
+			}
+			out[id] = d
 		}
 		return rows.Err()
 	})

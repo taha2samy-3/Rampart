@@ -48,6 +48,7 @@ var (
 	gvkClusterRiskPolicy = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterRiskPolicy"}
 	gvkClusterSLAPolicy  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSLAPolicy"}
 	gvkClusterFeedMirror = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterFeedMirror"}
+	gvkClusterFeed       = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterFeed"}
 	// D94: tier-1 integrations installed as data in a tenant namespace.
 	gvkIntegrationPackage = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "IntegrationPackage"}
 	gvkParser             = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "Parser"}
@@ -179,7 +180,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
 	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
-		"clusterfeedmirror": {gvkClusterFeedMirror, feedMirror}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks}} {
+		"clusterfeedmirror": {gvkClusterFeedMirror, feedMirror}, "clusterfeed": {gvkClusterFeed, feedMirror}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}

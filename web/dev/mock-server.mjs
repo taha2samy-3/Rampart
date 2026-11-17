@@ -669,6 +669,69 @@ const server = http.createServer((req, res) => {
       }
     }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
+    if (p === '/api/v1/feeds') return json(res, {
+      mirror: {
+        egress: 'allow',
+        kev: { url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json' },
+        epss: { url: 'https://epss.cyentia.com/epss_scores-current.csv.gz' },
+        nvd: { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
+        osv: { url: 'https://osv-vulnerabilities.storage.googleapis.com' },
+      },
+      items: [
+        {
+          name: 'cisa_kev',
+          display_name: 'CISA KEV',
+          category: 'Threat Intelligence',
+          description: 'Known Exploited Vulnerabilities catalog published by CISA tracking actively exploited CVEs.',
+          url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',
+          is_mirror: false,
+          enabled: true,
+          status: 'success',
+          records: 1284,
+          last_sync: new Date(Date.now() - 3600000).toISOString(),
+          error: null,
+        },
+        {
+          name: 'first_epss',
+          display_name: 'FIRST EPSS',
+          category: 'Exploit Prediction',
+          description: 'Exploit Prediction Scoring System probabilities estimating likelihood of active exploitation.',
+          url: 'https://epss.cyentia.com/epss_scores-current.csv.gz',
+          is_mirror: false,
+          enabled: true,
+          status: 'success',
+          records: 245100,
+          last_sync: new Date(Date.now() - 3600000).toISOString(),
+          error: null,
+        },
+        {
+          name: 'nvd',
+          display_name: 'NVD (National Vulnerability Database)',
+          category: 'Vulnerability Database',
+          description: 'NIST National Vulnerability Database CVE records, CVSS severity metrics, and CWE mappings.',
+          url: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
+          is_mirror: false,
+          enabled: true,
+          status: 'success',
+          records: 250412,
+          last_sync: new Date(Date.now() - 7200000).toISOString(),
+          error: null,
+        },
+        {
+          name: 'osv',
+          display_name: 'OSV (Open Source Vulnerabilities)',
+          category: 'Package Advisories',
+          description: 'Open Source Vulnerabilities database covering open-source package registries and ecosystems.',
+          url: 'https://osv-vulnerabilities.storage.googleapis.com',
+          is_mirror: false,
+          enabled: true,
+          status: 'success',
+          records: 48920,
+          last_sync: new Date(Date.now() - 7200000).toISOString(),
+          error: null,
+        },
+      ],
+    });
     if (p === '/api/v1/connectors') return json(res, { items: [...CONNECTORS, { name: 'chat-sec', type: 'plugin', direction: 'outbound', enabled: true, managed_by: 'resource',
       spec: { plugin: { name: 'google-chat' } }, status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'NotProbed', message: 'A declarative notifier has no check request; the first delivery tests it' }] } }] });
     // D94: tools installed as data.

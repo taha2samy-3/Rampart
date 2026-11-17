@@ -19,14 +19,19 @@ type AppFramework struct {
 	Version  string `json:"version"`
 	Origin   string `json:"origin"`
 	Logo     string `json:"logo,omitempty"`
-	Verdict  string `json:"verdict"` // meets | gaps | partial
+	Verdict  string `json:"verdict"` // meets | at_risk | gaps | partial
 	Controls int    `json:"controls"`
 	Clear    int    `json:"clear"`        // read, with no open finding
 	Open     int    `json:"open"`         // controls with at least one open finding
+	AtRisk   int    `json:"at_risk"`      // open findings, none past its deadline: fix them before the first falls due
 	Unread   int    `json:"not_assessed"` // no scan of the kind it needs, or a manual control nobody attested
 	Findings int    `json:"open_findings"`
-	Accepted int    `json:"accepted_findings"`
-	Window   int    `json:"window_days"`
+	// Overdue is the open findings past their deadline (they are what makes a control out of compliance), and EarliestDue the
+	// soonest deadline among the open ones.
+	Overdue     int        `json:"overdue_findings"`
+	EarliestDue *time.Time `json:"earliest_due,omitempty"`
+	Accepted    int        `json:"accepted_findings"`
+	Window      int        `json:"window_days"`
 }
 
 // AppCompliance is GET /api/v1/applications/{id}/compliance.
@@ -39,12 +44,15 @@ type AppCompliance struct {
 	NotInScope []string `json:"not_in_scope"`
 }
 
-// verdictOf: an application meets a framework when every control was read and none has an open finding; it has gaps
-// when one does; it is partial when nothing is open but some control was not read.
-func verdictOf(open, unread int) string {
+// verdictOf: an application has gaps when a control has a finding past its deadline (out of compliance); it is at risk
+// when findings are open but none is past its deadline (compliant today, with a date to meet); it is partial when nothing
+// is open but some control cannot be read; and it meets the framework when every control was read and nothing is open.
+func verdictOf(open, atRisk, unread int) string {
 	switch {
 	case open > 0:
 		return "gaps"
+	case atRisk > 0:
+		return "at_risk"
 	case unread > 0:
 		return "partial"
 	default:
@@ -103,15 +111,23 @@ func (a *API) handleApplicationCompliance(w http.ResponseWriter, r *http.Request
 			switch c.Status {
 			case "clear":
 				row.Clear++
-			case "open":
-				row.Open++
+			case "open", "at_risk":
+				if c.Status == "open" {
+					row.Open++
+				} else {
+					row.AtRisk++
+				}
 				row.Findings += c.Open
+				row.Overdue += c.Overdue
+				if c.EarliestDue != nil && (row.EarliestDue == nil || c.EarliestDue.Before(*row.EarliestDue)) {
+					row.EarliestDue = c.EarliestDue
+				}
 			default:
 				row.Unread++
 			}
 			row.Accepted += c.Accepted
 		}
-		row.Verdict = verdictOf(row.Open, row.Unread)
+		row.Verdict = verdictOf(row.Open, row.AtRisk, row.Unread)
 		out.Frameworks = append(out.Frameworks, row)
 	}
 	sort.Slice(out.Frameworks, func(i, j int) bool {

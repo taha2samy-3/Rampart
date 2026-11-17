@@ -32,11 +32,14 @@ export function finding(i: number, band: 'critical' | 'high' | 'medium' | 'low' 
 export interface Scenario {
   /** The occurrences GET /findings/{id} returns (the package a scanner named), and the vulnerability record and impact. */
   occurrences?: unknown[];
+  /** The compliance controls GET /findings/{id} says the finding counts against. */
+  findingControls?: unknown[];
   vuln?: { record?: unknown; impact?: unknown; error?: boolean };
   /** What POST /uploads/direct answers: 201 with these fields added, or 404 application-not-found. */
   upload?: Record<string, unknown> | 404;
   /** GET /integration-packages with null lists, as an old server wrote them. */
   packagesNull?: boolean;
+  feeds?: unknown | 'error';
   /** GET /applications/{id}/changes; `error` answers 500. The query (from, to) of each call is in the calls. */
   appChanges?: unknown | 'error';
   /** GET /applications/{id}/compliance. */
@@ -189,7 +192,7 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/me/tenants') return json([{ id: 't1', slug: 'acme', name: 'Acme' }, { id: 't2', slug: 'globex', name: 'Globex' }]);
     if (/^\/api\/v1\/findings\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET') {
       if (sc.sources === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
-      return json({ finding: {}, occurrences: sc.occurrences ?? [], reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
+      return json({ finding: {}, controls: sc.findingControls ?? [], occurrences: sc.occurrences ?? [], reported_by: sc.sources?.reported_by ?? [], also_reported_by: sc.sources?.also_reported_by ?? [] });
     }
     if (path === '/api/v1/inventory' || path === '/api/v1/inventory/components') {
       if (sc.inventory?.error) return json({ type: 'u', title: 'boom', status: 500 }, 500);
@@ -365,6 +368,72 @@ export function mockFetch(sc: Scenario): Calls {
           secrets: [{ field: 'tokenSecretRef', holds: 'a bot token', purpose: 'posts messages' }],
           example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
       ] });
+    }
+    if (path === '/api/v1/feeds') {
+      if (sc.feeds === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list feeds', status: 500 }, 500);
+      return json(sc.feeds ?? {
+        mirror: {
+          egress: 'allow',
+          kev: { url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json' },
+          epss: { url: 'https://epss.cyentia.com/epss_scores-current.csv.gz' },
+          nvd: { url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
+          osv: { url: 'https://osv-vulnerabilities.storage.googleapis.com' },
+        },
+        items: [
+          {
+            name: 'cisa_kev',
+            display_name: 'CISA KEV',
+            category: 'Threat Intelligence',
+            description: 'Known Exploited Vulnerabilities catalog published by CISA tracking actively exploited CVEs.',
+            url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',
+            is_mirror: false,
+            enabled: true,
+            status: 'success',
+            records: 1284,
+            last_sync: '2026-11-17T03:00:00Z',
+            error: null,
+          },
+          {
+            name: 'first_epss',
+            display_name: 'FIRST EPSS',
+            category: 'Exploit Prediction',
+            description: 'Exploit Prediction Scoring System probabilities estimating likelihood of active exploitation.',
+            url: 'https://epss.cyentia.com/epss_scores-current.csv.gz',
+            is_mirror: false,
+            enabled: true,
+            status: 'success',
+            records: 245100,
+            last_sync: '2026-11-17T03:00:00Z',
+            error: null,
+          },
+          {
+            name: 'nvd',
+            display_name: 'NVD (National Vulnerability Database)',
+            category: 'Vulnerability Database',
+            description: 'NIST National Vulnerability Database CVE records, CVSS severity metrics, and CWE mappings.',
+            url: 'https://services.nvd.nist.gov/rest/json/cves/2.0',
+            is_mirror: false,
+            enabled: true,
+            status: 'success',
+            records: 250412,
+            last_sync: '2026-11-17T01:00:00Z',
+            error: null,
+          },
+          {
+            name: 'osv',
+            display_name: 'OSV (Open Source Vulnerabilities)',
+            category: 'Package Advisories',
+            description: 'Open Source Vulnerabilities database covering open-source package registries and ecosystems.',
+            url: 'https://osv-vulnerabilities.storage.googleapis.com',
+            is_mirror: false,
+            enabled: true,
+            status: 'success',
+            records: 48920,
+            last_sync: '2026-11-17T01:00:00Z',
+            error: null,
+          },
+        ],
+      });
     }
     if (path === '/api/v1/connectors/validate' && init?.method === 'POST') {
       const resource = (JSON.parse(String(init.body ?? '{}')) as { resource?: string }).resource ?? '';

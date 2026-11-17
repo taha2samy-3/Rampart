@@ -434,9 +434,10 @@ export interface Attestation {
   id: string; framework_id: string; control_id: string; application_id?: string; status: 'passed' | 'failed';
   note: string; evidence_url?: string; attested_by: string; attested_at: string; expires_at: string;
 }
-export type ControlState = 'open' | 'clear' | 'not_assessed';
+/** open: a finding is past its deadline (out of compliance); at_risk: findings are open, none past its deadline yet. */
+export type ControlState = 'open' | 'at_risk' | 'clear' | 'not_assessed';
 export interface ControlStatus {
-  id: string; name: string; description?: string; status: ControlState;
+  id: string; name: string; description?: string; status: ControlState; overdue?: number; earliest_due?: string;
   /** The status in one sentence: why it reads so, and what would change it. */
   reason?: string;
   open: number; bands: Record<OpenBand, number>;
@@ -563,6 +564,46 @@ export interface IntegrationPackageItem {
   updated_at: string;
 }
 
+/** Vulnerability feed item and sync status (docs/16 D86, D88). */
+export interface FeedItem {
+  name: string;
+  display_name: string;
+  category: string;
+  description: string;
+  url: string;
+  is_mirror: boolean;
+  enabled: boolean;
+  status: 'success' | 'syncing' | 'idle' | 'error' | 'disabled';
+  records: number;
+  last_sync?: string | null;
+  error?: string | null;
+}
+
+export interface FeedMirrorSpec {
+  egress?: 'allow' | 'deny';
+  kev?: { url: string };
+  epss?: { url: string };
+  nvd?: { url: string };
+  osv?: { url: string };
+  vulnrichment?: { url?: string; tokenFile?: string };
+  exploitdb?: { url?: string; tokenFile?: string };
+  metasploit?: { url?: string; tokenFile?: string };
+  euvd?: { url?: string; tokenFile?: string };
+  vulncheckKev?: { url?: string; tokenFile?: string };
+  custom?: Array<{
+    name: string;
+    url?: string;
+    format: string;
+    tokenFile?: string;
+    pushTokenFile?: string;
+  }>;
+}
+
+export interface FeedsResponse {
+  mirror?: FeedMirrorSpec | null;
+  items: FeedItem[];
+}
+
 /** Inventory asset summary (docs/13, docs/21) */
 export interface InventoryAsset {
   id: string;
@@ -642,12 +683,15 @@ export interface AppFramework {
   version: string;
   origin?: 'builtin' | 'cluster' | 'tenant';
   logo?: string;
-  verdict: 'meets' | 'gaps' | 'partial';
+  verdict: 'meets' | 'at_risk' | 'gaps' | 'partial';
   controls: number;
   clear: number;
   open: number;
+  at_risk: number;
   not_assessed: number;
   open_findings: number;
+  overdue_findings: number;
+  earliest_due?: string;
   accepted_findings: number;
   window_days: number;
 }
@@ -691,4 +735,15 @@ export interface ApplicationChanges {
   reopened: FindingChange[];
   open: FindingChange[];
   truncated: string[];
+}
+
+/** A compliance control an open finding counts against (GET /findings/{id}). */
+export interface FindingControl {
+  framework_id: string;
+  framework: string;
+  version: string;
+  control_id: string;
+  control: string;
+  due?: string;
+  overdue: boolean;
 }

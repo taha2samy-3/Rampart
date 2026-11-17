@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, MappedProject, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, MappedProject, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -117,6 +117,11 @@ export async function getFindingPackage(id: string, signal?: AbortSignal): Promi
 }
 export const getVulnerability = (id: string, signal?: AbortSignal) => get<VulnerabilityDetail>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}`, { signal });
 export const getVulnerabilityImpact = (id: string, signal?: AbortSignal) => get<VulnerabilityImpact>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}/impact`, { signal });
+/** The compliance controls an open finding counts against, with its deadline. */
+export async function getFindingControls(id: string, signal?: AbortSignal): Promise<FindingControl[]> {
+  const raw = await get<{ controls?: FindingControl[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
+  return raw.controls ?? [];
+}
 export async function getFindingEvents(id: string, signal?: AbortSignal): Promise<FindingEvent[]> {
   const raw = await get<{ items?: FindingEvent[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}/events`, { signal });
   return raw.items ?? [];

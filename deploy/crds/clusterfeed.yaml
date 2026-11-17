@@ -1,0 +1,100 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterfeeds.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterFeed
+    listKind: ClusterFeedList
+    plural: clusterfeeds
+    singular: clusterfeed
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                Threat intelligence and vulnerability feeds configuration (docs/04, docs/16 D86, D88).
+                The one named default is in force, else the first by name. With egress deny, a feed without a mirror
+                is not read at all (air-gapped installs).
+              properties:
+                nvd:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused. Every feed runs every feeds.interval."}
+                osv:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                epss:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                kev:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    schedule: {type: string, description: "Not built; refused."}
+                cwe:
+                  type: object
+                  description: "Refused by this version; CWE definitions are not synced as a feed."
+                vulnrichment:
+                  type: object
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                exploitdb:
+                  type: object
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                metasploit:
+                  type: object
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                euvd:
+                  type: object
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                vulncheckKev:
+                  type: object
+                  properties:
+                    url: {type: string, pattern: '^https?://'}
+                    tokenFile: {type: string, pattern: '^/'}
+                custom:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, format]
+                    properties:
+                      name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,40}$'}
+                      url: {type: string, pattern: '^https?://'}
+                      format: {type: string, enum: [osv-zip, intel-jsonl]}
+                      tokenFile: {type: string, pattern: '^/'}
+                      pushTokenFile: {type: string, pattern: '^/'}
+                egress:
+                  type: string
+                  enum: [allow, deny]
+                  default: allow

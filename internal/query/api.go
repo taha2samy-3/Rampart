@@ -236,6 +236,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/connectors", a.handleListConnectors)
 	routes.HandleFunc("GET /api/v1/connectors/catalogue", a.handleConnectorCatalogue)
 	routes.HandleFunc("GET /api/v1/integration-packages", a.handleListPackages)
+	routes.HandleFunc("GET /api/v1/feeds", a.handleListFeeds)
 	routes.HandleFunc("POST /api/v1/feeds/{name}", a.handleFeedPush)
 	routes.HandleFunc("POST /api/v1/connectors/validate", a.handleValidateConnector)
 
@@ -253,6 +254,9 @@ type FindingResponse struct {
 	ReportedBy []Reporter `json:"reported_by"`
 	// AlsoReportedBy lists findings of other tools that share this finding's correlation key (D24).
 	AlsoReportedBy []CorrelatedRef `json:"also_reported_by,omitempty"`
+	// Controls are the compliance controls this open finding counts against, in the frameworks that read its application
+	// (only on GET /findings/{id}): fix it before its deadline and these controls do not go out of compliance.
+	Controls []FindingControl `json:"controls"`
 }
 
 // CorrelatedRef points at a finding in the same correlation group.
@@ -541,6 +545,7 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 			res.AlsoReportedBy = append(res.AlsoReportedBy, CorrelatedRef{ID: g.ID, Scanner: g.RuleScannerFamily, RuleID: g.RuleID, State: string(g.State)})
 		}
 	}
+	res.Controls = a.findingControls(r.Context(), tenantID, finding, res.SLADueDate)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

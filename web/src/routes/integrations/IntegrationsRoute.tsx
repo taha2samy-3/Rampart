@@ -19,10 +19,11 @@ import {
   TabsContent,
 } from '@/components';
 import { ConnectorCatalogueDialog } from './ConnectorCatalogueDialog';
+import { FeedsView } from './FeedsView';
 
 export function IntegrationsRoute() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<'connectors' | 'tokens'>('connectors');
+  const [tab, setTab] = useState<'connectors' | 'feeds' | 'tokens'>('connectors');
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   useEffect(() => {
     document.title = `${t('nav.integrations', { defaultValue: 'Integrations' })} · Rampart`;
@@ -55,10 +56,13 @@ export function IntegrationsRoute() {
         </p>
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'connectors' | 'tokens')} className="flex flex-col gap-4">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'connectors' | 'feeds' | 'tokens')} className="flex flex-col gap-4">
         <TabsList label="Integrations Tabs">
           <TabsTrigger value="connectors">
             {t('integrations.connectorsTab', { defaultValue: 'Connectors & Trackers' })}
+          </TabsTrigger>
+          <TabsTrigger value="feeds">
+            {t('integrations.feedsTab', { defaultValue: 'Vulnerability Feeds' })}
           </TabsTrigger>
           <TabsTrigger value="tokens">
             {t('integrations.tokensTab', { defaultValue: 'API Tokens' })}
@@ -183,6 +187,10 @@ export function IntegrationsRoute() {
             open={catalogueOpen}
             onOpenChange={setCatalogueOpen}
           />
+        </TabsContent>
+
+        <TabsContent value="feeds" className="flex flex-col gap-4">
+          <FeedsView />
         </TabsContent>
 
         <TabsContent value="tokens" className="flex flex-col gap-3">

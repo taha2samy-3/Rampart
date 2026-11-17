@@ -140,9 +140,14 @@ type ControlStatus struct {
 	Bands       map[string]int `json:"bands"`
 	Accepted    int            `json:"accepted"` // risk-accepted findings: approved exceptions, not counted as open
 	Query       string         `json:"query,omitempty"`
-	QueryExact  bool           `json:"query_exact"` // false: the link lists part of what is counted
-	Evidence    []string       `json:"evidence,omitempty"`
-	Needs       []string       `json:"needs,omitempty"` // the kinds of scan that read it
+	QueryExact  bool           `json:"query_exact"`
+	// Overdue is how many of the open findings are past their SLA due date, and EarliestDue the soonest due date of them all:
+	// a control is out of compliance when one is overdue, and at risk while they are only open (docs/28 §13).
+	Overdue     int        `json:"overdue,omitempty"`
+	EarliestDue *time.Time `json:"earliest_due,omitempty"`
+	deadlines   bool       // the store could tell the deadlines; without it an open finding breaks the control, as before // false: the link lists part of what is counted
+	Evidence    []string   `json:"evidence,omitempty"`
+	Needs       []string   `json:"needs,omitempty"` // the kinds of scan that read it
 	// Tenant-wide, a control is assessed only where its scans ran: in how many of the applications in scope.
 	AssessedApps int                `json:"assessed_apps"`
 	TotalApps    int                `json:"total_apps"`
@@ -230,6 +235,15 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 	if err != nil {
 		return nil, err
 	}
+	var deadlines map[string]store.ControlDeadline
+	if dl, ok := a.store.(store.ComplianceDeadlines); ok {
+		if deadlines, err = dl.ControlDeadlines(ctx, tenantID, apps, matches); err != nil {
+			return nil, err
+		}
+		if deadlines == nil {
+			deadlines = map[string]store.ControlDeadline{}
+		}
+	}
 	window := fw.Window()
 	scans, err := rd.RecentScans(ctx, tenantID, apps, now.AddDate(0, 0, -window))
 	if err != nil {
@@ -283,6 +297,10 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 			cs.Open += cc.Open[b]
 		}
 		cs.Accepted = cc.Accepted
+		if deadlines != nil {
+			cs.deadlines = true
+			cs.Overdue, cs.EarliestDue = deadlines[c.ID].Overdue, deadlines[c.ID].Earliest
+		}
 		cs.Query, cs.QueryExact = c.Query()
 		cs.Needs = c.EvidenceCategories()
 		for _, cat := range cs.Needs {
@@ -381,9 +399,21 @@ func readMatched(cs *ControlStatus, c compliance.Control, window int, oneApp boo
 		exceptions = " " + plural(cs.Accepted, "finding is", "findings are") + " risk-accepted: approved exceptions, not counted as open."
 	}
 	switch {
+	case cs.Open > 0 && cs.deadlines && cs.Overdue == 0 && cs.EarliestDue != nil:
+		// Open, but none is past its deadline: the control still holds. (With no deadline at all there is no clock to wait
+		// on, so the control is not met, as before.) PCI DSS 6.3.3 gives a month for a critical patch,
+		// Vanta and Drata count an item overdue only past its SLA. It is at risk, and the first date is what to meet.
+		cs.Status = string(compliance.StatusAtRisk)
+		cs.Reason = plural(cs.Open, "open finding counts", "open findings count") + " against it, none past its deadline."
+		if cs.EarliestDue != nil {
+			cs.Reason += " The first falls due " + cs.EarliestDue.UTC().Format("2 Jan 2006") + "."
+		}
 	case cs.Open > 0:
 		cs.Status = string(compliance.StatusOpen)
 		cs.Reason = plural(cs.Open, "open finding breaks", "open findings break") + " it."
+		if cs.deadlines && cs.Overdue > 0 {
+			cs.Reason = plural(cs.Overdue, "finding is", "findings are") + " past the deadline, so the control is out of compliance (" + fmt.Sprintf("%d open in all", cs.Open) + ")."
+		}
 	case cs.TotalApps == 0:
 		cs.Status = string(compliance.StatusNotAssessed)
 		cs.Reason = "No application is in this framework's scope."

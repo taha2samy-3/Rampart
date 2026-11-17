@@ -6,6 +6,7 @@ import { getAcceptance, getFindingEvents, getFindingSources, qk, toProblem } fro
 import type { FindingEvent, FindingRow } from '@/api/types';
 import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
+import { ComplianceSection } from './ComplianceSection';
 import { VulnerabilitySection } from './VulnerabilitySection';
 import { absoluteDate, dueShort, relativeDays, shortAge } from '@/lib/format';
 import { factorKind, factorLabel, type SegmentKind } from '@/lib/score';
@@ -111,6 +112,8 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
           <Fact label={t('findings.lastSeen')} value={absoluteDate(f.last_seen)} />
         </dl>
       </section>
+
+      <ComplianceSection finding={f} />
 
       <VulnerabilitySection finding={f} />
 

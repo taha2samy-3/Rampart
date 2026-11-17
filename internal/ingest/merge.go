@@ -662,6 +662,8 @@ type MemoryStore struct {
 	quotaUsage            map[string]int64
 	groups                map[uuid.UUID]*domain.FindingGroup
 	groupMembers          map[uuid.UUID][]uuid.UUID
+	feedMirror            *domain.FeedMirrorSpec
+	feedStates            map[string]domain.FeedState
 }
 
 type memBinding struct {
@@ -703,6 +705,7 @@ func NewMemoryStore() *MemoryStore {
 		quotaUsage:            make(map[string]int64),
 		groups:                make(map[uuid.UUID]*domain.FindingGroup),
 		groupMembers:          make(map[uuid.UUID][]uuid.UUID),
+		feedStates:            make(map[string]domain.FeedState),
 	}
 }
 
@@ -2576,3 +2579,37 @@ func carryDecisions(ctx context.Context, st Store, scope CloseScope, findings []
 }
 
 func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
+
+// Feeds & Mirror support in MemoryStore (D86, D88).
+func (m *MemoryStore) GetClusterFeedMirror(ctx context.Context) (*domain.FeedMirrorSpec, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.feedMirror, nil
+}
+
+func (m *MemoryStore) SetClusterFeedMirror(mirror *domain.FeedMirrorSpec) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.feedMirror = mirror
+}
+
+func (m *MemoryStore) ListFeedStates(ctx context.Context) ([]domain.FeedState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]domain.FeedState, 0, len(m.feedStates))
+	for _, s := range m.feedStates {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Feed < out[j].Feed })
+	return out, nil
+}
+
+func (m *MemoryStore) SetFeedState(state domain.FeedState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.feedStates == nil {
+		m.feedStates = make(map[string]domain.FeedState)
+	}
+	m.feedStates[state.Feed] = state
+}
+
