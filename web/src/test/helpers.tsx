@@ -199,6 +199,16 @@ export function mockFetch(sc: Scenario): Calls {
       if (path.endsWith('/components')) return json({ components: sc.inventory?.components ?? [], total: sc.inventory?.total ?? (sc.inventory?.components ?? []).length, truncated: sc.inventory?.truncated ?? false });
       return json({ assets: sc.inventory?.assets ?? [] });
     }
+    if (path === '/api/v1/inventory/components/scan' && (init?.method ?? 'GET') === 'POST') {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      const purl = body.purl || 'pkg:npm/lodash@4.17.20';
+      return json({
+        status: 'started',
+        purl,
+        message: `On-demand vulnerability scan initiated for ${purl}`,
+        scanned_at: new Date().toISOString(),
+      }, 202);
+    }
     if (path.startsWith('/api/v1/vulnerabilities/')) {
       if (sc.vuln?.error) return json({ type: 'u', title: 'boom', status: 500 }, 500);
       const id = decodeURIComponent(path.split('/')[4] ?? '');

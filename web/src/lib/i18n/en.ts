@@ -259,6 +259,11 @@ export const en = {
   inventory: {
     loadFailed: 'The inventory could not be loaded.',
     truncated: 'Showing {{shown}} of {{total}} packages. Narrow the filter to see the rest.',
+    scanNow: 'Scan Now',
+    scanning: 'Scanning...',
+    scanNowTooltip: 'Force on-demand vulnerability scan for {{name}}',
+    scanInitiated: 'On-demand scan initiated for {{name}}',
+    scanFailed: 'Failed to initiate scan for {{name}}',
   },
   findingControls: {
     title: 'Compliance',

@@ -181,6 +181,45 @@ func TestAPI_Inventory(t *testing.T) {
 			t.Errorf("%s without credentials: want 401, got %d", u, rec.Code)
 		}
 	}
+
+	// Scanning without credentials -> 401
+	postScan := func(body string, auth bool) *httptest.ResponseRecorder {
+		var r *http.Request
+		if body != "" {
+			r = httptest.NewRequest("POST", "/api/v1/inventory/components/scan", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+		} else {
+			r = httptest.NewRequest("POST", "/api/v1/inventory/components/scan", nil)
+		}
+		if auth {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+	if rec := postScan(`{"purl":"pkg:npm/lodash@4.17.20"}`, false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("scan without credentials: want 401, got %d", rec.Code)
+	}
+
+	// Scanning without purl -> 400
+	if rec := postScan(`{}`, true); rec.Code != http.StatusBadRequest {
+		t.Errorf("scan without purl: want 400, got %d", rec.Code)
+	}
+
+	// Scanning with purl in body -> 202
+	if rec := postScan(`{"purl":"pkg:npm/lodash@4.17.20","name":"lodash","version":"4.17.20"}`, true); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"started"`) || !strings.Contains(rec.Body.String(), "pkg:npm/lodash@4.17.20") {
+		t.Errorf("scan with purl body: want 202, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Scanning with purl in query param -> 202
+	reqQuery := httptest.NewRequest("POST", "/api/v1/inventory/components/scan?purl=pkg:npm/axios@0.21.1", nil)
+	reqQuery.Header.Set("Authorization", "Bearer "+token)
+	recQuery := httptest.NewRecorder()
+	mux.ServeHTTP(recQuery, reqQuery)
+	if recQuery.Code != http.StatusAccepted || !strings.Contains(recQuery.Body.String(), "pkg:npm/axios@0.21.1") {
+		t.Errorf("scan with purl query: want 202, got %d %s", recQuery.Code, recQuery.Body.String())
+	}
 	// The in-memory store has no inventory: 501, not a 500 or an empty list that hides it.
 	mux2 := http.NewServeMux()
 	query.NewAPIWithAuth(mem, nil, authn).RegisterRoutes(mux2)

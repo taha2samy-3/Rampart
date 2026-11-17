@@ -57,6 +57,17 @@ describe('Inventory', () => {
     expect(screen.queryByText('No matching assets found')).toBeNull();
   });
 
+  it('triggers on-demand component scan and displays feedback', async () => {
+    mockFetch({ loggedIn: true, inventory: { components: [lodash] } });
+    renderApp('/inventory');
+    await userEvent.click(await screen.findByRole('tab', { name: /SBOM Packages/ }));
+    const comps = await screen.findByRole('table', { name: 'Components table' });
+    const scanBtn = within(comps).getByRole('button', { name: /Scan lodash/i });
+    expect(scanBtn).toBeInTheDocument();
+    await userEvent.click(scanBtn);
+    expect(await screen.findByRole('status')).toHaveTextContent(/On-demand vulnerability scan initiated/i);
+  });
+
   it('has no accessibility violations', async () => {
     mockFetch({ loggedIn: true, inventory: { assets: [asset], components: [lodash] } });
     const { container } = renderApp('/inventory');

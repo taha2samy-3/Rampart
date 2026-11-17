@@ -173,6 +173,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/audit", a.handleListAudit)
 	routes.HandleFunc("GET /api/v1/inventory", a.handleInventoryAssets)
 	routes.HandleFunc("GET /api/v1/inventory/components", a.handleInventoryComponents)
+	routes.HandleFunc("POST /api/v1/inventory/components/scan", a.handleScanComponent)
 	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}", a.handleGetVulnerability)
 	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}/impact", a.handleVulnerabilityImpact)
 	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)

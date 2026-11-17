@@ -797,6 +797,62 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/views') return json(res, { views: VIEWS });
     if (p === '/api/v1/settings') return json(res, { riskAcceptanceApproval: true, riskAcceptanceMaxDays: 90 });
     if (p === '/api/v1/inventory') return json(res, { assets: INVENTORY });
+    if (p === '/api/v1/inventory/components') {
+      return json(res, {
+        components: [
+          {
+            name: 'axios',
+            version: '0.21.1',
+            purl: 'pkg:npm/axios@0.21.1',
+            type: 'npm',
+            track: 'main',
+            license: 'MIT',
+            direct: true,
+            asset_id: 'asset-1',
+            asset_name: 'github.com/acme/payments',
+            application_name: 'Payments Service',
+            vulnerabilities: 1,
+          },
+          {
+            name: 'log4j-core',
+            version: '2.14.1',
+            purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
+            type: 'maven',
+            track: 'main',
+            license: 'Apache-2.0',
+            direct: true,
+            asset_id: 'asset-2',
+            asset_name: 'docker.io/acme/auth-service:latest',
+            application_name: 'Auth Service',
+            vulnerabilities: 2,
+          },
+          {
+            name: 'golang.org/x/crypto',
+            version: 'v0.17.0',
+            purl: 'pkg:golang/golang.org/x/crypto@v0.17.0',
+            type: 'golang',
+            track: 'main',
+            license: 'BSD-3-Clause',
+            direct: false,
+            asset_id: 'asset-3',
+            asset_name: 'github.com/acme/backend',
+            application_name: 'Core API',
+            vulnerabilities: 0,
+          },
+        ],
+        total: 3,
+        truncated: false,
+      });
+    }
+    if (p === '/api/v1/inventory/components/scan') {
+      const purl = req.url.includes('purl=') ? new URL(req.url, 'http://localhost').searchParams.get('purl') : 'pkg:npm/axios@0.21.1';
+      return json(res, {
+        status: 'started',
+        purl: purl,
+        message: `On-demand vulnerability scan initiated for ${purl}`,
+        scanned_at: new Date().toISOString(),
+      }, 202);
+    }
     const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/impact)?$/.exec(p);
     if (vm) {
       const vid = decodeURIComponent(vm[1]);

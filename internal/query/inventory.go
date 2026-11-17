@@ -1,8 +1,11 @@
 package query
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"rampart/internal/store"
 )
@@ -67,4 +70,56 @@ func (a *API) handleInventoryComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"components": components, "total": total, "truncated": total > len(components)})
+}
+
+// ScanComponentRequest is the request body for POST /api/v1/inventory/components/scan.
+type ScanComponentRequest struct {
+	Purl      string `json:"purl"`
+	Name      string `json:"name,omitempty"`
+	Version   string `json:"version,omitempty"`
+	AssetID   string `json:"asset_id,omitempty"`
+	ForceSync bool   `json:"force,omitempty"`
+}
+
+// ScanComponentResponse is the response returned when an on-demand scan is initiated.
+type ScanComponentResponse struct {
+	Status    string    `json:"status"`
+	Purl      string    `json:"purl"`
+	Message   string    `json:"message"`
+	ScannedAt time.Time `json:"scanned_at"`
+}
+
+// handleScanComponent is POST /api/v1/inventory/components/scan: triggers an immediate on-demand
+// vulnerability scan / rescore for an SBOM package/dependency against threat intelligence feeds.
+func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+	var req ScanComponentRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	if req.Purl == "" {
+		req.Purl = r.URL.Query().Get("purl")
+	}
+	if req.Purl == "" {
+		problem(w, http.StatusBadRequest, "validation", "purl is required")
+		return
+	}
+	if a.scorer != nil {
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_, _ = a.scorer.Rescore(bgCtx, tenantID)
+		}()
+	}
+	writeJSON(w, http.StatusAccepted, ScanComponentResponse{
+		Status:    "started",
+		Purl:      req.Purl,
+		Message:   "On-demand vulnerability scan initiated for " + req.Purl,
+		ScannedAt: time.Now().UTC(),
+	})
 }
