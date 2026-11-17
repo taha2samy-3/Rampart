@@ -2612,4 +2612,3 @@ func (m *MemoryStore) SetFeedState(state domain.FeedState) {
 	}
 	m.feedStates[state.Feed] = state
 }
-
