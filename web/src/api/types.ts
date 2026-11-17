@@ -600,6 +600,21 @@ export interface FeedMirrorSpec {
   }>;
 }
 
+export interface FeedTestResult {
+  name: string;
+  url: string;
+  reachable: boolean;
+  status_code: number;
+  latency_ms: number;
+  message: string;
+  error?: string | null;
+}
+
+export interface FeedTestConnectionResponse {
+  tested_at: string;
+  results: FeedTestResult[];
+}
+
 export interface FeedsResponse {
   mirror?: FeedMirrorSpec | null;
   items: FeedItem[];

@@ -30,6 +30,9 @@ export const IconCheck = (p: P) => (
 export const IconX = (p: P) => (
   <svg {...base(p)}><path d="m4 4 8 8M12 4l-8 8" /></svg>
 );
+export const IconRefresh = (p: P) => (
+  <svg {...base(p)}><path d="M2.5 8a5.5 5.5 0 0 1 9.3-3.9L13.5 6M13.5 2v4h-4M13.5 8a5.5 5.5 0 0 1-9.3 3.9L2.5 10M2.5 14v-4h4" /></svg>
+);
 export const IconCopy = (p: P) => (
   <svg {...base(p)}><rect x="5.5" y="5.5" width="8" height="8" /><path d="M10.5 5.5v-3h-8v8h3" /></svg>
 );

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { get, qk } from '@/api';
-import type { FeedItem, FeedsResponse } from '@/api/types';
+import { get, post, qk } from '@/api';
+import type { FeedItem, FeedsResponse, FeedTestConnectionResponse, FeedTestResult } from '@/api/types';
 import {
   Button,
   Dialog,
@@ -17,7 +17,7 @@ import {
   THead,
   Tr,
 } from '@/components';
-import { IconCheck, IconCopy, IconSearch, IconWarning } from '@/components/icons';
+import { IconCheck, IconCopy, IconRefresh, IconSearch, IconWarning } from '@/components/icons';
 import { absoluteDate, shortAge } from '@/lib/format';
 
 export function FeedsView() {
@@ -26,6 +26,10 @@ export function FeedsView() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'error' | 'disabled'>('all');
   const [crdOpen, setCrdOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [testResults, setTestResults] = useState<Record<string, FeedTestResult>>({});
+  const [testingFeed, setTestingFeed] = useState<string | null>(null);
+  const [testingAll, setTestingAll] = useState(false);
+  const [testSummary, setTestSummary] = useState<string | null>(null);
 
   const feedsQuery = useQuery({
     queryKey: qk.feeds.list(),
@@ -36,6 +40,36 @@ export function FeedsView() {
   const feedsData = feedsQuery.data;
   const items = useMemo(() => feedsData?.items ?? [], [feedsData?.items]);
   const mirror = feedsData?.mirror;
+
+  const handleTestConnection = async (feedName?: string) => {
+    try {
+      if (feedName) {
+        setTestingFeed(feedName);
+      } else {
+        setTestingAll(true);
+      }
+      const queryParam = feedName ? `?feed=${encodeURIComponent(feedName)}` : '';
+      const res = await post<FeedTestConnectionResponse>(`/api/v1/feeds/test-connection${queryParam}`, {});
+      setTestResults((prev) => {
+        const next = { ...prev };
+        for (const r of res.results) {
+          next[r.name] = r;
+        }
+        return next;
+      });
+      if (!feedName) {
+        const reachable = res.results.filter((r) => r.reachable).length;
+        setTestSummary(
+          `Live probe verified: ${reachable} of ${res.results.length} upstream feeds reachable (responded in real-time).`
+        );
+      }
+    } catch {
+      // ignore
+    } finally {
+      setTestingFeed(null);
+      setTestingAll(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     return items.filter((f) => {
@@ -109,9 +143,29 @@ spec:
               })}
             </p>
           </div>
-          <Button variant="primary" onClick={() => setCrdOpen(true)}>
-            {t('feeds.viewCrd', { defaultValue: 'Declarative CRD Spec' })}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => handleTestConnection()}
+              disabled={testingAll || !!testingFeed}
+              className="flex items-center gap-1.5"
+            >
+              {testingAll ? (
+                <>
+                  <Spinner size={14} />
+                  <span>{t('feeds.testing', { defaultValue: 'Testing...' })}</span>
+                </>
+              ) : (
+                <>
+                  <IconRefresh className="h-4 w-4" />
+                  <span>{t('feeds.testAll', { defaultValue: 'Test Live Connectivity' })}</span>
+                </>
+              )}
+            </Button>
+            <Button variant="primary" onClick={() => setCrdOpen(true)}>
+              {t('feeds.viewCrd', { defaultValue: 'Declarative CRD Spec' })}
+            </Button>
+          </div>
         </div>
 
         {/* Stats Row */}
@@ -158,6 +212,23 @@ spec:
           </span>
         </div>
       </div>
+
+      {/* Live Probe Feedback Banner */}
+      {testSummary && (
+        <div className="flex items-center justify-between rounded border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 text-12 text-emerald-800 dark:text-emerald-300">
+          <div className="flex items-center gap-2">
+            <IconCheck className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span className="font-medium">{testSummary}</span>
+          </div>
+          <button
+            onClick={() => setTestSummary(null)}
+            className="text-11 text-ink-2 hover:text-ink px-1 font-bold"
+            aria-label="Dismiss test summary"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -218,10 +289,14 @@ spec:
               <Th>Records</Th>
               <Th>Upstream / Mirror URL</Th>
               <Th>Last Sync</Th>
+              <Th className="text-right">Live Connectivity</Th>
             </tr>
           </THead>
           <TBody>
             {filtered.map((feed: FeedItem) => {
+              const probe = testResults[feed.name];
+              const isPinging = testingFeed === feed.name;
+
               return (
                 <Tr key={feed.name} className="h-14">
                   <Td>
@@ -282,6 +357,43 @@ spec:
                     ) : (
                       '—'
                     )}
+                  </Td>
+                  <Td className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      {probe && (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-11 font-mono ${
+                            probe.reachable
+                              ? probe.status_code >= 400
+                                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
+                                : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
+                              : 'bg-red-500/10 text-red-700 dark:text-red-400 border border-red-500/20'
+                          }`}
+                          title={`${probe.message} (${probe.latency_ms}ms)`}
+                        >
+                          <span className="font-semibold">
+                            {probe.status_code > 0 ? `HTTP ${probe.status_code}` : 'Unreachable'}
+                          </span>
+                          <span>• {probe.latency_ms}ms</span>
+                        </span>
+                      )}
+                      <Button
+                        variant="ghost"
+                        disabled={isPinging || testingAll}
+                        onClick={() => handleTestConnection(feed.name)}
+                        className="text-11 flex items-center gap-1 px-2.5 py-1"
+                        title={`Test live connectivity to ${feed.url}`}
+                      >
+                        {isPinging ? (
+                          <>
+                            <Spinner size={12} />
+                            <span>Pinging...</span>
+                          </>
+                        ) : (
+                          <span>Test</span>
+                        )}
+                      </Button>
+                    </div>
                   </Td>
                 </Tr>
               );

@@ -669,6 +669,19 @@ const server = http.createServer((req, res) => {
       }
     }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
+    if (p === '/api/v1/feeds/test-connection') {
+      const feedParam = url.searchParams.get('feed');
+      const allResults = [
+        { name: 'cisa_kev', url: 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', reachable: true, status_code: 200, latency_ms: 64, message: 'Upstream reachable (HTTP 200 OK)' },
+        { name: 'first_epss', url: 'https://epss.cyentia.com/epss_scores-current.csv.gz', reachable: true, status_code: 200, latency_ms: 110, message: 'Upstream reachable (HTTP 200 OK)' },
+        { name: 'nvd', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0', reachable: true, status_code: 200, latency_ms: 180, message: 'Upstream reachable (HTTP 200 OK)' },
+        { name: 'osv', url: 'https://osv-vulnerabilities.storage.googleapis.com', reachable: true, status_code: 200, latency_ms: 85, message: 'Upstream reachable (HTTP 200 OK)' },
+        { name: 'vulnrichment', url: 'https://github.com/cisagov/vulnrichment/archive/refs/heads/develop.zip', reachable: true, status_code: 302, latency_ms: 140, message: 'Upstream reachable (HTTP 302 OK)' },
+        { name: 'exploitdb', url: 'https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv', reachable: true, status_code: 200, latency_ms: 95, message: 'Upstream reachable (HTTP 200 OK)' },
+      ];
+      const results = feedParam ? allResults.filter((r) => r.name === feedParam) : allResults;
+      return json(res, { tested_at: new Date().toISOString(), results });
+    }
     if (p === '/api/v1/feeds') return json(res, {
       mirror: {
         egress: 'allow',

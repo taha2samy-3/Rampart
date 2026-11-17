@@ -77,4 +77,19 @@ describe('vulnerability feeds tab and declarative CRD', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.getByText(/The vulnerability feeds could not be loaded/i)).toBeInTheDocument();
   });
+
+  it('triggers live connectivity probe when clicking test button', async () => {
+    mockFetch({ loggedIn: true, role: 'admin' });
+    const { container } = renderApp('/integrations');
+
+    await userEvent.click(await screen.findByRole('tab', { name: /Vulnerability Feeds/i }));
+
+    const testAllBtn = await screen.findByRole('button', { name: /Test Live Connectivity/i });
+    await userEvent.click(testAllBtn);
+
+    expect(await screen.findByText(/Live probe verified/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/HTTP 200/i).length).toBeGreaterThan(0);
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

@@ -180,4 +180,63 @@ func TestFeedsAPI(t *testing.T) {
 	if byNameDeny["nvd"].Enabled || byNameDeny["nvd"].Status != "disabled" {
 		t.Errorf("nvd without mirror should be disabled in egress deny mode")
 	}
+
+	// 5. Test Live Connectivity Probe endpoint
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	testMirror := &domain.FeedMirrorSpec{
+		Egress: "allow",
+		KEV: &domain.FeedMirrorSource{
+			URL: ts.URL,
+		},
+		EPSS: &domain.FeedMirrorSource{
+			URL: ts.URL,
+		},
+		NVD: &domain.FeedMirrorSource{
+			URL: ts.URL,
+		},
+		OSV: &domain.FeedMirrorSource{
+			URL: ts.URL,
+		},
+	}
+	st.SetClusterFeedMirror(testMirror)
+
+	// Single feed probe
+	req = httptest.NewRequest("POST", "/api/v1/feeds/test-connection?feed=cisa_kev", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from test-connection, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var testResp query.FeedTestConnectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &testResp); err != nil {
+		t.Fatalf("failed to parse test-connection response: %v", err)
+	}
+	if len(testResp.Results) != 1 {
+		t.Fatalf("expected 1 result for cisa_kev, got %d", len(testResp.Results))
+	}
+	if !testResp.Results[0].Reachable || testResp.Results[0].StatusCode != http.StatusOK {
+		t.Errorf("expected cisa_kev to be reachable with 200 OK, got %+v", testResp.Results[0])
+	}
+
+	// All feeds probe
+	req = httptest.NewRequest("POST", "/api/v1/feeds/test-connection", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for all feeds probe, got %d", rec.Code)
+	}
+	var allTestResp query.FeedTestConnectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &allTestResp); err != nil {
+		t.Fatalf("failed to parse all feeds test response: %v", err)
+	}
+	if len(allTestResp.Results) < 4 {
+		t.Errorf("expected at least 4 feed probe results, got %d", len(allTestResp.Results))
+	}
 }
