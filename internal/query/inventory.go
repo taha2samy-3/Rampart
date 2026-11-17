@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"rampart/internal/store"
 )
@@ -70,6 +73,47 @@ func (a *API) handleInventoryComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"components": components, "total": total, "truncated": total > len(components)})
+}
+
+// handleApplicationComponents answers GET /api/v1/applications/{id}/components.
+// It returns the packages of the latest SBOM of the assets belonging to this application,
+// indicating whether each package has open CVEs/vulnerabilities.
+func (a *API) handleApplicationComponents(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := a.resolveTenant(r)
+	if err != nil {
+		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+	appID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		problem(w, http.StatusNotFound, "not-found", "Application not found")
+		return
+	}
+	app, err := a.store.GetApplication(r.Context(), tenantID, appID)
+	if err != nil || app == nil {
+		problem(w, http.StatusNotFound, "not-found", "Application not found")
+		return
+	}
+	rd, ok := a.store.(store.InventoryReader)
+	if !ok {
+		problem(w, http.StatusNotImplemented, "unsupported", "The inventory needs PostgreSQL")
+		return
+	}
+	components, _, err := rd.ListInventoryComponents(r.Context(), tenantID, "", inventoryComponentMax)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to read packages")
+		return
+	}
+	out := make([]store.InventoryComponent, 0, len(components))
+	for _, c := range components {
+		if strings.EqualFold(c.Application, app.Name) || (app.Slug != "" && strings.EqualFold(c.Application, app.Slug)) {
+			out = append(out, c)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"components": out,
+		"total":      len(out),
+	})
 }
 
 // ScanComponentRequest is the request body for POST /api/v1/inventory/components/scan.

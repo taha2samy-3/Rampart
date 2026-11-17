@@ -181,7 +181,7 @@ function inAYear(): string {
   return d.toISOString().slice(0, 10);
 }
 
-function AttestDialog({ framework, control, application, onClose }: { framework: string; control: ControlStatus; application: string; onClose: () => void }) {
+export function AttestDialog({ framework, control, application, onClose }: { framework: string; control: ControlStatus; application: string; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const toast = useToast();

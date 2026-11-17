@@ -220,6 +220,15 @@ func TestAPI_Inventory(t *testing.T) {
 	if recQuery.Code != http.StatusAccepted || !strings.Contains(recQuery.Body.String(), "pkg:npm/axios@0.21.1") {
 		t.Errorf("scan with purl query: want 202, got %d %s", recQuery.Code, recQuery.Body.String())
 	}
+
+	// App components endpoint -> 200 with matching application components
+	appID := uuid.New()
+	_ = mem.CreateApplication(context.Background(), &domain.Application{ID: appID, TenantID: tenantID, Name: "Shop", Slug: "shop"})
+	is.comps = append(is.comps, store.InventoryComponent{Name: "express", Version: "4.18.2", Application: "Shop", Vulnerabilities: 2})
+	recApp := get("/api/v1/applications/"+appID.String()+"/components", true)
+	if recApp.Code != 200 || !strings.Contains(recApp.Body.String(), "express") || !strings.Contains(recApp.Body.String(), `"vulnerabilities":2`) {
+		t.Errorf("app components: %d %s", recApp.Code, recApp.Body.String())
+	}
 	// The in-memory store has no inventory: 501, not a 500 or an empty list that hides it.
 	mux2 := http.NewServeMux()
 	query.NewAPIWithAuth(mem, nil, authn).RegisterRoutes(mux2)

@@ -209,6 +209,26 @@ export function mockFetch(sc: Scenario): Calls {
         scanned_at: new Date().toISOString(),
       }, 202);
     }
+    if (/^\/api\/v1\/applications\/[^/]+\/components$/.test(path)) {
+      return json({
+        components: sc.inventory?.components ?? [
+          {
+            name: 'log4j-core',
+            version: '2.14.1',
+            purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
+            type: 'maven',
+            track: 'main',
+            license: 'Apache-2.0',
+            direct: true,
+            asset_id: 'asset-2',
+            asset_name: 'flare-reminders',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 2,
+          },
+        ],
+        total: 1,
+      });
+    }
     if (path.startsWith('/api/v1/vulnerabilities/')) {
       if (sc.vuln?.error) return json({ type: 'u', title: 'boom', status: 500 }, 500);
       const id = decodeURIComponent(path.split('/')[4] ?? '');

@@ -853,6 +853,53 @@ const server = http.createServer((req, res) => {
         scanned_at: new Date().toISOString(),
       }, 202);
     }
+    const appCompMatch = /^\/api\/v1\/applications\/([^/]+)\/components$/.exec(p);
+    if (appCompMatch) {
+      return json(res, {
+        components: [
+          {
+            name: 'log4j-core',
+            version: '2.14.1',
+            purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
+            type: 'maven',
+            track: 'main',
+            license: 'Apache-2.0',
+            direct: true,
+            asset_id: 'asset-2',
+            asset_name: 'flare-reminders',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 2,
+          },
+          {
+            name: 'axios',
+            version: '0.21.1',
+            purl: 'pkg:npm/axios@0.21.1',
+            type: 'npm',
+            track: 'main',
+            license: 'MIT',
+            direct: true,
+            asset_id: 'asset-1',
+            asset_name: 'default-repository',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 1,
+          },
+          {
+            name: 'lodash',
+            version: '4.17.21',
+            purl: 'pkg:npm/lodash@4.17.21',
+            type: 'npm',
+            track: 'main',
+            license: 'MIT',
+            direct: true,
+            asset_id: 'asset-3',
+            asset_name: 'default-repository',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 0,
+          },
+        ],
+        total: 3,
+      });
+    }
     const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/impact)?$/.exec(p);
     if (vm) {
       const vid = decodeURIComponent(vm[1]);

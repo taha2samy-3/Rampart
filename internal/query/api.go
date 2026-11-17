@@ -193,6 +193,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/runs/{id}", a.handleGetRun)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
 	routes.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleApplicationSBOM) // merged, CycloneDX or SPDX (doc 11, D95)
+	routes.HandleFunc("GET /api/v1/applications/{id}/components", a.handleApplicationComponents)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)

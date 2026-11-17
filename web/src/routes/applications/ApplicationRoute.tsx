@@ -10,6 +10,8 @@ import { openText } from '@/lib/apps';
 import { ChangesSection } from './ChangesSection';
 import { ComplianceSummary } from './ComplianceSummary';
 import { ScanCoverage } from './ScanCoverage';
+import { ApplicationSBOMSection } from './ApplicationSBOMSection';
+import { ApplicationAttestSection } from './ApplicationAttestSection';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
@@ -148,15 +150,13 @@ function Page({ app }: { app: ApplicationPage }) {
           )}
         </details>
 
-        <section className="mt-6" aria-labelledby="app-vex">
-          <h2 id="app-vex" className="mb-1 text-14 font-semibold">{t('apps.vex')}</h2>
-          <p className="m-0 mb-1 text-12 text-ink-2">{t('apps.vexHelp')}</p>
-          <p className="m-0 flex gap-4 text-13">
-            <a href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=openvex`} download>{t('apps.vexOpen')}</a>
-            <a href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=cyclonedx`} download>{t('apps.vexCdx')}</a>
-          </p>
-        </section>
+        {/* Software Bill of Materials (SBOM) & Packages */}
+        <ApplicationSBOMSection app={app} />
 
+        {/* Compliance Attestations (Attest) */}
+        <ApplicationAttestSection app={app} />
+
+        {/* Application Changes & CVE Activity Table */}
         <ChangesSection appId={app.id} />
       </article>
     </div>
