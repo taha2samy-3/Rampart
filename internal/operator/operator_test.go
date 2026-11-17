@@ -632,3 +632,33 @@ func TestConnectorReconciler_WithChecker(t *testing.T) {
 		t.Fatalf("expected Connected=False (AuthFailed), got %+v", cond2)
 	}
 }
+
+// A ScanSource resource carries trackedRefs; a bad list is a visible condition, not a silent default.
+func TestScanSourceReconciler_TrackedRefs(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, operator.NewMockSecretProvider(), newMemorySecretStore(), nil)
+	tStatus, _ := op.ReconcileTenant(ctx, &operator.TenantCR{Metadata: operator.Metadata{Name: "acme"}, Spec: operator.TenantSpec{DisplayName: "Acme", Namespaces: []string{"acme"}}})
+	tenantID := uuid.MustParse(tStatus.TenantID)
+	reconcile := func(refs []string) *operator.ScanSourceStatus {
+		st, err := op.ReconcileScanSource(ctx, &operator.ScanSourceCR{Metadata: operator.Metadata{Name: "ci", Namespace: "acme"}, Spec: operator.ScanSourceSpec{ScannerFamily: "semgrep", TrackedRefs: refs}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+
+	if c := reconcile([]string{"main", "develop", "hotfix-*"}).GetCondition("Ready"); c == nil || c.Status != "True" {
+		t.Fatalf("valid refs: %+v", c)
+	}
+	if p := store.ScanSourcePolicy(tenantID, "ci"); p == nil || len(p.TrackedRefs) != 3 || p.TrackedRefs[1] != "develop" {
+		t.Fatalf("the refs reach the store: %+v", p)
+	}
+	c := reconcile([]string{"bad branch"}).GetCondition("Ready")
+	if c == nil || c.Status != "False" || c.Reason != "InvalidTrackedRefs" {
+		t.Fatalf("a bad list is Ready=False InvalidTrackedRefs: %+v", c)
+	}
+	if p := store.ScanSourcePolicy(tenantID, "ci"); len(p.TrackedRefs) != 3 {
+		t.Errorf("a refused change leaves the last valid list in force: %+v", p)
+	}
+}

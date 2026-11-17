@@ -30,7 +30,8 @@ type InventoryComponent struct {
 	Name            string    `json:"name"`
 	Version         string    `json:"version"`
 	Purl            string    `json:"purl"`
-	Type            string    `json:"type"` // the purl type: npm, maven, apk, golang...
+	Type            string    `json:"type"`  // the purl type: npm, maven, apk, golang...
+	Track           string    `json:"track"` // the track (branch or environment) whose SBOM lists it
 	License         string    `json:"license,omitempty"`
 	Direct          bool      `json:"direct"`
 	AssetID         uuid.UUID `json:"asset_id"`
@@ -61,8 +62,10 @@ func (s *PostgresStore) ListInventoryAssets(ctx context.Context, tenantID uuid.U
 				WHERE tenant_id = $1 AND state IN `+activeStates+` AND detection = 'present'
 				GROUP BY asset_id
 			), latest AS (
-				SELECT DISTINCT ON (asset_id) asset_id, component_count
-				FROM sbom WHERE tenant_id = $1 ORDER BY asset_id, created_at DESC
+				SELECT asset_id, max(component_count) AS component_count FROM (
+					SELECT DISTINCT ON (asset_id, track) asset_id, track, component_count
+					FROM sbom WHERE tenant_id = $1 ORDER BY asset_id, track, created_at DESC
+				) t GROUP BY asset_id
 			)
 			SELECT a.id, COALESCE(NULLIF(a.display_name, ''), a.key), a.type, a.application_id, COALESCE(app.name, ''),
 			       COALESCE(fc.crit, 0), COALESCE(fc.high, 0), COALESCE(fc.med, 0), COALESCE(fc.low, 0), COALESCE(fc.total, 0),
@@ -101,9 +104,9 @@ func (s *PostgresStore) ListInventoryComponents(ctx context.Context, tenantID uu
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		const base = `
 			WITH latest AS (
-				SELECT DISTINCT ON (asset_id) id, asset_id FROM sbom WHERE tenant_id = $1 ORDER BY asset_id, created_at DESC
+				SELECT DISTINCT ON (asset_id, track) id, asset_id, track FROM sbom WHERE tenant_id = $1 ORDER BY asset_id, track, created_at DESC
 			), comp AS (
-				SELECT c.name, c.version, c.purl, c.purl_base, c.licenses, c.direct, l.asset_id
+				SELECT c.name, c.version, c.purl, c.purl_base, c.licenses, c.direct, l.asset_id, l.track
 				FROM latest l JOIN sbom_component c ON c.sbom_id = l.id AND c.tenant_id = $1
 				WHERE $2 = '%%' OR c.name ILIKE $2 OR c.purl ILIKE $2 OR c.version ILIKE $2
 			)`
@@ -112,18 +115,18 @@ func (s *PostgresStore) ListInventoryComponents(ctx context.Context, tenantID uu
 		}
 		rows, err := tx.Query(ctx, base+`,
 			vc AS (
-				SELECT o.asset_id, o.location->'package'->>'purl_base' AS pb, count(DISTINCT o.finding_id) AS n
+				SELECT o.asset_id, o.track, o.location->'package'->>'purl_base' AS pb, count(DISTINCT o.finding_id) AS n
 				FROM occurrence o JOIN finding f ON f.id = o.finding_id AND f.tenant_id = o.tenant_id
 				WHERE o.tenant_id = $1 AND o.location ? 'package' AND f.state IN `+activeStates+` AND f.detection = 'present'
-				GROUP BY 1, 2
+				GROUP BY 1, 2, 3
 			)
-			SELECT comp.name, comp.version, comp.purl, comp.licenses, comp.direct, comp.asset_id,
+			SELECT comp.name, comp.version, comp.purl, comp.licenses, comp.direct, comp.asset_id, comp.track,
 			       COALESCE(NULLIF(a.display_name, ''), a.key), COALESCE(app.name, ''), COALESCE(vc.n, 0)
 			FROM comp
 			JOIN asset a ON a.id = comp.asset_id AND a.tenant_id = $1
 			LEFT JOIN application app ON app.id = a.application_id AND app.tenant_id = $1
-			LEFT JOIN vc ON vc.asset_id = comp.asset_id AND vc.pb = comp.purl_base
-			ORDER BY COALESCE(vc.n, 0) DESC, comp.name, comp.version
+			LEFT JOIN vc ON vc.asset_id = comp.asset_id AND vc.track = comp.track AND vc.pb = comp.purl_base
+			ORDER BY COALESCE(vc.n, 0) DESC, comp.name, comp.version, comp.track
 			LIMIT $3`, tenantID, pattern, limit)
 		if err != nil {
 			return err
@@ -132,7 +135,7 @@ func (s *PostgresStore) ListInventoryComponents(ctx context.Context, tenantID uu
 		for rows.Next() {
 			var c InventoryComponent
 			var licenses []string
-			if err := rows.Scan(&c.Name, &c.Version, &c.Purl, &licenses, &c.Direct, &c.AssetID, &c.Asset, &c.Application, &c.Vulnerabilities); err != nil {
+			if err := rows.Scan(&c.Name, &c.Version, &c.Purl, &licenses, &c.Direct, &c.AssetID, &c.Track, &c.Asset, &c.Application, &c.Vulnerabilities); err != nil {
 				return err
 			}
 			c.License = strings.Join(licenses, ", ")

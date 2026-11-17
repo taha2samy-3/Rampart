@@ -159,14 +159,14 @@ export function IntegrationsRoute() {
                       </Td>
                       <Td className="text-13 text-ink-2">
                         {p.runtime} {p.kind} {p.version}
-                        {p.secrets.length > 0 && <span className="block text-12">needs {p.secrets.join(', ')}</span>}
+                        {(p.secrets ?? []).length > 0 && <span className="block text-12">needs {(p.secrets ?? []).join(', ')}</span>}
                       </Td>
-                      <Td className="font-mono text-12 text-ink-2">{p.egress.join(', ') || 'nothing'}</Td>
+                      <Td className="font-mono text-12 text-ink-2">{(p.egress ?? []).join(', ') || 'nothing'}</Td>
                       <Td className="text-13 text-ink-2">
                         {p.kind === 'parser'
                           ? `uploads named ${p.name}, or detected`
-                          : p.used_by.length
-                            ? p.used_by.join(', ')
+                          : (p.used_by ?? []).length
+                            ? (p.used_by ?? []).join(', ')
                             : 'no connector'}
                       </Td>
                       <Td className={p.error ? 'whitespace-normal text-13 font-medium text-ink' : 'text-13 text-ink-2'}>

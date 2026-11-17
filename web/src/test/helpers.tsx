@@ -33,6 +33,12 @@ export interface Scenario {
   /** The occurrences GET /findings/{id} returns (the package a scanner named), and the vulnerability record and impact. */
   occurrences?: unknown[];
   vuln?: { record?: unknown; impact?: unknown; error?: boolean };
+  /** What POST /uploads/direct answers: 201 with these fields added, or 404 application-not-found. */
+  upload?: Record<string, unknown> | 404;
+  /** GET /integration-packages with null lists, as an old server wrote them. */
+  packagesNull?: boolean;
+  /** GET /applications/{id}/changes; `error` answers 500. The query (from, to) of each call is in the calls. */
+  appChanges?: unknown | 'error';
   /** GET /applications/{id}/compliance. */
   appCompliance?: unknown | 'error';
   /** GET /inventory and /inventory/components. error answers 500 (a missing endpoint is a 404 in production). */
@@ -60,6 +66,8 @@ export interface Scenario {
   /** GET /api/v1/sources (Dependency-Track sources, D92), and per source its unmapped projects and decisions. */
   dtSources?: SourceStatus[];
   dtUnmapped?: Record<string, DTrackProjectRecord[]>;
+  /** GET /sources/{id}/projects: the projects in an application, and what put each there. */
+  dtMapped?: Record<string, (DTrackProjectRecord & { application_name: string; application_slug: string; by_rule: boolean })[]>;
   dtDecisions?: Record<string, UpstreamDecision[]>;
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
   taxonomies?: { id: string; name: string; version: string; origin?: string; error?: string }[];
@@ -159,7 +167,7 @@ export function run(i: number, over: Record<string, unknown> = {}) {
     context: { repository: 'github.com/acme/shop', branch: 'main', commit: 'abcdef1234567' }, scanners: ['semgrep'], ephemeral: false, ...over,
   };
 }
-export type Calls = { method: string; url: string; headers: Record<string, string>; body?: string }[];
+export type Calls = { method: string; url: string; headers: Record<string, string>; body?: string; form?: Record<string, string> }[];
 
 export function mockFetch(sc: Scenario): Calls {
   const calls: Calls = [];
@@ -169,7 +177,7 @@ export function mockFetch(sc: Scenario): Calls {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const path = url.split('?')[0]!;
-    calls.push({ method: init?.method ?? 'GET', url, headers: (init?.headers ?? {}) as Record<string, string>, body: typeof init?.body === 'string' ? init.body : undefined });
+    calls.push({ method: init?.method ?? 'GET', url, headers: (init?.headers ?? {}) as Record<string, string>, body: typeof init?.body === 'string' ? init.body : undefined, form: init?.body instanceof FormData ? Object.fromEntries([...init.body.entries()].filter(([, v]) => typeof v === 'string') as [string, string][]) : undefined });
     if (path === '/api/v1/ui-config') return json({ ...CONFIG, login: { methods: sc.methods ?? CONFIG.login.methods } });
     if (path === '/auth/local/login') {
       const st = sc.local ?? 204;
@@ -243,6 +251,10 @@ export function mockFetch(sc: Scenario): Calls {
       if (sc.apps === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list applications', status: 500, request_id: 'req_apps' }, 500);
       return json({ items: sc.apps?.length ? sc.apps : null });
     }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/changes')) {
+      if (sc.appChanges === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      return json(sc.appChanges ?? { application: 'x', from: '2026-10-19', to: '2026-11-17', days: 30, summary: { new: 0, closed: 0, reopened: 0, open_at_start: 0, open_at_end: 0, previous: { from: '', to: '', new: 0, closed: 0 } }, daily: [], new: [], closed: [], reopened: [], open: [], truncated: [] });
+    }
     if (path.startsWith('/api/v1/applications/') && path.endsWith('/compliance')) {
       if (sc.appCompliance === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
       return json(sc.appCompliance ?? { application: 'x', evaluated_at: '2026-11-17T00:00:00Z', frameworks: [], not_in_scope: [] });
@@ -263,6 +275,7 @@ export function mockFetch(sc: Scenario): Calls {
     if (path === '/api/v1/sources') return json({ sources: sc.dtSources ?? [] });
     if (path.startsWith('/api/v1/sources/')) {
       const [, , , , sid = '', what] = path.split('/');
+      if (what === 'projects') return json({ projects: sc.dtMapped?.[sid] ?? [], count: sc.dtMapped?.[sid]?.length ?? 0 });
       if (what === 'unmapped') return json({ projects: sc.dtUnmapped?.[sid] ?? [], count: 0 });
       if (what === 'decisions') return json({ decisions: sc.dtDecisions?.[sid] ?? [] });
       if (what === 'map') return json({ status: 'mapped', sync_queued: true });
@@ -332,6 +345,8 @@ export function mockFetch(sc: Scenario): Calls {
     }
     // D94: tools installed as data.
     if (path === '/api/v1/integration-packages') {
+      // What the server answered before the fix: a parser package with null lists (Go nil slices).
+      if (sc.packagesNull) return json({ items: [{ name: 'pip-audit', kind: 'parser', runtime: 'mapping', version: '1.0.0', egress: null, secrets: null, config: null, used_by: null, updated_at: '2026-11-16T10:00:00Z' }] });
       return json({ items: [
         { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Google Chat spaces', egress: ['chat.googleapis.com'],
           secrets: ['webhookUrl'], config: [], used_by: ['chat-sec'], updated_at: '2026-11-16T10:00:00Z' },
@@ -375,7 +390,8 @@ export function mockFetch(sc: Scenario): Calls {
       return json({ items: items.length ? items : null, next_cursor: idx + 1 < pages.length ? String(idx + 1) : '' });
     }
     if (path === '/api/v1/uploads/direct' && init?.method === 'POST') {
-      return json({ ingestRunId: '00000001-aaaa-bbbb-cccc-000000000001', status: 'completed' }, 201);
+      if (sc.upload === 404) return json({ type: 'https://rampart.aspm.dev/problems/application-not-found', title: 'No such application', status: 404, detail: 'There is no application "x" in this tenant.' }, 404);
+      return json({ ingestRunId: '00000001-aaaa-bbbb-cccc-000000000001', status: 'completed', ...(typeof sc.upload === 'object' ? sc.upload : {}) }, 201);
     }
     if (path.startsWith('/api/v1/runs/')) {
       const id = decodeURIComponent(path.split('/').pop() ?? '');

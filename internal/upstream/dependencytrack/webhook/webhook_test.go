@@ -112,6 +112,14 @@ func (m *mockDTrackStore) MapDTrackProject(ctx context.Context, tenantID uuid.UU
 	return nil
 }
 
+func (m *mockDTrackStore) GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error) {
+	return nil, nil
+}
+
+func (m *mockDTrackStore) ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
+	return nil, nil
+}
+
 type mockSecretResolver struct {
 	secrets map[string][]byte
 }

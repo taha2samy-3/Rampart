@@ -316,7 +316,9 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	}
 
 	res := Result{Status: status, Reason: reason, Stats: stats}
-	if pp.IsSBOM {
+	// An ephemeral run (a pull request, a feature branch) changes nothing in the inventory (D10); its SBOM used to be
+	// saved and replaced the real one of the asset.
+	if pp.IsSBOM && !pp.IsEphemeral {
 		n, err := p.saveSBOM(ctx, run, parserID, pp.Open)
 		if err != nil {
 			return res, err
@@ -438,6 +440,7 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 		sbom = &domain.SBOM{ID: domain.NewID(), Format: parserID, CreatedAt: time.Now().UTC()}
 	}
 	sbom.TenantID, sbom.AssetID, sbom.IngestRunID, sbom.ComponentCount = run.TenantID, run.AssetID, run.ID, len(components)
+	sbom.Track = run.Track
 	for i := range components {
 		if components[i].TenantID == domain.NilID {
 			components[i].TenantID = run.TenantID
@@ -547,7 +550,7 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 
 	res, err := p.Process(ctx, ProcessParams{
 		Run: run, Parser: parser, IsSBOM: isSBOM, ScanFinished: scanFinishedOf(u.Context),
-		IsEphemeral: IsEphemeral(u.Context.Branch, nil), Open: open,
+		IsEphemeral: IsEphemeralFor(ctx, p.store, u.TenantID, u.ScanSourceID, u.Context.Branch), Open: open,
 		// D80: the token's tightening options, stored on the upload when it was created (D22).
 		NoClose: u.Options.NoClose, MinSeverity: u.Options.MinSeverity,
 	})

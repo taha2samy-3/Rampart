@@ -652,3 +652,43 @@ export interface AppFramework {
   window_days: number;
 }
 export interface AppCompliance { application: string; evaluated_at: string; frameworks: AppFramework[]; not_in_scope: string[] }
+
+/** A Dependency-Track project that belongs to an application, and what put it there. */
+export interface MappedProject extends DTrackProjectRecord {
+  application_name: string;
+  application_slug: string;
+  /** A rule put it there, not a person. mapping_rule says which: defaultApplication, property:..., tag:..., cel:... */
+  by_rule: boolean;
+}
+
+/** A finding in one list of an application's changes (GET /applications/{id}/changes). */
+export interface FindingChange {
+  id: string;
+  vulnerability_id?: string;
+  rule_id: string;
+  title: string;
+  category: string;
+  severity: Severity;
+  risk_band: Severity;
+  risk_score: number;
+  state: string;
+  resolution?: string;
+  asset: string;
+  first_seen: string;
+  resolved_at?: string | null;
+  at: string;
+}
+export interface ChangeDay { day: string; new: number; closed: number }
+export interface ApplicationChanges {
+  application: string;
+  from: string;
+  to: string;
+  days: number;
+  summary: { new: number; closed: number; reopened: number; open_at_start: number; open_at_end: number; previous: { from: string; to: string; new: number; closed: number } };
+  daily: ChangeDay[];
+  new: FindingChange[];
+  closed: FindingChange[];
+  reopened: FindingChange[];
+  open: FindingChange[];
+  truncated: string[];
+}

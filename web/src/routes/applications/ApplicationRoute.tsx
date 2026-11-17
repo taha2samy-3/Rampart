@@ -7,6 +7,7 @@ import type { ApplicationPage } from '@/api/types';
 import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks } from '@/components';
 import type { ChartBand } from '@/components';
 import { openText } from '@/lib/apps';
+import { ChangesSection } from './ChangesSection';
 import { ComplianceSummary } from './ComplianceSummary';
 import { ScanCoverage } from './ScanCoverage';
 import { toBand } from '@/lib/band';
@@ -64,6 +65,8 @@ function Page({ app }: { app: ApplicationPage }) {
           <p className="m-0 mt-1 text-13 text-ink-2">{t('apps.riskLine', { score: app.risk_score, exposure: app.exposure_count })}</p>
           <Link to="/findings" search={{ q: `app:${app.slug} state:open,under_investigation,affected` }} className="mt-1 inline-block text-13">{t('apps.seeAll')}</Link>
         </section>
+
+        <ChangesSection appId={app.id} />
 
         <ComplianceSummary appId={app.id} />
 

@@ -66,6 +66,18 @@ spec:
                       type: array
                       items:
                         type: string
+                trackedRefs:
+                  type: array
+                  maxItems: 50
+                  description: >-
+                    The branches whose runs change the inventory (D10). An exact name, a prefix ending in * ("release/*",
+                    "hotfix-*"), or * for every ref. Any other ref is ephemeral: it feeds the CI gate and changes nothing.
+                    Empty: main, master, default, release/*, prod, production. A pull request is always ephemeral.
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 255
+                    pattern: '^[^\s*]+\*?$|^\*$'
                 trustRules:
                   type: array
                   items:

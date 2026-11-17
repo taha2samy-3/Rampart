@@ -23,6 +23,7 @@ export const qk = {
     one: (id: string) => ['applications', 'one', id] as const,
     trend: (id: string, days: number) => ['applications', 'trend', id, days] as const,
     compliance: (id: string) => ['applications', 'compliance', id] as const,
+    changes: (id: string, from: string, to: string) => ['applications', 'changes', id, from, to] as const,
   },
   overview: () => ['overview'] as const,
   trend: (metric: string, days: number) => ['trend', metric, days] as const,
@@ -72,6 +73,7 @@ export const qk = {
     all: () => ['dtrack'] as const,
     sources: () => ['dtrack', 'sources'] as const,
     unmapped: (source: string) => ['dtrack', 'unmapped', source] as const,
+    mapped: (source: string) => ['dtrack', 'mapped', source] as const,
     decisions: (source: string) => ['dtrack', 'decisions', source] as const,
   },
   parsers: {

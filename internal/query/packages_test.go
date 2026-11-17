@@ -84,3 +84,45 @@ func TestListParsersIncludesTenantPackages(t *testing.T) {
 		t.Fatalf("want this tenant's package and not the other's: %s", w.Body.String())
 	}
 }
+
+// A parser package reaches nothing and needs no secret. Its egress and secrets were nil slices, which JSON writes as
+// null, and the Integrations page called join() on null: "This screen failed to render". A list is always a list.
+func TestListIntegrationPackages_NoListIsEverNull(t *testing.T) {
+	ctx := context.Background()
+	st := ingest.NewMemoryStore()
+	tenant := uuid.New()
+	spec := `{"kind":"parser","runtime":"mapping","version":"1.0.0","description":"pip-audit parser","family":"pip-audit","category":"sca",
+	  "detect":{"probes":[{"jsonHasKeys":["dependencies"]}]},"input":{"format":"json","records":"$.dependencies[*].vulns[*]","parent":"dep"},
+	  "map":{"ruleId":"rec.id","title":"rec.id"}}`
+	_ = st.SaveIntegrationPackage(ctx, domain.IntegrationPackageRecord{TenantID: tenant, Name: "pip-audit", Kind: "parser", Runtime: "mapping", Version: "1.0.0", Spec: []byte(spec)})
+	_ = st.SaveIntegrationPackage(ctx, domain.IntegrationPackageRecord{TenantID: tenant, Name: "broken", Kind: "notifier", Runtime: "declarative", Spec: []byte(`{`), Error: "does not parse"})
+
+	authn := auth.NewAuthenticatorWithStore(st)
+	mux := http.NewServeMux()
+	query.NewAPIWithAuth(st, nil, authn).RegisterRoutes(mux)
+	req := httptest.NewRequest("GET", "/api/v1/integration-packages", nil)
+	req.Header.Set("Authorization", "Bearer "+authn.DefaultAdminToken(tenant))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var raw struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil || len(raw.Items) != 2 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	parsed := false
+	for _, it := range raw.Items {
+		for _, k := range []string{"egress", "secrets", "config", "used_by"} {
+			if string(it[k]) == "null" || len(it[k]) == 0 {
+				t.Errorf("%s of %s is %q: a list must be [], not null (%s)", k, it["name"], it[k], w.Body.String())
+			}
+		}
+		if string(it["description"]) == `"pip-audit parser"` {
+			parsed = true
+		}
+	}
+	if !parsed {
+		t.Fatal("the parser package spec was not read, so the test did not reach the case it is for")
+	}
+}

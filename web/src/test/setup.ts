@@ -1,10 +1,14 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, expect } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import * as matchers from 'vitest-axe/matchers';
 import '@/lib/i18n';
 
 expect.extend(matchers);
+
+// The suite runs many jsdom workers at once. A findBy that waits 1 s (the default) and a test that is given 5 s failed on a
+// busy machine and passed alone, which teaches people to ignore red. Wait for what the screen needs, not for the load.
+configure({ asyncUtilTimeout: 4000 });
 
 afterEach(() => {
   cleanup();

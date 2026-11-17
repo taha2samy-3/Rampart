@@ -25,6 +25,7 @@ interface ComponentRow {
   asset_id?: string;
   asset_name?: string;
   application_name?: string;
+  track?: string;
   purl: string;
   name: string;
   version: string;
@@ -76,7 +77,9 @@ export function InventoryRoute() {
     c.name.toLowerCase().includes(lowerSearch) ||
     c.purl.toLowerCase().includes(lowerSearch) ||
     c.type.toLowerCase().includes(lowerSearch) ||
-    c.version.toLowerCase().includes(lowerSearch)
+    c.version.toLowerCase().includes(lowerSearch) ||
+    (c.application_name ?? '').toLowerCase().includes(lowerSearch) ||
+    (c.track ?? '').toLowerCase().includes(lowerSearch)
   );
 
   return (
@@ -186,14 +189,16 @@ export function InventoryRoute() {
                   <Th>Package Name</Th>
                   <Th>Version</Th>
                   <Th>Ecosystem</Th>
+                  <Th>Application</Th>
                   <Th>Asset</Th>
+                  <Th>Track</Th>
                   <Th>License</Th>
                   <Th align="end">Vulnerabilities</Th>
                 </tr>
               </THead>
               <TBody>
                 {filteredComponents.map((c) => (
-                  <Tr key={`${c.asset_id ?? ''}|${c.purl}`} className="h-12">
+                  <Tr key={`${c.asset_id ?? ''}|${c.track ?? ''}|${c.purl}`} className="h-12">
                     <Td className="font-medium text-ink">
                       <div className="flex flex-col">
                         <span className="font-mono text-12">{c.name}</span>
@@ -202,9 +207,11 @@ export function InventoryRoute() {
                     </Td>
                     <Td className="font-mono text-12 text-ink-2">{c.version}</Td>
                     <Td className="text-12 text-ink-2 uppercase">{c.type}</Td>
+                    <Td className="text-12 text-ink">{c.application_name || '—'}</Td>
                     <Td className="text-12 text-ink-2">
                       <span className="block max-w-[14rem] truncate" title={c.asset_name}>{c.asset_name || '—'}</span>
                     </Td>
+                    <Td className="font-mono text-12 text-ink-2">{c.track || '—'}</Td>
                     <Td className="text-12 text-ink-2">{c.license || 'Unknown'}</Td>
                     <Td align="end">
                       <Link

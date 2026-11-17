@@ -231,8 +231,39 @@ func (m *mockSyncerStore) GetDTrackSync(ctx context.Context, tenantID uuid.UUID,
 func (m *mockSyncerStore) UpsertDTrackProject(ctx context.Context, proj domain.DTrackProjectRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// As PostgreSQL does: a project a person mapped keeps that mapping; the rules decide only the others (D92).
+	if prev, ok := m.projects[proj.ProjectUUID]; ok && prev.MappingRule == domain.DTrackManualMapping {
+		proj.ApplicationID, proj.MappingRule, proj.UnmappedReason = prev.ApplicationID, prev.MappingRule, ""
+	}
 	m.projects[proj.ProjectUUID] = &proj
 	return nil
+}
+
+func (m *mockSyncerStore) ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
+	return nil, nil
+}
+
+func (m *mockSyncerStore) GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.projects[projectUUID]; ok {
+		cp := *p
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+// MoveAssetToApplication is what PostgreSQL does for an asset and its findings; the mock records the asset's move.
+func (m *mockSyncerStore) MoveAssetToApplication(ctx context.Context, tenantID, assetID, appID uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.assets {
+		if a.ID == assetID && (a.ApplicationID == nil || *a.ApplicationID != appID) {
+			a.ApplicationID = &appID
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *mockSyncerStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {

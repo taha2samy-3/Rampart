@@ -11,6 +11,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 )
 
 // Standard CEL helper functions for declarative mapping (docs/19 §4).
@@ -287,7 +288,9 @@ func (cm *CompiledMapping) EvalString(prog cel.Program, vars map[string]any) str
 	return fmt.Sprintf("%v", v)
 }
 
-// EvalStringSlice evaluates a CEL program expecting a list of strings.
+// EvalStringSlice evaluates a CEL program expecting a list of strings. A list written in the expression ([rec.id], the
+// example of docs/19) is a CEL list, not a Go slice: it used to fall through to fmt and come back as the one string
+// "[CVE-2021-44228]", with the brackets, so no vulnerability id ever matched a feed. A scalar is a list of one.
 func (cm *CompiledMapping) EvalStringSlice(prog cel.Program, vars map[string]any) []string {
 	if prog == nil {
 		return nil
@@ -295,6 +298,13 @@ func (cm *CompiledMapping) EvalStringSlice(prog cel.Program, vars map[string]any
 	out, _, err := prog.Eval(vars)
 	if err != nil || out == nil {
 		return nil
+	}
+	if l, ok := out.(traits.Lister); ok {
+		var res []string
+		for it := l.Iterator(); it.HasNext() == types.True; {
+			res = append(res, celString(it.Next()))
+		}
+		return res
 	}
 	if list, ok := out.Value().([]string); ok {
 		return list
@@ -306,7 +316,17 @@ func (cm *CompiledMapping) EvalStringSlice(prog cel.Program, vars map[string]any
 		}
 		return res
 	}
-	return []string{fmt.Sprintf("%v", out.Value())}
+	if s := celString(out); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
+func celString(v ref.Val) string {
+	if s, ok := v.Value().(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v.Value())
 }
 
 // EvalInt evaluates a CEL program expecting an integer.

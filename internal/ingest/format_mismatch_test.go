@@ -3,11 +3,13 @@ package ingest_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"rampart/internal/auth"
 	"rampart/internal/domain"
@@ -171,5 +173,131 @@ func TestDirectUpload_SaysWhichApplicationItWasFiledUnder(t *testing.T) {
 	other := send("billing")
 	if other.Application != "shop" || len(other.Warnings) != 1 || !strings.Contains(other.Warnings[0], `"billing"`) {
 		t.Errorf("a different application must be reported as not used: %+v", other)
+	}
+}
+
+// An upload that names an application that does not exist used to make a new empty one, so a typo in a pipeline
+// (rampart-demo-appp) made an application nobody asked for. As in DefectDojo (auto_create_context) and Veracode
+// (create profile), creating one is now the caller's explicit choice, and needs a maintainer or a CI token.
+func TestDirectUpload_CreatingAnApplicationIsAnExplicitChoice(t *testing.T) {
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	admin := authn.DefaultAdminToken(tenantID)
+	mint := func(secret string, role auth.Role) string {
+		raw := auth.FormatToken(tenantID, secret)
+		authn.RegisterToken(raw, &auth.TokenRecord{TenantID: tenantID, Role: role, Subject: "qa", ExpiresAt: time.Now().Add(time.Hour)})
+		return raw
+	}
+	triager, ci := mint("triager-secret", auth.RoleTriager), mint("ci-secret", auth.RoleIngest)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	var seq int
+	send := func(token string, fields map[string]string) (*httptest.ResponseRecorder, ingest.DirectReportResponse) {
+		seq++
+		fields["track"], fields["format"] = "main", "sarif"
+		fields["repository"] = fmt.Sprintf("github.com/acme/repo-%d", seq) // a new asset each time, so no asset already has an application
+		rec := postReport(t, mux, token, fields, "r.sarif", sarifOf("x"))
+		var out ingest.DirectReportResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec, out
+	}
+	exists := func(slug string) bool {
+		a, err := gw.Store().LookupApplication(t.Context(), tenantID, slug)
+		return err == nil && a != nil
+	}
+
+	// createApplication=false: a name that does not exist is a 404 that says what to do, and nothing is made.
+	rec, _ := send(admin, map[string]string{"application": "rampart-demo-appp", "createApplication": "false"})
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "application-not-found") || !strings.Contains(rec.Body.String(), "createApplication=true") {
+		t.Fatalf("a missing application with createApplication=false: want 404 application-not-found, got %d %s", rec.Code, rec.Body.String())
+	}
+	if exists("rampart-demo-appp") {
+		t.Fatal("a refused upload must not make the application")
+	}
+
+	// createApplication=true by a maintainer or an admin: made, said so, no warning.
+	rec, out := send(admin, map[string]string{"application": "billing", "createApplication": "true"})
+	if rec.Code != http.StatusCreated || !out.ApplicationCreated || out.Application != "billing" || len(out.Warnings) != 0 || !exists("billing") {
+		t.Fatalf("explicit create: %d %+v", rec.Code, out)
+	}
+	// A CI token may do it too (its first upload of a new service is what it exists for).
+	if rec, out = send(ci, map[string]string{"application": "payments", "createApplication": "true"}); rec.Code != http.StatusCreated || !out.ApplicationCreated {
+		t.Fatalf("a CI token creating: %d %s", rec.Code, rec.Body.String())
+	}
+	// A triager may not: it decides about findings, it does not add applications.
+	rec, _ = send(triager, map[string]string{"application": "shadow", "createApplication": "true"})
+	if rec.Code != http.StatusForbidden || exists("shadow") {
+		t.Fatalf("a triager creating: want 403 and nothing made, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// An application that exists is used, whatever createApplication says.
+	for _, v := range []string{"false", "true", ""} {
+		rec, out = send(admin, map[string]string{"application": "billing", "createApplication": v})
+		if rec.Code != http.StatusCreated || out.ApplicationCreated || out.Application != "billing" || len(out.Warnings) != 0 {
+			t.Errorf("createApplication=%q on an existing application: %d %+v", v, rec.Code, out)
+		}
+	}
+
+	// Without the parameter nothing breaks: it is made, with a warning that says how to choose.
+	rec, out = send(admin, map[string]string{"application": "legacy-pipeline"})
+	if rec.Code != http.StatusCreated || !out.ApplicationCreated || len(out.Warnings) != 1 || !strings.Contains(out.Warnings[0], "createApplication") {
+		t.Fatalf("the old behaviour, with a warning: %d %+v", rec.Code, out)
+	}
+	// No application named at all is Unassigned, which is never a creation the caller has to ask for.
+	if rec, out = send(admin, map[string]string{"createApplication": "false"}); rec.Code != http.StatusCreated || out.ApplicationCreated {
+		t.Errorf("no application named: %d %+v", rec.Code, out)
+	}
+}
+
+// docs/04 spec.trackedRefs, end to end: a branch the source lists changes the inventory, another does not, and a
+// source that lists nothing keeps the defaults. Before, develop and staging were ephemeral for everyone.
+func TestDirectUpload_TrackedRefsOfTheSourceDecideWhatChangesTheInventory(t *testing.T) {
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+	mem := gw.Store().(*ingest.MemoryStore)
+
+	listing, plain := uuid.New(), uuid.New() // two sources: one lists develop and staging, one lists nothing
+	mem.SetIngestionPolicy(tenantID, listing, domain.WithTrackedRefs(nil, []string{"develop", "staging"}))
+
+	count := func() int {
+		fs, _ := gw.Store().ListFindings(t.Context(), tenantID)
+		return len(fs)
+	}
+	send := func(source uuid.UUID, branch, repo string) {
+		t.Helper()
+		rec := postReport(t, mux, token, map[string]string{"format": "sarif", "source": source.String(), "branch": branch, "repository": repo}, "r.sarif", sarifOf("x"))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s on %s: %d %s", branch, source, rec.Code, rec.Body.String())
+		}
+	}
+
+	for _, c := range []struct {
+		name    string
+		source  uuid.UUID
+		branch  string
+		repo    string
+		changes bool
+	}{
+		{"a listed branch changes the inventory", listing, "develop", "github.com/acme/a", true},
+		{"another listed one", listing, "staging", "github.com/acme/b", true},
+		{"a branch the source does not list is ephemeral", listing, "feature/login", "github.com/acme/c", false},
+		{"listing develop replaces the defaults: main is ephemeral for this source", listing, "main", "github.com/acme/d", false},
+		{"a source that lists nothing keeps the defaults: main is tracked", plain, "main", "github.com/acme/e", true},
+		{"and develop is ephemeral for it", plain, "develop", "github.com/acme/f", false},
+		{"a pull request is ephemeral for every source", listing, "pr/42", "github.com/acme/g", false},
+	} {
+		before := count()
+		send(c.source, c.branch, c.repo)
+		if got := count() > before; got != c.changes {
+			t.Errorf("%s: the inventory changed=%v, want %v", c.name, got, c.changes)
+		}
 	}
 }

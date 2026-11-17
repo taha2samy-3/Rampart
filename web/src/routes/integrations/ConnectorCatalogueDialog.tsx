@@ -95,7 +95,7 @@ export function ConnectorCatalogueDialog({ open, onOpenChange }: { open: boolean
                   >
                     <span className="text-13 font-medium text-ink">{e.name}</span>
                     <span className="text-12 text-ink-2">
-                      {e.kind} · {e.directions.join(' or ')}
+                      {e.kind} · {(e.directions ?? []).join(' or ')}
                     </span>
                   </button>
                 </li>

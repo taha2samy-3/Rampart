@@ -1,4 +1,4 @@
-قimport { screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptance, mockFetch, renderApp } from '@/test/helpers';
 

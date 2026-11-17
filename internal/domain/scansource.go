@@ -18,7 +18,15 @@ type IngestionPolicy struct {
 	MinHeldClose     *int     `json:"minHeldClose,omitempty"`
 	MaxReportBytes   *int64   `json:"maxReportBytes,omitempty"`
 	AcceptedFormats  []string `json:"acceptedFormats,omitempty"`
+	// TrackedRefs are the branches (or tags, or environments by name) whose runs change the inventory (docs/04, D10): an
+	// exact name, a prefix ending in * ("release/*", "hotfix-*"), or * for every ref. Any other ref is ephemeral and
+	// feeds only the CI gate. Empty: the defaults (main, master, default, release/*, prod, production). A pull request
+	// is always ephemeral, whatever is listed.
+	TrackedRefs []string `json:"trackedRefs,omitempty"`
 }
+
+// MaxTrackedRefs bounds the list, so a source cannot make every upload walk a long one.
+const MaxTrackedRefs = 50
 
 // Validate checks that policy values fall within allowed ranges.
 func (p *IngestionPolicy) Validate() error {
@@ -35,7 +43,44 @@ func (p *IngestionPolicy) Validate() error {
 			return fmt.Errorf("minHeldClose must be non-negative, got %d", *p.MinHeldClose)
 		}
 	}
+	return ValidateTrackedRefs(p.TrackedRefs)
+}
+
+// ValidateTrackedRefs refuses a list that could not mean what the author meant: an empty or oversized name, a space or
+// control character in it (a branch name has none), a * anywhere but the end (it would be read as a literal), more
+// than MaxTrackedRefs names.
+func ValidateTrackedRefs(refs []string) error {
+	if len(refs) > MaxTrackedRefs {
+		return fmt.Errorf("trackedRefs has at most %d entries, got %d", MaxTrackedRefs, len(refs))
+	}
+	for _, r := range refs {
+		if r == "" || len(r) > 255 {
+			return fmt.Errorf("trackedRefs: %q is empty or longer than 255 characters", r)
+		}
+		for i, c := range r {
+			if c <= ' ' || c == 0x7f {
+				return fmt.Errorf("trackedRefs: %q has a space or a control character", r)
+			}
+			if c == '*' && i != len(r)-1 {
+				return fmt.Errorf("trackedRefs: %q has a * that is not the last character; only a trailing * is a wildcard", r)
+			}
+		}
+	}
 	return nil
+}
+
+// WithTrackedRefs returns the policy with the refs of spec.trackedRefs set (they sit beside ingestionPolicy in a
+// ScanSource, as in docs/04, and are stored with it). It does not change the policy it is given.
+func WithTrackedRefs(p *IngestionPolicy, refs []string) *IngestionPolicy {
+	if len(refs) == 0 {
+		return p
+	}
+	out := IngestionPolicy{}
+	if p != nil {
+		out = *p
+	}
+	out.TrackedRefs = append([]string(nil), refs...)
+	return &out
 }
 
 // HeldClose records a mass-close held by the safety guard for human review (D22, Milestone 3.3).

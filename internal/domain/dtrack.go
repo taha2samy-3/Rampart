@@ -29,6 +29,10 @@ type DTrackSync struct {
 }
 
 // DTrackProjectRecord tracks portfolio projects and their mapping status to Rampart applications (docs/10 §3).
+// DTrackManualMapping is the mapping rule recorded when a person maps a project in the UI. It beats the rules and the
+// project filters, and the portfolio sync keeps it (D92).
+const DTrackManualMapping = "manual_ui_mapping"
+
 type DTrackProjectRecord struct {
 	TenantID       uuid.UUID  `json:"tenant_id"`
 	SourceID       uuid.UUID  `json:"source_id"`

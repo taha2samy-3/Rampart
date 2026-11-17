@@ -20,6 +20,10 @@ type DTrackStore interface {
 	UpsertDTrackProject(ctx context.Context, proj domain.DTrackProjectRecord) error
 	ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error)
 	MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error
+	// GetDTrackProject reads the record of one project (nil, nil when the portfolio sync has not seen it yet).
+	GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error)
+	// ListMappedDTrackProjects lists the projects of a source that belong to an application, with how each was mapped.
+	ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error)
 	LookupScanSource(ctx context.Context, sourceID uuid.UUID) (tenantID uuid.UUID, name string, err error)
 }
 
@@ -199,6 +203,61 @@ func (s *PostgresStore) UpsertDTrackProject(ctx context.Context, proj domain.DTr
 		)
 		return err
 	})
+}
+
+// GetDTrackProject reads one project record, with how it was mapped.
+func (s *PostgresStore) GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error) {
+	var rec *domain.DTrackProjectRecord
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var r domain.DTrackProjectRecord
+		var rule, reason *string
+		err := tx.QueryRow(ctx, `SELECT tenant_id, source_id, project_uuid, name, COALESCE(version, ''), COALESCE(purl, ''), active,
+		        last_bom_import, application_id, mapping_rule, unmapped_reason, created_at, updated_at
+		        FROM dtrack_project WHERE tenant_id = $1 AND project_uuid = $2`, tenantID, projectUUID).Scan(
+			&r.TenantID, &r.SourceID, &r.ProjectUUID, &r.Name, &r.Version, &r.Purl, &r.Active, &r.LastBomImport, &r.ApplicationID,
+			&rule, &reason, &r.CreatedAt, &r.UpdatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if rule != nil {
+			r.MappingRule = *rule
+		}
+		if reason != nil {
+			r.UnmappedReason = *reason
+		}
+		rec = &r
+		return nil
+	})
+	return rec, err
+}
+
+// ListMappedDTrackProjects lists the projects of a source that belong to an application, with the rule that put each there.
+func (s *PostgresStore) ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
+	out := []domain.DTrackProjectRecord{}
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT tenant_id, source_id, project_uuid, name, COALESCE(version, ''), COALESCE(purl, ''), active,
+		        last_bom_import, application_id, COALESCE(mapping_rule, ''), created_at, updated_at
+		        FROM dtrack_project
+		        WHERE tenant_id = $1 AND ($2 = '00000000-0000-0000-0000-000000000000'::uuid OR source_id = $2) AND application_id IS NOT NULL
+		        ORDER BY name ASC, version ASC`, tenantID, sourceID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r domain.DTrackProjectRecord
+			if err := rows.Scan(&r.TenantID, &r.SourceID, &r.ProjectUUID, &r.Name, &r.Version, &r.Purl, &r.Active, &r.LastBomImport,
+				&r.ApplicationID, &r.MappingRule, &r.CreatedAt, &r.UpdatedAt); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // ListUnmappedDTrackProjects lists portfolio projects that did not match any mapping rule.

@@ -43,7 +43,7 @@ func (a *API) runView(r *http.Request, tenantID uuid.UUID, run *domain.IngestRun
 	if fams, err := a.store.ListRunScopes(r.Context(), tenantID, run.ID); err == nil && fams != nil {
 		v.Scanners = fams
 	}
-	v.Ephemeral = ingest.IsEphemeral(run.Context.Branch, nil)
+	v.Ephemeral = ingest.IsEphemeralFor(r.Context(), a.store, tenantID, run.ScanSourceID, run.Context.Branch)
 	v.HasReport = a.objects != nil && run.UploadID != nil && run.ReportPurgedAt == nil
 	return v
 }

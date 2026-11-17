@@ -6,6 +6,12 @@ import { Button, Dialog, DialogClose, DialogContent, Input, ProblemMessage, useT
 import { useAccess } from '@/app/useAccess';
 import { cn } from '@/lib/cn';
 
+/** The value of the application select that means "a new one": the name is then typed. */
+const NEW_APP = '__new__';
+
+/** A slug as the server reads it: lower-case letters, digits and hyphens. */
+const toSlug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
+
 export interface UploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -34,6 +40,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [format, setFormat] = useState('');
   const [app, setApp] = useState('');
+  const [newName, setNewName] = useState('');
   const [track, setTrack] = useState('main');
   const [isDragging, setIsDragging] = useState(false);
 
@@ -41,6 +48,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
     file: useId(),
     format: useId(),
     app: useId(),
+    newApp: useId(),
     track: useId(),
   };
 
@@ -56,19 +64,27 @@ function UploadForm({ onDone }: { onDone: () => void }) {
     staleTime: 60_000,
   });
   const accessibleApps = (appsQuery.data ?? []).filter((a) => can(a.id, 'triager'));
+  // Making an application is a maintainer's act (the server checks it too).
+  const mayCreate = can(undefined, 'maintainer');
+  const creating = app === NEW_APP;
+  const newSlug = toSlug(newName);
 
   const mutation = useMutation({
     mutationFn: () => {
       if (!file) throw new Error('No file selected');
       return uploadReport(file, {
-        application: app.trim() || undefined,
+        application: (creating ? newSlug : app.trim()) || undefined,
+        // An application chosen from the list must exist (false); a new one is made on purpose (true).
+        createApplication: creating ? true : app.trim() ? false : undefined,
         track: track.trim() || undefined,
         format: format || undefined,
       });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: qk.runs.all() });
-      toast.info(t('ingestion.uploadSuccess'));
+      void qc.invalidateQueries({ queryKey: qk.applications.list() });
+      toast.info(res.applicationCreated ? t('ingestion.uploadCreated', { slug: res.application }) : t('ingestion.uploadSuccess'));
+      for (const w of res.warnings ?? []) toast.info(w);
       onDone();
     },
   });
@@ -172,7 +188,15 @@ function UploadForm({ onDone }: { onDone: () => void }) {
               {a.name} ({a.slug || a.id})
             </option>
           ))}
+          {mayCreate && <option value={NEW_APP}>{t('ingestion.uploadNewApplication')}</option>}
         </select>
+        {creating && (
+          <div className="mt-2">
+            <label htmlFor={ids.newApp} className="mb-1 block text-12 font-medium text-ink">{t('ingestion.uploadNewApplicationName')}</label>
+            <Input id={ids.newApp} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('ingestion.uploadApplicationPlaceholder')} />
+            <p className="mt-1 text-11 text-ink-2">{newSlug ? t('ingestion.uploadNewApplicationHint', { slug: newSlug }) : t('ingestion.uploadNewApplicationEmpty')}</p>
+          </div>
+        )}
         {(appsQuery.isError || parsersQuery.isError) && (
           <p role="alert" className="mt-1 text-11 text-crimson">{t('ingestion.uploadListFailed')}</p>
         )}
@@ -203,7 +227,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             {t('common.cancel')}
           </Button>
         </DialogClose>
-        <Button type="submit" variant="primary" loading={mutation.isPending} disabled={!file || mutation.isPending}>
+        <Button type="submit" variant="primary" loading={mutation.isPending} disabled={!file || mutation.isPending || (creating && !newSlug)}>
           {mutation.isPending ? t('ingestion.uploadUploading') : t('ingestion.uploadSubmit')}
         </Button>
       </div>

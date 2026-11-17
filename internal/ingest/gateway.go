@@ -81,8 +81,9 @@ type DirectReportResponse struct {
 	ComponentCount int    `json:"componentCount,omitempty"`
 	// Application is the slug the report was filed under. It can differ from the one the client named: an asset
 	// that already belongs to an application stays there (D10), which Warnings says.
-	Application string   `json:"application,omitempty"`
-	Warnings    []string `json:"warnings,omitempty"`
+	Application        string   `json:"application,omitempty"`
+	ApplicationCreated bool     `json:"applicationCreated,omitempty"` // the application did not exist and this upload made it
+	Warnings           []string `json:"warnings,omitempty"`
 }
 
 // Gateway provides HTTP handlers for ingestion (docs/11).
@@ -667,7 +668,29 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		return
 	}
 
-	appID, err := ResolveApplication(r.Context(), g.store, tenantID, asset, declaredApp)
+	// Creating an application from an upload is the caller's explicit choice, as in DefectDojo (auto_create_context) and
+	// Veracode (create profile): createApplication=true creates a missing one (a maintainer, or a CI token),
+	// createApplication=false refuses it, and without the parameter the old behaviour stays (it is created) with a
+	// warning, so no pipeline breaks. A typo in a pipeline used to make a new empty application.
+	createChoice := strings.ToLower(strings.TrimSpace(get("createApplication")))
+	createMissing := createChoice != "false" && createChoice != "0" && createChoice != "no"
+	if createChoice == "true" || createChoice == "1" || createChoice == "yes" {
+		if caller.Role != auth.RoleIngest && caller.Role.Rank() < auth.RoleMaintainer.Rank() {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"type": "https://rampart.aspm.dev/problems/forbidden", "status": http.StatusForbidden,
+				"title": "Creating an application needs the maintainer role (or a CI token)"})
+			return
+		}
+	}
+	appID, appCreated, err := ResolveApplicationWith(r.Context(), g.store, tenantID, asset, declaredApp, createMissing)
+	if errors.Is(err, ErrApplicationNotFound) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"type": "https://rampart.aspm.dev/problems/application-not-found", "status": http.StatusNotFound,
+			"title": "No such application", "detail": fmt.Sprintf("There is no application %q in this tenant. Check the name, create it, or send createApplication=true.", strings.ToLower(declaredApp))})
+		return
+	}
 	if err != nil {
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve application"}`, http.StatusInternalServerError)
 		return
@@ -676,6 +699,9 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	// D10: an asset that already belongs to an application stays in it, whatever the upload names. Say so, instead
 	// of filing the report under another application than the one the client asked for without a word.
 	filedUnder, warnings := "", []string(nil)
+	if appCreated && createChoice == "" {
+		warnings = append(warnings, fmt.Sprintf("application %q did not exist and was created; send createApplication=false to refuse that, or createApplication=true to say it is meant", strings.ToLower(declaredApp)))
+	}
 	if app, err := g.store.GetApplication(r.Context(), tenantID, appID); err == nil && app != nil {
 		filedUnder = app.Slug
 		if want := strings.ToLower(declaredApp); want != "" && want != app.Slug {
@@ -688,7 +714,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	}
 
 	// D10: ephemeral is decided by the ref (PRs, feature branches), not by the track name.
-	isEphemeral := IsEphemeral(uploadCtx.Branch, nil)
+	isEphemeral := IsEphemeralFor(r.Context(), g.store, tenantID, sourceID, uploadCtx.Branch)
 
 	// D2: the run exists (and is visible) before any finding is touched.
 	isSBOM := forceSBOM || strings.Contains(scannerFamily, "cyclonedx") || strings.Contains(scannerFamily, "spdx") || strings.Contains(scannerFamily, "syft")
@@ -741,7 +767,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	_ = json.NewEncoder(w).Encode(DirectReportResponse{
 		IngestRunID: runID.String(), Status: string(res.Status), Staged: res.Stats.Parsed, Created: res.Stats.Created,
 		Updated: res.Stats.Updated, Untouched: res.Stats.Untouched, Reactivated: res.Stats.Reactivated,
-		Closed: res.Stats.Closed, ComponentCount: res.Components, Application: filedUnder, Warnings: warnings,
+		Closed: res.Stats.Closed, ComponentCount: res.Components, Application: filedUnder, ApplicationCreated: appCreated, Warnings: warnings,
 	})
 }
 

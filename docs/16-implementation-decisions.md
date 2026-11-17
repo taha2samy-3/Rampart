@@ -2087,3 +2087,25 @@ Open, from the same session: the `kevDueDate` cap for non-federal use, `extends:
 |---|---|---|
 | D112 | **An application page says what it meets today.** `GET /api/v1/applications/{id}/compliance` returns, for each framework that reads the application, its controls clear, open and not read, and a verdict (`meets`, `gaps`, `partial`). A framework with a scope reads only the applications that list it, and the others are named. It is the reading of the Compliance page, narrowed to one application: no second set of rules | docs/27 reads a framework for one application; nothing answered "which frameworks does this application meet" |
 | D113 | **A framework may carry a logo, read by the server.** `spec.logoUrl` (https, at most 2048 characters) is fetched once by the server with an SSRF-safe client, checked by its bytes (PNG, JPEG, WebP, plain SVG), kept a day, and served from `/api/v1/taxonomies/{id}/logo` with `nosniff` and a sandbox policy; the browser never contacts the address and the CSP stays `img-src 'self' data:`. **Official logos are not bundled**: they are trademarks and recolouring them is an alteration. Built-in frameworks get a mark of Rampart's own (indigo; teal for a framework the organisation installed) | See docs/28 §9 |
+
+## D114 to D116: applications from uploads, SBOM per track, schema version
+
+| # | Decision | Why |
+|---|---|---|
+| D114 | **Creating an application from an upload is explicit.** `createApplication=true` makes a missing one (maintainer, admin or CI token; a triager gets 403); `=false` answers 404 `application-not-found` and makes nothing; without it the old behaviour stays, with a warning. The answer has `applicationCreated`. The upload dialog offers "New application..." to a maintainer and sends `false` for a listed one. An asset that already belongs to an application keeps it (D10) and the answer says so | DefectDojo, Veracode and Snyk create on purpose and by permission; a typo made an empty application |
+| D115 | **An SBOM belongs to a track of an asset** (migration 45, `sbom.track`, default `default`). The inventory lists the newest SBOM of each track; the asset's single SBOM (export, graph) is the primary track's (`main`, then `default`, else the newest); an ephemeral run saves no SBOM (D10) | One slot per asset let branches replace one another, and a pull request replace the real SBOM |
+| D116 | **The schema version is checked by a test.** `CurrentExpectedSchemaVersion` and the chart's `minSchemaVersion` equal the latest migration (45) | docs/21 asked for it; it was forgotten for 43 and 44 |
+
+Open at the time: `ScanSource.spec.trackedRefs` (docs/04, D10) was not built; see D117.
+
+## D117: `ScanSource.spec.trackedRefs`
+
+`spec.trackedRefs` (docs/04) decides which refs of a source change the inventory: an exact name, a prefix ending in `*`, or `*`. The list replaces the defaults (`main`, `master`, `default`, `release/*`, `prod`, `production`); a pull request is always ephemeral; no list keeps the defaults. It is stored in the source's ingestion policy and read at the direct upload, the presigned upload and the runs list (`IsEphemeralFor`; a policy that cannot be read falls back to the defaults, so a read failure never makes a tracked run ephemeral). Validated by the CRD, `rampart apply` and the operator. `SaveScanSource` now overwrites the stored policy, so a list removed from the resource is removed from the source. The match is on the branch; an upload with an `environment` and no `branch` is tracked. docs/28 §10.
+
+## D118: a person's Dependency-Track mapping is read, and the asset follows the mapping
+
+In `SyncProject` and the portfolio sync the order is: the project's stored manual mapping (`manual_ui_mapping`), which bypasses the rules and the project filters; then the seven rules (D92); then the filters. A Dependency-Track asset moves, with its findings, to the application its mapping names when that changes (an upload's asset keeps its application, D10; the mapping is the declared truth for this kind of asset). `POST /sources/{id}/map` accepts any project of the source, and `GET /sources/{id}/projects` lists the mapped ones with the rule that put each there. `domain.DTrackManualMapping` is the rule name. Where `defaultApplication` is set, it takes every project no other rule claimed (docs/10 rule 7): leave it empty on a Dependency-Track that serves several teams. docs/28 §11.
+
+## D119: what changed in an application
+
+`GET /api/v1/applications/{id}/changes?from=&to=` answers which findings appeared, were closed (and how), came back, and were open at the end of a range of days (both included, UTC, at most 366, default 30), with exact counts, the counts of the range of equal length before it, and a count per day. A finding is "new" by `first_seen`, "closed" by `resolved_at` (any resolution), "came back" by a `reactivated` event, "open at an instant" when first seen before it and not closed by it. Lists are cut at 1,000 and the cut is named. No schema change. docs/28 §12.

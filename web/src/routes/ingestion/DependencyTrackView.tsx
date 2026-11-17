@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import {
   listApplications,
+  listMappedProjects,
   listSourceDecisions,
   listSources,
   listUnmappedProjects,
@@ -42,6 +43,17 @@ spec:
     projects: {versions: latest}
     webhook: {enabled: false}`;
 
+/** What put a project in its application, in words: a person, the default application, or the rule that matched. */
+export function mappedBy(rule: string | undefined): string {
+  if (!rule) return 'A rule';
+  if (rule === 'manual_ui_mapping') return 'You';
+  if (rule === 'defaultApplication') return 'The default application';
+  if (rule.startsWith('property:')) return `A project property (${rule.slice('property:'.length)})`;
+  if (rule.startsWith('tag:')) return `A project tag (${rule.slice('tag:'.length)})`;
+  if (rule.startsWith('cel:')) return 'A CEL rule';
+  return `The rule ${rule}`;
+}
+
 /** One sentence that says how a source is doing, from what the server recorded (D92). */
 export function sourceSentence(s: SourceStatus, now = Date.now()): string {
   const every = Math.round(s.schedule_seconds / 60);
@@ -70,6 +82,11 @@ export function DependencyTrackView() {
   const unmappedQuery = useQuery({
     queryKey: qk.dtrack.unmapped(sourceId),
     queryFn: ({ signal }) => listUnmappedProjects(sourceId, signal),
+    enabled: !!sourceId,
+  });
+  const mappedQuery = useQuery({
+    queryKey: qk.dtrack.mapped(sourceId),
+    queryFn: ({ signal }) => listMappedProjects(sourceId, signal),
     enabled: !!sourceId,
   });
   const decisionsQuery = useQuery({
@@ -114,6 +131,7 @@ export function DependencyTrackView() {
   }
 
   const unmapped = unmappedQuery.data ?? [];
+  const mapped = mappedQuery.data ?? [];
   const decisions = decisionsQuery.data ?? [];
   const apps = appsQuery.data ?? [];
 
@@ -183,6 +201,56 @@ export function DependencyTrackView() {
                     <Td align="end">
                       <Button variant="secondary" onClick={() => setMapping(p)}>
                         Map to application
+                      </Button>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+          </>
+        )}
+      </section>
+
+      <section aria-labelledby="dt-mapped" className="flex flex-col gap-2">
+        <h3 id="dt-mapped" className="text-14 font-semibold">
+          Projects in an application
+        </h3>
+        {mappedQuery.isError ? (
+          <ProblemMessage problem={toProblem(mappedQuery.error)} />
+        ) : mapped.length === 0 ? (
+          <p className="text-13 text-ink-2">No project is in an application yet.</p>
+        ) : (
+          <>
+            <p className="max-w-[72ch] text-13 text-ink-2">
+              The rule that put each project in its application is shown. A project the default application took was not
+              claimed by any other rule: check that it belongs there, and change it if it does not. Its findings move with it.
+            </p>
+            <Table aria-label="Projects in an application">
+              <THead>
+                <tr>
+                  <Th>Project</Th>
+                  <Th>Version</Th>
+                  <Th>Application</Th>
+                  <Th>Put there by</Th>
+                  <Th align="end">
+                    <span className="sr-only">Action</span>
+                  </Th>
+                </tr>
+              </THead>
+              <TBody>
+                {mapped.map((p) => (
+                  <Tr key={p.project_uuid}>
+                    <Td className="text-13 text-ink">{p.name}</Td>
+                    <Td className="text-13 text-ink-2">{p.version || 'none'}</Td>
+                    <Td className="text-13">
+                      <Link to="/applications" className="text-accent hover:underline">{p.application_name || p.application_slug || 'An application'}</Link>
+                    </Td>
+                    <Td className={p.mapping_rule === 'defaultApplication' ? 'text-13 font-medium text-ink' : 'text-13 text-ink-2'}>
+                      {mappedBy(p.mapping_rule)}
+                    </Td>
+                    <Td align="end">
+                      <Button variant="secondary" onClick={() => setMapping(p)}>
+                        Change application
                       </Button>
                     </Td>
                   </Tr>

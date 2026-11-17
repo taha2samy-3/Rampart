@@ -196,7 +196,9 @@ func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		it := PackageItem{Name: p.Name, Kind: p.Kind, Runtime: p.Runtime, Version: p.Version, Error: p.Error,
 			Egress: []string{}, Secrets: []string{}, Config: []string{}, UsedBy: []string{}, UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339)}
 		if spec, err := declarative.Parse(p.Spec); err == nil {
-			it.Description, it.Egress, it.Secrets = spec.Description, spec.Egress, spec.SecretNames()
+			// A parser package has no egress and no secrets: those are nil slices, which JSON writes as null, and the
+			// page called join() on null and failed to render. A list is always a list.
+			it.Description, it.Egress, it.Secrets = spec.Description, nonNil(spec.Egress), nonNil(spec.SecretNames())
 			if spec.ConfigSchema != nil {
 				for k := range spec.ConfigSchema.Properties {
 					it.Config = append(it.Config, k)
@@ -212,4 +214,12 @@ func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		items = append(items, it)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// nonNil is s, or an empty list when s is nil, so JSON writes [] and never null.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

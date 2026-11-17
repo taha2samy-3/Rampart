@@ -632,6 +632,7 @@ type MemoryStore struct {
 	findings              map[string]*domain.Finding
 	occurrences           map[string]*domain.Occurrence
 	sboms                 map[string]*domain.SBOM
+	sourcePolicies        map[string]*domain.IngestionPolicy
 	sbomComponents        map[string][]domain.SBOMComponent
 	scopeLastScanFinished map[string]time.Time
 	findingEvents         map[string][]*domain.FindingEvent
@@ -1114,7 +1115,7 @@ func (m *MemoryStore) SaveSBOM(ctx context.Context, sbom *domain.SBOM, component
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := sbom.TenantID.String() + ":" + sbom.AssetID.String()
+	key := sbom.TenantID.String() + ":" + sbom.AssetID.String() + ":" + sbom.Track
 	cp := *sbom
 	m.sboms[key] = &cp
 	m.sbomComponents[sbom.ID.String()] = components
@@ -1126,13 +1127,31 @@ func (m *MemoryStore) GetSBOM(ctx context.Context, tenantID, assetID uuid.UUID) 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	key := tenantID.String() + ":" + assetID.String()
-	sbom, exists := m.sboms[key]
-	if !exists {
+	// The primary track first (main, then default), else the newest: the same rule as PostgreSQL.
+	var best *domain.SBOM
+	rank := func(t string) int {
+		switch t {
+		case "main":
+			return 0
+		case "default":
+			return 1
+		}
+		return 2
+	}
+	prefix := tenantID.String() + ":" + assetID.String() + ":"
+	for k, v := range m.sboms {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		if best == nil || rank(v.Track) < rank(best.Track) || (rank(v.Track) == rank(best.Track) && v.CreatedAt.After(best.CreatedAt)) {
+			best = v
+		}
+	}
+	if best == nil {
 		return nil, nil, nil
 	}
-	comps := m.sbomComponents[sbom.ID.String()]
-	cp := *sbom
+	comps := m.sbomComponents[best.ID.String()]
+	cp := *best
 	return &cp, comps, nil
 }
 
@@ -2176,7 +2195,19 @@ func (m *MemoryStore) RecordWebhookDelivery(ctx context.Context, tenantID uuid.U
 }
 
 func (m *MemoryStore) GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error) {
-	return nil, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sourcePolicies[tenantID.String()+":"+sourceID.String()], nil
+}
+
+// SetIngestionPolicy sets the policy of a scan source, as the operator does for a ScanSource resource.
+func (m *MemoryStore) SetIngestionPolicy(tenantID, sourceID uuid.UUID, p *domain.IngestionPolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sourcePolicies == nil {
+		m.sourcePolicies = map[string]*domain.IngestionPolicy{}
+	}
+	m.sourcePolicies[tenantID.String()+":"+sourceID.String()] = p
 }
 
 func (m *MemoryStore) CreateHeldClose(ctx context.Context, tenantID uuid.UUID, hc *domain.HeldClose) error {
@@ -2307,6 +2338,14 @@ func (m *MemoryStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, 
 
 func (m *MemoryStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
 	return nil
+}
+
+func (m *MemoryStore) ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
+	return nil, nil
+}
+
+func (m *MemoryStore) GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error) {
+	return nil, nil
 }
 
 func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) (uuid.UUID, string, error) {

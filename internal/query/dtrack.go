@@ -87,6 +87,52 @@ func (a *API) handleListUnmapped(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"projects": projects, "count": len(projects)})
 }
 
+// MappedProject is a project that belongs to an application, with how it got there.
+type MappedProject struct {
+	domain.DTrackProjectRecord
+	ApplicationName string `json:"application_name"`
+	ApplicationSlug string `json:"application_slug"`
+	// ByRule says a rule put it there (a person did not): the default application above all, which takes every project
+	// no other rule claimed and is the one to look at when a project is in an application it does not belong to.
+	ByRule bool `json:"by_rule"`
+}
+
+// handleListMappedProjects answers GET /api/v1/sources/{id}/projects: the projects that belong to an application and the
+// rule that put each there. The page listed only the unmapped ones, so a project the default rule sent to the wrong
+// application could not be seen, let alone moved.
+func (a *API) handleListMappedProjects(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := a.requireRole(w, r, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	sourceID, ok := pathSource(w, r)
+	if !ok {
+		return
+	}
+	projects, err := a.store.ListMappedDTrackProjects(r.Context(), tenantID, sourceID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Listing the projects failed")
+		return
+	}
+	out := make([]MappedProject, 0, len(projects))
+	names := map[uuid.UUID]*domain.Application{}
+	for _, p := range projects {
+		mp := MappedProject{DTrackProjectRecord: p, ByRule: p.MappingRule != domain.DTrackManualMapping}
+		if p.ApplicationID != nil {
+			app, seen := names[*p.ApplicationID]
+			if !seen {
+				app, _ = a.store.GetApplication(r.Context(), tenantID, *p.ApplicationID)
+				names[*p.ApplicationID] = app
+			}
+			if app != nil {
+				mp.ApplicationName, mp.ApplicationSlug = app.Name, app.Slug
+			}
+		}
+		out = append(out, mp)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": out, "count": len(out)})
+}
+
 // MapProjectRequest is the body of POST /api/v1/sources/{id}/map.
 type MapProjectRequest struct {
 	ProjectUUID   string    `json:"project_uuid"`
@@ -117,17 +163,15 @@ func (a *API) handleMapProject(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusUnprocessableEntity, "validation", "No such application")
 		return
 	}
-	unmapped, err := a.store.ListUnmappedDTrackProjects(r.Context(), tenantID, sourceID)
+	// Any project of this source may be mapped, a mapped one included: a project the rules sent to the wrong application
+	// (a defaultApplication that took everything) could not be moved, because only the unmapped ones were accepted.
+	rec, err := a.store.GetDTrackProject(r.Context(), tenantID, req.ProjectUUID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "internal", "Reading the source's projects failed")
 		return
 	}
-	found := false
-	for _, p := range unmapped {
-		found = found || p.ProjectUUID == req.ProjectUUID
-	}
-	if !found {
-		problem(w, http.StatusNotFound, "not-found", "No unmapped project with that id on this source")
+	if rec == nil || (sourceID != uuid.Nil && rec.SourceID != sourceID) {
+		problem(w, http.StatusNotFound, "not-found", "No project with that id on this source")
 		return
 	}
 	if err := a.store.MapDTrackProject(r.Context(), tenantID, req.ProjectUUID, req.ApplicationID); err != nil {

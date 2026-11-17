@@ -129,3 +129,36 @@ func TestIsEphemeral(t *testing.T) {
 		t.Error("expected release/1.0 branch to NOT be ephemeral")
 	}
 }
+
+// The branches a ScanSource tracks (spec.trackedRefs): an exact name, a trailing * as a prefix, * for all. A pull
+// request stays ephemeral whatever the list says.
+func TestIsEphemeral_TrackedRefsOfASource(t *testing.T) {
+	cases := []struct {
+		name   string
+		refs   []string
+		branch string
+		want   bool
+	}{
+		{"no list: develop is ephemeral (the defaults do not include it)", nil, "develop", true},
+		{"no list: main is tracked", nil, "main", false},
+		{"no list: release/1.0 is tracked", nil, "release/1.0", false},
+		{"listed exactly", []string{"develop", "staging"}, "develop", false},
+		{"another listed one", []string{"develop", "staging"}, "staging", false},
+		{"listing develop does not track main: the list replaces the defaults", []string{"develop"}, "main", true},
+		{"a prefix", []string{"hotfix-*"}, "hotfix-2026-11", false},
+		{"a prefix is not a substring", []string{"hotfix-*"}, "my-hotfix-2026", true},
+		{"a path prefix", []string{"release/*"}, "release/2.1", false},
+		{"a path prefix does not match the bare word", []string{"release/*"}, "release", true},
+		{"every ref", []string{"*"}, "feature/anything", false},
+		{"every ref, but a pull request is still ephemeral", []string{"*"}, "refs/pull/42/merge", true},
+		{"pr/ is ephemeral too", []string{"*"}, "pr/42", true},
+		{"merge-requests/ is ephemeral too", []string{"*"}, "merge-requests/7/head", true},
+		{"no branch at all is tracked (the environment is the track)", []string{"main"}, "", false},
+		{"the match is case-sensitive, as a branch name is", []string{"main"}, "Main", true},
+	}
+	for _, c := range cases {
+		if got := ingest.IsEphemeral(c.branch, c.refs); got != c.want {
+			t.Errorf("%s: IsEphemeral(%q, %v) = %v, want %v", c.name, c.branch, c.refs, got, c.want)
+		}
+	}
+}

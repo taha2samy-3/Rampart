@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"rampart/internal/auth"
+	"rampart/internal/domain"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
 	"rampart/internal/objectstore"
@@ -402,5 +403,59 @@ func TestGateway_RoleAuthZEnforcement(t *testing.T) {
 	mux.ServeHTTP(recBoundComp, reqBoundComp)
 	if recBoundComp.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 Forbidden for token bound to different scan source, got %d", recBoundComp.Code)
+	}
+}
+
+// An SBOM from a pull request or a feature branch changes nothing in the inventory (D10). It was saved all the same
+// and replaced the SBOM of the real branch, so the inventory showed what the last pull request would install.
+func TestGatewaySBOM_AnEphemeralRunLeavesTheInventoryAlone(t *testing.T) {
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	xmlData, err := os.ReadFile("../parsers/cyclonedx/testdata/sample.cdx.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(query string) ingest.DirectReportResponse {
+		req := httptest.NewRequest("POST", "/ingest/v1/sbom?repository=github.com/acme/shop&"+query, bytes.NewReader(xmlData))
+		req.Header.Set("Content-Type", "application/vnd.cyclonedx+xml")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var out ingest.DirectReportResponse
+		if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("%s: %d %s", query, rec.Code, rec.Body.String())
+		}
+		return out
+	}
+	assetID := func() uuid.UUID {
+		a, err := gw.Store().LookupAsset(t.Context(), tenantID, domain.AssetRepository, ingest.DeriveAssetKey(domain.AssetRepository, domain.UploadContext{Repository: "github.com/acme/shop"}))
+		if err != nil || a == nil {
+			t.Fatalf("the asset: %v", err)
+		}
+		return a.ID
+	}
+
+	if res := send("branch=main"); res.ComponentCount != 1 {
+		t.Fatalf("a tracked branch saves its SBOM: %+v", res)
+	}
+	main, _, _ := gw.Store().GetSBOM(t.Context(), tenantID, assetID())
+	if main == nil || main.Track != "main" {
+		t.Fatalf("the SBOM of main is saved on the track main: %+v", main)
+	}
+
+	for _, branch := range []string{"feature/login", "pr/42", "refs/pull/7/merge"} {
+		if res := send("branch=" + branch); res.ComponentCount != 0 {
+			t.Errorf("%s is ephemeral: its SBOM must not be saved, got %d components", branch, res.ComponentCount)
+		}
+	}
+	after, _, _ := gw.Store().GetSBOM(t.Context(), tenantID, assetID())
+	if after == nil || after.ID != main.ID {
+		t.Fatalf("the SBOM of main must still be the asset's: %+v", after)
 	}
 }

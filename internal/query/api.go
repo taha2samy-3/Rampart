@@ -178,6 +178,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)
 	routes.HandleFunc("GET /api/v1/applications/{id}/compliance", a.handleApplicationCompliance)
+	routes.HandleFunc("GET /api/v1/applications/{id}/changes", a.handleApplicationChanges)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/logo", a.handleTaxonomyLogo)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/history", a.handleTaxonomyHistory)                 // the days a reading was kept (D102)
 	routes.HandleFunc("POST /api/v1/taxonomies/{id}/controls/{control}/attestations", a.handleAttest) // a manual control (D102)
@@ -208,6 +209,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	// Dependency-Track integration & unmapped projects (docs/10 §3, §13)
 	routes.HandleFunc("GET /api/v1/sources", a.handleListSources)
 	routes.HandleFunc("GET /api/v1/sources/{id}/unmapped", a.handleListUnmapped)
+	routes.HandleFunc("GET /api/v1/sources/{id}/projects", a.handleListMappedProjects)
 	routes.HandleFunc("POST /api/v1/sources/{id}/map", a.handleMapProject)
 	routes.HandleFunc("GET /api/v1/sources/{id}/decisions", a.handleListDecisions)
 

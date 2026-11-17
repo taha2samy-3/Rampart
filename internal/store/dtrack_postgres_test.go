@@ -154,3 +154,75 @@ func TestDTrackProject_MappingAndUnmappedScenarios(t *testing.T) {
 		t.Fatalf("tenant B should see 0 unmapped projects, got %d", len(unmappedB))
 	}
 }
+
+// The mapping of a Dependency-Track project, on PostgreSQL: a person's mapping is read back and survives the rules, a
+// project mapped by a rule can be mapped again, and the mapped and unmapped lists are each other's complement.
+func TestDTrackProjectMapping_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	app, sys := setupStores(t, ctx)
+	tenant := newTenant(t, ctx, sys, "dtrack-map-"+uuid.NewString()[:6])
+	other := newTenant(t, ctx, sys, "dtrack-map-other-"+uuid.NewString()[:6])
+	src, err := sys.SaveScanSource(ctx, tenant, "dt", "dependency-track", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkApp := func(slug string) uuid.UUID {
+		a := &domain.Application{ID: uuid.New(), TenantID: tenant, Slug: slug, Name: slug, BusinessCriticality: "medium", Lifecycle: "production", CreatedAt: time.Now().UTC()}
+		if err := app.CreateApplication(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		return a.ID
+	}
+	demo, own := mkApp("demo"), mkApp("flare")
+
+	rec := func(uuidStr, name string, appID *uuid.UUID, rule, reason string) domain.DTrackProjectRecord {
+		return domain.DTrackProjectRecord{TenantID: tenant, SourceID: src, ProjectUUID: uuidStr, Name: name, Version: "1", Active: true,
+			ApplicationID: appID, MappingRule: rule, UnmappedReason: reason}
+	}
+	for _, r := range []domain.DTrackProjectRecord{
+		rec("p-default", "flare-reminders", &demo, "defaultApplication", ""), // the default rule took it
+		rec("p-prop", "payments", &demo, "property:rampart.application", ""),
+		rec("p-none", "orphan", nil, "", "no matching rule found for project orphan"),
+	} {
+		if err := app.UpsertDTrackProject(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := app.GetDTrackProject(ctx, tenant, "p-default")
+	if err != nil || got == nil || got.MappingRule != "defaultApplication" || got.ApplicationID == nil || *got.ApplicationID != demo || got.SourceID != src {
+		t.Fatalf("GetDTrackProject: %+v %v", got, err)
+	}
+	if none, err := app.GetDTrackProject(ctx, tenant, "p-missing"); err != nil || none != nil {
+		t.Fatalf("an unknown project is nil, nil: %+v %v", none, err)
+	}
+	if hidden, _ := app.GetDTrackProject(ctx, other, "p-default"); hidden != nil {
+		t.Fatal("another tenant must not read the project")
+	}
+
+	mapped, _ := app.ListMappedDTrackProjects(ctx, tenant, src)
+	unmapped, _ := app.ListUnmappedDTrackProjects(ctx, tenant, src)
+	if len(mapped) != 2 || len(unmapped) != 1 || unmapped[0].ProjectUUID != "p-none" {
+		t.Fatalf("mapped %d, unmapped %d: the two lists are complements", len(mapped), len(unmapped))
+	}
+	if o, _ := app.ListMappedDTrackProjects(ctx, other, src); len(o) != 0 {
+		t.Errorf("another tenant's mapped list: %d", len(o))
+	}
+
+	// A person moves the project the default rule took.
+	if err := app.MapDTrackProject(ctx, tenant, "p-default", own); err != nil {
+		t.Fatalf("a mapped project can be mapped again: %v", err)
+	}
+	got, _ = app.GetDTrackProject(ctx, tenant, "p-default")
+	if got.MappingRule != domain.DTrackManualMapping || *got.ApplicationID != own {
+		t.Fatalf("after the person: %+v", got)
+	}
+	// The next portfolio sync, where the rules still say the default application, must not undo it.
+	if err := app.UpsertDTrackProject(ctx, rec("p-default", "flare-reminders", &demo, "defaultApplication", "")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = app.GetDTrackProject(ctx, tenant, "p-default"); *got.ApplicationID != own || got.MappingRule != domain.DTrackManualMapping {
+		t.Fatalf("a person's mapping survives the rules: %+v", got)
+	}
+}

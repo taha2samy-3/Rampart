@@ -248,6 +248,20 @@ func (s *Syncer) complete(ctx context.Context, tenantID, sourceID uuid.UUID, pro
 	return err
 }
 
+// resolveProject decides where a project's findings go. A person's mapping (the UI's "Map project") comes first and
+// bypasses the rules and the filters: it was stored but the sync never read it, so a project mapped by hand stayed
+// without findings, and the portfolio sync did not even schedule it. Then the rules, then the project filters.
+func (s *Syncer) resolveProject(ctx context.Context, tenantID uuid.UUID, proj dtclient.Project, props []dtclient.Property) MappingResult {
+	if rec, err := s.store.GetDTrackProject(ctx, tenantID, proj.UUID); err == nil && rec != nil && rec.MappingRule == domain.DTrackManualMapping && rec.ApplicationID != nil {
+		return MappingResult{ApplicationID: rec.ApplicationID, MatchedRule: domain.DTrackManualMapping}
+	}
+	res := s.mapping.Resolve(ctx, tenantID, proj, props)
+	if ok, why := s.wantedIn(ctx, proj); !ok {
+		return MappingResult{UnmappedReason: "filtered out: " + why}
+	}
+	return res
+}
+
 // SyncProject executes a single project sync run.
 func (s *Syncer) SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string) error {
 	proj, err := s.client.GetProject(ctx, projectUUID)
@@ -261,10 +275,7 @@ func (s *Syncer) SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, 
 	}
 
 	props, _ := s.client.GetProjectProperties(ctx, projectUUID)
-	res := s.mapping.Resolve(ctx, tenantID, *proj, props)
-	if ok, why := s.wantedIn(ctx, *proj); !ok {
-		res = MappingResult{UnmappedReason: "filtered out: " + why}
-	}
+	res := s.resolveProject(ctx, tenantID, *proj, props)
 
 	var lastBom *time.Time
 	if proj.LastBomImport > 0 {
@@ -318,6 +329,20 @@ func (s *Syncer) SyncProject(ctx context.Context, tenantID, sourceID uuid.UUID, 
 		}
 	} else if err != nil {
 		return s.complete(ctx, tenantID, sourceID, projectUUID, err)
+	} else if asset.ApplicationID == nil || *asset.ApplicationID != *res.ApplicationID {
+		// The mapping of a Dependency-Track project is the declared truth for its asset (unlike an upload, whose asset
+		// keeps the application it has, D10). The asset was created once, under the application the mapping gave that
+		// day, and stayed there when the mapping changed: a rule edited, the default removed, a person mapping it by hand.
+		// Its findings move with it.
+		if mover, ok := s.store.(interface {
+			MoveAssetToApplication(ctx context.Context, tenantID, assetID, appID uuid.UUID) (bool, error)
+		}); ok {
+			if moved, err := mover.MoveAssetToApplication(ctx, tenantID, asset.ID, *res.ApplicationID); err != nil {
+				return s.complete(ctx, tenantID, sourceID, projectUUID, err)
+			} else if moved {
+				s.logger.Info("dependency-track asset moved to the application its mapping now names", "project", proj.Name, "application", res.ApplicationSlug, "rule", res.MatchedRule)
+			}
+		}
 	}
 	track := s.track(*proj)
 
@@ -473,10 +498,7 @@ func (s *Syncer) SyncPortfolio(ctx context.Context, tenantID, sourceID uuid.UUID
 		}
 		for _, proj := range projects {
 			props, _ := s.client.GetProjectProperties(ctx, proj.UUID)
-			res := s.mapping.Resolve(ctx, tenantID, proj, props)
-			if ok, why := s.wantedIn(ctx, proj); !ok {
-				res = MappingResult{UnmappedReason: "filtered out: " + why}
-			}
+			res := s.resolveProject(ctx, tenantID, proj, props)
 			var lastBom *time.Time
 			if proj.LastBomImport > 0 {
 				t := time.UnixMilli(proj.LastBomImport).UTC()

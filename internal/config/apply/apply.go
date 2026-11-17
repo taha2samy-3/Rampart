@@ -298,6 +298,7 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			ScannerFamily   string                  `json:"scannerFamily"`
 			Type            string                  `json:"type"`
 			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
+			TrackedRefs     []string                `json:"trackedRefs"`
 			TrustRules      []domain.TrustRule      `json:"trustRules"`
 			domain.DTrackSourceInput
 		}
@@ -313,6 +314,10 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
 		}
 
+		if err := domain.ValidateTrackedRefs(spec.TrackedRefs); err != nil {
+			return "", fmt.Errorf("apply: invalid %w", err)
+		}
+		spec.IngestionPolicy = domain.WithTrackedRefs(spec.IngestionPolicy, spec.TrackedRefs)
 		if spec.IngestionPolicy != nil {
 			if err := spec.IngestionPolicy.Validate(); err != nil {
 				return "", fmt.Errorf("apply: invalid ingestionPolicy: %w", err)
@@ -698,20 +703,21 @@ func defaultNamespace(ns string) string {
 
 // MemoryConfigStore provides an in-memory implementation of ConfigStore.
 type MemoryConfigStore struct {
-	domain.PackageMap // installed IntegrationPackages (D94)
-	mu                sync.RWMutex
-	orphaned          map[string]bool
-	disabled          map[string]bool
-	withData          map[uuid.UUID]bool
-	purged            map[uuid.UUID]bool
-	tenants           map[string]domain.Tenant
-	applications      map[string]domain.Application
-	scanSources       map[string]uuid.UUID
-	namespaces        map[string]uuid.UUID
-	policies          map[string]PolicyObject
-	idps              map[string]domain.IdentityProvider
-	connectors        map[string]domain.Connector
-	trustRules        map[uuid.UUID][]domain.TrustRuleRecord
+	domain.PackageMap  // installed IntegrationPackages (D94)
+	mu                 sync.RWMutex
+	orphaned           map[string]bool
+	disabled           map[string]bool
+	withData           map[uuid.UUID]bool
+	purged             map[uuid.UUID]bool
+	tenants            map[string]domain.Tenant
+	applications       map[string]domain.Application
+	scanSources        map[string]uuid.UUID
+	scanSourcePolicies map[string]*domain.IngestionPolicy
+	namespaces         map[string]uuid.UUID
+	policies           map[string]PolicyObject
+	idps               map[string]domain.IdentityProvider
+	connectors         map[string]domain.Connector
+	trustRules         map[uuid.UUID][]domain.TrustRuleRecord
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
@@ -1003,7 +1009,18 @@ func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UU
 		id = domain.NewID()
 		m.scanSources[key] = id
 	}
+	if m.scanSourcePolicies == nil {
+		m.scanSourcePolicies = map[string]*domain.IngestionPolicy{}
+	}
+	m.scanSourcePolicies[key] = policy
 	return id, nil
+}
+
+// ScanSourcePolicy is the ingestion policy last saved for a ScanSource (tests and the in-memory path).
+func (m *MemoryConfigStore) ScanSourcePolicy(tenantID uuid.UUID, name string) *domain.IngestionPolicy {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.scanSourcePolicies[tenantID.String()+":"+name]
 }
 
 func (m *MemoryConfigStore) SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error {

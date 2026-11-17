@@ -95,3 +95,58 @@ func TestInventory_OnPostgreSQL(t *testing.T) {
 		t.Errorf("tenant isolation: %d assets, %d components", len(oa), len(oc))
 	}
 }
+
+// An SBOM belongs to a track of an asset: the same repository built from main, staging and a release branch has
+// three SBOMs. With one slot per asset the last upload replaced the others and the inventory showed whichever
+// branch ran last.
+func TestInventory_OneSBOMPerTrack_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "trk-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	app, _ := appStore.LookupApplication(ctx, tn.ID, "shop")
+	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
+	run := &domain.IngestRun{ID: uuid.New(), TenantID: tn.ID, ApplicationID: app.ID, AssetID: asset.ID, Track: "main", ScannerFamily: "cyclonedx",
+		Format: "cyclonedx", Status: domain.RunCompleted, CreatedAt: time.Now().UTC()}
+	if err := appStore.CreateIngestRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	save := func(track string, age time.Duration, pkg string) {
+		id := uuid.New()
+		c := domain.SBOMComponent{TenantID: tn.ID, SBOMID: id, Ref: pkg, Purl: "pkg:npm/" + pkg + "@1.0.0", PurlBase: "pkg:npm/" + pkg, Name: pkg, Version: "1.0.0"}
+		if err := appStore.SaveSBOM(ctx, &domain.SBOM{ID: id, TenantID: tn.ID, AssetID: asset.ID, IngestRunID: run.ID, Track: track, Format: "cyclonedx", SpecVersion: "1.5",
+			ComponentCount: 1, CreatedAt: time.Now().UTC().Add(-age)}, []domain.SBOMComponent{c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("main", 3*time.Hour, "on-main")
+	save("staging", 2*time.Hour, "on-staging")
+	save("release-2", 0, "on-release")  // the newest upload of the asset, from a branch that is not the primary one
+	save("staging", 0, "on-staging-v2") // a newer SBOM of staging replaces the older one of staging, not the others
+
+	comps, total, err := appStore.ListInventoryComponents(ctx, tn.ID, "", 100)
+	if err != nil || total != 3 || len(comps) != 3 {
+		t.Fatalf("one SBOM per track, the newest of each: %d of %d %v", len(comps), total, err)
+	}
+	byTrack := map[string]string{}
+	for _, c := range comps {
+		byTrack[c.Track] = c.Name
+	}
+	if byTrack["main"] != "on-main" || byTrack["staging"] != "on-staging-v2" || byTrack["release-2"] != "on-release" {
+		t.Errorf("each track keeps its own SBOM: %v", byTrack)
+	}
+	assets, _ := appStore.ListInventoryAssets(ctx, tn.ID, 10)
+	if len(assets) != 1 || assets[0].Components != 1 {
+		t.Errorf("the asset row counts components of one SBOM, not of all tracks added: %+v", assets)
+	}
+
+	// The asset's single SBOM (the SBOM export, the graph) is the primary track's, not the last upload's.
+	sbom, comps2, err := appStore.GetSBOM(ctx, tn.ID, asset.ID)
+	if err != nil || sbom.Track != "main" || len(comps2) != 1 || comps2[0].Name != "on-main" {
+		t.Fatalf("GetSBOM must prefer main over the newest upload: %+v %v", sbom, err)
+	}
+}

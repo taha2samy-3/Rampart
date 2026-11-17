@@ -1213,8 +1213,8 @@ func (s *PostgresStore) RecordRunResult(ctx context.Context, result *domain.Inge
 func (s *PostgresStore) SaveSBOM(ctx context.Context, sbom *domain.SBOM, components []domain.SBOMComponent) error {
 	return s.withTenantTx(ctx, sbom.TenantID, func(tx pgx.Tx) error {
 		query := `
-			INSERT INTO sbom (id, tenant_id, asset_id, ingest_run_id, format, spec_version, serial, object_ref, root_component, component_count, dependencies, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+			INSERT INTO sbom (id, tenant_id, asset_id, ingest_run_id, format, spec_version, serial, object_ref, root_component, component_count, dependencies, created_at, track)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE(NULLIF($13, ''), 'default'))`
 
 		depsJSON, _ := json.Marshal(sbom.Dependencies)
 		createdAt := sbom.CreatedAt
@@ -1224,7 +1224,7 @@ func (s *PostgresStore) SaveSBOM(ctx context.Context, sbom *domain.SBOM, compone
 
 		_, err := tx.Exec(ctx, query,
 			sbom.ID, sbom.TenantID, sbom.AssetID, sbom.IngestRunID, sbom.Format, sbom.SpecVersion,
-			sbom.Serial, sbom.ObjectRef, sbom.RootComponent, sbom.ComponentCount, depsJSON, createdAt,
+			sbom.Serial, sbom.ObjectRef, sbom.RootComponent, sbom.ComponentCount, depsJSON, createdAt, sbom.Track,
 		)
 		if err != nil {
 			return err
@@ -1261,7 +1261,8 @@ func (s *PostgresStore) SaveSBOM(ctx context.Context, sbom *domain.SBOM, compone
 	})
 }
 
-// GetSBOM retrieves the latest SBOM and its components for an asset (docs/12).
+// GetSBOM retrieves the SBOM of an asset and its components (docs/12). An asset has one per track: the primary
+// track's comes first (main, then default), else the newest, so the answer does not depend on which branch ran last.
 func (s *PostgresStore) GetSBOM(ctx context.Context, tenantID, assetID uuid.UUID) (*domain.SBOM, []domain.SBOMComponent, error) {
 	var (
 		sbom       domain.SBOM
@@ -1271,16 +1272,16 @@ func (s *PostgresStore) GetSBOM(ctx context.Context, tenantID, assetID uuid.UUID
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		query := `
 			SELECT id, tenant_id, asset_id, ingest_run_id, format, spec_version, serial, coalesce(object_ref, ''),
-			       coalesce(root_component, ''), component_count, dependencies, created_at
+			       coalesce(root_component, ''), component_count, dependencies, created_at, track
 			FROM sbom
 			WHERE tenant_id = $1 AND asset_id = $2
-			ORDER BY created_at DESC
+			ORDER BY CASE track WHEN 'main' THEN 0 WHEN 'default' THEN 1 ELSE 2 END, created_at DESC
 			LIMIT 1`
 
 		var depsJSON []byte
 		err := tx.QueryRow(ctx, query, tenantID, assetID).Scan(
 			&sbom.ID, &sbom.TenantID, &sbom.AssetID, &sbom.IngestRunID, &sbom.Format, &sbom.SpecVersion,
-			&sbom.Serial, &sbom.ObjectRef, &sbom.RootComponent, &sbom.ComponentCount, &depsJSON, &sbom.CreatedAt,
+			&sbom.Serial, &sbom.ObjectRef, &sbom.RootComponent, &sbom.ComponentCount, &depsJSON, &sbom.CreatedAt, &sbom.Track,
 		)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1622,7 +1623,9 @@ func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, 
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (tenant_id, name) DO UPDATE SET
 				scanner_family = EXCLUDED.scanner_family,
-				ingestion_policy = CASE WHEN EXCLUDED.ingestion_policy = '{}'::jsonb THEN scan_source.ingestion_policy ELSE EXCLUDED.ingestion_policy END,
+				-- The resource is the source of truth: one with no policy means the defaults, so a policy (or a trackedRefs list)
+				-- taken out of it is taken out of the source too. It used to keep the old one, so it could be added and never removed.
+				ingestion_policy = EXCLUDED.ingestion_policy,
 				disabled_at = NULL
 			RETURNING id`
 		scanType := scannerFamily

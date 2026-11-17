@@ -121,7 +121,9 @@ type ScanSourceSpec struct {
 	Type            string                  `json:"type,omitempty"`
 	SecretRef       *SecretRef              `json:"secretRef,omitempty"`
 	IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy,omitempty"`
-	TrustRules      []domain.TrustRule      `json:"trustRules,omitempty"`
+	// TrackedRefs: the branches whose runs change the inventory; any other is ephemeral (docs/04, D10).
+	TrackedRefs []string           `json:"trackedRefs,omitempty"`
+	TrustRules  []domain.TrustRule `json:"trustRules,omitempty"`
 	// Connector, Schedule and DependencyTrack make the source pull from Dependency-Track (docs/10 §8, D92).
 	Connector       string          `json:"connector,omitempty"`
 	Schedule        string          `json:"schedule,omitempty"`

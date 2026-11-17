@@ -73,4 +73,16 @@ describe('integrations route and connector catalogue', () => {
     expect(within(pkgs).getByText(/Not used: runtime "wasm"/)).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  // "This screen failed to render: Cannot read properties of null (reading 'join')": a parser package has no egress
+  // and no secrets, and the server wrote them as null. A page must not die on a list that is null.
+  it('renders a package whose lists are null instead of failing the whole screen', async () => {
+    mockFetch({ loggedIn: true, role: 'admin', packagesNull: true });
+    renderApp('/integrations');
+    const table = await screen.findByRole('table', { name: 'Installed packages' });
+    expect(within(table).getByText('pip-audit')).toBeInTheDocument();
+    expect(within(table).getByText('nothing')).toBeInTheDocument(); // reaches nothing
+    expect(within(table).getByText('uploads named pip-audit, or detected')).toBeInTheDocument();
+    expect(screen.queryByText('This screen failed to render')).toBeNull();
+  });
 });

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -146,6 +147,21 @@ type selectorStore interface {
 // An asset in Unassigned is resolved again on every run, so a selector declared after the first scan still
 // claims it. Moving an asset moves its findings in the same transaction.
 func ResolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset *domain.Asset, declaredSlug string) (uuid.UUID, error) {
+	return resolveApplication(ctx, st, tenantID, asset, declaredSlug, true, nil)
+}
+
+// ErrApplicationNotFound is returned when an upload names an application that does not exist and may not create it.
+var ErrApplicationNotFound = errors.New("application not found")
+
+// ResolveApplicationWith is ResolveApplication with the choice of step 3 made by the caller: with createMissing
+// false, an application the upload names that does not exist is an error (ErrApplicationNotFound) instead of a new
+// empty application, so a typo in a pipeline does not make one. created says a new application was made.
+func ResolveApplicationWith(ctx context.Context, st Store, tenantID uuid.UUID, asset *domain.Asset, declaredSlug string, createMissing bool) (id uuid.UUID, created bool, err error) {
+	id, err = resolveApplication(ctx, st, tenantID, asset, declaredSlug, createMissing, &created)
+	return id, created, err
+}
+
+func resolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset *domain.Asset, declaredSlug string, createMissing bool, created *bool) (uuid.UUID, error) {
 	sel, hasSelectors := st.(selectorStore)
 	if asset != nil && asset.ApplicationID != nil && *asset.ApplicationID != domain.NilID {
 		if !hasSelectors {
@@ -197,6 +213,9 @@ func ResolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset
 		return domain.NilID, err
 	}
 
+	if !createMissing && targetSlug != "unassigned" {
+		return domain.NilID, fmt.Errorf("%w: %q", ErrApplicationNotFound, targetSlug)
+	}
 	name := "Unassigned"
 	if targetSlug != "unassigned" {
 		name = targetSlug
@@ -211,6 +230,9 @@ func ResolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset
 			return domain.NilID, err
 		}
 		return bind(existing.ID)
+	}
+	if created != nil && targetSlug != "unassigned" {
+		*created = true
 	}
 	return bind(newApp.ID)
 }
@@ -252,13 +274,29 @@ func IsEphemeral(branch string, trackedRefs []string) bool {
 		if ref == branch {
 			return false
 		}
-		if strings.HasSuffix(ref, "/*") {
-			prefix := strings.TrimSuffix(ref, "/*")
-			if strings.HasPrefix(branch, prefix+"/") {
-				return false
-			}
+		// A trailing * is a prefix: "release/*" (release/1.0), "hotfix-*", or "*" for every ref.
+		if prefix, ok := strings.CutSuffix(ref, "*"); ok && strings.HasPrefix(branch, prefix) {
+			return false
 		}
 	}
 
 	return true
+}
+
+// policyReader is the part of a store that holds a ScanSource's ingestion policy.
+type policyReader interface {
+	GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error)
+}
+
+// IsEphemeralFor is IsEphemeral with the tracked refs of the ScanSource the run belongs to (spec.trackedRefs). A source
+// with none, a store that keeps no policy, or a policy that cannot be read all fall back to the default refs, so a
+// failure to read the list never makes a run ephemeral that would have been tracked by default.
+func IsEphemeralFor(ctx context.Context, st any, tenantID, sourceID uuid.UUID, branch string) bool {
+	var refs []string
+	if pr, ok := st.(policyReader); ok && sourceID != domain.NilID {
+		if policy, err := pr.GetScanSourceIngestionPolicy(ctx, tenantID, sourceID); err == nil && policy != nil {
+			refs = policy.TrackedRefs
+		}
+	}
+	return IsEphemeral(branch, refs)
 }

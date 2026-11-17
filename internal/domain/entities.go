@@ -126,8 +126,9 @@ type SBOM struct {
 	TenantID       uuid.UUID        `json:"tenant_id"`
 	AssetID        uuid.UUID        `json:"asset_id"`
 	IngestRunID    uuid.UUID        `json:"ingest_run_id"`
-	Format         string           `json:"format"`       // cyclonedx | spdx | syft
-	SpecVersion    string           `json:"spec_version"` // 1.4, 1.5, 1.6, 2.2, 2.3, 3.0
+	Track          string           `json:"track,omitempty"` // the track of the asset this SBOM describes (main, staging, ...)
+	Format         string           `json:"format"`          // cyclonedx | spdx | syft
+	SpecVersion    string           `json:"spec_version"`    // 1.4, 1.5, 1.6, 2.2, 2.3, 3.0
 	Serial         string           `json:"serial,omitempty"`
 	ObjectRef      string           `json:"object_ref,omitempty"`
 	RootComponent  string           `json:"root_component,omitempty"`

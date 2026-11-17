@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
-import { mockFetch, renderApp, run } from '@/test/helpers';
+import { app, mockFetch, renderApp, run } from '@/test/helpers';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -179,5 +179,53 @@ describe('ingest runs', () => {
     // A 500 is retried twice (App.tsx) before the error shows.
     expect(await screen.findByRole('alert', {}, { timeout: 8000 })).toHaveTextContent('The parsers could not be loaded.');
     expect(screen.queryByRole('table', { name: 'Supported parsers table' })).toBeNull();
+  });
+});
+
+// An upload that named an application that did not exist made a new empty one, so a typo in a pipeline or a
+// dialog made an application nobody asked for. Choosing one from the list now says "it must exist"; making a new
+// one is a visible choice of a maintainer.
+describe('manual upload: the application', () => {
+  async function openDialog(sc: Parameters<typeof mockFetch>[0]) {
+    const calls = mockFetch({ loggedIn: true, runs: [], apps: [app(1, { id: 'app-1', slug: 'shop', name: 'Shop' })], ...sc });
+    renderApp('/ingestion');
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Upload report' }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: 'Upload security report' });
+    await userEvent.upload(within(dialog).getByLabelText('Report file'), new File(['{}'], 'r.sarif', { type: 'application/json' }));
+    return { calls, dialog };
+  }
+  const sent = (calls: Awaited<ReturnType<typeof openDialog>>['calls']) => calls.find((c) => c.url.startsWith('/api/v1/uploads/direct'))?.form;
+
+  it('sends createApplication=false for an application chosen from the list', async () => {
+    const { calls, dialog } = await openDialog({ role: 'maintainer' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'shop');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload' }));
+    await waitFor(() => expect(sent(calls)).toBeDefined());
+    expect(sent(calls)).toMatchObject({ application: 'shop', createApplication: 'false' });
+  });
+
+  it('lets a maintainer make a new application on purpose, and says what it will be called', async () => {
+    const { calls, dialog } = await openDialog({ role: 'maintainer', upload: { application: 'billing-api', applicationCreated: true } });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'New application...');
+    const submit = within(dialog).getByRole('button', { name: 'Upload' });
+    expect(submit).toBeDisabled(); // a new application needs a name
+    await userEvent.type(within(dialog).getByLabelText('Name of the new application'), 'Billing API!');
+    expect(within(dialog).getByText('It will be created as billing-api.')).toBeInTheDocument();
+    await userEvent.click(submit);
+    await waitFor(() => expect(sent(calls)).toBeDefined());
+    expect(sent(calls)).toMatchObject({ application: 'billing-api', createApplication: 'true' });
+    expect(await screen.findByText('Report uploaded. Application billing-api was created.')).toBeInTheDocument();
+  });
+
+  it('does not offer a new application to someone who may not make one', async () => {
+    const { dialog } = await openDialog({ role: 'triager' });
+    expect(within(dialog).queryByRole('option', { name: 'New application...' })).toBeNull();
+  });
+
+  it('shows the server\'s answer when the application does not exist', async () => {
+    const { dialog } = await openDialog({ role: 'maintainer', upload: 404 });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'shop');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload' }));
+    expect(await within(dialog).findByText(/There is no application/)).toBeInTheDocument();
   });
 });

@@ -380,3 +380,45 @@ func TestApply_Connector(t *testing.T) {
 		t.Errorf("unexpected webhook URL %q or missing id %s", conn.Status.WebhookURL, conn.ID)
 	}
 }
+
+// docs/04: a ScanSource lists trackedRefs beside ingestionPolicy. It was in the design and nowhere in the code, so every
+// branch but main, master and release/* was ephemeral and its findings and SBOM never reached the inventory.
+func TestApplyScanSource_TrackedRefs(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	applier := apply.NewApplier(store)
+	if _, err := applier.ApplyDocument(ctx, []byte(`{"kind":"Tenant","metadata":{"name":"acme"},"spec":{"namespaces":["acme"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	tn, _ := store.GetTenantBySlug(ctx, "acme")
+	src := func(spec string) []byte {
+		return []byte(`{"kind":"ScanSource","metadata":{"name":"ci","namespace":"acme"},"spec":` + spec + `}`)
+	}
+
+	// Beside ingestionPolicy, and it keeps the rest of the policy.
+	if _, err := applier.ApplyDocument(ctx, src(`{"scannerFamily":"semgrep","trackedRefs":["main","develop","staging","release/*"],"ingestionPolicy":{"minimumSeverity":"low"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	p := store.ScanSourcePolicy(tn.ID, "ci")
+	if p == nil || strings.Join(p.TrackedRefs, ",") != "main,develop,staging,release/*" || p.MinimumSeverity != "low" {
+		t.Fatalf("trackedRefs must be stored with the policy, and the policy kept: %+v", p)
+	}
+	// Alone, with no ingestionPolicy.
+	if _, err := applier.ApplyDocument(ctx, src(`{"scannerFamily":"semgrep","trackedRefs":["*"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if p := store.ScanSourcePolicy(tn.ID, "ci"); p == nil || len(p.TrackedRefs) != 1 || p.TrackedRefs[0] != "*" {
+		t.Fatalf("trackedRefs alone: %+v", p)
+	}
+	// A list that cannot mean what the author meant is refused, and names the field.
+	for name, refs := range map[string]string{
+		"empty name":        `[""]`,
+		"a space":           `["my branch"]`,
+		"a middle wildcard": `["re*lease"]`,
+		"too many":          `[` + strings.TrimSuffix(strings.Repeat(`"b",`, 51), ",") + `]`,
+	} {
+		if _, err := applier.ApplyDocument(ctx, src(`{"scannerFamily":"semgrep","trackedRefs":`+refs+`}`)); err == nil || !strings.Contains(err.Error(), "trackedRefs") {
+			t.Errorf("%s: must be refused, naming trackedRefs: %v", name, err)
+		}
+	}
+}

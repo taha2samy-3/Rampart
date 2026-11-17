@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, MappedProject, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -77,14 +77,16 @@ export async function listRuns(args: { cursor?: string; limit?: number; signal?:
 export const getRun = (id: string, signal?: AbortSignal) => get<RunRow>(`/api/v1/runs/${encodeURIComponent(id)}`, { signal });
 
 /** Upload a security report directly from the UI (docs/13 §1, Phase 2 MVP). */
-export function uploadReport(file: File, options?: { source?: string; application?: string; track?: string; format?: string }) {
+export function uploadReport(file: File, options?: { source?: string; application?: string; track?: string; format?: string; createApplication?: boolean }) {
   const fd = new FormData();
   fd.append('file', file, file.name);
   if (options?.source) fd.append('source', options.source);
   if (options?.application) fd.append('application', options.application);
   if (options?.track) fd.append('track', options.track);
   if (options?.format) fd.append('format', options.format);
-  return post<{ ingestRunId: string; status: string }>('/api/v1/uploads/direct', fd);
+  // Only when an application is named: the choice is explicit, so a typo does not make an application (docs/28 §10).
+  if (options?.application && options.createApplication !== undefined) fd.append('createApplication', String(options.createApplication));
+  return post<{ ingestRunId: string; status: string; application?: string; applicationCreated?: boolean; warnings?: string[] }>('/api/v1/uploads/direct', fd);
 }
 
 /** Change a finding's state. `version` is the one the analyst saw; a stale one is a 409 (docs/16 D38). */
@@ -237,6 +239,8 @@ export const findingsExportUrl = (format: 'csv' | 'json' | 'ocsf', q?: string) =
 };
 
 /** One application's open findings per day and band, new and fixed per day, and the age of what is open (D93). */
+export const getApplicationChanges = (id: string, range: { from: string; to: string }, signal?: AbortSignal) =>
+  get<ApplicationChanges>(`/api/v1/applications/${encodeURIComponent(id)}/changes`, { query: range, signal });
 export const getApplicationCompliance = (id: string, signal?: AbortSignal) => get<AppCompliance>(`/api/v1/applications/${encodeURIComponent(id)}/compliance`, { signal });
 export const getApplicationTrend = (id: string, days: number, signal?: AbortSignal) =>
   get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
@@ -248,6 +252,10 @@ export async function listSources(signal?: AbortSignal): Promise<SourceStatus[]>
 }
 export async function listUnmappedProjects(sourceId: string, signal?: AbortSignal): Promise<DTrackProjectRecord[]> {
   const raw = await get<{ projects?: DTrackProjectRecord[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/unmapped`, { signal });
+  return raw.projects ?? [];
+}
+export async function listMappedProjects(sourceId: string, signal?: AbortSignal): Promise<MappedProject[]> {
+  const raw = await get<{ projects?: MappedProject[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/projects`, { signal });
   return raw.projects ?? [];
 }
 export const mapSourceProject = (sourceId: string, projectUuid: string, applicationId: string) =>
