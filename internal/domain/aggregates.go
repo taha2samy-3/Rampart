@@ -106,13 +106,15 @@ type Changes struct {
 
 // OverdueFinding is an active finding past its SLA deadline.
 type OverdueFinding struct {
-	ID       uuid.UUID `json:"id"`
-	Title    string    `json:"title"`
-	Band     string    `json:"band"`
-	Due      time.Time `json:"due"`
-	AppSlug  string    `json:"app_slug"`
-	AppName  string    `json:"app_name"`
-	Severity string    `json:"severity"`
+	ID              uuid.UUID `json:"id"`
+	Title           string    `json:"title"`
+	Band            string    `json:"band"`
+	Due             time.Time `json:"due"`
+	AppSlug         string    `json:"app_slug"`
+	AppName         string    `json:"app_name"`
+	Severity        string    `json:"severity"`
+	VulnerabilityID *string   `json:"vulnerability_id,omitempty"`
+	RuleID          string    `json:"rule_id,omitempty"`
 }
 
 // Overview is the opening screen: what changed, what is overdue, how the deadlines are going, where the risk is.

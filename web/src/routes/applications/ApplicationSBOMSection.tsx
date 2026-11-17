@@ -452,7 +452,7 @@ function PackageCVEsDrawer({
               {findings.map((item: FindingRow) => {
                 const f = item.finding;
                 const cveId = f.vulnerability_id || f.rule_id || f.id;
-                const searchQ = f.vulnerability_id ? `cve:${f.vulnerability_id}` : (f.rule_id ? `rule:${f.rule_id}` : '');
+                const searchQ = f.vulnerability_id ? `cve:${f.vulnerability_id}` : (f.rule_id ? `rule:${f.rule_id}` : `id:${f.id}`);
                 return (
                   <tr key={f.id} className="transition-colors hover:bg-surface-2/50">
                     <td className="py-2 pr-3 font-mono font-semibold text-ink">

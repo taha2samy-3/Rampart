@@ -146,23 +146,16 @@ function Page({ app }: { app: ApplicationPage }) {
                   <ol className="m-0 list-none border-t border-rule p-0 text-13">
                     {app.top_findings.map((f) => {
                       const due = dueShort(f.sla_due_date, now);
+                      const targetQ = f.vulnerability_id
+                        ? `cve:${f.vulnerability_id}`
+                        : (f.rule_id ? `rule:${f.rule_id}` : (appQuerySlug ? `app:${appQuerySlug}` : `id:${f.id}`));
                       return (
                         <li key={f.id} className="flex items-center gap-3 border-b border-rule py-2">
                           <BandShape band={toBand(f.band)} size={12} />
                           <span className="w-9 text-end text-14 font-semibold tnum">{f.risk_score}</span>
                           <Link
                             to="/findings"
-                            search={{ q: `app:${appQuerySlug}`, sel: f.id }}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setSelectedFinding({
-                                id: f.id,
-                                title: f.title,
-                                severity: f.band,
-                                risk_score: f.risk_score,
-                                state: f.state,
-                              });
-                            }}
+                            search={{ q: targetQ, sel: f.id }}
                             className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline"
                           >
                             {f.title}

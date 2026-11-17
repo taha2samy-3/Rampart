@@ -15,12 +15,14 @@ import (
 
 // TopFinding is one of the worst findings of an application, as the application page lists it.
 type TopFinding struct {
-	ID        uuid.UUID  `json:"id"`
-	Title     string     `json:"title"`
-	Band      string     `json:"band"`
-	RiskScore int        `json:"risk_score"`
-	State     string     `json:"state"`
-	Due       *time.Time `json:"sla_due_date,omitempty"`
+	ID              uuid.UUID  `json:"id"`
+	Title           string     `json:"title"`
+	Band            string     `json:"band"`
+	RiskScore       int        `json:"risk_score"`
+	State           string     `json:"state"`
+	Due             *time.Time `json:"sla_due_date,omitempty"`
+	VulnerabilityID *string    `json:"vulnerability_id,omitempty"`
+	RuleID          string     `json:"rule_id,omitempty"`
 }
 
 // ApplicationPage is GET /api/v1/applications/{id}/summary (docs/11): the summary, the SLA standing, the MTTR, the
@@ -105,7 +107,16 @@ func (a *API) handleApplicationSummary(w http.ResponseWriter, r *http.Request) {
 		q, _ := grammar.Parse("app:" + id.String() + " state:open,under_investigation,affected")
 		if top, err := fq.QueryFindings(r.Context(), tenantID, &q, "-score", 5, nil); err == nil {
 			for _, f := range top {
-				page.TopFindings = append(page.TopFindings, TopFinding{ID: f.ID, Title: f.Title, Band: string(f.RiskBand), RiskScore: f.RiskScore, State: string(f.State), Due: f.SLADue})
+				page.TopFindings = append(page.TopFindings, TopFinding{
+					ID:              f.ID,
+					Title:           f.Title,
+					Band:            string(f.RiskBand),
+					RiskScore:       f.RiskScore,
+					State:           string(f.State),
+					Due:             f.SLADue,
+					VulnerabilityID: f.VulnerabilityID,
+					RuleID:          f.RuleID,
+				})
 			}
 		}
 	}

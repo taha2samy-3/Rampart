@@ -213,8 +213,7 @@ function List({
                     sel: r.id,
                   }}
                   onClick={(e) => {
-                    e.preventDefault();
-                    onSelect(r);
+                    e.stopPropagation();
                   }}
                   className="font-mono text-12 font-medium no-underline hover:underline"
                 >
@@ -277,7 +276,7 @@ export function FindingDetailModal({ change, onClose }: { change: FindingDetailT
 
   const vulnId = change.vulnerability_id || f?.vulnerability_id;
   const ruleId = change.rule_id || f?.rule_id;
-  const targetQuery = vulnId ? `cve:${vulnId}` : (ruleId ? `rule:${ruleId}` : (change.asset ? `app:${change.asset}` : ''));
+  const targetQuery = vulnId ? `cve:${vulnId}` : (ruleId ? `rule:${ruleId}` : `id:${change.id}`);
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>

@@ -287,6 +287,8 @@ export interface TopFinding {
   risk_score: number;
   state: string;
   sla_due_date?: string;
+  vulnerability_id?: string | null;
+  rule_id?: string;
 }
 export interface ApplicationPage extends AppSummary {
   sla: SlaStanding;
@@ -309,6 +311,8 @@ export interface OverdueFinding {
   due: string;
   app_slug: string;
   app_name: string;
+  vulnerability_id?: string | null;
+  rule_id?: string;
 }
 export interface Overview {
   changes: { since: string; new: number; reopened: number; fixed: number };

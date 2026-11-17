@@ -155,13 +155,24 @@ func BuildCountQuery(tenantID uuid.UUID, q *grammar.Query) (string, []any) {
 func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 	if term.Text != "" {
 		// Full-text search
-		pattern := "%" + strings.ToLower(term.Text) + "%"
 		idx := startIdx
-		clause := fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(description) LIKE $%d OR LOWER(rule_id) LIKE $%d OR LOWER(COALESCE(vulnerability_id, '')) LIKE $%d)", idx, idx, idx, idx)
+		var clause string
+		var termArgs []any
+		if uid, err := uuid.Parse(term.Text); err == nil {
+			clause = fmt.Sprintf("(id = $%d OR LOWER(title) LIKE $%d OR LOWER(description) LIKE $%d OR LOWER(rule_id) LIKE $%d OR LOWER(COALESCE(vulnerability_id, '')) LIKE $%d)", idx, idx+1, idx+1, idx+1, idx+1)
+			pattern := "%" + strings.ToLower(term.Text) + "%"
+			termArgs = []any{uid, pattern}
+			idx += 2
+		} else {
+			pattern := "%" + strings.ToLower(term.Text) + "%"
+			clause = fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(description) LIKE $%d OR LOWER(rule_id) LIKE $%d OR LOWER(COALESCE(vulnerability_id, '')) LIKE $%d)", idx, idx, idx, idx)
+			termArgs = []any{pattern}
+			idx++
+		}
 		if term.Negated {
 			clause = "NOT (" + clause + ")"
 		}
-		return clause, []any{pattern}, idx + 1
+		return clause, termArgs, idx
 	}
 
 	field := strings.ToLower(term.Field)
@@ -170,6 +181,14 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 	curIdx := startIdx
 
 	switch field {
+	case "id":
+		for _, v := range term.Values {
+			if uid, err := uuid.Parse(v.Raw); err == nil {
+				orClauses = append(orClauses, fmt.Sprintf("id = $%d", curIdx))
+				args = append(args, uid)
+				curIdx++
+			}
+		}
 	case "is":
 		for _, v := range term.Values {
 			val := strings.ToLower(v.Raw)
@@ -256,12 +275,12 @@ func buildTermClause(term grammar.Term, startIdx int) (string, []any, int) {
 		// docs/16 D19: the id or any alias of it (a GHSA finding matches its CVE and the other way round).
 		for _, v := range term.Values {
 			if v.IsWildcard {
-				orClauses = append(orClauses, fmt.Sprintf("(vulnerability_id ILIKE $%[1]d OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias ILIKE $%[1]d))", curIdx))
+				orClauses = append(orClauses, fmt.Sprintf("(vulnerability_id ILIKE $%[1]d OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias ILIKE $%[1]d) OR vulnerability_id IN (SELECT alias FROM vulnerability_alias WHERE vulnerability_id ILIKE $%[1]d))", curIdx))
 				args = append(args, v.Prefix+"%")
 			} else {
-				orClauses = append(orClauses, fmt.Sprintf(`(vulnerability_id = $%[1]d
-					OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias = $%[1]d)
-					OR vulnerability_id IN (SELECT alias FROM vulnerability_alias WHERE vulnerability_id = UPPER($%[1]d)))`, curIdx))
+				orClauses = append(orClauses, fmt.Sprintf(`(vulnerability_id ILIKE $%[1]d
+					OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias ILIKE $%[1]d)
+					OR vulnerability_id IN (SELECT alias FROM vulnerability_alias WHERE vulnerability_id ILIKE $%[1]d))`, curIdx))
 				args = append(args, v.Raw)
 			}
 			curIdx++

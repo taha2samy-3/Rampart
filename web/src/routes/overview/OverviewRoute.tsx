@@ -65,12 +65,15 @@ function Body({ ov, trend }: { ov: Overview; trend: TrendPoint[] }) {
               <ol className="m-0 list-none border-t border-rule p-0 text-13">
                 {ov.overdue.map((f) => {
                   const fApp = f.app_slug || (f.app_name ? `"${f.app_name}"` : '');
+                  const targetQ = f.vulnerability_id
+                    ? `cve:${f.vulnerability_id}`
+                    : (f.rule_id ? `rule:${f.rule_id}` : (fApp ? `app:${fApp}` : undefined));
                   return (
                     <li key={f.id} className="flex items-center gap-3 border-b border-rule py-2">
                       <BandShape band={toBand(f.band)} size={12} />
                       <Link
                         to="/findings"
-                        search={{ q: fApp ? `app:${fApp}` : undefined, sel: f.id }}
+                        search={{ q: targetQ, sel: f.id }}
                         className="min-w-0 flex-1 truncate font-medium text-ink no-underline hover:underline"
                       >
                         {f.title}

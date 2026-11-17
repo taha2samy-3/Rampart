@@ -228,7 +228,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 			AND sla_due_date < now() AND sla_paused_at IS NULL`, tenantID).Scan(&o.OverdueTotal); err != nil {
 			return err
 		}
-		od, err := tx.Query(ctx, `SELECT f.id, f.title, f.risk_band, f.severity, f.sla_due_date, a.slug, a.name
+		od, err := tx.Query(ctx, `SELECT f.id, f.title, f.risk_band, f.severity, f.sla_due_date, a.slug, a.name, f.vulnerability_id, f.rule_id
 			FROM finding f JOIN application a ON a.id = f.application_id AND a.tenant_id = f.tenant_id
 			WHERE f.tenant_id = $1 AND f.state IN `+activeStates+` AND f.sla_due_date < now() AND f.sla_paused_at IS NULL
 			ORDER BY f.sla_due_date ASC, f.risk_score DESC LIMIT 10`, tenantID)
@@ -237,7 +237,7 @@ func (s *PostgresStore) Overview(ctx context.Context, tenantID uuid.UUID, since 
 		}
 		for od.Next() {
 			var f domain.OverdueFinding
-			if err := od.Scan(&f.ID, &f.Title, &f.Band, &f.Severity, &f.Due, &f.AppSlug, &f.AppName); err != nil {
+			if err := od.Scan(&f.ID, &f.Title, &f.Band, &f.Severity, &f.Due, &f.AppSlug, &f.AppName, &f.VulnerabilityID, &f.RuleID); err != nil {
 				od.Close()
 				return err
 			}
