@@ -1,164 +1,149 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
-import { getApplicationCompliance, listTaxonomies, qk, toProblem } from '@/api';
+import { useMutation, useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
+import { getApplicationCompliance, getTaxonomyStatus, qk, retryAttestationTicket, toProblem } from '@/api';
 import type { ApplicationPage, ControlStatus } from '@/api/types';
-import {
-  Button,
-  EmptyState,
-  ProblemMessage,
-  Skeleton,
-  Table,
-  TBody,
-  Td,
-  Th,
-  THead,
-  Tr,
-} from '@/components';
+import { Button, EmptyState, ProblemMessage, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
+import { useAccess } from '@/app/useAccess';
 import { AttestDialog } from '../compliance/ComplianceRoute';
 import { absoluteDate } from '@/lib/format';
 
-export function ApplicationAttestSection({ app }: { app: ApplicationPage }) {
-  const { t } = useTranslation();
-  const [attestingControl, setAttestingControl] = useState<{ framework: string; control: ControlStatus } | null>(null);
+const READING: Record<string, string> = {
+  clear: 'Met',
+  open: 'Not met',
+  at_risk: 'At risk',
+  not_assessed: 'Not attested',
+};
 
-  const complianceQuery = useQuery({
+/**
+ * A person's reading of the manual controls of this application's frameworks (docs/16 D102, item 8). Only a control
+ * the framework marks `manual` can be attested, and the attestation is of that control, for this application. The
+ * automatic controls are read from findings and scans and are shown in the Compliance section above.
+ */
+export function ApplicationAttestSection({ app }: { app: ApplicationPage }) {
+  const { can } = useAccess();
+  const mayAttest = can(app.id, 'maintainer');
+  const mayRetry = can(undefined, 'admin'); // the ticket is opened on the tenant's tracker, with its credentials
+  const qc = useQueryClient();
+  const retry = useMutation({
+    mutationFn: (attestationId: string) => retryAttestationTicket(attestationId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['taxonomies', 'status'] }),
+  });
+  const [attesting, setAttesting] = useState<{ framework: string; control: ControlStatus } | null>(null);
+
+  const compliance = useQuery({
     queryKey: qk.applications.compliance(app.id),
     queryFn: ({ signal }) => getApplicationCompliance(app.id, signal),
   });
-
-  const taxonomiesQuery = useQuery({
-    queryKey: qk.taxonomies(),
-    queryFn: ({ signal }) => listTaxonomies(signal),
+  const frameworks = compliance.data?.frameworks ?? [];
+  const statuses = useQueries({
+    queries: frameworks.map((fw) => ({
+      queryKey: qk.taxonomyStatus(fw.id, app.id, ''),
+      queryFn: ({ signal }: { signal: AbortSignal }) => getTaxonomyStatus(fw.id, app.id, signal, ''),
+      retry: false,
+    })),
   });
+  const loading = compliance.isLoading || statuses.some((s) => s.isLoading);
+  const failed = statuses.flatMap((s, i) => (s.isError ? [{ fw: frameworks[i]!, s }] : []));
 
-  const frameworks = complianceQuery.data?.frameworks ?? [];
-  const taxonomies = taxonomiesQuery.data ?? [];
-
-  // Default framework to use when opening general attestation
-  const defaultFramework = taxonomies[0]?.id || frameworks[0]?.id || 'soc2-type2';
-
-  const handleOpenGeneralAttestation = () => {
-    setAttestingControl({
-      framework: defaultFramework,
-      control: {
-        id: 'SEC-REVIEW',
-        name: `${app.name} Application Security Review`,
-        status: 'not_assessed',
-        open: 0,
-        bands: { critical: 0, high: 0, medium: 0, low: 0 },
-        manual: true,
-      },
-    });
-  };
+  const rows = frameworks.flatMap((fw, i) =>
+    (statuses[i]?.data?.status ?? []).filter((c) => c.manual).map((c) => ({ fw, control: c })),
+  );
 
   return (
     <section className="mt-8 border-t border-rule pt-6" aria-labelledby="app-attest-section">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 id="app-attest-section" className="text-16 font-semibold text-ink">
-            Compliance Attestations (Attest)
-          </h2>
-          <p className="m-0 text-12 text-ink-2">
-            Record, sign, and review human-verified security attestations, threat model sign-offs, and compliance evidence for this application.
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          onClick={handleOpenGeneralAttestation}
-          className="h-8 px-3 text-12 whitespace-nowrap self-start sm:self-auto"
-        >
-          {t('compliance.attest', { defaultValue: 'Record Attestation' })}
-        </Button>
-      </div>
-
+      <h2 id="app-attest-section" className="text-16 font-semibold text-ink">Manual controls</h2>
+      <p className="m-0 text-12 text-ink-2">
+        Controls that no scan can read, such as a threat-model sign-off. A maintainer records whether each is met for this
+        application, with what was checked and when the reading ends.
+      </p>
       <div className="mt-4">
-        {complianceQuery.isLoading ? (
+        {loading ? (
           <Skeleton className="h-24 w-full" />
-        ) : complianceQuery.isError ? (
-          <ProblemMessage problem={toProblem(complianceQuery.error)} title="Failed to load compliance status" onRetry={() => void complianceQuery.refetch()} />
-        ) : frameworks.length === 0 ? (
-          <EmptyState title="No compliance frameworks in scope">
-            Configure compliance frameworks or assign compliance scopes in Administration to track automated and manual controls for this application.
+        ) : compliance.isError ? (
+          <ProblemMessage problem={toProblem(compliance.error)} title="Failed to load compliance status" onRetry={() => void compliance.refetch()} />
+        ) : rows.length === 0 && failed.length === 0 ? (
+          <EmptyState title="No manual controls">
+            {frameworks.length === 0
+              ? 'This application is in no compliance framework yet.'
+              : <>None of the frameworks this application is in has a control marked <code>manual: true</code>. Add one to a ComplianceFramework to record a sign-off here.</>}
           </EmptyState>
         ) : (
-          <div className="flex flex-col gap-3">
-            <Table aria-label="Application compliance frameworks table">
-              <THead>
-                <tr>
-                  <Th>Framework / Standard</Th>
-                  <Th>Status</Th>
-                  <Th>Controls Evaluated</Th>
-                  <Th>Earliest Deadline</Th>
-                  <Th align="end">Actions</Th>
-                </tr>
-              </THead>
-              <TBody>
-                {frameworks.map((fw) => (
-                  <Tr key={fw.id} className="h-11">
-                    <Td className="font-medium text-ink">
-                      <div className="flex flex-col">
-                        <span>{fw.name}</span>
-                        <span className="text-11 text-ink-2 font-mono">{fw.id}</span>
-                      </div>
-                    </Td>
-                    <Td>
-                      <span
-                        className={`inline-flex items-center rounded px-2 py-0.5 text-11 font-medium capitalize ${
-                          fw.verdict === 'meets'
-                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
-                            : fw.verdict === 'gaps'
-                              ? 'bg-red-500/10 text-red-700 dark:text-red-400 border border-red-500/20'
-                              : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
-                        }`}
-                      >
-                        {fw.verdict.replace('_', ' ')}
-                      </span>
-                    </Td>
-                    <Td className="text-12 text-ink-2">
-                      {fw.clear} / {fw.controls} clear
-                      {fw.open > 0 && <span className="text-red-600 dark:text-red-400 font-medium ml-1">({fw.open} open)</span>}
-                    </Td>
-                    <Td className="text-12 text-ink-2">
-                      {fw.earliest_due ? absoluteDate(fw.earliest_due) : '—'}
-                    </Td>
-                    <Td align="end">
-                      <Button
-                        variant="ghost"
-                        onClick={() =>
-                          setAttestingControl({
-                            framework: fw.id,
-                            control: {
-                              id: `${fw.id}-APP-ATTEST`,
-                              name: `${app.name} - ${fw.name} Compliance Sign-off`,
-                              status: 'not_assessed',
-                              open: fw.open,
-                              bands: { critical: 0, high: 0, medium: 0, low: 0 },
-                              manual: true,
-                            },
-                          })
-                        }
-                        className="h-7 px-2.5 text-11 text-accent hover:bg-accent/10 hover:text-accent"
-                      >
-                        {t('compliance.attest', { defaultValue: 'Attest' })}
+          <>
+          {failed.map(({ fw, s }) => (
+            <ProblemMessage key={fw.id} problem={toProblem(s.error)} title={`The controls of ${fw.name} could not be loaded`} onRetry={() => void s.refetch()} />
+          ))}
+          {rows.length > 0 && <Table aria-label="Manual controls table">
+            <THead>
+              <tr>
+                <Th>Framework</Th>
+                <Th>Control</Th>
+                <Th>Reading</Th>
+                <Th>Owner</Th>
+                <Th>In force until</Th>
+                <Th>Renewal ticket</Th>
+                <Th align="end">Actions</Th>
+              </tr>
+            </THead>
+            <TBody>
+              {rows.map(({ fw, control }) => (
+                <Tr key={`${fw.id}/${control.id}`} className="h-11">
+                  <Td className="text-12 text-ink-2">{fw.name}</Td>
+                  <Td>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-ink">{control.name}</span>
+                      <span className="font-mono text-11 text-ink-2">{control.id}</span>
+                    </div>
+                  </Td>
+                  <Td>
+                    <span className="text-12 text-ink" title={control.reason}>{READING[control.status] ?? control.status}</span>
+                  </Td>
+                  <Td className="text-12 text-ink-2">
+                    {control.attestation ? (control.attestation.owner || control.attestation.attested_by).replace(/^(user|team):/, '') : '—'}
+                  </Td>
+                  <Td className="text-12 text-ink-2">
+                    {control.attestation && control.status !== 'not_assessed' ? absoluteDate(control.attestation.expires_at) : '—'}
+                  </Td>
+                  <Td className="text-12 text-ink-2">
+                    <TicketCell control={control} mayRetry={mayRetry} busy={retry.isPending} onRetry={(id) => retry.mutate(id)} />
+                  </Td>
+                  <Td align="end">
+                    {mayAttest ? (
+                      <Button variant="ghost" onClick={() => setAttesting({ framework: fw.id, control })} className="h-7 px-2.5 text-11 text-accent hover:bg-accent/10 hover:text-accent">
+                        {control.attestation ? 'Attest again' : 'Attest'}
                       </Button>
-                    </Td>
-                  </Tr>
-                ))}
-              </TBody>
-            </Table>
-          </div>
+                    ) : (
+                      <span className="text-11 text-ink-2" title="Recording an attestation needs the maintainer role on this application">Needs maintainer</span>
+                    )}
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>}
+          </>
         )}
       </div>
-
-      {attestingControl && (
-        <AttestDialog
-          framework={attestingControl.framework}
-          control={attestingControl.control}
-          application={app.id}
-          onClose={() => setAttestingControl(null)}
-        />
+      {attesting && (
+        <AttestDialog framework={attesting.framework} control={attesting.control} application={app.id} onClose={() => setAttesting(null)} />
       )}
     </section>
+  );
+}
+
+/** The renewal ticket of the attestation in force, or why there is none. It is opened when the attestation ends within 14 days. */
+function TicketCell({ control, mayRetry, busy, onRetry }: { control: ControlStatus; mayRetry: boolean; busy: boolean; onRetry: (attestationId: string) => void }) {
+  const a = control.attestation;
+  const t = a?.ticket;
+  if (!a || a.status !== 'passed') return <span>—</span>;
+  if (!t) return <span title="A ticket is opened 14 days before it ends, when the tenant has a tracker">Not yet</span>;
+  if (t.status === 'opened')
+    return t.url ? <a href={t.url} className="text-accent underline" target="_blank" rel="noreferrer">{t.ref || 'Open ticket'}</a> : <span>{t.ref}</span>;
+  if (t.status === 'closed') return <span>Closed (renewed)</span>;
+  if (t.status === 'reserved') return <span>Opening…</span>;
+  return (
+    <span className="flex flex-col items-start gap-1">
+      <span className="text-red-700 dark:text-red-400">Could not be opened</span>
+      {t.error && <span className="max-w-[16rem] break-words text-11" title={t.error}>{t.error}</span>}
+      {mayRetry && <Button variant="ghost" disabled={busy} onClick={() => onRetry(a.id)} className="h-6 px-2 text-11 text-accent">Try again</Button>}
+    </span>
   );
 }

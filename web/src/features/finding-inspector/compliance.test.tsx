@@ -34,15 +34,21 @@ describe('Finding: the controls it counts against', () => {
     expect(link.getAttribute('href')).toContain('application=b7e1c9a2-0000'); // the finding's application
   });
 
-  it('says so, in bold, when the deadline has passed: the control is out of compliance until it is dealt with', async () => {
+  it('says so, in bold, when the deadline has passed: it counts the controls as out of compliance until it is dealt with', async () => {
     const { insp } = await open({ findingControls: [ctl({ due: day(-3), overdue: true })] });
-    const text = await within(insp).findByText(/Overdue by 3 days: the control is out of compliance/);
+    const text = await within(insp).findByText(/Overdue by 3 days: it counts these controls as out of compliance/);
     expect(text.className).toContain('font-semibold');
+  });
+
+  it('does not say "1 day" of a finding that is hours past its deadline', async () => {
+    const { insp } = await open({ findingControls: [ctl({ due: new Date(Date.now() - 3 * 3600_000).toISOString(), overdue: true })] });
+    expect(await within(insp).findByText(/Overdue, by less than a day/)).toBeInTheDocument();
+    expect(within(insp).queryByText(/Overdue by 1 day/)).toBeNull();
   });
 
   it('says when no deadline is set', async () => {
     const { insp } = await open({ findingControls: [ctl({ due: undefined })] });
-    expect(await within(insp).findByText('No deadline is set.')).toBeInTheDocument();
+    expect(await within(insp).findByText(/No deadline is set, so it counts these controls as out of compliance now/)).toBeInTheDocument();
   });
 
   it('shows nothing for a finding that counts against no control', async () => {

@@ -32,10 +32,10 @@ func TestParseSLAPolicySpec(t *testing.T) {
 	// The CISA date wins only when the policy says so.
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	kev := start.Add(24 * time.Hour)
-	if d := domain.DefaultSLAPolicy().Due(domain.SeverityLow, "low", start, &kev); !d.Equal(kev) {
+	if d := domain.DefaultSLAPolicy().Due(domain.SeverityLow, "low", start, &kev); !d.Equal(kev.Add(24 * time.Hour)) { // due by the end of CISA's day
 		t.Fatalf("kev cap on: %v", d)
 	}
-	if d := p.Due(domain.SeverityLow, "low", start, &kev); d.Equal(kev) {
+	if d := p.Due(domain.SeverityLow, "low", start, &kev); d.Equal(kev.Add(24 * time.Hour)) {
 		t.Fatal("kev cap off, but the CISA date was used")
 	}
 

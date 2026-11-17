@@ -258,6 +258,7 @@ func (s *FeedSyncer) lastSuccess(ctx context.Context, feed string) (time.Time, e
 
 // recordNVDSuccess stores the records written and the cursor for the next incremental sync.
 func (s *FeedSyncer) recordNVDSuccess(ctx context.Context, startedAt time.Time, records int64) error {
+	s.note(FeedResult{Feed: "nvd", Records: records})
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO feed_state (feed, cursor, last_sync, records, status, error)
 		VALUES ('nvd', $1, NOW(), $2, 'success', NULL)

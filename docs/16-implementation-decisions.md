@@ -2135,3 +2135,85 @@ In `SyncProject` and the portfolio sync the order is: the project's stored manua
 - `GET /api/v1/feeds` queries active mirror configuration and correlated feed states (`records`, `last_sync`, `status`, `error`).
 - A dedicated "Vulnerability Feeds" tab in the Integrations page surfaces feed health, synced record counts, egress policies, and an interactive Declarative CRD specification dialog with copyable manifests and kubectl commands.
 
+
+## D121: a feed sync is run by the system role, and ends as a notification and a Kubernetes Event
+
+**What was wrong (found on dev, 2026-11-17).** The Sync buttons on the Vulnerability Feeds page ran the sync inside the query API with the application pool. That role cannot write the global tables or `feed_state` (D19), the error was dropped, and the API answered 202 whatever happened. So Sync "succeeded", the status never changed, and a failed feed (NVD) stayed on "Error" with the old message. The button also ignored its `feed` parameter, did not use the scheduler's configuration (NVD key, OSV ecosystems, re-score after the sync), and any tenant could trigger a sync that is global.
+
+**Now.**
+- `enrich.OnDemand` runs it with the system pool and the scheduler's `FeedConfig`, under the same advisory lock (`ErrSyncBusy` → 409). `Only` limits a round to one feed. The feeds are marked `syncing` before the API answers, so the page sees it at once; a feed that no step ran is put back to `idle`; a `syncing` left by a restart is set to `error` ("interrupted") by the next round that holds the lock.
+- Only an administrator may start a sync. A server without `database.systemUrl` or with feeds off answers 501, not 202.
+- **Every round ends in one notification per tenant** (`feed_sync` or `feed_sync_failed`, one message for the round, linking to Integrations) **and one Kubernetes Event** in the operator's namespace (`FeedSynced` Normal, `FeedSyncFailed` Warning, about the ClusterFeed). This holds for the scheduled round and for the one asked for on the page. The rule going forward: what tenants are told about the platform's own work is also an Event in the namespace. Notifiers (Slack, webhooks) receive it through the same router as other notifications.
+- The page follows the server: it polls every 2 s while a feed says `syncing`, shows the whole error, and when a Test answers but the sync failed it says so (the address is fine; the failure is in the sync).
+
+**Known limits.** A scheduled round every 6 h with all feeds well is a notification every 6 h; there is no setting yet to send failures only. The Event is about `ClusterFeed/default`, in the operator namespace, so `kubectl describe clusterfeed` (which reads the `default` namespace) does not show it; `kubectl get events -n <namespace>` does. Outside a cluster there is no Event.
+
+## D122: the application page's attestation section attests real manual controls
+
+The section sent made-up control ids (`SEC-REVIEW`, `<framework>-APP-ATTEST`) and a framework-wide "sign-off". D102 allows an attestation only of a control the framework marks `manual`, and the API refuses any other (404 or 409), so no button on that section could ever succeed. It also repeated the framework table the Compliance section already shows. Now it lists the manual controls of the frameworks the application is in, with the reading, the date it is in force until, and Attest / Attest again for a maintainer, for that control and this application. With no manual control it says so.
+
+## D123: attestations: decided where the caller may decide, the right one reads, an owner, reminders before the end
+
+Checked against Drata (an evidence owner of its own; a renewal date, one year by default; past it the evidence is outdated and the control may not be audit-ready) and Vanta (document tests with a renewal date and reminders before it). D102's model matched: a person's reading of a manual control, a note, an https link, one year by default (three at most), append-only, audited, expired reads "not assessed". Four things did not.
+
+1. **Where the caller may decide (D48).** The API's door was the tenant role alone, so a maintainer on one application, who is offered the button, was answered 403. The door is now the highest role held anywhere, and the decision is checked against the application the attestation is for (`maintainer` on it, a binding or the tenant role); an attestation for the whole tenant needs the tenant role. No privilege was widened; one was missing.
+2. **Which attestation reads.** One for the application wins over one for the whole tenant, but only while it is in force. An expired application attestation used to hide a tenant-wide one that still held and the control read "not assessed". When none is in force, the newest that applies is shown, so the reading says when it expired.
+3. **Owner.** `owner` (optional, at most 200 characters) is who renews it; empty means the person who made it. Shown on the application page and in the reminder. Migration 00046 (D124 raised the version to 47).
+4. **Reminders.** The sweep that warns of risk acceptances ending (D45) also warns of the current "passed" attestation of a manual control ending, at 14 days and again at 1 day, once each (`compliance_attestation_warning` keeps the smallest threshold sent). One notification per sweep per tenant, listing the controls, application and owner (kind `attestation_expiring`). A superseded or failed attestation is not announced. Notifiers receive it through the same router.
+
+**Not built.** The reminder goes to the tenant, not to the owner alone (per-user routing is not built, D45). Renewal tickets: D124.
+
+## D124: renewal tickets for attestations, and migrations are expand-only
+
+**Renewal tickets (Vanta opens a Jira ticket, due on the renewal date, for the document's owner).** An attestation that ends within 14 days gets one ticket on the tenant's tracker, whichever it is (Jira or GitHub; a tenant has one, D70), and the ticket closes by itself when the attestation is renewed.
+- It follows the group tickets (D90): the table `attestation_ticket` (migration 00047) is the outbox; the reservation is written before the tracker is called; a retry first looks the issue up by its label (`rampart-f-<attestation id>`) because a failed call may have created it; a failure is retried with backoff up to `MaxTicketAttempts`; the existing ticket sweeper (one replica, advisory lock) runs it.
+- Only the current "passed" attestation of a control and application counts. A tenant with no tracker gets no ticket and nothing is reserved, so adding a tracker later opens tickets only for what ends within 14 days then, not a backlog.
+- The ticket names the framework, control, application, end date and owner. The trackers show it as a **compliance notice**: `Finding.Notice` marks the stand-in finding, and Jira and GitHub then drop "vulnerability", the severity labels and the link to a finding page that does not exist (they link the Compliance page, labels `rampart`, `compliance`).
+- A renewed attestation (a newer "passed" one in force) closes the ticket with a comment. One that simply expires is left open: that is overdue, not done.
+- **Not built.** Assigning the ticket to the owner in the tracker (an owner is free text, not a Jira account or GitHub login); due dates on the issue; a declarative tracker may render the stand-in as an ordinary finding.
+
+**Migrations are expand-only (from 46).** A release upgrades in this order: the migrate job (a pre-upgrade hook, D4), then the new pods, whose init container waits for `minSchemaVersion`. Until the new pods are ready, the old ones keep serving on the new schema. So the whole release must be rolled, which Helm does, and a migration must never break the previous binary: it may add tables, nullable or defaulted columns, indexes and policies, and must not drop, rename or tighten anything the old version reads. `TestMigrationsAreExpandOnly` fails on DROP, RENAME, `SET NOT NULL`, a column type change, TRUNCATE, REVOKE, or a NOT NULL column without a default, in the Up part of 46 and later. A change of that kind is made in two releases; the second migration carries a `-- contract:` comment. 46 and 47 only add a column with a default and two tables. `CurrentExpectedSchemaVersion` and the chart's `minSchemaVersion` are 47 (D116).
+
+## D125: corrections after a review of D119–D124 (2026-11-17)
+
+Three independent readers went through the code written in this session. What was confirmed and changed:
+
+**Compliance (D120).**
+- The finding page showed a deadline the control did not use: with no stored due date it invented one from the built-in policy ("Due in 12 days") while the control already counted the finding. It now shows the stored date, and says "No deadline is set, so it counts these controls as out of compliance now."
+- A control with some findings that have a deadline and some that have none read "At risk" and the finding with none could never fail it. Any open finding with no deadline now keeps the control "Not met", and the reason says so. `ControlDeadline.NoDeadline` carries the count.
+- The totals on the application page counted a finding once per control it bears on (a CWE-89 finding in four controls was four). `DistinctFindings` counts each once. Where a control fails for another reason (a manual control attested as not met) the sentence no longer says "0 findings are past their deadline".
+- A CISA KEV due date is a day: a finding is late from the next midnight UTC, not from the first moment of that day (`SLAPolicy.Due`).
+- `GET /taxonomies/{id}/status?application=` refuses an application outside the framework's complianceScope (it used to evaluate it).
+- The CSV gains `overdue`, `earliest_due` and `attestation_owner` (appended). A control with `open > 0` and `overdue = 0` is "at_risk", not a failure. Daily readings kept before D120 still say "open" for such controls; the history steps on the day D120 was deployed.
+- The inspector says "Overdue, by less than a day" instead of "1 day" for a finding hours past its deadline.
+
+**Feeds (D121).**
+- Feeds the server's configuration does not run (NVD switched off, OSV with no ecosystem) answer 409 `feed-off` instead of being marked syncing and silently reset.
+- The round's announcement (notification and Event) runs after the sync lock is released; the sync itself uses the server's context, not the request's, cleans up with a context of its own after a timeout, and recovers from a panic; a failing `pg_advisory_unlock` closes the connection rather than returning a connection that still holds the lock to the pool.
+- NVD's success and an EPSS file that cannot be unpacked now reach the round's summary; a round of one feed is announced too.
+- The Event is about the Pod that runs the sync, in its own namespace. The API server refuses a core/v1 Event whose involved object is in another namespace (a cluster-scoped `ClusterFeed` only allows `default`), so the first version would have been rejected and only logged.
+- The page: the CRD it prints shows only what the server has (printing the public defaults defeated `egress: deny` and switched on two optional sources); Test errors are shown; probe results are cleared when a sync starts; a switched-off feed is not "Unreachable" and offers neither Test nor Sync; Sync is offered to administrators only; "Healthy" is said only when every enabled feed synced.
+
+**Attestations (D123, D124).**
+- The renewal ticket looks the issue up by its label whenever the reservation already existed (a crash between creating the issue and recording it used to open a second one). A ticket opened on another tracker than the tenant has now is not closed through the wrong one.
+- The reminder's message is written in the same transaction as its "announced" marker. A notification that mixes a 1-day and a 14-day item says so.
+- `owner` is one line (no control characters), since it is written into notifications and tickets.
+- The ticket sweeper starts from the attestations that end soon (`idx_compliance_attestation_expiry`) instead of ranking every attestation of every tenant each minute.
+- The dialog offers only days the server accepts (tomorrow to three years), and the application's summary is refreshed after an attestation.
+
+**Known problem, left as it is on purpose.**
+- Any administrator of any tenant can start the global feed sync. There is no platform-administrator role and no cooldown, so in a multi-tenant installation one tenant's administrator can start upstream traffic, a re-key and a re-score of every tenant. The options were a platform role (GitLab keeps its Admin Area for instance administrators apart from group owners), moving the sync to the operator and a CronJob only, or a cooldown with an audit entry; none is built. It matters only where more than one tenant runs.
+
+**Dealt with afterwards (D126).** The changes ledger, tickets that gave up, the SBOM "Scan Now" button, the history across D120, and reminders for covered attestations.
+
+## D126: what was left open by D125, and was then done
+
+**The changes ledger replays transitions (D119).** "Open at start/end", "closed" and "came back" used to be read from the finding as it is now, and `resolved_at` is cleared on reopening, so a finding closed on 1 Oct and reopened on 10 Oct was counted open on 5 Oct, and a manual reopen was not a return. The ledger now reads each finding's closings and returns from its events (closed by a rescan, a state change, a risk acceptance approved, expired or revoked, a reactivation), and from `resolved_at` for a finding without events (older than them, or than the events' retention). A closing counts only when the finding was open, a return only when it was closed (fixed to risk_accepted is one closing; open to under_investigation is no return), except that an event that is a return by its nature counts even when the closing before it was never recorded. The point-in-time reading follows the usual event-sourcing pattern (replay up to the instant). The first version did it in SQL with a lookup per finding and took a minute on 10,000 findings; the transitions are now read once and replayed in memory (0.4 s). The lists keep the most recent transitions when they are cut. Counts are of findings: a finding that cycles twice in the range is one.
+
+**A ticket that gave up is announced, shown and can be sent back (D124).** A `ticket_failed` notification is written when a renewal ticket gives up; the attestation shows its ticket (link, "opening", or "could not be opened" with why); an administrator can send it back (`POST /api/v1/attestation-tickets/{attestation id}/retry`, migration 00048 grants the application role `UPDATE` on four columns of `attestation_ticket` and nothing else).
+
+**"Scan Now" no longer pretends to scan.** Matching packages to vulnerabilities is Dependency-Track's work, per project. `POST /api/v1/inventory/components/scan` re-scores the tenant's findings and says so; it needs the triager role (it was open to any role). The application's SBOM section has "Refresh from Dependency-Track" (`POST /api/v1/applications/{id}/refresh-vulnerabilities`, triager on that application): it queues a sync of each Dependency-Track project mapped to the application. It pulls what Dependency-Track has analysed; asking Dependency-Track to re-analyse first needs a client call this version does not make (its API has an analyse endpoint for a project, which appears in published OpenAPI documents and not in its own documentation: check it against the running version first).
+
+**The history says which rule made it.** A reading carries `model` (`d120-deadlines`). A kept reading without it was written before D120, when any open finding made a control not met; reading it by day now carries a note saying so. Kept readings are evidence and are not rewritten.
+
+**Attestations covered by a whole-tenant one.** An attestation of one application whose control a newer whole-tenant "passed" attestation outlasts gets no reminder and no ticket: the reading falls back to the tenant-wide one when it ends.

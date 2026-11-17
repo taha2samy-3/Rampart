@@ -436,7 +436,9 @@ export interface Taxonomy {
 }
 export interface Attestation {
   id: string; framework_id: string; control_id: string; application_id?: string; status: 'passed' | 'failed';
-  note: string; evidence_url?: string; attested_by: string; attested_at: string; expires_at: string;
+  note: string; evidence_url?: string; attested_by: string; owner?: string; attested_at: string; expires_at: string;
+  /** The renewal ticket opened for it on the tenant's tracker. failed: it gave up after its tries. */
+  ticket?: { status: 'reserved' | 'opened' | 'closed' | 'failed'; ref?: string; url?: string; error?: string };
 }
 /** open: a finding is past its deadline (out of compliance); at_risk: findings are open, none past its deadline yet. */
 export type ControlState = 'open' | 'at_risk' | 'clear' | 'not_assessed';

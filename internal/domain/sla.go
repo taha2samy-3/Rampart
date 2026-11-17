@@ -54,8 +54,12 @@ func (p SLAPolicy) Days(band Severity, criticality string) int {
 // the policy caps by it and it is earlier (FedRAMP, BOD 22-01).
 func (p SLAPolicy) Due(band Severity, criticality string, start time.Time, kevDue *time.Time) time.Time {
 	due := start.Add(time.Duration(p.Days(band, criticality)) * 24 * time.Hour)
-	if p.KEVDueDate && kevDue != nil && !kevDue.IsZero() && kevDue.Before(due) {
-		return *kevDue
+	// CISA's due date is a day, and the work is due by the end of it: a finding is late from the next midnight (UTC),
+	// not from the first moment of the day itself.
+	if p.KEVDueDate && kevDue != nil && !kevDue.IsZero() {
+		if endOfDay := kevDue.Add(24 * time.Hour); endOfDay.Before(due) {
+			return endOfDay
+		}
 	}
 	return due
 }

@@ -248,6 +248,11 @@ type IngestRunResult struct {
 
 // Finding represents the deduplicated, triaged vulnerability entity (D11, D18, D28).
 type Finding struct {
+	// Notice is set only on the stand-in a tracker is given for a ticket that is not about a scan finding, such as the
+	// renewal of an attestation (D124). A tracker then says "compliance notice", not "vulnerability", and does not link a
+	// finding page that does not exist. It is never stored or sent.
+	Notice string `json:"-"`
+
 	ID                     uuid.UUID       `json:"id"`
 	TenantID               uuid.UUID       `json:"tenant_id"`
 	FindingKey             string          `json:"finding_key"`               // SHA-256 deterministic fingerprint (D11)

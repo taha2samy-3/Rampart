@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,9 @@ type OSVRecord struct {
 // FeedSyncer writes global intelligence tables as rampart_system (D19).
 type FeedSyncer struct {
 	pool *pgxpool.Pool
+
+	mu      sync.Mutex
+	results []FeedResult // what each feed did in the round under way (SyncAll)
 }
 
 // NewFeedSyncer creates a new FeedSyncer backed by a system-privileged connection pool.
@@ -313,6 +317,7 @@ func (s *FeedSyncer) ListFeedStates(ctx context.Context) ([]FeedState, error) {
 }
 
 func (s *FeedSyncer) recordFeedSuccess(ctx context.Context, feed string, records int64) error {
+	s.note(FeedResult{Feed: feed, Records: records})
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO feed_state (feed, last_sync, records, status, error)
 		VALUES ($1, NOW(), $2, 'success', NULL)
@@ -328,6 +333,7 @@ func (s *FeedSyncer) recordFeedSuccess(ctx context.Context, feed string, records
 }
 
 func (s *FeedSyncer) recordFeedError(ctx context.Context, feed string, syncErr error) {
+	s.note(FeedResult{Feed: feed, Err: syncErr})
 	errMsg := syncErr.Error()
 	_, _ = s.pool.Exec(ctx, `
 		INSERT INTO feed_state (feed, last_sync, records, status, error)

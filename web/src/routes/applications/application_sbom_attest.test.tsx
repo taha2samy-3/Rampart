@@ -45,12 +45,13 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     const sbomSection = await screen.findByRole('region', { name: /Software Bill of Materials/i });
     expect(sbomSection).toBeInTheDocument();
 
-    // Verify SBOM & VEX download links
-    expect(within(sbomSection).getByRole('link', { name: 'CycloneDX SBOM' })).toHaveAttribute(
+    // The manifests are in a menu: open it, then check the links
+    await userEvent.click(within(sbomSection).getByRole('button', { name: /Export manifests/i }));
+    expect(await screen.findByRole('menuitem', { name: /CycloneDX SBOM/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/sbom?format=cyclonedx')
     );
-    expect(within(sbomSection).getByRole('link', { name: 'SPDX SBOM' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: /SPDX SBOM/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/sbom?format=spdx')
     );
@@ -61,33 +62,133 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     expect(within(table).getByText('log4j-core')).toBeInTheDocument();
     expect(within(table).getByRole('link', { name: /2 open CVEs/i })).toBeInTheDocument();
 
-    // Verify Scan Now button on package
-    expect(within(table).getByRole('button', { name: /Scan log4j-core/i })).toBeInTheDocument();
+    // The per-package button re-scores; it does not claim to scan
+    expect(within(table).getByRole('button', { name: /Re-evaluate log4j-core/i })).toBeInTheDocument();
+    expect(within(table).queryByRole('button', { name: /^Scan /i })).toBeNull();
   });
 
-  it('renders Attest section and allows opening attestation modal', async () => {
+  const fw = (over: Record<string, unknown>) => ({ id: 'x', name: 'X', version: '1', origin: 'builtin', verdict: 'partial', controls: 2, clear: 0, open: 0, at_risk: 0, not_assessed: 2, open_findings: 0, overdue_findings: 0, accepted_findings: 0, window_days: 30, ...over });
+  const ctl = (id: string, name: string, manual: boolean, status = 'not_assessed') => ({ id, name, status, open: 0, bands: { critical: 0, high: 0, medium: 0, low: 0 }, manual });
+  const ID = '01a1e562-93be-7b79-9762-615a097742e5';
+
+  it('lists only the manual controls of the frameworks in scope, and attests the real control for this application', async () => {
     mockFetch({
-      loggedIn: true,
-      appPages: {
-        '01a1e562-93be-7b79-9762-615a097742e5': appSummary,
-      },
+      loggedIn: true, role: 'maintainer',
+      appPages: { [ID]: appSummary },
       inventory: { components: [appComponent] },
+      appCompliance: { application: ID, evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [], frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding' })] },
+      taxonomyStatus: { 'acme-policy': { status: [ctl('TM-1', 'Threat model signed off', true), ctl('SC-1', 'No secrets in code', false)] } },
     });
+    renderApp(`/applications/${ID}`);
 
-    renderApp('/applications/01a1e562-93be-7b79-9762-615a097742e5');
+    const section = await screen.findByRole('region', { name: /Manual controls/i });
+    const table = await within(section).findByRole('table', { name: 'Manual controls table' });
+    expect(within(table).getByText('Threat model signed off')).toBeInTheDocument();
+    expect(within(table).queryByText('No secrets in code')).toBeNull(); // read from scans: not attested by hand
+    expect(within(table).getByText('Not attested')).toBeInTheDocument();
 
-    // Verify Attest section
-    const attestSection = await screen.findByRole('region', { name: /Compliance Attestations/i });
-    expect(attestSection).toBeInTheDocument();
-
-    const recordBtn = within(attestSection).getByRole('button', { name: /^Attest$/i });
-    expect(recordBtn).toBeInTheDocument();
-
-    // Click Attest to open dialog
-    await userEvent.click(recordBtn);
+    await userEvent.click(within(table).getByRole('button', { name: 'Attest' }));
     const dialog = await screen.findByRole('dialog');
-    expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByText(/Application Security Review/i)).toBeInTheDocument();
+    expect(within(dialog).getByText('Threat model signed off')).toBeInTheDocument(); // a control the framework has, not an invented id
+    expect(await axe(section)).toHaveNoViolations();
+  });
+
+  it('names the owner of an attestation, and sends the owner the person typed', async () => {
+    const withOwner = { ...ctl('TM-1', 'Threat model signed off', true, 'clear'), attestation: { id: 'a1', framework_id: 'acme-policy', control_id: 'TM-1', status: 'passed', note: 'x', attested_by: 'user:sara@acme.example', owner: 'team:appsec', attested_at: '2026-11-01T00:00:00Z', expires_at: '2027-11-01T00:00:00Z' } };
+    mockFetch({
+      loggedIn: true, role: 'maintainer',
+      appPages: { [ID]: appSummary },
+      inventory: { components: [appComponent] },
+      appCompliance: { application: ID, evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [], frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding' })] },
+      taxonomyStatus: { 'acme-policy': { status: [withOwner] } },
+    });
+    const inner = globalThis.fetch;
+    const bodies: unknown[] = [];
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      if (path.endsWith('/attestations') && init?.method === 'POST') bodies.push(JSON.parse(String(init.body)));
+      return inner(input, init);
+    });
+    renderApp(`/applications/${ID}`);
+    const section = await screen.findByRole('region', { name: /Manual controls/i });
+    expect(await within(section).findByText('appsec')).toBeInTheDocument(); // the owner, not the person who clicked
+    await userEvent.click(within(section).getByRole('button', { name: 'Attest again' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Owner'), 'team:payments-security');
+    await userEvent.type(within(dialog).getByLabelText('What you checked'), 'Reviewed with the team');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Record attestation' }));
+    await vi.waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ owner: 'team:payments-security', application_id: ID, status: 'passed' });
+  });
+
+  const withTicket = (ticket: Record<string, unknown>) => ({
+    ...ctl('TM-1', 'Threat model signed off', true, 'clear'),
+    attestation: { id: 'a1', framework_id: 'acme-policy', control_id: 'TM-1', status: 'passed', note: 'x', attested_by: 'user:sara@acme.example', attested_at: '2026-11-01T00:00:00Z', expires_at: '2026-12-01T00:00:00Z', ticket },
+  });
+  const openWith = async (role: 'admin' | 'maintainer', ticket: Record<string, unknown>) => {
+    mockFetch({
+      loggedIn: true, role,
+      appPages: { [ID]: appSummary },
+      inventory: { components: [appComponent] },
+      appCompliance: { application: ID, evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [], frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding' })] },
+      taxonomyStatus: { 'acme-policy': { status: [withTicket(ticket)] } },
+    });
+    const calls: string[] = [];
+    const inner = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      if (path.includes('/attestation-tickets/') && init?.method === 'POST') { calls.push(path); return Promise.resolve(new Response(null, { status: 202 })); }
+      return inner(input, init);
+    });
+    renderApp(`/applications/${ID}`);
+    return { section: await screen.findByRole('region', { name: /Manual controls/i }), calls };
+  };
+
+  it('links the renewal ticket that was opened', async () => {
+    const { section } = await openWith('maintainer', { status: 'opened', ref: 'SEC-42', url: 'https://jira.example/browse/SEC-42' });
+    expect(await within(section).findByRole('link', { name: 'SEC-42' })).toHaveAttribute('href', 'https://jira.example/browse/SEC-42');
+  });
+
+  it('shows a ticket that gave up, with why, and lets only an administrator try again', async () => {
+    const admin = await openWith('admin', { status: 'failed', error: 'tracker HTTP 401: bad credentials' });
+    expect(await within(admin.section).findByText('Could not be opened')).toBeInTheDocument();
+    expect(within(admin.section).getByText(/bad credentials/)).toBeInTheDocument();
+    await userEvent.click(within(admin.section).getByRole('button', { name: 'Try again' }));
+    await vi.waitFor(() => expect(admin.calls).toEqual(['/api/v1/attestation-tickets/a1/retry']));
+  });
+
+  it('does not offer "Try again" to a maintainer', async () => {
+    const { section } = await openWith('maintainer', { status: 'failed', error: 'x' });
+    expect(await within(section).findByText('Could not be opened')).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('says so when no framework has a manual control, and offers no invented attestation', async () => {
+    mockFetch({
+      loggedIn: true, role: 'maintainer',
+      appPages: { [ID]: appSummary },
+      inventory: { components: [appComponent] },
+      appCompliance: { application: ID, evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [], frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding' })] },
+      taxonomyStatus: { 'acme-policy': { status: [ctl('SC-1', 'No secrets in code', false)] } },
+    });
+    renderApp(`/applications/${ID}`);
+    const section = await screen.findByRole('region', { name: /Manual controls/i });
+    expect(await within(section).findByText('No manual controls')).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: /attest/i })).toBeNull();
+  });
+
+  it('shows no Attest button to someone who is not a maintainer', async () => {
+    mockFetch({
+      loggedIn: true, role: 'triager',
+      appPages: { [ID]: appSummary },
+      inventory: { components: [appComponent] },
+      appCompliance: { application: ID, evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [], frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding' })] },
+      taxonomyStatus: { 'acme-policy': { status: [ctl('TM-1', 'Threat model signed off', true)] } },
+    });
+    renderApp(`/applications/${ID}`);
+    const section = await screen.findByRole('region', { name: /Manual controls/i });
+    expect(await within(section).findByText('Threat model signed off')).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: /attest/i })).toBeNull();
   });
 
   it('verifies CVE changes table is present at the bottom', async () => {
@@ -127,7 +228,7 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
               component_name: 'log4j-core',
               purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
               fixed_version: '2.17.1',
-            } as any,
+            } as never,
           },
         },
       ],
@@ -175,5 +276,32 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     const { container } = renderApp('/applications/01a1e562-93be-7b79-9762-615a097742e5');
     await screen.findByRole('region', { name: /Software Bill of Materials/i });
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('refreshes from Dependency-Track for someone who may triage, and says what it did', async () => {
+    mockFetch({ loggedIn: true, role: 'triager', appPages: { [ID]: appSummary }, inventory: { components: [appComponent] } });
+    const inner = globalThis.fetch;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      if (path.endsWith('/refresh-vulnerabilities') && init?.method === 'POST') {
+        calls.push(path);
+        return Promise.resolve(new Response(JSON.stringify({ status: 'started', projects: 2, message: 'Pulling the vulnerabilities of its Dependency-Track projects' }), { status: 202, headers: { 'content-type': 'application/json' } }));
+      }
+      return inner(input, init);
+    });
+    renderApp(`/applications/${ID}`);
+    const section = await screen.findByRole('region', { name: /Software Bill of Materials/i });
+    await userEvent.click(await within(section).findByRole('button', { name: /Refresh from Dependency-Track/i }));
+    expect(await within(section).findByRole('status')).toHaveTextContent('(2 projects)');
+    expect(calls).toEqual([`/api/v1/applications/${ID}/refresh-vulnerabilities`]);
+  });
+
+  it('offers neither button to a viewer', async () => {
+    mockFetch({ loggedIn: true, role: 'viewer', appPages: { [ID]: appSummary }, inventory: { components: [appComponent] } });
+    renderApp(`/applications/${ID}`);
+    const section = await screen.findByRole('region', { name: /Software Bill of Materials/i });
+    await within(section).findByRole('table', { name: 'Application packages table' });
+    expect(within(section).queryByRole('button', { name: /Refresh from Dependency-Track/i })).toBeNull();
   });
 });

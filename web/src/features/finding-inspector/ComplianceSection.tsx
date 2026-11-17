@@ -52,7 +52,8 @@ export function ComplianceSection({ finding }: { finding: Finding }) {
 function deadline(c: FindingControl, now: number, t: TFunction): string {
   if (!c.due) return t('findingControls.noDeadline');
   if (c.overdue) {
-    const days = Math.max(1, Math.floor((now - Date.parse(c.due)) / DAY)); // whole days past it
+    const days = Math.floor((now - Date.parse(c.due)) / DAY); // whole days past it
+    if (days < 1) return t('findingControls.overdueToday');
     return t('findingControls.overdue', { days: t('findingControls.days', { count: days }) });
   }
   return `${t('findingControls.dueIn', { when: relativeDays(c.due, now) })} (${absoluteDate(c.due)}).`;

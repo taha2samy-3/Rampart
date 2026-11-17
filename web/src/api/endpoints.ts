@@ -205,7 +205,7 @@ export async function getTaxonomyHistory(id: string, signal?: AbortSignal): Prom
   const raw = await get<{ days?: string[] | null }>(`/api/v1/taxonomies/${encodeURIComponent(id)}/history`, { signal });
   return raw.days ?? [];
 }
-export const attestControl = (framework: string, control: string, body: { status: 'passed' | 'failed'; note: string; evidence_url?: string; expires_at?: string; application_id?: string }) =>
+export const attestControl = (framework: string, control: string, body: { status: 'passed' | 'failed'; note: string; evidence_url?: string; expires_at?: string; application_id?: string; owner?: string }) =>
   post<Attestation>(`/api/v1/taxonomies/${encodeURIComponent(framework)}/controls/${encodeURIComponent(control)}/attestations`, body);
 
 // --- Phase 3: Saved Views & Groups (docs/21 §6.1, §6.2) ---
@@ -279,3 +279,5 @@ export async function listParsers(signal?: AbortSignal): Promise<ParserDescripto
   return raw.parsers ?? [];
 }
 
+/** Sends a renewal ticket that gave up back to the outbox (administrator). */
+export const retryAttestationTicket = (attestationId: string) => post<void>(`/api/v1/attestation-tickets/${encodeURIComponent(attestationId)}/retry`, {});

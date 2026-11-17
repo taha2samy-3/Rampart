@@ -50,8 +50,11 @@ type Attestation struct {
 	Note          string     `json:"note"`
 	EvidenceURL   string     `json:"evidence_url,omitempty"`
 	AttestedBy    string     `json:"attested_by"`
-	AttestedAt    time.Time  `json:"attested_at"`
-	ExpiresAt     time.Time  `json:"expires_at"`
+	Owner         string     `json:"owner,omitempty"` // who renews it; empty: the person who made it
+	// Ticket is the renewal ticket opened for it on the tenant's tracker, when there is one (D124).
+	Ticket     *AttestationTicketInfo `json:"ticket,omitempty"`
+	AttestedAt time.Time              `json:"attested_at"`
+	ExpiresAt  time.Time              `json:"expires_at"`
 }
 
 // ErrNoSnapshot is returned when no reading was kept for that day.
@@ -208,16 +211,22 @@ func (s *PostgresStore) FamilyFindingCategories(ctx context.Context, tenantID uu
 func (s *PostgresStore) Attestations(ctx context.Context, tenantID uuid.UUID, frameworkID string) ([]Attestation, error) {
 	var out []Attestation
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, framework_id, control_id, application_id, status, note, evidence_url, attested_by, attested_at, expires_at
-			FROM compliance_attestation WHERE tenant_id = $1 AND framework_id = $2 ORDER BY attested_at DESC, id`, tenantID, frameworkID)
+		rows, err := tx.Query(ctx, `SELECT a.id, a.framework_id, a.control_id, a.application_id, a.status, a.note, a.evidence_url, a.attested_by, a.owner, a.attested_at, a.expires_at,
+			       t.status, t.ticket_ref, t.ticket_url, t.error
+			FROM compliance_attestation a LEFT JOIN attestation_ticket t ON t.attestation_id = a.id
+			WHERE a.tenant_id = $1 AND a.framework_id = $2 ORDER BY a.attested_at DESC, a.id`, tenantID, frameworkID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var a Attestation
-			if err := rows.Scan(&a.ID, &a.FrameworkID, &a.ControlID, &a.ApplicationID, &a.Status, &a.Note, &a.EvidenceURL, &a.AttestedBy, &a.AttestedAt, &a.ExpiresAt); err != nil {
+			var ts, tref, turl, terr *string
+			if err := rows.Scan(&a.ID, &a.FrameworkID, &a.ControlID, &a.ApplicationID, &a.Status, &a.Note, &a.EvidenceURL, &a.AttestedBy, &a.Owner, &a.AttestedAt, &a.ExpiresAt, &ts, &tref, &turl, &terr); err != nil {
 				return err
+			}
+			if ts != nil {
+				a.Ticket = &AttestationTicketInfo{Status: *ts, Ref: deref(tref), URL: deref(turl), Error: deref(terr)}
 			}
 			out = append(out, a)
 		}
@@ -229,9 +238,9 @@ func (s *PostgresStore) Attestations(ctx context.Context, tenantID uuid.UUID, fr
 func (s *PostgresStore) AddAttestation(ctx context.Context, tenantID uuid.UUID, a Attestation) error {
 	return s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO compliance_attestation
-			(id, tenant_id, framework_id, control_id, application_id, status, note, evidence_url, attested_by, attested_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			a.ID, tenantID, a.FrameworkID, a.ControlID, a.ApplicationID, a.Status, a.Note, a.EvidenceURL, a.AttestedBy, a.AttestedAt, a.ExpiresAt)
+			(id, tenant_id, framework_id, control_id, application_id, status, note, evidence_url, attested_by, owner, attested_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			a.ID, tenantID, a.FrameworkID, a.ControlID, a.ApplicationID, a.Status, a.Note, a.EvidenceURL, a.AttestedBy, a.Owner, a.AttestedAt, a.ExpiresAt)
 		return err
 	})
 }
@@ -281,20 +290,26 @@ func (s *PostgresStore) ComplianceSnapshotDays(ctx context.Context, tenantID uui
 
 // ControlDeadline is the time left on the open findings that break one control.
 type ControlDeadline struct {
-	Open     int        // open findings that break it
-	Overdue  int        // of them, past their SLA due date
-	Earliest *time.Time // the soonest SLA due date among them (nil when none has one)
+	Open       int        // open findings that break it
+	Overdue    int        // of them, past their SLA due date
+	NoDeadline int        // of them, with no SLA due date at all: nothing says when they are late (D120)
+	Earliest   *time.Time // the soonest SLA due date among them (nil when none has one)
 }
+
+// FindingTotals counts findings once, however many controls each bears on.
+type FindingTotals struct{ Open, Overdue int }
 
 // ComplianceDeadlines tells, for each control, how soon the findings that break it fall due, so a person can fix them
 // before the control is out of compliance by deadline and not only by count. Only the PostgreSQL store implements it.
 type ComplianceDeadlines interface {
 	ControlDeadlines(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlDeadline, error)
+	// DistinctFindings counts the open findings that break any of the controls, each once: a finding that bears on four
+	// controls is one finding, not four.
+	DistinctFindings(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (FindingTotals, error)
 }
 
 // ControlDeadlines reads the open (not accepted) findings that break each control, with their soonest SLA due date.
-func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlDeadline, error) {
-	out := map[string]ControlDeadline{}
+func deadlineControls(controls []ControlMatch) []byte {
 	type row struct {
 		ID    string           `json:"id"`
 		CWEs  []int            `json:"cwes"`
@@ -318,10 +333,17 @@ func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID
 		body = append(body, r)
 	}
 	raw, _ := json.Marshal(body)
+	return raw
+}
+
+func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (map[string]ControlDeadline, error) {
+	out := map[string]ControlDeadline{}
+	raw := deadlineControls(controls)
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			WITH c AS (SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(id text, cwes int[], cats text[], rules jsonb, min int))
-			SELECT c.id, count(DISTINCT f.id), count(DISTINCT f.id) FILTER (WHERE f.sla_due_date IS NOT NULL AND f.sla_due_date < NOW()), min(f.sla_due_date)
+			SELECT c.id, count(DISTINCT f.id), count(DISTINCT f.id) FILTER (WHERE f.sla_due_date IS NOT NULL AND f.sla_due_date < NOW()),
+			       count(DISTINCT f.id) FILTER (WHERE f.sla_due_date IS NULL), min(f.sla_due_date)
 			FROM c JOIN finding f ON f.tenant_id = $1
 			 AND f.state IN `+activeStates+`
 			 AND ($3::uuid[] IS NULL OR f.application_id = ANY($3))
@@ -334,7 +356,7 @@ func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID
 		for rows.Next() {
 			var id string
 			var d ControlDeadline
-			if err := rows.Scan(&id, &d.Open, &d.Overdue, &d.Earliest); err != nil {
+			if err := rows.Scan(&id, &d.Open, &d.Overdue, &d.NoDeadline, &d.Earliest); err != nil {
 				return err
 			}
 			out[id] = d
@@ -342,4 +364,26 @@ func (s *PostgresStore) ControlDeadlines(ctx context.Context, tenantID uuid.UUID
 		return rows.Err()
 	})
 	return out, err
+}
+
+func (s *PostgresStore) DistinctFindings(ctx context.Context, tenantID uuid.UUID, apps []uuid.UUID, controls []ControlMatch) (FindingTotals, error) {
+	var t FindingTotals
+	raw := deadlineControls(controls)
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			WITH c AS (SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(id text, cwes int[], cats text[], rules jsonb, min int))
+			SELECT count(DISTINCT f.id), count(DISTINCT f.id) FILTER (WHERE f.sla_due_date IS NOT NULL AND f.sla_due_date < NOW())
+			FROM c JOIN finding f ON f.tenant_id = $1
+			 AND f.state IN `+activeStates+`
+			 AND ($3::uuid[] IS NULL OR f.application_id = ANY($3))
+			 AND `+controlBreaksSQL, tenantID, raw, apps).Scan(&t.Open, &t.Overdue)
+	})
+	return t, err
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

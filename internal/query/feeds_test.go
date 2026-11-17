@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -240,19 +241,50 @@ func TestFeedsAPI(t *testing.T) {
 		t.Errorf("expected at least 4 feed probe results, got %d", len(allTestResp.Results))
 	}
 
-	// 5. Test feeds on-demand sync
-	syncReq := httptest.NewRequest("POST", "/api/v1/feeds/sync?feed=cisa_kev", nil)
-	syncReq.Header.Set("Authorization", "Bearer "+token)
-	syncRec := httptest.NewRecorder()
-	mux.ServeHTTP(syncRec, syncReq)
+	// 5. On-demand sync. The API cannot write the global tables (D19), so it hands the work to the system syncer; a
+	// server without one says so instead of answering 202 and doing nothing.
+	post := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", path, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	if w := post("/api/v1/feeds/sync?feed=cisa_kev"); w.Code != http.StatusNotImplemented {
+		t.Fatalf("no system syncer: expected 501, got %d", w.Code)
+	}
+	fs := &fakeSyncer{}
+	api.SetFeedSyncer(fs)
+	syncRec := post("/api/v1/feeds/sync?feed=cisa_kev")
 	if syncRec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202 Accepted for feed sync, got %d", syncRec.Code)
+		t.Fatalf("expected 202 Accepted for feed sync, got %d: %s", syncRec.Code, syncRec.Body.String())
 	}
 	var syncResp query.FeedSyncResponse
 	if err := json.Unmarshal(syncRec.Body.Bytes(), &syncResp); err != nil {
 		t.Fatalf("failed to parse feed sync response: %v", err)
 	}
-	if syncResp.Status != "started" || syncResp.Feed != "cisa_kev" {
-		t.Errorf("unexpected sync response: %+v", syncResp)
+	if syncResp.Status != "started" || syncResp.Feed != "cisa_kev" || fs.feed != "cisa_kev" {
+		t.Errorf("unexpected sync response: %+v (asked for %q)", syncResp, fs.feed)
 	}
+	if w := post("/api/v1/feeds/sync"); w.Code != http.StatusAccepted || fs.feed != "" || len(fs.names) < 4 {
+		t.Errorf("all feeds: %d feed=%q names=%v", w.Code, fs.feed, fs.names)
+	}
+	if w := post("/api/v1/feeds/sync?feed=nope"); w.Code != http.StatusNotFound {
+		t.Errorf("an unknown feed is 404, got %d", w.Code)
+	}
+	fs.err = enrich.ErrSyncBusy
+	if w := post("/api/v1/feeds/sync"); w.Code != http.StatusConflict {
+		t.Errorf("a sync already running is 409, got %d", w.Code)
+	}
+}
+
+type fakeSyncer struct {
+	feed  string
+	names []string
+	err   error
+}
+
+func (f *fakeSyncer) Start(_ context.Context, feed string, names []string) error {
+	f.feed, f.names = feed, names
+	return f.err
 }

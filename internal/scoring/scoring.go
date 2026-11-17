@@ -430,6 +430,9 @@ func RunSweeper(ctx context.Context, sc *Scorer, sys store.Store, pool *pgxpool.
 			if _, err := sc.WarnExpiringAcceptances(ctx, t, now); err != nil {
 				log.Warn("acceptance expiry warning failed", "tenant", t, "error", err)
 			}
+			if _, err := sc.WarnExpiringAttestations(ctx, t, now); err != nil {
+				log.Warn("attestation expiry warning failed", "tenant", t, "error", err)
+			}
 		}
 	}
 	locked(sweep)

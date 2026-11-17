@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -172,5 +173,88 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 	}
 	if r.Counts.OpenAtEnd < 3000 {
 		t.Errorf("the count is exact beyond the cut: %d", r.Counts.OpenAtEnd)
+	}
+}
+
+// The ledger reads a finding's closings and returns from its events, not from the row as it is now (D125): a finding
+// closed before the range and reopened inside it was not open at the start; one closed inside and reopened after it was
+// not open at the end; a manual reopen is a return; moving from fixed to risk_accepted is one closing; open to
+// under_investigation is not a return.
+func TestApplicationChanges_ClosedAndReopened_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "cyc-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	app, _ := appStore.LookupApplication(ctx, tn.ID, "shop")
+	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
+	day := func(n int) time.Time { return time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).AddDate(0, 0, n) }
+	mk := func(name string, state domain.FindingState, first time.Time, resolved *time.Time) *domain.Finding {
+		f := &domain.Finding{ID: uuid.New(), TenantID: tn.ID, FindingKey: uuid.NewString(), DedupScope: "shop:main", AssetID: asset.ID, ApplicationID: app.ID, Track: "main",
+			RuleScannerFamily: "trivy", RuleID: name, Title: name, Category: domain.CategorySCA, Severity: domain.SeverityHigh, ToolSeverity: "HIGH", RiskBand: domain.SeverityHigh,
+			RiskScore: 600, State: state, FirstSeen: first, LastSeen: first, ResolvedAt: resolved, OccurrenceCount: 1, Version: 1, CreatedAt: first, UpdatedAt: first}
+		if resolved != nil {
+			r := domain.ResolutionRiskAccepted
+			f.Resolution = &r
+		}
+		return f
+	}
+	riskAt := day(13)
+	s1, s2 := mk("closed-before-back-inside", domain.StateOpen, day(-30), nil), mk("closed-inside-back-after", domain.StateOpen, day(-30), nil)
+	s3, s4 := mk("new-closed-manual-reopen", domain.StateOpen, day(12), nil), mk("fixed-then-risk-accepted", domain.StateRiskAccepted, day(-30), &riskAt)
+	s5 := mk("investigating", domain.StateUnderInvestigation, day(-30), nil)
+	if err := appStore.UpsertFindings(ctx, tn.ID, []*domain.Finding{s1, s2, s3, s4, s5}); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(f *domain.Finding, at time.Time, typ, to string) *domain.FindingEvent {
+		e := &domain.FindingEvent{ID: uuid.New(), FindingID: f.ID, At: at, Actor: "system:parser", Type: typ}
+		if to != "" {
+			e.To = json.RawMessage(`"` + to + `"`)
+		}
+		return e
+	}
+	if err := appStore.RecordFindingEvents(ctx, tn.ID, []*domain.FindingEvent{
+		ev(s1, day(9), "closed_by_rescan", ""), ev(s1, day(15), "reactivated", ""),
+		ev(s2, day(12), "closed_by_rescan", ""), ev(s2, day(22), "reactivated", ""),
+		ev(s3, day(13), "state_changed", "fixed"), ev(s3, day(15), "state_changed", "open"),
+		ev(s4, day(12), "state_changed", "fixed"), ev(s4, day(13), "state_changed", "risk_accepted"),
+		ev(s5, day(14), "state_changed", "under_investigation"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	from, to := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	r, err := appStore.ApplicationChanges(ctx, tn.ID, app.ID, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(cs []store.FindingChange) map[string]bool {
+		m := map[string]bool{}
+		for _, c := range cs {
+			m[c.RuleID] = true
+		}
+		return m
+	}
+	if c := r.Counts; c.New != 1 || c.Closed != 3 || c.Reopened != 2 || c.OpenAtStart != 3 || c.OpenAtEnd != 3 {
+		t.Errorf("counts %+v, want new 1, closed 3, reopened 2, open at start 3 (not s1), open at end 3 (not s2, s4)", c)
+	}
+	if n := names(r.Closed); len(r.Closed) != 3 || !n["closed-inside-back-after"] || !n["new-closed-manual-reopen"] || !n["fixed-then-risk-accepted"] {
+		t.Errorf("closed: %v (fixed then risk-accepted is one closing; the one closed before the range is not here)", n)
+	}
+	if n := names(r.Reopened); len(r.Reopened) != 2 || !n["closed-before-back-inside"] || !n["new-closed-manual-reopen"] {
+		t.Errorf("reopened: %v (a manual reopen is a return; open to under_investigation is not)", n)
+	}
+	if n := names(r.OpenAtEnd); len(r.OpenAtEnd) != 3 || !n["closed-before-back-inside"] || !n["new-closed-manual-reopen"] || !n["investigating"] {
+		t.Errorf("open at the end: %v", n)
+	}
+	// The day chart closes the same findings as the count says.
+	closedByDay := 0
+	for _, d := range r.Days {
+		closedByDay += d.Closed
+	}
+	if closedByDay != r.Counts.Closed {
+		t.Errorf("the chart closes %d findings, the count says %d", closedByDay, r.Counts.Closed)
 	}
 }

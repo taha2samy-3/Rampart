@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ type mockNotifStore struct {
 	created  []domain.Notification
 	dueSoon  []domain.DueSoon
 	expiring []domain.ExpiringAcceptance
+	attests  []domain.ExpiringAttestation
 }
 
 func (m *mockNotifStore) CreateNotification(_ context.Context, _ uuid.UUID, n *domain.Notification) error {
@@ -62,6 +64,15 @@ func (m *mockNotifStore) WarnSLADueSoon(_ context.Context, _ uuid.UUID, _ time.T
 }
 func (m *mockNotifStore) WarnExpiringAcceptances(_ context.Context, _ uuid.UUID, _ time.Time) ([]domain.ExpiringAcceptance, error) {
 	return m.expiring, nil
+}
+
+func (m *mockNotifStore) WarnExpiringAttestations(_ context.Context, _ uuid.UUID, now time.Time, build func([]domain.ExpiringAttestation) *domain.Notification) ([]domain.ExpiringAttestation, *domain.Notification, error) {
+	if len(m.attests) == 0 {
+		return nil, nil, nil
+	}
+	n := build(m.attests)
+	m.created = append(m.created, *n)
+	return m.attests, n, nil
 }
 
 type mockRouter struct {
@@ -113,5 +124,27 @@ func TestScorer_InAppNotificationRouting(t *testing.T) {
 	}
 	if len(r.routed) != 3 || r.routed[2].Kind != domain.NotifyAcceptanceEnding {
 		t.Fatalf("expected acceptance_expiring notification routed, got %+v", r.routed)
+	}
+
+	// 4. WarnExpiringAttestations: one message for the sweep, naming the controls, the application and the owner.
+	st.attests = []domain.ExpiringAttestation{
+		{FrameworkID: "acme", ControlID: "TM-1", Application: "payments", Owner: "team:appsec", ExpiresAt: now.Add(24 * time.Hour), DaysLeft: 1},
+		{FrameworkID: "acme", ControlID: "TM-2", Owner: "user:sara@acme.example", ExpiresAt: now.Add(10 * 24 * time.Hour), DaysLeft: 14},
+	}
+	nAtt, err := scorer.WarnExpiringAttestations(ctx, tenantID, now)
+	if err != nil || nAtt != 2 {
+		t.Fatalf("WarnExpiringAttestations returned n=%d, err=%v", nAtt, err)
+	}
+	if len(r.routed) != 4 || r.routed[3].Kind != domain.NotifyAttestationEnding {
+		t.Fatalf("expected attestation_expiring notification routed, got %+v", r.routed)
+	}
+	got := r.routed[3]
+	if got.Title != "2 attestations end within 14 days, the soonest within 1 day" {
+		t.Fatalf("title: %q", got.Title)
+	}
+	for _, want := range []string{"acme / TM-1 (payments): ends ", "Owner: team:appsec.", "acme / TM-2: ends ", "Owner: sara@acme.example."} {
+		if !strings.Contains(got.Body, want) {
+			t.Fatalf("the message names %q: %q", want, got.Body)
+		}
 	}
 }

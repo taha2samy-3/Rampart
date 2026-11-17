@@ -290,6 +290,11 @@ func RunTicketSweeper(ctx context.Context, st TicketStore, tr domain.TrackerReso
 				log.Info("group tickets processed", "opened", o, "failed", f)
 			}
 		}
+		if as, ok := st.(AttestationTicketStore); ok {
+			if o, c, f := ProcessAttestationTickets(ctx, as, tr, time.Now().UTC(), log); o+c+f > 0 {
+				log.Info("attestation tickets processed", "opened", o, "closed", c, "failed", f)
+			}
+		}
 	}
 	pass()
 	t := time.NewTicker(interval)

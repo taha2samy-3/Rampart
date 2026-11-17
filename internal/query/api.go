@@ -44,6 +44,7 @@ type API struct {
 	ssrfAllowlist *domain.PlatformSSRFAllowlist
 	store         store.Store
 	feeds         *enrich.FeedStore
+	feedSync      FeedSyncer
 	authn         *auth.Authenticator
 	hmacKey       []byte
 	objects       objectstore.Store
@@ -242,6 +243,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("POST /api/v1/feeds/test-connection", a.handleTestFeedsConnection)
 	routes.HandleFunc("GET /api/v1/feeds/test-connection", a.handleTestFeedsConnection)
 	routes.HandleFunc("POST /api/v1/feeds/sync", a.handleSyncFeeds)
+	routes.HandleFunc("POST /api/v1/attestation-tickets/{id}/retry", a.handleRetryAttestationTicket)
+	routes.HandleFunc("POST /api/v1/applications/{id}/refresh-vulnerabilities", a.handleRefreshVulnerabilities)
 	routes.HandleFunc("POST /api/v1/feeds/{name}", a.handleFeedPush)
 	routes.HandleFunc("POST /api/v1/connectors/validate", a.handleValidateConnector)
 
@@ -550,7 +553,7 @@ func (a *API) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 			res.AlsoReportedBy = append(res.AlsoReportedBy, CorrelatedRef{ID: g.ID, Scanner: g.RuleScannerFamily, RuleID: g.RuleID, State: string(g.State)})
 		}
 	}
-	res.Controls = a.findingControls(r.Context(), tenantID, finding, res.SLADueDate)
+	res.Controls = a.findingControls(r.Context(), tenantID, finding, finding.SLADue) // the stored deadline: a built-in fallback would say "12 days left" while the controls already count it (D120)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

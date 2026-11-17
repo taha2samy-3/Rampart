@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"rampart/internal/auth"
 	"rampart/internal/store"
 )
 
@@ -133,12 +134,13 @@ type ScanComponentResponse struct {
 	ScannedAt time.Time `json:"scanned_at"`
 }
 
-// handleScanComponent is POST /api/v1/inventory/components/scan: triggers an immediate on-demand
-// vulnerability scan / rescore for an SBOM package/dependency against threat intelligence feeds.
+// handleScanComponent is POST /api/v1/inventory/components/scan. It does NOT scan the package: matching packages to
+// vulnerabilities is Dependency-Track's work, per project (POST /applications/{id}/refresh-vulnerabilities asks for
+// that). What it does is recalculate the risk scores of the tenant's findings against the feeds as they are now, which
+// is why it needs triage rights and says so in its answer (D126).
 func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := a.resolveTenant(r)
-	if err != nil {
-		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+	tenantID, _, _, ok := a.requireAny(w, r, auth.RoleTriager)
+	if !ok {
 		return
 	}
 	var req ScanComponentRequest
@@ -163,7 +165,7 @@ func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, ScanComponentResponse{
 		Status:    "started",
 		Purl:      req.Purl,
-		Message:   "On-demand vulnerability scan initiated for " + req.Purl,
+		Message:   "Risk scores are being recalculated against the current feeds. This does not scan " + req.Purl + "; use Refresh from Dependency-Track on the application to pull new vulnerabilities.",
 		ScannedAt: time.Now().UTC(),
 	})
 }

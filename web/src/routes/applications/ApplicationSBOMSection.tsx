@@ -3,13 +3,21 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { get, listFindings, post, toProblem } from '@/api';
+import { useAccess } from '@/app/useAccess';
 import type { ApplicationPage, FindingRow } from '@/api/types';
 import {
   BandShape,
   Button,
   EmptyState,
+  IconChevronDown,
   IconRefresh,
   Input,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  MenuTrigger,
   ProblemMessage,
   Spinner,
   Table,
@@ -46,6 +54,9 @@ export function ApplicationSBOMSection({
 }) {
   const [search, setSearch] = useState('');
   const [scanningPurl, setScanningPurl] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const { can } = useAccess();
+  const mayTriage = can(app.id, 'triager'); // both buttons need the triage right the API checks
   const [scanStatus, setScanStatus] = useState<{ purl: string; message: string; ok: boolean } | null>(null);
   const [expandedPurls, setExpandedPurls] = useState<Set<string>>(new Set());
   const [localSelectedFinding, setLocalSelectedFinding] = useState<FindingDetailTarget | null>(null);
@@ -125,11 +136,25 @@ export function ApplicationSBOMSection({
     }
   };
 
+  // The application's vulnerabilities come from Dependency-Track, per project: sync it now.
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await post<{ message: string; projects: number }>(`/api/v1/applications/${encodeURIComponent(app.id)}/refresh-vulnerabilities`, {});
+      setScanStatus({ purl: '', message: `${res.message} (${res.projects} ${res.projects === 1 ? 'project' : 'projects'}). The list updates when the sync ends.`, ok: true });
+      window.setTimeout(() => void query.refetch(), 4000);
+    } catch (err) {
+      setScanStatus({ purl: '', message: toProblem(err).detail || 'The refresh could not be started.', ok: false });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const appQuerySlug = app.slug || `"${app.name}"`;
 
   return (
     <section aria-labelledby="app-sbom-section">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 id="app-sbom-section" className="text-16 font-semibold text-ink">
             Software Bill of Materials (SBOM) & Packages
@@ -138,46 +163,80 @@ export function ApplicationSBOMSection({
             Dependencies and packages ingested for this application. Review packages affected by CVEs or download standardized SBOM manifests.
           </p>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 sm:mt-0">
-          <a
-            href={`/api/v1/applications/${encodeURIComponent(app.id)}/sbom?format=cyclonedx`}
-            download
-            className="inline-flex h-7 items-center rounded-ctl border border-rule bg-surface px-2.5 text-11 font-medium text-ink hover:bg-chrome no-underline"
-            title="Download CycloneDX SBOM (JSON)"
-          >
-            CycloneDX SBOM
-          </a>
-          <a
-            href={`/api/v1/applications/${encodeURIComponent(app.id)}/sbom?format=spdx`}
-            download
-            className="inline-flex h-7 items-center rounded-ctl border border-rule bg-surface px-2.5 text-11 font-medium text-ink hover:bg-chrome no-underline"
-            title="Download SPDX SBOM (JSON)"
-          >
-            SPDX SBOM
-          </a>
-          <a
-            href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=cyclonedx`}
-            download
-            className="inline-flex h-7 items-center rounded-ctl border border-rule bg-surface px-2.5 text-11 font-medium text-ink hover:bg-chrome no-underline"
-            title="Download CycloneDX VEX Advisory"
-          >
-            CycloneDX VEX
-          </a>
-          <a
-            href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=openvex`}
-            download
-            className="inline-flex h-7 items-center rounded-ctl border border-rule bg-surface px-2.5 text-11 font-medium text-ink hover:bg-chrome no-underline"
-            title="Download OpenVEX Advisory"
-          >
-            OpenVEX
-          </a>
+        <div className="flex items-center gap-2">
+          {mayTriage && (
+            <Button
+              variant="secondary"
+              loading={refreshing}
+              disabled={refreshing}
+              onClick={() => void handleRefresh()}
+              className="h-8 gap-1.5 px-3 text-12 font-medium"
+              title="Pull the vulnerabilities of this application's Dependency-Track projects now"
+            >
+              <IconRefresh className="size-3" />
+              <span>Refresh from Dependency-Track</span>
+            </Button>
+          )}
+          <Menu>
+            <MenuTrigger asChild>
+              <Button variant="secondary" className="h-8 gap-1.5 px-3 text-12 font-medium">
+                <span>Export manifests</span>
+                <IconChevronDown width={12} height={12} className="opacity-70" />
+              </Button>
+            </MenuTrigger>
+            <MenuContent align="end" className="w-56">
+              <MenuLabel>Software Bill of Materials (SBOM)</MenuLabel>
+              <MenuItem asChild>
+                <a
+                  href={`/api/v1/applications/${encodeURIComponent(app.id)}/sbom?format=cyclonedx`}
+                  download={`${app.slug || 'application'}-sbom-cyclonedx.json`}
+                  className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
+                >
+                  <span>CycloneDX SBOM</span>
+                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                </a>
+              </MenuItem>
+              <MenuItem asChild>
+                <a
+                  href={`/api/v1/applications/${encodeURIComponent(app.id)}/sbom?format=spdx`}
+                  download={`${app.slug || 'application'}-sbom-spdx.json`}
+                  className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
+                >
+                  <span>SPDX SBOM</span>
+                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                </a>
+              </MenuItem>
+              <MenuSeparator />
+              <MenuLabel>VEX Advisories</MenuLabel>
+              <MenuItem asChild>
+                <a
+                  href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=cyclonedx`}
+                  download={`${app.slug || 'application'}-vex-cyclonedx.json`}
+                  className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
+                >
+                  <span>CycloneDX VEX</span>
+                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                </a>
+              </MenuItem>
+              <MenuItem asChild>
+                <a
+                  href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=openvex`}
+                  download={`${app.slug || 'application'}-openvex.json`}
+                  className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
+                >
+                  <span>OpenVEX</span>
+                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                </a>
+              </MenuItem>
+            </MenuContent>
+          </Menu>
         </div>
       </div>
 
       {scanStatus && (
         <div
           role="status"
-          className={`mt-3 flex items-center justify-between rounded border px-3 py-2 text-12 font-medium ${
+          className={`mt-3 flex items-center justify-between rounded-ctl border px-3 py-2 text-12 font-medium ${
             scanStatus.ok
               ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
               : 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-400'
@@ -196,15 +255,16 @@ export function ApplicationSBOMSection({
       )}
 
       {vulnPackages.length > 0 && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-12 text-amber-800 dark:text-amber-300">
-          <span className="font-semibold">⚠️ Action needed:</span>
-          <span>
-            {vulnPackages.length} package{vulnPackages.length > 1 ? 's' : ''} in this application {vulnPackages.length > 1 ? 'have' : 'has'} active CVEs.
-          </span>
+        <div className="mt-3 flex items-center justify-between border-b border-rule pb-2 text-13">
+          <p className="m-0 text-ink">
+            <span className="font-semibold text-critical">
+              {vulnPackages.length} package{vulnPackages.length > 1 ? 's' : ''} in this application {vulnPackages.length > 1 ? 'have' : 'has'} active CVEs.
+            </span>
+          </p>
           <Link
             to="/findings"
             search={{ q: `app:${appQuerySlug} state:open,under_investigation,affected` }}
-            className="ml-auto font-medium text-accent underline hover:opacity-85 text-12"
+            className="text-12 font-medium text-accent hover:underline"
           >
             View all application CVEs →
           </Link>
@@ -356,11 +416,11 @@ function PackageRowGroup({
             loading={scanningPurl === pkg.purl}
             onClick={() => void onScan(pkg)}
             className="h-7 px-2 text-11 text-accent hover:bg-accent/10 hover:text-accent"
-            title={`Force on-demand vulnerability scan for ${pkg.name}`}
-            aria-label={`Scan ${pkg.name}`}
+            title={t('inventory.scanNowTooltip', { name: pkg.name })}
+            aria-label={`Re-evaluate ${pkg.name}`}
           >
             <IconRefresh className="mr-1 size-3" />
-            <span>{t('inventory.scanNow', { defaultValue: 'Scan Now' })}</span>
+            <span>{t('inventory.scanNow')}</span>
           </Button>
         </Td>
       </Tr>

@@ -145,6 +145,7 @@ type ControlStatus struct {
 	// a control is out of compliance when one is overdue, and at risk while they are only open (docs/28 §13).
 	Overdue     int        `json:"overdue,omitempty"`
 	EarliestDue *time.Time `json:"earliest_due,omitempty"`
+	noDeadline  int        // of the open findings, how many have no SLA due date (D120)
 	deadlines   bool       // the store could tell the deadlines; without it an open finding breaks the control, as before // false: the link lists part of what is counted
 	Evidence    []string   `json:"evidence,omitempty"`
 	Needs       []string   `json:"needs,omitempty"` // the kinds of scan that read it
@@ -163,6 +164,11 @@ type TaxonomyStatus struct {
 	EvaluatedAt time.Time       `json:"evaluated_at"`
 	Historical  bool            `json:"historical,omitempty"` // read from the day's kept reading, not now
 	Controls    []ControlStatus `json:"status"`
+	// Model names the rule the statuses were read by. A kept reading carries the one it was written with; one with none was
+	// written before D120, when any open finding made a control "open" and "at_risk" did not exist.
+	Model string `json:"model,omitempty"`
+	// totals counts the findings that break any control once each (not once per control); nil when the store cannot.
+	totals *store.FindingTotals
 }
 
 // categoryWords names scan kinds in a sentence.
@@ -236,12 +242,18 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 		return nil, err
 	}
 	var deadlines map[string]store.ControlDeadline
+	var totals *store.FindingTotals
 	if dl, ok := a.store.(store.ComplianceDeadlines); ok {
 		if deadlines, err = dl.ControlDeadlines(ctx, tenantID, apps, matches); err != nil {
 			return nil, err
 		}
 		if deadlines == nil {
 			deadlines = map[string]store.ControlDeadline{}
+		}
+		if t, terr := dl.DistinctFindings(ctx, tenantID, apps, matches); terr != nil {
+			return nil, terr
+		} else {
+			totals = &t
 		}
 	}
 	window := fw.Window()
@@ -282,11 +294,11 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 		}
 	}
 
-	res := &TaxonomyStatus{TaxonomyInfo: infoOf(fw), Application: app, EvaluatedAt: now, Controls: make([]ControlStatus, 0, len(fw.Controls))}
+	res := &TaxonomyStatus{TaxonomyInfo: infoOf(fw), Application: app, EvaluatedAt: now, Controls: make([]ControlStatus, 0, len(fw.Controls)), totals: totals, Model: complianceModel}
 	for _, c := range fw.Controls {
 		cs := ControlStatus{ID: c.ID, Name: c.Name, Description: c.Description, Rank: c.Rank, Manual: c.Manual, Bands: map[string]int{}, TotalApps: len(appSet)}
 		if c.Manual {
-			cs.Attestation = attestationFor(atts, c.ID, app)
+			cs.Attestation = attestationFor(atts, c.ID, app, time.Now())
 			readManual(&cs, now)
 			res.Controls = append(res.Controls, cs)
 			continue
@@ -299,7 +311,7 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 		cs.Accepted = cc.Accepted
 		if deadlines != nil {
 			cs.deadlines = true
-			cs.Overdue, cs.EarliestDue = deadlines[c.ID].Overdue, deadlines[c.ID].Earliest
+			cs.Overdue, cs.EarliestDue, cs.noDeadline = deadlines[c.ID].Overdue, deadlines[c.ID].Earliest, deadlines[c.ID].NoDeadline
 		}
 		cs.Query, cs.QueryExact = c.Query()
 		cs.Needs = c.EvidenceCategories()
@@ -329,6 +341,10 @@ func (a *API) evaluate(ctx context.Context, tenantID uuid.UUID, fw compliance.Fr
 	return res, nil
 }
 
+// complianceModel is the rule a reading's statuses are made by. Raise it when the meaning of a status changes, so a kept
+// reading says which rule it was made with and the history can be read across the change.
+const complianceModel = "d120-deadlines"
+
 var errUnsupported = errors.New("compliance views need PostgreSQL")
 
 func hasManual(fw compliance.Framework) bool {
@@ -340,23 +356,35 @@ func hasManual(fw compliance.Framework) bool {
 	return false
 }
 
-// attestationFor is the newest attestation of a control: for the application asked about, else one made for the
-// whole tenant. Tenant-wide, only an attestation for the whole tenant counts.
-func attestationFor(atts []store.Attestation, controlID string, app *uuid.UUID) *store.Attestation {
-	var tenantWide *store.Attestation
+// attestationFor is the attestation that reads a control. One made for the application asked about is more specific
+// and wins over one made for the whole tenant, but only while it is in force: an expired one must not hide a
+// tenant-wide attestation that still holds (D123). When none is in force, the newest that applies is returned, so
+// the reading says "expired on ..." rather than "nobody has yet". Tenant-wide, only a whole-tenant attestation counts.
+func attestationFor(atts []store.Attestation, controlID string, app *uuid.UUID, now time.Time) *store.Attestation {
+	var specific, wide *store.Attestation
 	for i := range atts { // newest first
 		a := &atts[i]
 		if a.ControlID != controlID {
 			continue
 		}
 		if app != nil && a.ApplicationID != nil && *a.ApplicationID == *app {
-			return a
-		}
-		if a.ApplicationID == nil && tenantWide == nil {
-			tenantWide = a
+			if specific == nil {
+				specific = a
+			}
+		} else if a.ApplicationID == nil && wide == nil {
+			wide = a
 		}
 	}
-	return tenantWide
+	inForce := func(a *store.Attestation) bool { return a != nil && a.ExpiresAt.After(now) }
+	switch {
+	case inForce(specific):
+		return specific
+	case inForce(wide):
+		return wide
+	case specific != nil:
+		return specific
+	}
+	return wide
 }
 
 func readManual(cs *ControlStatus, now time.Time) {
@@ -399,7 +427,7 @@ func readMatched(cs *ControlStatus, c compliance.Control, window int, oneApp boo
 		exceptions = " " + plural(cs.Accepted, "finding is", "findings are") + " risk-accepted: approved exceptions, not counted as open."
 	}
 	switch {
-	case cs.Open > 0 && cs.deadlines && cs.Overdue == 0 && cs.EarliestDue != nil:
+	case cs.Open > 0 && cs.deadlines && cs.Overdue == 0 && cs.EarliestDue != nil && cs.noDeadline == 0:
 		// Open, but none is past its deadline: the control still holds. (With no deadline at all there is no clock to wait
 		// on, so the control is not met, as before.) PCI DSS 6.3.3 gives a month for a critical patch,
 		// Vanta and Drata count an item overdue only past its SLA. It is at risk, and the first date is what to meet.
@@ -411,6 +439,14 @@ func readMatched(cs *ControlStatus, c compliance.Control, window int, oneApp boo
 	case cs.Open > 0:
 		cs.Status = string(compliance.StatusOpen)
 		cs.Reason = plural(cs.Open, "open finding breaks", "open findings break") + " it."
+		if cs.deadlines && cs.Overdue == 0 && cs.noDeadline > 0 {
+			// A finding with no deadline has no clock to wait on, so it counts now (D120), even beside findings that have one.
+			late := "they are"
+			if cs.noDeadline == 1 {
+				late = "it is"
+			}
+			cs.Reason = plural(cs.noDeadline, "open finding has", "open findings have") + " no deadline, so nothing says when " + late + " late, and the control is not met (" + fmt.Sprintf("%d open in all", cs.Open) + ")."
+		}
 		if cs.deadlines && cs.Overdue > 0 {
 			cs.Reason = plural(cs.Overdue, "finding is", "findings are") + " past the deadline, so the control is out of compliance (" + fmt.Sprintf("%d open in all", cs.Open) + ")."
 		}
@@ -468,6 +504,19 @@ func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		app = &id
+		if fw.Scope != "" { // a scoped framework reads only the applications that list its scope (D102)
+			if sl, ok := a.store.(scopeLister); ok {
+				all, err := sl.ApplicationComplianceScopes(r.Context(), tenantID)
+				if err != nil {
+					problem(w, http.StatusInternalServerError, "internal", "The application's scopes could not be read")
+					return
+				}
+				if !containsStr(all[id], fw.Scope) {
+					problem(w, http.StatusNotFound, "not-found", "This framework does not apply to that application: it does not list the complianceScope "+fw.Scope)
+					return
+				}
+			}
+		}
 	}
 	format := r.URL.Query().Get("format")
 	if format != "" && format != "json" && format != "csv" {
@@ -500,6 +549,9 @@ func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res.Historical = true
+		if res.Model != complianceModel {
+			res.Note = strings.TrimSpace(res.Note + " This reading was kept before controls were read by deadline (D120): then any open finding made a control not met, and \"at risk\" did not exist. Compare it with later days with that in mind.")
+		}
 	} else {
 		res, err = a.evaluate(r.Context(), tenantID, *fw, app, time.Now().UTC())
 		if err != nil {
@@ -521,20 +573,27 @@ func (a *API) handleTaxonomyStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="`+fw.ID+`.csv"`)
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"framework", "version", "application", "control", "name", "status", "reason", "open", "critical", "high", "medium", "low",
-		"accepted", "assessed_applications", "applications", "evidence", "attested_by", "attested_at", "attestation_expires", "evaluated_at"})
+		"accepted", "assessed_applications", "applications", "evidence", "attested_by", "attested_at", "attestation_expires", "evaluated_at", "overdue", "earliest_due", "attestation_owner"})
+	// open is every finding that counts against the control; only "overdue" of them are past their deadline, and a control
+	// with open > 0 and overdue = 0 reads at_risk (D120). The last three columns were added after the first release.
 	appCell := ""
 	if app != nil {
 		appCell = app.String()
 	}
 	for _, c := range res.Controls {
-		by, at, exp := "", "", ""
+		by, at, exp, owner := "", "", "", ""
 		if c.Attestation != nil {
 			by, at, exp = c.Attestation.AttestedBy, c.Attestation.AttestedAt.Format(time.RFC3339), c.Attestation.ExpiresAt.Format(time.RFC3339)
+			owner = csvCell(c.Attestation.Owner)
+		}
+		due := ""
+		if c.EarliestDue != nil {
+			due = c.EarliestDue.UTC().Format(time.RFC3339)
 		}
 		_ = cw.Write([]string{res.Name, res.Version, appCell, c.ID, csvCell(c.Name), c.Status, csvCell(c.Reason), strconv.Itoa(c.Open),
 			strconv.Itoa(c.Bands["critical"]), strconv.Itoa(c.Bands["high"]), strconv.Itoa(c.Bands["medium"]), strconv.Itoa(c.Bands["low"]),
 			strconv.Itoa(c.Accepted), strconv.Itoa(c.AssessedApps), strconv.Itoa(c.TotalApps), strings.Join(c.Evidence, " "),
-			csvCell(by), at, exp, res.EvaluatedAt.Format(time.RFC3339)})
+			csvCell(by), at, exp, res.EvaluatedAt.Format(time.RFC3339), strconv.Itoa(c.Overdue), due, owner})
 	}
 	cw.Flush()
 }
@@ -577,12 +636,15 @@ type AttestRequest struct {
 	EvidenceURL   string     `json:"evidence_url,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"` // default a year; at most three
 	ApplicationID *uuid.UUID `json:"application_id,omitempty"`
+	Owner         string     `json:"owner,omitempty"` // who renews it; default the person attesting
 }
 
 // handleAttest records a person's reading of a manual control (D102). Only a maintainer or above may attest:
 // the same people who approve risk acceptances (docs/07).
 func (a *API) handleAttest(w http.ResponseWriter, r *http.Request) {
-	tenantID, user, ok := a.requireRole(w, r, auth.RoleMaintainer)
+	// The door is the highest role the caller holds anywhere (D48); the decision is checked below against the
+	// application the attestation is for, or against the tenant role when it is for the whole tenant.
+	tenantID, user, scope, ok := a.requireAny(w, r, auth.RoleMaintainer)
 	if !ok {
 		return
 	}
@@ -645,9 +707,21 @@ func (a *API) handleAttest(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusBadRequest, "validation", "application_id is not an application of this tenant")
 			return
 		}
+		if !scope.allows(*req.ApplicationID, auth.RoleMaintainer) {
+			problem(w, http.StatusForbidden, "forbidden", "Attesting needs the maintainer role on this application")
+			return
+		}
+	} else if scope.tenant.Rank() < auth.RoleMaintainer.Rank() {
+		problem(w, http.StatusForbidden, "forbidden", "An attestation for the whole tenant needs the maintainer role on the tenant, not only on an application")
+		return
+	}
+	req.Owner = strings.TrimSpace(req.Owner)
+	if len(req.Owner) > 200 || strings.ContainsFunc(req.Owner, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		problem(w, http.StatusBadRequest, "validation", "owner is at most 200 characters, on one line (it is written into notifications and tickets)")
+		return
 	}
 	att := store.Attestation{ID: uuid.New(), FrameworkID: fw.ID, ControlID: ctl.ID, ApplicationID: req.ApplicationID, Status: req.Status,
-		Note: req.Note, EvidenceURL: req.EvidenceURL, AttestedBy: actorOf(user), AttestedAt: now, ExpiresAt: expires}
+		Note: req.Note, EvidenceURL: req.EvidenceURL, AttestedBy: actorOf(user), Owner: req.Owner, AttestedAt: now, ExpiresAt: expires}
 	if err := rd.AddAttestation(r.Context(), tenantID, att); err != nil {
 		problem(w, http.StatusInternalServerError, "internal", "The attestation could not be recorded")
 		return

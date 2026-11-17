@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
 )
@@ -103,7 +104,7 @@ func TestQuota_PostgresScenarios(t *testing.T) {
 	})
 
 	t.Run("Token RateLimit and Quota Persistence", func(t *testing.T) {
-		rawToken := "rpt_test_token_with_limits"
+		rawToken := "rpt_test_token_with_limits_" + uuid.NewString() // the database outlives a run: a fixed hash fails the second one
 		rateLimit := 120
 		quota := int64(50000)
 		rec := &auth.TokenRecord{

@@ -114,4 +114,13 @@ describe('Application page: compliance', () => {
       expect(names(section)[0]).toBe('C gaps');
     });
   });
+
+  it('does not talk of findings past their deadline when the control fails for another reason', async () => {
+    const section = await open({
+      application: 'app-1', evaluated_at: '2026-11-17T00:00:00Z', not_in_scope: [],
+      frameworks: [fw({ id: 'acme-policy', name: 'ACME secure coding', version: '1', verdict: 'gaps', controls: 5, clear: 4, open: 1, open_findings: 0, overdue_findings: 0 })],
+    });
+    expect(await within(section).findByText(/1 of 5 controls is not met, with no finding past its deadline/)).toBeInTheDocument();
+    expect(within(section).queryByText(/0 findings are past their deadline/)).toBeNull();
+  });
 });

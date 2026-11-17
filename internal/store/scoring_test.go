@@ -165,7 +165,7 @@ func TestScoring_RescoreAfterTheFeedsChange(t *testing.T) {
 		t.Fatalf("after the feeds: kev %v epss %q score %d -> %d", after.KEV, after.EPSSBucket, before.RiskScore, after.RiskScore)
 	}
 	kevDue, _ := time.Parse("2006-01-02", due)
-	if after.SLADue == nil || !after.SLADue.Equal(kevDue) {
+	if after.SLADue == nil || !after.SLADue.Equal(kevDue.Add(24*time.Hour)) { // due by the end of CISA's day
 		t.Fatalf("the CISA due date (%s) is earlier than the matrix and must win, got %v", due, after.SLADue)
 	}
 	// The explorer can now find it by what the feeds said.

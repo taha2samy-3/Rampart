@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { get, post, qk } from '@/api';
+import { get, post, qk, toProblem } from '@/api';
 import type { FeedItem, FeedsResponse, FeedTestConnectionResponse, FeedTestResult, FeedSyncResponse } from '@/api/types';
 import {
   Button,
@@ -19,6 +19,7 @@ import {
 } from '@/components';
 import { IconCheck, IconCopy, IconRefresh, IconSearch, IconWarning } from '@/components/icons';
 import { absoluteDateTime } from '@/lib/format';
+import { useAccess } from '@/app/useAccess';
 
 export function FeedsView() {
   const { t } = useTranslation();
@@ -30,14 +31,18 @@ export function FeedsView() {
   const [testingFeed, setTestingFeed] = useState<string | null>(null);
   const [testingAll, setTestingAll] = useState(false);
   const [testSummary, setTestSummary] = useState<string | null>(null);
-  const [syncingFeed, setSyncingFeed] = useState<string | null>(null);
-  const [syncingAll, setSyncingAll] = useState(false);
-  const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false); // the sync request is in flight
+  const { can } = useAccess();
+  const mayManage = can(undefined, 'admin'); // starting a sync is global: the API needs an administrator
 
   const feedsQuery = useQuery({
     queryKey: qk.feeds.list(),
     queryFn: async ({ signal }): Promise<FeedsResponse> =>
       get<FeedsResponse>('/api/v1/feeds', { signal }),
+    // The server marks a feed "syncing" before it answers the sync request; follow it until it ends.
+    refetchInterval: (q) => (q.state.data?.items.some((i) => i.status === 'syncing') ? 2000 : false),
   });
 
   const feedsData = feedsQuery.data;
@@ -45,26 +50,22 @@ export function FeedsView() {
   const mirror = feedsData?.mirror;
 
   const handleSyncNow = async (feedName?: string) => {
+    if (starting) return;
+    setStarting(true);
+    setSyncError(null);
+    // What a probe said before this sync says nothing about the sync, and would stay on screen for hours.
+    setTestResults({});
+    setTestSummary(null);
     try {
-      if (feedName) {
-        setSyncingFeed(feedName);
-      } else {
-        setSyncingAll(true);
-      }
       const queryParam = feedName ? `?feed=${encodeURIComponent(feedName)}` : '';
       await post<FeedSyncResponse>(`/api/v1/feeds/sync${queryParam}`, {});
-      setSyncSummary(
-        feedName
-          ? `Sync initiated for ${feedName}. Background worker is pulling updates.`
-          : 'Sync initiated for all threat intelligence feeds. Background worker is pulling updates.'
-      );
-      void feedsQuery.refetch();
-    } catch {
-      setSyncSummary('Failed to trigger feed sync.');
+    } catch (e) {
+      const p = toProblem(e);
+      setSyncError(p.detail ?? p.title ?? 'Failed to start the sync.');
     } finally {
-      setSyncingFeed(null);
-      setSyncingAll(false);
+      setStarting(false);
     }
+    await feedsQuery.refetch(); // shows "syncing" at once, and the polling takes over
   };
 
   const handleTestConnection = async (feedName?: string) => {
@@ -74,6 +75,7 @@ export function FeedsView() {
       } else {
         setTestingAll(true);
       }
+      setTestError(null);
       const queryParam = feedName ? `?feed=${encodeURIComponent(feedName)}` : '';
       const res = await post<FeedTestConnectionResponse>(`/api/v1/feeds/test-connection${queryParam}`, {});
       setTestResults((prev) => {
@@ -89,8 +91,9 @@ export function FeedsView() {
           `Live probe verified: ${reachable} of ${res.results.length} upstream feeds reachable (responded in real-time).`
         );
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      const p = toProblem(e);
+      setTestError(p.detail ?? p.title ?? 'The connectivity test could not run.');
     } finally {
       setTestingFeed(null);
       setTestingAll(false);
@@ -115,32 +118,54 @@ export function FeedsView() {
     return items.reduce((acc, curr) => acc + (curr.records || 0), 0);
   }, [items]);
 
+  const syncingNames = useMemo(() => items.filter((f) => f.status === 'syncing').map((f) => f.display_name), [items]);
+  const anySyncing = syncingNames.length > 0;
+
   const errorCount = useMemo(() => {
     return items.filter((f) => f.status === 'error').length;
   }, [items]);
+  // "Healthy" is said only of feeds that did sync: nothing loaded, or nothing synced yet, is not health.
+  const enabledItems = items.filter((f) => f.enabled);
+  const health: 'unknown' | 'degraded' | 'healthy' | 'pending' =
+    feedsQuery.isError || enabledItems.length === 0 ? 'unknown'
+      : errorCount > 0 ? 'degraded'
+        : enabledItems.every((f) => f.status === 'success') ? 'healthy' : 'pending';
 
+  // Only what the live resource sets. A source listed here is switched on (the optional ones) or counts as a mirror
+  // (kev, epss, nvd, osv), and under egress: deny a feed with a url is the only kind that is still read, so printing
+  // the public defaults would defeat an air gap and turn on sources nobody chose.
   const crdYaml = useMemo(() => {
-    return `# Threat Intelligence Feeds CRD (ClusterFeed)
-apiVersion: rampart.aspm.dev/v1alpha1
-kind: ClusterFeed
-metadata:
-  name: default
-spec:
-  egress: ${mirror?.egress ?? 'allow'} # allow | deny (air-gapped)
-  storageMode: ${mirror?.storageMode ?? 'lightweight'} # lightweight (stream) | full (offline local DB like Dependency-Track)
-  kev:
-    url: "${mirror?.kev?.url ?? 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'}"
-  epss:
-    url: "${mirror?.epss?.url ?? 'https://epss.cyentia.com/epss_scores-current.csv.gz'}"
-  nvd:
-    url: "${mirror?.nvd?.url ?? 'https://services.nvd.nist.gov/rest/json/cves/2.0'}"
-  osv:
-    url: "${mirror?.osv?.url ?? 'https://osv-vulnerabilities.storage.googleapis.com'}"
-  vulnrichment:
-    url: "${mirror?.vulnrichment?.url ?? 'https://github.com/cisagov/vulnrichment/archive/refs/heads/develop.zip'}"
-  exploitdb:
-    url: "${mirror?.exploitdb?.url ?? 'https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv'}"
-`;
+    const m = (mirror ?? {}) as Record<string, unknown>;
+    const lines = [
+      '# ClusterFeed (the ClusterFeedMirror alias is accepted too). Shown: what this server has. Add a source to turn it on;',
+      '# add a url to read a feed from an internal mirror. kev, epss, nvd and osv run by default without any block.',
+      'apiVersion: rampart.aspm.dev/v1alpha1',
+      'kind: ClusterFeed',
+      'metadata:',
+      '  name: default',
+      'spec:',
+      `  egress: ${String(m.egress ?? 'allow')} # allow | deny: with deny only a feed that has a url (a mirror) is read`,
+      `  storageMode: ${String(m.storageMode ?? 'lightweight')} # lightweight | full`,
+    ];
+    for (const k of ['kev', 'epss', 'nvd', 'osv', 'vulnrichment', 'exploitdb', 'metasploit', 'euvd', 'vulncheckKev']) {
+      const v = m[k] as { url?: string; tokenFile?: string } | undefined;
+      if (!v) continue;
+      lines.push(`  ${k}:`);
+      if (v.url) lines.push(`    url: "${v.url}"`);
+      if (v.tokenFile) lines.push(`    tokenFile: "${v.tokenFile}"`);
+      if (!v.url && !v.tokenFile) lines.push('    {}');
+    }
+    const custom = (m.custom as Array<{ name: string; url?: string; format: string; tokenFile?: string; pushTokenFile?: string }> | undefined) ?? [];
+    if (custom.length) {
+      lines.push('  custom:');
+      for (const c of custom) {
+        lines.push(`    - name: ${c.name}`, `      format: ${c.format}`);
+        if (c.url) lines.push(`      url: "${c.url}"`);
+        if (c.tokenFile) lines.push(`      tokenFile: "${c.tokenFile}"`);
+        if (c.pushTokenFile) lines.push(`      pushTokenFile: "${c.pushTokenFile}"`);
+      }
+    }
+    return lines.join('\n') + '\n';
   }, [mirror]);
 
   const handleCopy = async () => {
@@ -170,13 +195,13 @@ spec:
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
+            {mayManage && <Button
               variant="secondary"
               onClick={() => handleSyncNow()}
-              disabled={syncingAll || !!syncingFeed}
+              disabled={anySyncing || starting}
               className="flex items-center gap-1.5"
             >
-              {syncingAll ? (
+              {anySyncing ? (
                 <>
                   <Spinner size={14} />
                   <span>{t('feeds.syncing', { defaultValue: 'Syncing...' })}</span>
@@ -187,7 +212,7 @@ spec:
                   <span>{t('feeds.syncAll', { defaultValue: 'Sync Now' })}</span>
                 </>
               )}
-            </Button>
+            </Button>}
             <Button
               variant="secondary"
               onClick={() => handleTestConnection()}
@@ -224,8 +249,8 @@ spec:
           </div>
           <div className="flex flex-col">
             <span className="text-11 text-ink-2 uppercase tracking-wider">{t('feeds.health', { defaultValue: 'Feed Health' })}</span>
-            <span className={`text-18 font-semibold ${errorCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-              {errorCount > 0 ? `${errorCount} Degraded` : 'Healthy'}
+            <span className={`text-18 font-semibold ${health === 'degraded' ? 'text-amber-600 dark:text-amber-400' : health === 'healthy' ? 'text-emerald-600 dark:text-emerald-400' : 'text-ink-2'}`}>
+              {health === 'degraded' ? `${errorCount} Degraded` : health === 'healthy' ? 'Healthy' : health === 'pending' ? 'Not synced yet' : '—'}
             </span>
           </div>
           <div className="flex flex-col">
@@ -274,20 +299,23 @@ spec:
         </div>
       )}
 
-      {/* Sync Trigger Feedback Banner */}
-      {syncSummary && (
-        <div className="flex items-center justify-between rounded border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-12 text-blue-800 dark:text-blue-300">
-          <div className="flex items-center gap-2">
-            <IconRefresh className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400 animate-spin" />
-            <span className="font-medium">{syncSummary}</span>
-          </div>
-          <button
-            onClick={() => setSyncSummary(null)}
-            className="text-11 text-ink-2 hover:text-ink px-1 font-bold"
-            aria-label="Dismiss sync summary"
-          >
-            ✕
-          </button>
+      {/* The banner follows the server: it is there while a feed says "syncing", and it is gone when it ends. */}
+      {anySyncing && (
+        <div role="status" className="flex items-center gap-2 rounded border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-12 text-blue-800 dark:text-blue-300">
+          <Spinner size={14} />
+          <span className="font-medium">Syncing {syncingNames.join(', ')}. The table shows the result when it ends, and everyone gets a notification.</span>
+        </div>
+      )}
+      {testError && (
+        <div role="alert" className="flex items-center justify-between rounded border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-12 text-red-800 dark:text-red-300">
+          <span className="font-medium">{testError}</span>
+          <button onClick={() => setTestError(null)} className="px-1 text-11 font-bold text-ink-2 hover:text-ink" aria-label="Dismiss test error">✕</button>
+        </div>
+      )}
+      {syncError && (
+        <div role="alert" className="flex items-center justify-between rounded border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-12 text-red-800 dark:text-red-300">
+          <span className="font-medium">{syncError}</span>
+          <button onClick={() => setSyncError(null)} className="px-1 text-11 font-bold text-ink-2 hover:text-ink" aria-label="Dismiss sync error">✕</button>
         </div>
       )}
 
@@ -338,7 +366,7 @@ spec:
         </div>
       ) : filtered.length === 0 ? (
         <EmptyState title="No matching feeds found">
-          {search ? 'Try clearing your search filter.' : 'No threat intelligence feeds are currently configured.'}
+          {search || statusFilter !== 'all' ? 'Try clearing the search or the status filter.' : 'No threat intelligence feeds are currently configured.'}
         </EmptyState>
       ) : (
         <Table aria-label="Vulnerability feeds table">
@@ -357,7 +385,7 @@ spec:
             {filtered.map((feed: FeedItem) => {
               const probe = testResults[feed.name];
               const isPinging = testingFeed === feed.name;
-              const isSyncing = syncingFeed === feed.name;
+              const isSyncing = feed.status === 'syncing';
 
               return (
                 <Tr key={feed.name} className="h-14">
@@ -385,7 +413,9 @@ spec:
                         </>
                       )}
                       {feed.status === 'idle' && (
-                        <span className="text-12 text-ink-2">Idle</span>
+                        <span className="text-12 text-ink-2">
+                          {feed.name === 'osv' && feed.records === 0 ? 'Off until an ecosystem is chosen (feeds.osvEcosystems)' : 'Not synced yet'}
+                        </span>
                       )}
                       {feed.status === 'disabled' && (
                         <span className="text-12 text-ink-2">Disabled (Airgap)</span>
@@ -393,9 +423,13 @@ spec:
                       {feed.status === 'error' && (
                         <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
                           <IconWarning className="h-4 w-4" />
-                          <span className="text-12 font-medium" title={feed.error ?? ''}>
-                            {feed.error ? 'Error: ' + feed.error.slice(0, 30) + '...' : 'Sync Failed'}
-                          </span>
+                          <div className="flex max-w-xs flex-col">
+                            <span className="text-12 font-medium">Sync failed</span>
+                            <span className="break-words text-11 text-ink-2" title={feed.error ?? ''}>{feed.error ?? ''}</span>
+                            {probe?.reachable && (
+                              <span className="text-11 text-ink-2">The address answers (HTTP {probe.status_code}); the failure is in the sync itself.</span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -425,7 +459,9 @@ spec:
                       {probe && (
                         <span
                           className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-11 font-mono ${
-                            probe.reachable
+                            !probe.reachable && probe.status_code === 0 && probe.latency_ms === 0
+                              ? 'bg-surface-2 text-ink-2 border border-border'
+                              : probe.reachable
                               ? probe.status_code >= 400
                                 ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
                                 : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
@@ -433,15 +469,21 @@ spec:
                           }`}
                           title={`${probe.message} (${probe.latency_ms}ms)`}
                         >
-                          <span className="font-semibold">
-                            {probe.status_code > 0 ? `HTTP ${probe.status_code}` : 'Unreachable'}
-                          </span>
-                          <span>• {probe.latency_ms}ms</span>
+                          {!probe.reachable && probe.status_code === 0 && probe.latency_ms === 0 ? (
+                            <span className="font-sans">{probe.message}</span>
+                          ) : (
+                            <>
+                              <span className="font-semibold">
+                                {probe.status_code > 0 ? `HTTP ${probe.status_code}` : 'Unreachable'}
+                              </span>
+                              <span>• {probe.latency_ms}ms</span>
+                            </>
+                          )}
                         </span>
                       )}
                       <Button
                         variant="ghost"
-                        disabled={isPinging || testingAll}
+                        disabled={isPinging || testingAll || !feed.enabled}
                         onClick={() => handleTestConnection(feed.name)}
                         className="text-11 flex items-center gap-1 px-2.5 py-1"
                         title={`Test live connectivity to ${feed.url}`}
@@ -455,9 +497,9 @@ spec:
                           <span>Test</span>
                         )}
                       </Button>
-                      <Button
+                      {mayManage && <Button
                         variant="ghost"
-                        disabled={isSyncing || syncingAll}
+                        disabled={anySyncing || starting || !feed.enabled}
                         onClick={() => handleSyncNow(feed.name)}
                         className="text-11 flex items-center gap-1 px-2.5 py-1"
                         title={`Trigger immediate sync for ${feed.display_name}`}
@@ -470,7 +512,7 @@ spec:
                         ) : (
                           <span>Sync</span>
                         )}
-                      </Button>
+                      </Button>}
                     </div>
                   </Td>
                 </Tr>

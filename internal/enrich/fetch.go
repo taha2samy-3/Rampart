@@ -35,6 +35,13 @@ const (
 
 // FeedConfig says which feeds run and where they come from.
 type FeedConfig struct {
+	// OnRound is called when a SyncAll round ends, with what each feed did (success or error), for the scheduled
+	// round and the one asked for on the feeds page alike: it tells the tenants and records a Kubernetes Event.
+	OnRound func(ctx context.Context, results []FeedResult)
+
+	// Only, when set, limits one SyncAll round to that feed (an on-demand sync of one row of the feeds page).
+	Only string
+
 	KEVURL        string
 	EPSSURL       string
 	OSVBaseURL    string
@@ -156,8 +163,29 @@ func (l *limitedBody) Close() error { return l.c.Close() }
 
 // SyncAll downloads and applies every configured feed. One feed failing does not stop the others;
 // the errors are joined.
-func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logger) error {
+// wants reports whether this round is to run the feed: all of them, or the one named in Only.
+func (c FeedConfig) wants(feed string) bool { return c.Only == "" || c.Only == feed }
+
+func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logger) (err error) {
 	cfg.defaults()
+	s.mu.Lock()
+	s.results = nil
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		rs := s.results
+		s.results = nil
+		s.mu.Unlock()
+		if cfg.OnRound != nil && len(rs) > 0 {
+			// Not under the sync lock: telling every tenant can be slow, and a click meanwhile would be answered "busy".
+			go func() {
+				defer func() { _ = recover() }()
+				cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+				defer cancel()
+				cfg.OnRound(cctx, rs)
+			}()
+		}
+	}()
 	var errs []error
 	skipKEV, skipEPSS := false, false
 	var mirror *domain.FeedMirrorSpec
@@ -170,7 +198,9 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		skipKEV, skipEPSS = cfg.applyMirror(m, log)
 	}
 
-	if skipKEV {
+	if !cfg.wants("cisa_kev") {
+		// another feed was asked for
+	} else if skipKEV {
 		// egress deny without a KEV mirror: not read (D86)
 	} else if body, err := cfg.get(ctx, cfg.KEVURL, maxKEVBytes); err != nil {
 		s.recordFeedError(ctx, "cisa_kev", err)
@@ -185,7 +215,9 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		}
 	}
 
-	if skipEPSS {
+	if !cfg.wants("first_epss") {
+		// another feed was asked for
+	} else if skipEPSS {
 		// egress deny without an EPSS mirror: not read (D86)
 	} else if body, err := cfg.get(ctx, cfg.EPSSURL, maxEPSSBytes); err != nil {
 		s.recordFeedError(ctx, "first_epss", err)
@@ -206,13 +238,14 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		}
 		_ = body.Close()
 		if err != nil {
+			s.recordFeedError(ctx, "first_epss", err) // also when the file could not be unpacked, which SyncEPSS never saw
 			errs = append(errs, fmt.Errorf("epss: %w", err))
 		} else {
 			log.Info("feed synced", "feed", "first_epss", "records", n)
 		}
 	}
 
-	if !cfg.NVDDisabled {
+	if !cfg.NVDDisabled && cfg.wants("nvd") {
 		started := time.Now()
 		n, err := s.syncNVD(ctx, cfg)
 		if err != nil {
@@ -225,7 +258,7 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		}
 	}
 
-	if len(cfg.OSVEcosystems) > 0 {
+	if len(cfg.OSVEcosystems) > 0 && cfg.wants("osv") {
 		total := 0
 		var osvErr error
 		for _, eco := range cfg.OSVEcosystems {
@@ -410,12 +443,13 @@ func RunScheduler(ctx context.Context, pool *pgxpool.Pool, cfg FeedConfig, log *
 			log.Warn("feed sync: no database connection", "error", err)
 			return
 		}
-		defer conn.Release()
 		var got bool
 		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKey).Scan(&got); err != nil || !got {
+			conn.Release()
 			return // another replica is syncing
 		}
-		defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockKey) }()
+		defer unlockAndRelease(ctx, conn, lockKey)
+		syncer.clearStaleSyncing(ctx)
 		if err := syncer.SyncAll(ctx, cfg, log); err != nil {
 			log.Warn("feed sync finished with errors", "error", err)
 		}

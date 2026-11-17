@@ -97,7 +97,9 @@ function Row({ f, appId, pinned, onPin }: { f: AppFramework; appId: string; pinn
     f.verdict === 'meets'
       ? t('apps.verdictMeets', { count: f.controls })
       : f.verdict === 'gaps'
-        ? t('apps.verdictGaps', { count: f.open, open: f.open, total: f.controls, overdue: f.overdue_findings, findings: f.open_findings })
+        ? f.overdue_findings === 0
+          ? t('apps.verdictGapsOther', { count: f.open, open: f.open, total: f.controls }) // a manual control attested as not met, or findings with no deadline
+          : t('apps.verdictGaps', { count: f.open, open: f.open, total: f.controls, overdue: f.overdue_findings, findings: f.open_findings })
         : f.verdict === 'at_risk'
           ? date
             ? t('apps.verdictAtRisk', { count: f.at_risk, atRisk: f.at_risk, total: f.controls, date })

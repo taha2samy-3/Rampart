@@ -48,6 +48,10 @@ type Runner struct {
 	cfg    *config.Config
 	logger *slog.Logger
 	ops    *telemetry.OpsServer
+
+	// kubeEvents records a Kubernetes Event in the operator's namespace; nil outside a cluster. Whatever tenants are
+	// told by a notification about the platform's own work (a feed sync) is also an Event there.
+	kubeEvents func(ctx context.Context, eventType, reason, message string)
 }
 
 // NewRunner creates a new multi-target runner.
@@ -405,12 +409,14 @@ func (r *Runner) Run(ctx context.Context) error {
 					r.logger.Warn("feeds.nvdApiKeyFile could not be read; NVD is synced at the keyless rate", "err", kerr)
 				}
 			}
+			fc.OnRound = func(c context.Context, rs []enrich.FeedResult) { r.announceFeedRound(c, sysStore, notifRouter, rs) }
 			fc.OnSynced = func(c context.Context) {
 				// New aliases first: a finding keyed by a GHSA id moves to its CVE's key, then everything is re-scored (D50).
 				ingest.RekeyAll(c, sysStore, sysStore.ListTenantIDs, r.logger)
 				scoring.RescoreAll(c, scorer, sysStore, r.logger)
 			}
 			go enrich.RunScheduler(ctx, sysStore.Pool(), fc, r.logger)
+			queryAPI.SetFeedSyncer(enrich.NewOnDemand(ctx, sysStore.Pool(), fc, r.logger)) // the sync buttons run as the system role, like the scheduler
 			r.logger.Info("feed sync started", "interval", r.cfg.Feeds.Interval, "osv_ecosystems", r.cfg.Feeds.OSVEcosystems)
 		}
 	}
@@ -838,6 +844,11 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 		Allowlist:     allowlist,
 		AllowLoopback: allowlist != nil && allowlist.AllowLoopback,
 	}), allowlist)
+	if em, eerr := operator.NewEventEmitter(rc, ns, r.logger); eerr == nil {
+		r.kubeEvents = em.Emit
+	} else {
+		r.logger.Warn("Kubernetes Events are off", "err", eerr)
+	}
 	r.logger.Info("operator starting", "cluster", source, "leaderElectionNamespace", ns)
 	go func() {
 		errCh <- operator.Run(ctx, operator.ManagerConfig{
@@ -849,4 +860,32 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 		})
 	}()
 	return nil
+}
+
+// announceFeedRound tells everyone about a feed sync round, the scheduled one and the one asked for on the page, whether
+// it went well or not: a notification for every tenant (and its notifiers), and a Kubernetes Event in the namespace.
+func (r *Runner) announceFeedRound(ctx context.Context, sys *store.PostgresStore, router *connectors.NotificationRouter, rs []enrich.FeedResult) {
+	title, body, failed := enrich.Summarize(rs)
+	kind, evType, reason := domain.NotifyFeedSync, "Normal", "FeedSynced"
+	if failed {
+		kind, evType, reason = domain.NotifyFeedSyncFailed, "Warning", "FeedSyncFailed"
+	}
+	if r.kubeEvents != nil {
+		r.kubeEvents(ctx, evType, reason, title+"\n"+body)
+	}
+	ids, err := sys.ListTenantIDs(ctx)
+	if err != nil {
+		r.logger.Warn("feed sync: could not list tenants to notify", "err", err)
+		return
+	}
+	for _, id := range ids {
+		n := &domain.Notification{Kind: kind, Title: title, Body: body, Link: "/integrations"}
+		if err := sys.CreateNotification(ctx, id, n); err != nil {
+			r.logger.Warn("feed sync: notification not stored", "tenant", id, "err", err)
+			continue
+		}
+		if router != nil {
+			_ = router.RouteInAppNotification(ctx, id, n)
+		}
+	}
 }

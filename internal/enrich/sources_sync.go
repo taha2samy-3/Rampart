@@ -463,10 +463,15 @@ func (s *FeedSyncer) pruneSources(ctx context.Context, keep []string) error {
 // syncOptionalAll runs every optional source the mirror switches on. One failing source does not stop the others.
 func (s *FeedSyncer) syncOptionalAll(ctx context.Context, cfg FeedConfig, m *domain.FeedMirrorSpec, log *slog.Logger) []error {
 	srcs, keep, errs := optionalSources(m)
-	if err := s.pruneSources(ctx, keep); err != nil {
-		errs = append(errs, fmt.Errorf("pruning sources: %w", err))
+	if cfg.Only == "" { // a one-feed round must not prune the others
+		if err := s.pruneSources(ctx, keep); err != nil {
+			errs = append(errs, fmt.Errorf("pruning sources: %w", err))
+		}
 	}
 	for _, src := range srcs {
+		if !cfg.wants(src.name) {
+			continue
+		}
 		n, err := s.syncOptional(ctx, cfg, src)
 		if err != nil {
 			s.recordFeedError(ctx, src.name, err)

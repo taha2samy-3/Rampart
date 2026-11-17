@@ -175,6 +175,13 @@ function ControlRow({ c, onAttest }: { c: ControlStatus; onAttest?: () => void }
   );
 }
 
+/** A day, in UTC, this many days from now: the server reads the chosen day as its last second (UTC), and wants it in the future and within three years. */
+function utcDay(daysAhead: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + daysAhead);
+  return d.toISOString().slice(0, 10);
+}
+
 function inAYear(): string {
   const d = new Date();
   d.setFullYear(d.getFullYear() + 1);
@@ -189,6 +196,8 @@ export function AttestDialog({ framework, control, application, onClose }: { fra
   const [note, setNote] = useState('');
   const [link, setLink] = useState('');
   const [until, setUntil] = useState(inAYear);
+  const [owner, setOwner] = useState('');
+  const ownerId = useId();
   const noteId = useId();
   const linkId = useId();
   const untilId = useId();
@@ -201,9 +210,12 @@ export function AttestDialog({ framework, control, application, onClose }: { fra
         evidence_url: link.trim() || undefined,
         expires_at: until ? new Date(`${until}T23:59:59Z`).toISOString() : undefined,
         application_id: application || undefined,
+        owner: owner.trim() || undefined,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['taxonomies', 'status', framework] });
+      void qc.invalidateQueries({ queryKey: ['taxonomies', 'history', framework] });
+      if (application) void qc.invalidateQueries({ queryKey: qk.applications.compliance(application) }); // the application's own summary
       toast.info(t('compliance.attestSaved'));
       onClose();
     },
@@ -239,8 +251,13 @@ export function AttestDialog({ framework, control, application, onClose }: { fra
             <input id={linkId} type="url" pattern="https://.*" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://" className={field} />
           </div>
           <div className="flex flex-col gap-1.5">
+            <label htmlFor={ownerId} className="text-13 font-medium">{t('compliance.attestOwner')}</label>
+            <input id={ownerId} type="text" maxLength={200} value={owner} onChange={(e) => setOwner(e.target.value)} aria-describedby={`${ownerId}-help`} className={`w-full ${field}`} />
+            <span id={`${ownerId}-help`} className="text-12 text-ink-2">{t('compliance.attestOwnerHelp')}</span>
+          </div>
+          <div className="flex flex-col gap-1.5">
             <label htmlFor={untilId} className="text-13 font-medium">{t('compliance.attestExpires')}</label>
-            <input id={untilId} type="date" required value={until} onChange={(e) => setUntil(e.target.value)} aria-describedby={untilHelp} className={`w-fit ${field}`} />
+            <input id={untilId} type="date" required min={utcDay(1)} max={utcDay(3 * 365 - 1)} value={until} onChange={(e) => setUntil(e.target.value)} aria-describedby={untilHelp} className={`w-fit ${field}`} />
             <span id={untilHelp} className="text-12 text-ink-2">{t('compliance.attestExpiresHelp')}</span>
           </div>
           {mutation.isError && <ProblemMessage problem={toProblem(mutation.error)} title={t('compliance.attestFailed')} />}

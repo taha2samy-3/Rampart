@@ -17,7 +17,11 @@ func TestCalculateSLADueDate(t *testing.T) {
 		t.Fatalf("critical on a low application: %v", due)
 	}
 	kev := start.AddDate(0, 0, 2)
-	if due := risk.CalculateSLADueDate(domain.SeverityCritical, "critical", start, &kev); !due.Equal(kev) {
-		t.Fatalf("an earlier CISA due date wins: %v", due)
+	if due := risk.CalculateSLADueDate(domain.SeverityCritical, "critical", start, &kev); !due.Equal(kev.Add(24 * time.Hour)) {
+		t.Fatalf("an earlier CISA due date wins, and it is due by the end of that day: %v", due)
+	}
+	late := start.AddDate(0, 0, 3) // CISA's day is the same day as the matrix allowance: the later of the two does not win
+	if due := risk.CalculateSLADueDate(domain.SeverityCritical, "critical", start, &late); !due.Equal(start.AddDate(0, 0, 3)) {
+		t.Fatalf("the matrix wins when CISA's end of day is not earlier: %v", due)
 	}
 }

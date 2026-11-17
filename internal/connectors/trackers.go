@@ -137,6 +137,9 @@ func (j *JiraTracker) findingLink(f *domain.Finding) string {
 	if j.publicURL == "" || j.tenantSlug == "" {
 		return ""
 	}
+	if f.Notice != "" {
+		return fmt.Sprintf("%s/t/%s/compliance", j.publicURL, j.tenantSlug) // a notice has no finding page
+	}
 	return fmt.Sprintf("%s/t/%s/findings/%s", j.publicURL, j.tenantSlug, f.ID.String())
 }
 
@@ -211,6 +214,9 @@ func (j *JiraTracker) CreateIssue(ctx context.Context, finding *domain.Finding, 
 		"security",
 		"severity-" + strings.ToLower(string(finding.Severity)),
 		FindingLabel(finding.ID),
+	}
+	if finding.Notice != "" {
+		labels = []string{"rampart", "compliance", FindingLabel(finding.ID)}
 	}
 
 	fields := map[string]any{
@@ -469,6 +475,9 @@ func BuildJiraADF(finding *domain.Finding, appName, findingURL string) map[strin
 
 	// 1. Overview paragraph
 	overviewText := fmt.Sprintf("A %s vulnerability was identified in application %q.", strings.ToUpper(string(finding.Severity)), appName)
+	if finding.Notice != "" {
+		overviewText = fmt.Sprintf("A compliance notice for %q.", appName)
+	}
 	paragraphs = append(paragraphs, map[string]any{
 		"type": "paragraph",
 		"content": []map[string]any{
@@ -621,9 +630,15 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 	// Text from a scanner is untrusted. Written as markdown it could mention people (@name), link or load an image
 	// from another host, or close another issue ("fixes #1"); inside a code block it is only text (D70).
 	var bodyBuilder strings.Builder
-	fmt.Fprintf(&bodyBuilder, "### Vulnerability Alert\n\n")
+	if finding.Notice != "" {
+		fmt.Fprintf(&bodyBuilder, "### Compliance notice\n\n")
+	} else {
+		fmt.Fprintf(&bodyBuilder, "### Vulnerability Alert\n\n")
+	}
 	fmt.Fprintf(&bodyBuilder, "- **Application**: %s\n", codeSpan(appName))
-	fmt.Fprintf(&bodyBuilder, "- **Severity**: **%s**\n", strings.ToUpper(string(finding.Severity)))
+	if finding.Notice == "" {
+		fmt.Fprintf(&bodyBuilder, "- **Severity**: **%s**\n", strings.ToUpper(string(finding.Severity)))
+	}
 	if finding.RuleID != "" {
 		fmt.Fprintf(&bodyBuilder, "- **Rule**: %s\n", codeSpan(finding.RuleID))
 	}
@@ -634,29 +649,39 @@ func (g *GitHubTracker) CreateIssue(ctx context.Context, finding *domain.Finding
 	if locStr != "" {
 		fmt.Fprintf(&bodyBuilder, "- **Location**: %s\n", codeSpan(locStr))
 	}
-	fmt.Fprintf(&bodyBuilder, "- **Finding**: %s\n", codeSpan(truncateRunes(finding.Title, 300)))
+	if finding.Notice == "" {
+		fmt.Fprintf(&bodyBuilder, "- **Finding**: %s\n", codeSpan(truncateRunes(finding.Title, 300)))
+	}
 	if finding.Description != "" {
 		desc := truncateRunes(finding.Description, githubBodyMax-2000)
 		fence := fenceFor(desc)
 		fmt.Fprintf(&bodyBuilder, "\n#### Description\n\n%s\n%s\n%s\n", fence, desc, fence)
 	}
 	if g.publicURL != "" && g.tenantSlug != "" {
-		findingURL := fmt.Sprintf("%s/t/%s/findings/%s", g.publicURL, g.tenantSlug, finding.ID.String())
-		fmt.Fprintf(&bodyBuilder, "\n[**View in Rampart**](%s)\n", findingURL)
+		page := "findings/" + finding.ID.String()
+		if finding.Notice != "" {
+			page = "compliance" // there is no finding page for a notice
+		}
+		fmt.Fprintf(&bodyBuilder, "\n[**View in Rampart**](%s/t/%s/%s)\n", g.publicURL, g.tenantSlug, page)
 	}
 
 	labels := []string{"security", "rampart"}
+	if finding.Notice != "" {
+		labels = []string{"compliance", "rampart"}
+	}
 	if len(g.cfg.DefaultLabels) > 0 {
 		labels = append(labels, g.cfg.DefaultLabels...)
 	}
 	sevLabel := ""
-	if len(g.cfg.SeverityToLabels) > 0 {
-		sevLabel = g.cfg.SeverityToLabels[strings.ToLower(string(finding.Severity))]
-	}
-	if sevLabel != "" {
-		labels = append(labels, sevLabel)
-	} else {
-		labels = append(labels, "severity:"+strings.ToLower(string(finding.Severity)))
+	if finding.Notice == "" {
+		if len(g.cfg.SeverityToLabels) > 0 {
+			sevLabel = g.cfg.SeverityToLabels[strings.ToLower(string(finding.Severity))]
+		}
+		if sevLabel != "" {
+			labels = append(labels, sevLabel)
+		} else {
+			labels = append(labels, "severity:"+strings.ToLower(string(finding.Severity)))
+		}
 	}
 	labels = append(labels, FindingLabel(finding.ID))
 

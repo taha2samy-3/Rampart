@@ -90,7 +90,7 @@ func TestControlBreaks_GoAndSQLAgree_OnPostgreSQL(t *testing.T) {
 	}
 
 	for _, c := range controls {
-		var wantOpen, wantOverdue int
+		var wantOpen, wantOverdue, wantNone int
 		var wantEarliest *time.Time
 		for i, f := range fs {
 			if cases[i].state != domain.StateOpen && cases[i].state != domain.StateAffected && cases[i].state != domain.StateUnderInvestigation {
@@ -100,6 +100,9 @@ func TestControlBreaks_GoAndSQLAgree_OnPostgreSQL(t *testing.T) {
 				continue
 			}
 			wantOpen++
+			if f.SLADue == nil {
+				wantNone++
+			}
 			if f.SLADue != nil {
 				if f.SLADue.Before(time.Now()) {
 					wantOverdue++
@@ -117,12 +120,44 @@ func TestControlBreaks_GoAndSQLAgree_OnPostgreSQL(t *testing.T) {
 			t.Errorf("%s: SQL counts %d open findings, Go says %d", c.ID, sqlOpen, wantOpen)
 		}
 		d := deadlines[c.ID]
+		if d.NoDeadline != wantNone {
+			t.Errorf("%s: %d findings with no deadline, want %d", c.ID, d.NoDeadline, wantNone)
+		}
 		if d.Open != wantOpen || d.Overdue != wantOverdue {
 			t.Errorf("%s: deadlines open %d overdue %d, want %d and %d", c.ID, d.Open, d.Overdue, wantOpen, wantOverdue)
 		}
 		if (d.Earliest == nil) != (wantEarliest == nil) || (wantEarliest != nil && d.Earliest.Sub(*wantEarliest).Abs() > time.Second) {
 			t.Errorf("%s: earliest due %v, want %v", c.ID, d.Earliest, wantEarliest)
 		}
+	}
+	// A finding that bears on several controls is one finding in the totals of the framework.
+	totals, err := appStore.DistinctFindings(ctx, tn.ID, []uuid.UUID{app.ID}, matches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTotal, wantLate, sum := 0, 0, 0
+	for i, f := range fs {
+		if cases[i].state != domain.StateOpen && cases[i].state != domain.StateAffected && cases[i].state != domain.StateUnderInvestigation {
+			continue
+		}
+		hits := 0
+		for _, c := range controls {
+			if !c.Manual && c.Breaks(compliance.FindingFacts{CWEs: cases[i].cwes, Category: string(cases[i].cat), ScannerFamily: cases[i].family, RuleID: cases[i].rule, Band: string(cases[i].band)}) {
+				hits++
+			}
+		}
+		if hits > 0 {
+			wantTotal++
+			if f.SLADue != nil && f.SLADue.Before(time.Now()) {
+				wantLate++
+			}
+		}
+	}
+	for _, d := range deadlines {
+		sum += d.Open
+	}
+	if totals.Open != wantTotal || totals.Overdue != wantLate || sum <= totals.Open {
+		t.Errorf("distinct findings %+v, want open %d overdue %d (and fewer than the %d counted per control)", totals, wantTotal, wantLate, sum)
 	}
 	// A control with nothing against it has no deadline, and the manual control is not counted at all.
 	if d := deadlines["nothing"]; d.Open != 0 || d.Earliest != nil {

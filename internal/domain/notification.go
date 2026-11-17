@@ -8,11 +8,14 @@ import (
 
 // Notification kinds (docs/16 D45).
 const (
-	NotifySLABreached      = "sla_breached"
-	NotifySLADueSoon       = "sla_due_soon"
-	NotifyAcceptanceEnding = "acceptance_expiring"
-	NotifyAcceptanceEnded  = "acceptance_expired"
-	NotifyCloseHeld        = "close_held"
+	NotifySLABreached       = "sla_breached"
+	NotifySLADueSoon        = "sla_due_soon"
+	NotifyAcceptanceEnding  = "acceptance_expiring"
+	NotifyAcceptanceEnded   = "acceptance_expired"
+	NotifyCloseHeld         = "close_held"
+	NotifyAttestationEnding = "attestation_expiring" // a manual control's attestation ends in 14 days, then in 1 day (D123)
+	NotifyFeedSync          = "feed_sync"            // a feed sync round finished, every feed well
+	NotifyFeedSyncFailed    = "feed_sync_failed"     // a feed sync round finished with at least one feed failing
 )
 
 // Notification is one message to the people of a tenant: what a sweep found, with a link to where to act.
@@ -59,4 +62,14 @@ type AccessBinding struct {
 	ManagedBy       string    `json:"managed_by"`
 	CreatedBy       string    `json:"created_by"`
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ExpiringAttestation is the current attestation of a control that ends soon; DaysLeft is the threshold announced (14 or 1).
+type ExpiringAttestation struct {
+	FrameworkID string
+	ControlID   string
+	Application string // the application's name; empty for an attestation of the whole tenant
+	Owner       string // who renews it; the person who made it when none was named
+	ExpiresAt   time.Time
+	DaysLeft    int
 }

@@ -117,8 +117,10 @@ func (a *API) handleApplicationCompliance(w http.ResponseWriter, r *http.Request
 				} else {
 					row.AtRisk++
 				}
-				row.Findings += c.Open
-				row.Overdue += c.Overdue
+				if st.totals == nil { // a store that cannot count once: the sum over controls
+					row.Findings += c.Open
+					row.Overdue += c.Overdue
+				}
 				if c.EarliestDue != nil && (row.EarliestDue == nil || c.EarliestDue.Before(*row.EarliestDue)) {
 					row.EarliestDue = c.EarliestDue
 				}
@@ -126,6 +128,9 @@ func (a *API) handleApplicationCompliance(w http.ResponseWriter, r *http.Request
 				row.Unread++
 			}
 			row.Accepted += c.Accepted
+		}
+		if st.totals != nil { // a finding that bears on four controls is one finding
+			row.Findings, row.Overdue = st.totals.Open, st.totals.Overdue
 		}
 		row.Verdict = verdictOf(row.Open, row.AtRisk, row.Unread)
 		out.Frameworks = append(out.Frameworks, row)

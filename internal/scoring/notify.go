@@ -95,3 +95,40 @@ func (s *Scorer) WarnExpiringAcceptances(ctx context.Context, tenantID uuid.UUID
 	}
 	return len(list), err
 }
+
+// WarnExpiringAttestations announces the attestations of manual controls that end in 14 days, then in 1 day. One
+// message for the sweep's finds, so a tenant with many controls gets one, not one each. The store writes it in the
+// same transaction as the "announced" marker, so a reminder is never marked sent without being written.
+func (s *Scorer) WarnExpiringAttestations(ctx context.Context, tenantID uuid.UUID, now time.Time) (int, error) {
+	nt, ok := s.store.(store.Notifications)
+	if !ok {
+		return 0, nil
+	}
+	list, notif, err := nt.WarnExpiringAttestations(ctx, tenantID, now, func(list []domain.ExpiringAttestation) *domain.Notification {
+		soonest := list[0].DaysLeft
+		lines := make([]string, 0, len(list))
+		for _, e := range list {
+			soonest = min(soonest, e.DaysLeft)
+			where := ""
+			if e.Application != "" {
+				where = " (" + e.Application + ")"
+			}
+			lines = append(lines, fmt.Sprintf("%s / %s%s: ends %s. Owner: %s.", e.FrameworkID, e.ControlID, where, e.ExpiresAt.UTC().Format("2 Jan 2006"), strings.TrimPrefix(e.Owner, "user:")))
+		}
+		title := fmt.Sprintf("%d %s within 14 days", len(list), plural(len(list), "attestation ends", "attestations end"))
+		if soonest <= 1 {
+			title = fmt.Sprintf("%d %s within 1 day", len(list), plural(len(list), "attestation ends", "attestations end"))
+			for _, e := range list {
+				if e.DaysLeft > 1 {
+					title = fmt.Sprintf("%d %s within 14 days, the soonest within 1 day", len(list), plural(len(list), "attestation ends", "attestations end"))
+					break
+				}
+			}
+		}
+		return &domain.Notification{Kind: domain.NotifyAttestationEnding, Title: title, Body: strings.Join(lines, "\n"), Link: "/compliance", CreatedAt: now}
+	})
+	if notif != nil && s.router != nil {
+		_ = s.router.RouteInAppNotification(ctx, tenantID, notif)
+	}
+	return len(list), err
+}

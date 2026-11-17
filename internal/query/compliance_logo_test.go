@@ -28,6 +28,10 @@ type fwStore struct {
 	open   map[string]int // control id -> open findings (in "high")
 	// deadlines, when set, makes the store answer ControlDeadlines (the PostgreSQL store does): control id -> its deadlines.
 	deadlines map[string]store.ControlDeadline
+	attested  []store.Attestation // what AddAttestation was given, newest first
+	retried   []uuid.UUID
+	snapshot  []byte // what ComplianceSnapshot returns
+	canRetry  bool
 }
 
 func (s *fwStore) ControlDeadlines(_ context.Context, _ uuid.UUID, _ []uuid.UUID, cs []store.ControlMatch) (map[string]store.ControlDeadline, error) {
@@ -36,6 +40,21 @@ func (s *fwStore) ControlDeadlines(_ context.Context, _ uuid.UUID, _ []uuid.UUID
 		out[c.ID] = s.deadlines[c.ID]
 	}
 	return out, nil
+}
+
+func (s *fwStore) RetryFailedAttestationTicket(_ context.Context, _ uuid.UUID, id uuid.UUID) (bool, error) {
+	s.retried = append(s.retried, id)
+	return s.canRetry, nil
+}
+
+func (s *fwStore) DistinctFindings(_ context.Context, _ uuid.UUID, _ []uuid.UUID, cs []store.ControlMatch) (store.FindingTotals, error) {
+	var t store.FindingTotals
+	for _, c := range cs {
+		d := s.deadlines[c.ID]
+		t.Open += d.Open
+		t.Overdue += d.Overdue
+	}
+	return t, nil
 }
 
 func (s *fwStore) ListComplianceFrameworks(context.Context, uuid.UUID) ([]store.StoredFramework, error) {
@@ -62,13 +81,19 @@ func (s *fwStore) FamilyFindingCategories(context.Context, uuid.UUID) (map[strin
 	return map[string][]string{"semgrep": {"sast"}, "trivy": {"sca"}}, nil
 }
 func (s *fwStore) Attestations(context.Context, uuid.UUID, string) ([]store.Attestation, error) {
-	return nil, nil
+	return s.attested, nil
 }
-func (s *fwStore) AddAttestation(context.Context, uuid.UUID, store.Attestation) error { return nil }
+func (s *fwStore) AddAttestation(_ context.Context, _ uuid.UUID, a store.Attestation) error {
+	s.attested = append([]store.Attestation{a}, s.attested...)
+	return nil
+}
 func (s *fwStore) SaveComplianceSnapshot(context.Context, uuid.UUID, string, time.Time, []byte) error {
 	return nil
 }
 func (s *fwStore) ComplianceSnapshot(context.Context, uuid.UUID, string, time.Time) ([]byte, error) {
+	if s.snapshot != nil {
+		return s.snapshot, nil
+	}
 	return nil, store.ErrNoSnapshot
 }
 func (s *fwStore) ComplianceSnapshotDays(context.Context, uuid.UUID, string, int) ([]time.Time, error) {
@@ -264,6 +289,13 @@ func TestAPI_ApplicationCompliance(t *testing.T) {
 	s.deadlines = map[string]store.ControlDeadline{"SC-2": {Open: 3, Earliest: &later}}
 	if f := by(read())["b-gaps"]; f.Verdict != "at_risk" || f.AtRisk != 1 || f.Open != 0 || f.Findings != 3 || f.Clear != 1 {
 		t.Errorf("b-gaps, no deadline passed: %+v", f)
+	}
+
+	// One of its findings has no deadline at all: nothing says when it is late, so the control is not "at risk" (D120).
+	mixed := time.Now().Add(5 * 24 * time.Hour)
+	s.deadlines = map[string]store.ControlDeadline{"SC-2": {Open: 3, NoDeadline: 1, Earliest: &mixed}}
+	if f := by(read())["b-gaps"]; f.Verdict != "gaps" || f.AtRisk != 0 || f.Open != 1 {
+		t.Errorf("b-gaps, a finding with no deadline among others: %+v", f)
 	}
 
 	soon, past := time.Now().Add(5*24*time.Hour), time.Now().Add(-2*24*time.Hour)

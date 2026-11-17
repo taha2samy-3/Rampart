@@ -78,7 +78,7 @@ function Page({ app }: { app: ApplicationPage }) {
         </div>
 
         {/* Top-Level Tabs Navigation */}
-        <section className="mt-6" aria-labelledby="app-main-tabs">
+        <section className="mt-6">
           <Tabs defaultValue="overview">
             <TabsList label={t('apps.sectionsNav', { defaultValue: 'Application Sections' })}>
               <TabsTrigger value="overview">

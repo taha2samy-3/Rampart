@@ -21,6 +21,10 @@ type Notifications interface {
 	// WarnExpiringAcceptances marks the approved acceptances that end within 14 days (then within 1 day) and
 	// returns them: each threshold is announced once.
 	WarnExpiringAcceptances(ctx context.Context, tenantID uuid.UUID, now time.Time) ([]domain.ExpiringAcceptance, error)
+	// WarnExpiringAttestations does the same for the current "passed" attestation of each manual control (D123).
+	// The message is written inside the same transaction as the marker (build makes it from what was found), so a marker
+	// never exists without its message: a reminder is not lost between the two, and the one returned is to be routed.
+	WarnExpiringAttestations(ctx context.Context, tenantID uuid.UUID, now time.Time, build func([]domain.ExpiringAttestation) *domain.Notification) ([]domain.ExpiringAttestation, *domain.Notification, error)
 }
 
 func (s *PostgresStore) CreateNotification(ctx context.Context, tenantID uuid.UUID, n *domain.Notification) error {
@@ -123,4 +127,65 @@ func (s *PostgresStore) WarnExpiringAcceptances(ctx context.Context, tenantID uu
 		return rows.Err()
 	})
 	return out, err
+}
+
+// WarnExpiringAttestations announces the attestations that end within 14 days, then within 1 day, once each. Only the
+// current one of a control counts (the newest for that control and application): a superseded one ending is no news,
+// and one that says "failed" has nothing to renew.
+func (s *PostgresStore) WarnExpiringAttestations(ctx context.Context, tenantID uuid.UUID, now time.Time, build func([]domain.ExpiringAttestation) *domain.Notification) ([]domain.ExpiringAttestation, *domain.Notification, error) {
+	var out []domain.ExpiringAttestation
+	var note *domain.Notification
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			WITH cur AS (
+				SELECT DISTINCT ON (framework_id, control_id, application_id)
+				       id, tenant_id, framework_id, control_id, application_id, status, owner, attested_by, expires_at
+				FROM compliance_attestation WHERE tenant_id = $1
+				ORDER BY framework_id, control_id, application_id, attested_at DESC, id
+			), due AS (
+				SELECT id, framework_id, control_id, application_id, owner, attested_by, expires_at,
+				       CASE WHEN expires_at <= $2::timestamptz + interval '1 day' THEN 1 ELSE 14 END AS d
+				FROM cur WHERE status = 'passed' AND expires_at > $2 AND expires_at <= $2::timestamptz + interval '14 days'
+				  AND NOT `+coveredByTenant("cur")+`
+			), ins AS (
+				INSERT INTO compliance_attestation_warning (attestation_id, tenant_id, days)
+				SELECT id, $1, d FROM due
+				ON CONFLICT (attestation_id) DO UPDATE SET days = EXCLUDED.days, warned_at = NOW()
+				WHERE compliance_attestation_warning.days > EXCLUDED.days
+				RETURNING attestation_id, days
+			)
+			SELECT due.framework_id, due.control_id, coalesce(a.name, ''), CASE WHEN due.owner <> '' THEN due.owner ELSE due.attested_by END,
+			       due.expires_at, ins.days
+			FROM ins JOIN due ON due.id = ins.attestation_id LEFT JOIN application a ON a.id = due.application_id
+			ORDER BY due.expires_at, due.control_id`, tenantID, now)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e domain.ExpiringAttestation
+			if err := rows.Scan(&e.FrameworkID, &e.ControlID, &e.Application, &e.Owner, &e.ExpiresAt, &e.DaysLeft); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		if build != nil && len(out) > 0 {
+			note = build(out)
+			if note.ID == uuid.Nil {
+				note.ID = domain.NewID()
+			}
+			if note.CreatedAt.IsZero() {
+				note.CreatedAt = now
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO notification (id, tenant_id, kind, title, body, link, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+				note.ID, tenantID, note.Kind, note.Title, note.Body, note.Link, note.CreatedAt)
+			return err
+		}
+		return nil
+	})
+	return out, note, err
 }

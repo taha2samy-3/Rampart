@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 )
@@ -60,10 +59,6 @@ type FeedSyncResponse struct {
 	Feed      string    `json:"feed"`   // "all" or specific feed name
 	Message   string    `json:"message"`
 	StartedAt time.Time `json:"started_at"`
-}
-
-type poolGetter interface {
-	Pool() *pgxpool.Pool
 }
 
 const (
@@ -153,14 +148,24 @@ func (a *API) handleTestFeedsConnection(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleSyncFeeds handles POST /api/v1/feeds/sync.
-// Triggers an on-demand synchronization round for threat intelligence feeds.
+// FeedSyncer starts an on-demand sync. The implementation runs with the system role (enrich.OnDemand).
+type FeedSyncer interface {
+	Start(ctx context.Context, feed string, names []string) error
+}
+
+// SetFeedSyncer wires the on-demand sync. Without it (no database.systemUrl, or feeds off) the sync button answers 501.
+func (a *API) SetFeedSyncer(f FeedSyncer) { a.feedSync = f }
+
+// handleSyncFeeds handles POST /api/v1/feeds/sync[?feed=name]: starts a sync of one feed or of all that are on. It
+// answers 202 once the feeds are marked "syncing"; GET /api/v1/feeds then shows the state until it ends.
+//
+// KNOWN PROBLEM (D125, left as it is on purpose): the feeds are global, but any administrator of any tenant may start this
+// sync. There is no platform-administrator role and no cooldown, so in a multi-tenant installation one tenant's
+// administrator can start upstream traffic, a re-key and a re-score of every tenant, as often as the lock allows.
 func (a *API) handleSyncFeeds(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.resolveTenant(r); err != nil {
-		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+	if _, _, ok := a.requireRole(w, r, auth.RoleAdmin); !ok { // the feeds are global: one tenant's click syncs for all
 		return
 	}
-
 	requestedFeed := strings.TrimSpace(r.URL.Query().Get("feed"))
 	if requestedFeed == "" && r.Method == http.MethodPost {
 		var req struct {
@@ -171,35 +176,47 @@ func (a *API) handleSyncFeeds(w http.ResponseWriter, r *http.Request) {
 			requestedFeed = strings.TrimSpace(req.Feed)
 		}
 	}
-
+	if a.feedSync == nil {
+		problem(w, http.StatusNotImplemented, "unsupported", "This server cannot sync feeds: it needs feeds.enabled and database.systemUrl")
+		return
+	}
+	_, items, err := a.getFeedItemsAndMirror(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to retrieve feeds: "+err.Error())
+		return
+	}
+	var names []string
+	for _, it := range items {
+		if !it.Enabled {
+			if it.Name == requestedFeed {
+				problem(w, http.StatusConflict, "feed-disabled", "Feed "+requestedFeed+" is switched off (egress deny without a mirror)")
+				return
+			}
+			continue
+		}
+		names = append(names, it.Name)
+	}
+	if requestedFeed != "" && !containsStr(names, requestedFeed) {
+		problem(w, http.StatusNotFound, "not-found", "Feed "+requestedFeed+" not found")
+		return
+	}
+	if err := a.feedSync.Start(r.Context(), requestedFeed, names); err != nil {
+		if errors.Is(err, enrich.ErrFeedOff) {
+			problem(w, http.StatusConflict, "feed-off", "This feed is switched off in the server's configuration (NVD disabled, or OSV with no ecosystem chosen)")
+			return
+		}
+		if errors.Is(err, enrich.ErrSyncBusy) {
+			problem(w, http.StatusConflict, "sync-running", "A feed sync is already running; its progress is in the table")
+			return
+		}
+		problem(w, http.StatusInternalServerError, "internal", "Could not start the sync: "+err.Error())
+		return
+	}
 	target := "all"
 	if requestedFeed != "" {
 		target = requestedFeed
 	}
-
-	// If running against real PostgreSQL pool, trigger sync
-	if pg, ok := a.store.(poolGetter); ok && pg.Pool() != nil {
-		pool := pg.Pool()
-		mirror, _, _ := a.getFeedItemsAndMirror(r.Context())
-		fc := enrich.FeedConfig{
-			Mirror: func(ctx context.Context) (*domain.FeedMirrorSpec, error) {
-				return mirror, nil
-			},
-		}
-		syncer := enrich.NewFeedSyncer(pool)
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			_ = syncer.SyncAll(bgCtx, fc, slog.Default())
-		}()
-	}
-
-	writeJSON(w, http.StatusAccepted, FeedSyncResponse{
-		Status:    "started",
-		Feed:      target,
-		Message:   "Feed synchronization initiated successfully",
-		StartedAt: time.Now().UTC(),
-	})
+	writeJSON(w, http.StatusAccepted, FeedSyncResponse{Status: "started", Feed: target, Message: "Sync started", StartedAt: time.Now().UTC()})
 }
 
 func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec, []FeedItemResponse, error) {
