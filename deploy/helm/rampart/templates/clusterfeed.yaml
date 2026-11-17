@@ -1,6 +1,6 @@
 {{- if and .Values.feeds.enabled .Values.feeds.defaultMirror.enabled }}
 apiVersion: rampart.aspm.dev/v1alpha1
-kind: ClusterFeedMirror
+kind: ClusterFeed
 metadata:
   name: {{ .Values.feeds.defaultMirror.name | default "default" }}
   labels:

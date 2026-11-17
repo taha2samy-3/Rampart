@@ -28,7 +28,7 @@ spec:
   type: reportUpload
 ---
 apiVersion: rampart.aspm.dev/v1alpha1
-kind: ClusterFeedMirror
+kind: ClusterFeed
 metadata:
   name: default
 spec:

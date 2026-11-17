@@ -9,6 +9,10 @@ spec:
     listKind: ClusterFeedList
     plural: clusterfeeds
     singular: clusterfeed
+    shortNames:
+      - cf
+      - feed
+      - feeds
   scope: Cluster
   versions:
     - name: v1alpha1

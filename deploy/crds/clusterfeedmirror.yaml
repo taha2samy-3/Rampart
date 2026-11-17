@@ -11,10 +11,6 @@ spec:
     singular: clusterfeedmirror
     shortNames:
       - cfm
-      - feed
-      - feeds
-      - clusterfeed
-      - clusterfeeds
   scope: Cluster
   versions:
     - name: v1alpha1
