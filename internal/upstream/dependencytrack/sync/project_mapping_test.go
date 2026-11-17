@@ -38,11 +38,6 @@ func newMappingFixture(t *testing.T, cfg dtsync.MappingConfig) *mappingFixture {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		var id, rest string
-		if n, _ := splitProjectPath(r.URL.Path); n != "" {
-			id, rest = n, ""
-			_ = rest
-		}
 		switch {
 		case matchPath(r.URL.Path, "/api/v1/finding/project/"):
 			_, _ = w.Write([]byte(oneFinding))
@@ -54,7 +49,7 @@ func newMappingFixture(t *testing.T, cfg dtsync.MappingConfig) *mappingFixture {
 			}
 			_ = json.NewEncoder(w).Encode([]dtclient.Property{{Group: "integrations", Name: "rampart.application", Value: v}})
 		case matchPath(r.URL.Path, "/api/v1/project/"):
-			id = projectOf(r.URL.Path)
+			id := projectOf(r.URL.Path)
 			latest := !f.notLatest[id]
 			_ = json.NewEncoder(w).Encode(dtclient.Project{UUID: id, Name: "svc-" + id, Version: "1", Active: true, IsLatest: &latest})
 		default:
@@ -117,7 +112,6 @@ func matchPath(p, prefix string) bool { return len(p) >= len(prefix) && p[:len(p
 func matchSuffix(p, suffix string) bool {
 	return len(p) >= len(suffix) && p[len(p)-len(suffix):] == suffix
 }
-func splitProjectPath(p string) (string, string) { return projectOf(p), "" }
 
 // "Map project" in the UI stored the mapping and nothing read it: the sync took the application from the rules only, so a
 // project mapped by hand kept no findings, and the portfolio sync did not schedule it. A person's mapping comes first,
