@@ -26,7 +26,7 @@ import { UploadDialog } from './UploadDialog';
 import { DependencyTrackView } from './DependencyTrackView';
 import { ParsersView } from './ParsersView';
 import { cn } from '@/lib/cn';
-import { absoluteDateTime, shortAge, shortId } from '@/lib/format';
+import { absoluteDateTime, shortId } from '@/lib/format';
 
 export interface IngestionSearch {
   sel?: string;
@@ -122,7 +122,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
             <col />
             <col className="w-[150px]" />
             <col className="w-[132px] @max-[520px]/list:hidden" />
-            <col className="w-[72px]" />
+            <col className="w-[180px]" />
           </colgroup>
           <THead className="sticky top-0 z-10">
             <tr role="row">
@@ -165,8 +165,8 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
                   </Td>
                   <Td className={cn(r.status === 'failed' && 'font-semibold')}>{t(`ingestion.status.${r.status}`)}</Td>
                   <Td className="text-ink-2">{foundText(r)}</Td>
-                  <Td align="end" className="text-ink-2" title={absoluteDateTime(r.created_at)}>
-                    {shortAge(r.created_at)}
+                  <Td align="end" className="text-ink-2 whitespace-nowrap font-mono text-12" title={r.created_at ? new Date(r.created_at).toISOString() : ''}>
+                    {absoluteDateTime(r.created_at)}
                   </Td>
                 </Tr>
               );

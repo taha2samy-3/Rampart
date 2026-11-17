@@ -18,7 +18,7 @@ import {
   Tr,
 } from '@/components';
 import { IconCheck, IconCopy, IconRefresh, IconSearch, IconWarning } from '@/components/icons';
-import { absoluteDate, shortAge } from '@/lib/format';
+import { absoluteDateTime } from '@/lib/format';
 
 export function FeedsView() {
   const { t } = useTranslation();
@@ -413,9 +413,9 @@ spec:
                       )}
                     </div>
                   </Td>
-                  <Td className="text-12 text-ink-2">
+                  <Td className="text-12 text-ink-2 whitespace-nowrap font-mono">
                     {feed.last_sync ? (
-                      <span title={absoluteDate(feed.last_sync)}>{shortAge(feed.last_sync)}</span>
+                      <span title={feed.last_sync}>{absoluteDateTime(feed.last_sync)}</span>
                     ) : (
                       '—'
                     )}
