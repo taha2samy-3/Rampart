@@ -47,21 +47,15 @@ export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: 
 
 function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string } }) {
   const navigate = useNavigate();
-  const searchTab = search?.tab && ['overview', 'cves', 'sbom', 'attest'].includes(search.tab)
+  const tab: AppTab = search?.tab && ['overview', 'cves', 'sbom', 'attest'].includes(search.tab)
     ? (search.tab as AppTab)
-    : undefined;
-  const [tab, setTab] = useState<AppTab>(searchTab || 'overview');
-
-  useEffect(() => {
-    if (searchTab && searchTab !== tab) {
-      setTab(searchTab);
-    }
-  }, [searchTab]);
+    : 'overview';
 
   const handleTabChange = (val: string) => {
     const nextTab = val as AppTab;
-    setTab(nextTab);
     void navigate({
+      to: '/applications/$id',
+      params: { id: app.id },
       search: (prev: Record<string, unknown>) => ({
         ...prev,
         tab: nextTab === 'overview' ? undefined : nextTab,

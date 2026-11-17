@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -69,10 +69,12 @@ export function ComplianceSummary({ appId }: { appId: string }) {
   } catch {
     /* fallback if outside AppCtx */
   }
+  const [prevKey, setPrevKey] = useState(key);
   const [pins, setPins] = useState(() => readPins(key));
-  useEffect(() => {
+  if (prevKey !== key) {
+    setPrevKey(key);
     setPins(readPins(key));
-  }, [key]);
+  }
   const [all, setAll] = useState(false);
   const q = useQuery({ queryKey: qk.applications.compliance(appId), queryFn: ({ signal }) => getApplicationCompliance(appId, signal), retry: false });
   const ordered = useMemo(() => orderFrameworks(q.data?.frameworks ?? [], pins), [q.data, pins]);

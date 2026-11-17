@@ -30,7 +30,7 @@ export function WorkflowRoute({ search }: { search: WorkflowSearch }) {
     document.title = `${title} - Rampart`;
   }, [t, tab]);
 
-  const set = (patch: Partial<WorkflowSearch>) => void navigate({ to: '/workflow', search: (p: WorkflowSearch) => ({ ...p, ...patch }), replace: true });
+  const set = (patch: Partial<WorkflowSearch>) => void navigate({ to: '/workflow', search: (p: Record<string, unknown>) => ({ ...p, ...patch }), replace: true });
 
   if (tab === 'held_closes') {
     return <HeldClosesView search={search} set={set} />;
