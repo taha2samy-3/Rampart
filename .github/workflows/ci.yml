@@ -279,6 +279,8 @@ jobs:
       - uses: helm/kind-action@v1
         with:
           cluster_name: rampart-e2e
+      - name: Update Helm chart dependencies
+        run: helm dependency update deploy/helm/rampart
       - name: Build the image straight into the kind node (the embedded UI is included)
         run: |
           KO_DOCKER_REPO=ko.local ko build --bare --tags e2e ./cmd/rampart

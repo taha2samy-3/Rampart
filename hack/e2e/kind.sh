@@ -56,6 +56,9 @@ helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo update cnpg >/dev/null
 helm upgrade --install cnpg cnpg/cloudnative-pg --namespace cnpg-system --create-namespace --wait --timeout 5m
 
+log "Update chart dependencies"
+helm dependency update "$CHART"
+
 log "helm install (plain Job for migrations on install, D4)"
 helm install "$REL" "$CHART" "${helm_args[@]}" --create-namespace --wait --wait-for-jobs --timeout 10m
 
