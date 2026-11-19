@@ -108,12 +108,13 @@ All of it passed when this was written (commands in section 10).
 | The matcher over the real table: bounds, `last_affected`, exact versions, withdrawn advisories, severity from the score | PostgreSQL test and matcher unit tests; the severity test found a real defect (a 9.8 score was `unknown`), fixed |
 | The cron reader | 40 cases: fields, steps, ranges, day-of-month/day-of-week rule, 31 February, `Prev` over a day, a month and years |
 | The routes: roles, 409 when off, 404, bad input, tenant of the call | `internal/query/analyzers_test.go`, with the race detector |
-| The page | 19 tests including accessibility checks; the whole web suite |
+| The page | 19 tests including accessibility checks; the whole web suite (38 files, 285 tests). **Also opened in Chromium** (Playwright against the dev mock server, `web/dev/mock-server.mjs`, which now serves the analyzer routes) at 1440 px and 390 px, which found five defects the tests did not: on a phone, selecting a row collapsed the table to zero height and the inspector covered it (a grid that may shrink squeezes a scroll container to nothing); the Status and Last result columns were off the screen; a refused analyzer showed an empty Address row; a long address broke in the middle of a word; and "Last result" named two different things. All fixed and re-measured (the table keeps its height, the page has no horizontal overflow). |
 | The chart | `helm template` (without the remote dependencies): the environment, the schema refusing `maxAge: soon` and `maxInFlight: 0` |
 | The analyzer service takes a 5 MiB request | its own test, which fails without the raised limit |
 
 ## 9. What was not checked, and the limits
 
+- **The page against the real server:** it was opened in a browser against the dev mock server, which answers in the real API's shape but is not the real server. Not done against a running Rampart.
 - **Not run end to end:** the Sonatype analyzer image called by a running Rampart in a cluster (no cluster was touched). Each part is tested; the whole is not.
 - **River.** The queue is exercised through a recording fake and through the real database for everything but River itself: the enqueue, the retry backoff and the priority were not run against a live River in a test. The settings used are River's documented ones.
 - **Version comparison** in the matcher is by dotted numbers with a simple pre-release rule. Debian epochs, Maven qualifiers and similar are not implemented, so a match there can be wrong either way.

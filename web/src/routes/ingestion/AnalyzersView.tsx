@@ -173,8 +173,8 @@ function AnalyzerRow({ a, selected, onSelect }: { a: AnalyzerItem; selected: boo
     <Tr selected={selected} className="h-12 align-middle">
       <Td className="whitespace-normal">
         <button type="button" onClick={onSelect} aria-pressed={selected} className="block max-w-full text-start hover:text-accent">
-          <span className="block truncate font-medium">{a.name}</span>
-          <span className="block truncate text-12 text-ink-2">
+          <span className="block break-words font-medium md:truncate">{a.name}</span>
+          <span className="block break-words text-12 text-ink-2 md:truncate">
             <span className="md:hidden">{t(`analyzers.kind_${a.kind}`)}, </span>
             {t(`analyzers.scope_${a.scope}`)}
             {a.namespace ? `, ${a.namespace}` : ''}

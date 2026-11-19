@@ -16,6 +16,7 @@ deploy/helm/rampart/charts/*.tgz
 coverage.txt
 
 # OS / Editor artifacts
+node_modules/
 .DS_Store
 .idea/
 .vscode/
