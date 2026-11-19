@@ -129,11 +129,17 @@ All of it passed when this was written (commands in section 10).
 
 ## 10. How to run the checks
 
+**Timing, measured on one 8-core laptop that was also running an IDE and a browser.** `go test -race ./...` did not finish cleanly there, for reasons that are not the analyzers:
+`internal/store` alone, without the race detector, takes about 9 minutes (102 tests pass, 1 is skipped), more than Go's default 10-minute limit under `-race`; `internal/ingest` takes 150 s without it
+and also passed alone; and `cmd/rampart` `TestCLIE2EUploadAndSBOM` passes in 39 s without `-race` but exceeds its own 120 s client timeout with it, **and fails the same way on the commit before this work** (a clean
+worktree of `b6fdb2a`, same machine). Run the packages with `-timeout 30m`, and that test without `-race` on a loaded machine.
+
+
 ```
 go vet ./... && gofmt -l .                                  # clean
 export RAMPART_WASM_DIR=$(hack/test-modules.sh)
 export RAMPART_TEST_POSTGRES_URL='postgres://rampart_owner:rampart_password@127.0.0.1:5435/rampart?sslmode=disable'   # a throwaway database
-go test -race ./...
+go test -race -timeout 30m ./...                              # cmd/rampart TestCLIE2EUploadAndSBOM needs no -race on a loaded machine
 cd web && npx tsc --noEmit && npx eslint src && npx vitest run --maxWorkers=1 --testTimeout=20000
 cd ../../sonatype-analyzer && go test -race ./...
 ```
