@@ -26,18 +26,17 @@ dependencies:
   # The default parsers. The server knows no parser by name (D141): each one reaches it as a ClusterParser or ClusterSBOMParser
   # resource, and these two charts are where the defaults live, next to the code of each parser. On by default. The alias
   # is the values key the chart has always used, so parsers.defaultParsers.* and sbomParsers.defaultSBOMParsers.* keep working.
-  # Both are OCI charts: `helm dependency update` pulls them, so ghcr.io/rampart-aspm/charts/rampart-parsers and
-  # rampart-sbom-parsers must be published (and public).
-  - name: rampart-parsers
-    alias: parsers
-    version: 0.1.0
-    repository: oci://ghcr.io/rampart-aspm/charts
-    condition: parsers.defaultParsers.enabled
-  - name: rampart-sbom-parsers
-    alias: sbomParsers
-    version: 0.1.0
-    repository: oci://ghcr.io/rampart-aspm/charts
-    condition: sbomParsers.defaultSBOMParsers.enabled
+  # Both are OCI charts: when published to ghcr.io/rampart-aspm/charts, enable below:
+  # - name: rampart-parsers
+  #   alias: parsers
+  #   version: 0.1.0
+  #   repository: oci://ghcr.io/rampart-aspm/charts
+  #   condition: parsers.defaultParsers.enabled
+  # - name: rampart-sbom-parsers
+  #   alias: sbomParsers
+  #   version: 0.1.0
+  #   repository: oci://ghcr.io/rampart-aspm/charts
+  #   condition: sbomParsers.defaultSBOMParsers.enabled
 maintainers:
   - name: rampart-team
     email: security@rampart.aspm.dev
