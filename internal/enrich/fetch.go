@@ -169,7 +169,7 @@ func (c *FeedConfig) applyMirror(m *domain.FeedMirrorSpec, log *slog.Logger) (sk
 		case deny:
 			c.OSVEcosystems = nil // no mirror, and the public address is not allowed
 		}
-		if len(m.OSV.Ecosystems) > 0 && !(deny && m.OSV.URL == "") {
+		if len(m.OSV.Ecosystems) > 0 && (!deny || m.OSV.URL != "") {
 			c.OSVEcosystems = append([]string(nil), m.OSV.Ecosystems...)
 		}
 	}

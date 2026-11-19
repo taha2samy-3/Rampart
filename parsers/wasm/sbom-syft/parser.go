@@ -92,7 +92,7 @@ type syftSchema struct {
 // `artifacts` array is not one, and an SBOM that says nothing is not an SBOM with no packages.
 func ParseSyftStream(r io.Reader, w io.Writer, _ Options) error {
 	out := bufio.NewWriter(w)
-	defer out.Flush()
+	defer func() { _ = out.Flush() }()
 	emit := func(v any) error {
 		data, err := json.Marshal(v)
 		if err != nil {
@@ -273,7 +273,7 @@ func ParseSyftStream(r io.Reader, w io.Writer, _ Options) error {
 		}
 	}
 	if skipped > 0 {
-		fmt.Fprintf(errWriter, "syft: %d artifact(s) with no id, purl or name were skipped\n", skipped)
+		_, _ = fmt.Fprintf(errWriter, "syft: %d artifact(s) with no id, purl or name were skipped\n", skipped)
 	}
 	return nil
 }

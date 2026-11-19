@@ -69,7 +69,7 @@ func TestVerifyReportsEveryProblem(t *testing.T) {
 	if err == nil {
 		t.Fatal("b and c are missing")
 	}
-	if msg := err.Error(); !(contains(msg, "b") && contains(msg, "c") && contains(msg, "2 shipped")) {
+	if msg := err.Error(); !contains(msg, "b") || !contains(msg, "c") || !contains(msg, "2 shipped") {
 		t.Fatalf("every problem is named: %v", err)
 	}
 	if err := s.Verify([]string{"a"}); err != nil {

@@ -273,7 +273,7 @@ func ParseCycloneDXStream(r io.Reader, w io.Writer, opts Options) error {
 
 func parseCycloneDXXMLStream(r io.Reader, w io.Writer, opts Options) error {
 	out := bufio.NewWriter(w)
-	defer out.Flush()
+	defer func() { _ = out.Flush() }()
 
 	emit := func(v any) error {
 		data, err := json.Marshal(v)
@@ -520,7 +520,7 @@ func emitVulnerability(emit func(any) error, id, source, description, detail str
 
 func parseCycloneDXJSONStream(r io.Reader, w io.Writer, opts Options) error {
 	out := bufio.NewWriter(w)
-	defer out.Flush()
+	defer func() { _ = out.Flush() }()
 
 	emit := func(v any) error {
 		data, err := json.Marshal(v)

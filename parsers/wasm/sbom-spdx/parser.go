@@ -59,7 +59,7 @@ type EdgeEvent struct {
 // ParseSPDXStream streams SPDX (JSON, JSON-LD, or Tag-Value) into line-delimited JSON events.
 func ParseSPDXStream(r io.Reader, w io.Writer, opts Options) error {
 	out := bufio.NewWriter(w)
-	defer out.Flush()
+	defer func() { _ = out.Flush() }()
 
 	emit := func(v any) error {
 		data, err := json.Marshal(v)
@@ -147,7 +147,6 @@ func parseSPDXJSONStream(r io.Reader, emit func(any) error, opts Options) error 
 		rootRef           = ""
 		toolName          = ""
 		timestamp         = ""
-		emittedMetadata   = false
 		sawVersion        = false
 		bufferedPackages  []rawSPDXPackage
 		bufferedEdges     []rawSPDXRelationship
@@ -267,7 +266,6 @@ func parseSPDXJSONStream(r io.Reader, emit func(any) error, opts Options) error 
 		ToolName:     toolName,
 		RootRef:      rootRef,
 	})
-	emittedMetadata = true
 
 	// 2. Emit ComponentEvents
 	for _, pkg := range bufferedPackages {
@@ -325,7 +323,6 @@ func parseSPDXJSONStream(r io.Reader, emit func(any) error, opts Options) error 
 		}
 	}
 
-	_ = emittedMetadata
 	return nil
 }
 

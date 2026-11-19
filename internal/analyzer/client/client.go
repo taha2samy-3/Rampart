@@ -19,13 +19,9 @@ type Client struct {
 }
 
 // New connects to a target gRPC analyzer service.
-func New(target string, timeout time.Duration) (*Client, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, target,
+func New(target string, _ time.Duration) (*Client, error) {
+	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial analyzer at %s: %w", target, err)

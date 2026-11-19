@@ -155,7 +155,7 @@ func (p *WasmParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseCont
 		}
 
 		rt := wazero.NewRuntimeWithConfig(ctx, cfg)
-		defer rt.Close(ctx)
+		defer func() { _ = rt.Close(ctx) }()
 
 		// Instantiate WASI snapshot preview 1
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
@@ -166,7 +166,7 @@ func (p *WasmParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseCont
 			yield(domain.RawFinding{}, fmt.Errorf("%w: compiling wasm module: %v", ErrWasmExecution, err))
 			return
 		}
-		defer compiled.Close(ctx)
+		defer func() { _ = compiled.Close(ctx) }()
 
 		// Set up standard streaming IO:
 		// Stdin: Report input stream
@@ -187,7 +187,7 @@ func (p *WasmParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseCont
 
 		execErrCh := make(chan error, 1)
 		go func() {
-			defer outWriter.Close()
+			defer func() { _ = outWriter.Close() }()
 			_, modErr := rt.InstantiateModule(ctx, compiled, modConfig)
 			execErrCh <- modErr
 		}()

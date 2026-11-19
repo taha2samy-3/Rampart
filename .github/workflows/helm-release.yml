@@ -84,7 +84,8 @@ jobs:
       - name: Package Chart
         run: |
           mkdir -p dist
-          helm package "$CHART_DIR" --destination dist
+          version="${{ steps.meta.outputs.version }}"
+          helm package "$CHART_DIR" --version "$version" --app-version "$version" --destination dist
 
       - name: Push Helm Chart to GHCR OCI
         id: push

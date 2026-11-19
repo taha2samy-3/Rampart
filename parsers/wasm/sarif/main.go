@@ -13,7 +13,7 @@ import (
 func main() {
 	p := NewParser()
 	w := bufio.NewWriter(os.Stdout)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	enc := json.NewEncoder(w)
 	ctx := context.Background()

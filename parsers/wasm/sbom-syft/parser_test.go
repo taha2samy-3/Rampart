@@ -34,7 +34,7 @@ func runWasm(t *testing.T, code, input []byte) (stdout, stderr []byte, err error
 	t.Helper()
 	ctx := context.Background()
 	r := wazero.NewRuntime(ctx)
-	defer r.Close(ctx)
+	defer func() { _ = r.Close(ctx) }()
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 	var out, errb bytes.Buffer
 	cfg := wazero.NewModuleConfig().WithStdin(bytes.NewReader(input)).WithStdout(&out).WithStderr(&errb).WithArgs("parser.wasm")
@@ -42,7 +42,7 @@ func runWasm(t *testing.T, code, input []byte) (stdout, stderr []byte, err error
 	if err != nil {
 		return nil, nil, err
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 	mod, err := r.InstantiateModule(ctx, compiled, cfg)
 	if mod != nil {
 		_ = mod.Close(ctx)

@@ -30,7 +30,7 @@ func compileWasm(t *testing.T) string {
 func runWasm(ctx context.Context, t *testing.T, wasmCode []byte, input []byte, envVars []string) ([]byte, []byte, error) {
 	t.Helper()
 	r := wazero.NewRuntime(ctx)
-	defer r.Close(ctx)
+	defer func() { _ = r.Close(ctx) }()
 
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
@@ -54,7 +54,7 @@ func runWasm(ctx context.Context, t *testing.T, wasmCode []byte, input []byte, e
 	if err != nil {
 		return nil, nil, err
 	}
-	defer compiled.Close(ctx)
+	defer func() { _ = compiled.Close(ctx) }()
 
 	mod, err := r.InstantiateModule(ctx, compiled, cfg)
 	if mod != nil {

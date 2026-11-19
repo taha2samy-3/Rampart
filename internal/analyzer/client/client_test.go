@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -78,10 +77,7 @@ func setupTestServer(t *testing.T) (*client.Client, func()) {
 		return lis.Dial()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, "bufnet",
+	conn, err := grpc.NewClient("passthrough://bufnet",
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
