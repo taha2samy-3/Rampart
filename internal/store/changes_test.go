@@ -139,6 +139,7 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
 	base := time.Now().UTC().AddDate(0, 0, -60)
 	const total = 10000
+	seedStart := time.Now()
 	for start := 0; start < total; start += 5000 {
 		batch := make([]*domain.Finding, 0, 5000)
 		for i := start; i < start+5000; i++ {
@@ -157,6 +158,7 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Logf("seeded %d findings in %v", total, time.Since(seedStart))
 	to := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 	began := time.Now()
 	r, err := appStore.ApplicationChanges(ctx, tn.ID, app.ID, to.AddDate(0, 0, -30), to)

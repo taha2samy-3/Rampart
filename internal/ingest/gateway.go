@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
+	"rampart/internal/sbom"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,10 @@ type DirectReportResponse struct {
 	Reactivated    int    `json:"reactivated"`
 	Closed         int    `json:"closed"`
 	ComponentCount int    `json:"componentCount,omitempty"`
+	// Parser is the parser that read the document, by the name a client sends in "parser". Detected is true when the
+	// client did not name one and the server chose it from the content.
+	Parser   string `json:"parser,omitempty"`
+	Detected bool   `json:"detected,omitempty"`
 	// Application is the slug the report was filed under. It can differ from the one the client named: an asset
 	// that already belongs to an application stays there (D10), which Warnings says.
 	Application        string   `json:"application,omitempty"`
@@ -629,7 +634,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 				"type":   "https://rampart.aspm.dev/problems/unsupported-format",
 				"title":  "Unsupported or unknown parser",
 				"status": http.StatusBadRequest,
-				"detail": fmt.Sprintf("Unknown parser %q. Specify a valid parser (e.g. trivy, sarif, semgrep, cyclonedx, snyk, gitleaks, spdx, checkov)", formatHint),
+				"detail": fmt.Sprintf("Unknown parser %q. Available parsers: %s", formatHint, strings.Join(parsers.available(r.Context(), tenantID), ", ")),
 			})
 			return
 		}
@@ -655,8 +660,15 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	scannerFamily := selectedParser.Descriptor().ID
 
 	// D10: Asset, Application & Track Resolution
+	// One rule for "is this an SBOM": the parser is an SBOM reader (sbom.IsReader), whatever its name or the endpoint.
+	isSBOM := sbom.IsReader(selectedParser)
+	if forceSBOM && !isSBOM {
+		problemJSON(w, http.StatusBadRequest, "unsupported-format", "The document is not an SBOM",
+			fmt.Sprintf("%q is not an SBOM format: send it to POST /api/v1/reports.", selectedParser.Descriptor().ID))
+		return
+	}
 	primaryCategory := domain.CategorySAST
-	if forceSBOM || strings.Contains(scannerFamily, "cyclonedx") || strings.Contains(scannerFamily, "spdx") || strings.Contains(scannerFamily, "syft") {
+	if isSBOM {
 		primaryCategory = domain.CategorySCA
 	}
 	assetType := DetermineAssetType(primaryCategory, uploadCtx)
@@ -717,7 +729,6 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	isEphemeral := IsEphemeralFor(r.Context(), g.store, tenantID, sourceID, uploadCtx.Branch)
 
 	// D2: the run exists (and is visible) before any finding is touched.
-	isSBOM := forceSBOM || strings.Contains(scannerFamily, "cyclonedx") || strings.Contains(scannerFamily, "spdx") || strings.Contains(scannerFamily, "syft")
 	run := &domain.IngestRun{
 		ID: runID, TenantID: tenantID, ScanSourceID: sourceID, ApplicationID: appID, AssetID: asset.ID, Track: track,
 		ScannerFamily: firstNonEmpty(scannerOverride, scannerFamily), Format: scannerFamily, Context: uploadCtx,
@@ -756,7 +767,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		g.processor.Finish(r.Context(), run, domain.RunStale, "")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(DirectReportResponse{IngestRunID: runID.String(), Status: "stale"})
+		_ = json.NewEncoder(w).Encode(DirectReportResponse{IngestRunID: runID.String(), Status: "stale", Parser: parserName(selectedParser), Detected: formatHint == ""})
 		return
 	}
 	run.Stats = res.Stats
@@ -767,7 +778,8 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	_ = json.NewEncoder(w).Encode(DirectReportResponse{
 		IngestRunID: runID.String(), Status: string(res.Status), Staged: res.Stats.Parsed, Created: res.Stats.Created,
 		Updated: res.Stats.Updated, Untouched: res.Stats.Untouched, Reactivated: res.Stats.Reactivated,
-		Closed: res.Stats.Closed, ComponentCount: res.Components, Application: filedUnder, ApplicationCreated: appCreated, Warnings: warnings,
+		Closed: res.Stats.Closed, ComponentCount: res.Components, Parser: parserName(selectedParser), Detected: formatHint == "",
+		Application: filedUnder, ApplicationCreated: appCreated, Warnings: warnings,
 	})
 }
 
@@ -860,11 +872,17 @@ func (g *Gateway) categoryOf(ctx context.Context, u *domain.Upload) domain.Findi
 	if parser == nil {
 		return domain.CategorySAST
 	}
-	switch id := parser.Descriptor().ID; {
-	case strings.Contains(id, "trivy"), strings.Contains(id, "grype"), strings.Contains(id, "cyclonedx"), strings.Contains(id, "spdx"), strings.Contains(id, "syft"), strings.Contains(id, "openvex"):
+	rawCat := strings.ToLower(strings.TrimSpace(parser.Descriptor().Category))
+	switch rawCat {
+	case "sca", "sbom":
 		return domain.CategorySCA
-	case strings.Contains(id, "gitleaks"), strings.Contains(id, "trufflehog"):
+	case "secret", "secrets":
 		return domain.CategorySecret
+	default:
+		fc := domain.FindingCategory(rawCat)
+		if fc.IsValid() {
+			return fc
+		}
 	}
 	return domain.CategorySAST
 }

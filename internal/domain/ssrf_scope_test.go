@@ -13,19 +13,19 @@ func TestSSRFAllowlistScopedTo(t *testing.T) {
 	_, cluster, _ := net.ParseCIDR("10.96.0.0/12")
 	al := &PlatformSSRFAllowlist{
 		AllowedCIDRs:      []*net.IPNet{cluster},
-		AllowedHosts:      []string{"dtrack.dtrack.svc"},
+		AllowedHosts:      []string{"jira.internal.svc"},
 		AllowInternalHTTP: true,
 		Tenants:           []string{tenantA.String()},
-		ConnectorTypes:    []string{string(ConnectorTypeDependencyTrack)},
+		ConnectorTypes:    []string{string(ConnectorTypeJira)},
 	}
 
-	if got := al.ScopedTo(tenantA, ConnectorTypeDependencyTrack); !got.Grants() {
-		t.Fatal("tenant A's Dependency-Track connector is in scope and must get the exception")
+	if got := al.ScopedTo(tenantA, ConnectorTypeJira); !got.Grants() {
+		t.Fatal("tenant A's Jira connector is in scope and must get the exception")
 	}
 	for name, got := range map[string]*PlatformSSRFAllowlist{
-		"other tenant":         al.ScopedTo(tenantB, ConnectorTypeDependencyTrack),
+		"other tenant":         al.ScopedTo(tenantB, ConnectorTypeJira),
 		"other connector type": al.ScopedTo(tenantA, ConnectorTypeWebhook),
-		"no tenant":            al.ScopedTo(uuid.Nil, ConnectorTypeDependencyTrack),
+		"no tenant":            al.ScopedTo(uuid.Nil, ConnectorTypeJira),
 	} {
 		if got.Grants() {
 			t.Errorf("%s: out of scope but the exception still applies: %+v", name, got)
@@ -34,14 +34,14 @@ func TestSSRFAllowlistScopedTo(t *testing.T) {
 
 	// Out of scope, the in-cluster address is refused exactly as with no allowlist at all.
 	out := al.ScopedTo(tenantB, ConnectorTypeWebhook)
-	if err := ValidateConnectorURLWithAllowlist("http://dtrack.dtrack.svc:8080", out); err == nil {
+	if err := ValidateConnectorURLWithAllowlist("http://jira.internal.svc:8080", out); err == nil {
 		t.Error("another tenant's webhook could reach the in-cluster host")
 	}
 	if !IsBlockedIPWithAllowlistAndHost(net.ParseIP("10.96.0.10"), "", out, false) {
 		t.Error("another tenant's webhook could reach the cluster service range")
 	}
 	// In scope, the same address is allowed.
-	if err := ValidateConnectorURLWithAllowlist("https://10.96.0.10:8443", al.ScopedTo(tenantA, ConnectorTypeDependencyTrack)); err != nil {
+	if err := ValidateConnectorURLWithAllowlist("https://10.96.0.10:8443", al.ScopedTo(tenantA, ConnectorTypeJira)); err != nil {
 		t.Errorf("in scope, the cluster address must be allowed: %v", err)
 	}
 

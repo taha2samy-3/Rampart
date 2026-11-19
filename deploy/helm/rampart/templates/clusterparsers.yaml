@@ -1,0 +1,598 @@
+{{- /*
+ClusterParser custom resources deployed by default in Rampart (docs/29).
+Each parser can be toggled on/off individually in values.yaml under parsers.defaultParsers.<name>.enabled
+*/}}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "sarif").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: sarif
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sast
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/sarif:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Streaming SARIF 2.1.0 parser with Semgrep, Trivy, Gitleaks enrichers
+  detect:
+    filenames:
+    - '*.sarif'
+    - '*sarif*.json'
+    probes:
+    - jsonHasKeys:
+      - runs
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "openvex").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: openvex
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: vex
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/openvex:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: OpenVEX triage statements and exploitability assertions parser
+  detect:
+    filenames:
+    - '*openvex*.json'
+    - '*.vex.json'
+    probes:
+    - jsonHasKeys:
+      - '@context'
+      - statements
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "trivy").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: trivy
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sca
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/trivy:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations,
+    licenses'
+  detect:
+    filenames:
+    - '*trivy*.json'
+    probes:
+    - jsonHasKeys:
+      - SchemaVersion
+      - Results
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "grype").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: grype
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sca
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/grype:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'Grype JSON: vulnerability matches with their related identifiers'
+  detect:
+    filenames:
+    - '*grype*.json'
+    probes:
+    - jsonHasKeys:
+      - matches
+      - source
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "semgrep").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: semgrep
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sast
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/semgrep:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'Semgrep JSON: code findings with CWE, location and code snippet hash'
+  detect:
+    filenames:
+    - '*semgrep*.json'
+    probes:
+    - jsonHasKeys:
+      - results
+      - errors
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "gitleaks").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: gitleaks
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: secrets
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/gitleaks:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'Gitleaks JSON: secrets found in a repository; the secret is hashed and
+    never stored'
+  detect:
+    filenames:
+    - '*gitleaks*.json'
+    probes:
+    - jsonHasKeys:
+      - Description
+      - Secret
+      - Match
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "trufflehog").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: trufflehog
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: secrets
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/trufflehog:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'TruffleHog JSON lines: secrets, with whether the credential is live;
+    the secret is hashed and never stored'
+  detect:
+    filenames:
+    - '*trufflehog*.json'
+    - '*trufflehog*.jsonl'
+    probes:
+    - jsonHasKeys:
+      - DetectorType
+      - Raw
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "dependencytrack").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: dependencytrack
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sca
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/dependencytrack:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Dependency-Track FPF export and direct API finding response parser with
+    VEX and attribution
+  detect:
+    filenames:
+    - '*dependencytrack*.json'
+    - '*dependency-track*.json'
+    probes:
+    - jsonHasKeys:
+      - component
+      - vulnerability
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "checkov").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: checkov
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: iac
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/checkov:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile
+  detect:
+    filenames:
+    - '*checkov*.json'
+    probes:
+    - jsonHasKeys:
+      - check_type
+      - results
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "snyk").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: snyk
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sca
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/snyk:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Snyk open source and container vulnerability report
+  detect:
+    filenames:
+    - '*snyk*.json'
+    probes:
+    - jsonHasKeys:
+      - vulnerabilities
+      - packageManager
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "kubebench").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: kubebench
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: compliance
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/kubebench:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Aqua Security kube-bench CIS Kubernetes benchmark report
+  detect:
+    filenames:
+    - '*kube-bench*.json'
+    probes:
+    - jsonHasKeys:
+      - Controls
+      - Totals
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "prowler").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: prowler
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: compliance
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/prowler:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: Prowler AWS/Azure/GCP cloud security and compliance report
+  detect:
+    filenames:
+    - '*prowler*.json'
+    - '*prowler*.ocsf.json'
+    probes:
+    - jsonHasKeys:
+      - AssessmentStartTime
+      - FindingUniqueId
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "gitlab").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: gitlab
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sast
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/gitlab:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: 'GitLab security reports (schema v14/v15): SAST, secret detection, dependency
+    and container scanning, DAST; the secret is hashed and never stored'
+  detect:
+    filenames:
+    - gl-sast-report*.json
+    - gl-secret-detection-report*.json
+    - gl-dependency-scanning-report*.json
+    - gl-container-scanning-report*.json
+    - gl-dast-report*.json
+    probes:
+    - jsonHasKeys:
+      - vulnerabilities
+      - scan
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "dependencycheck").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: dependencycheck
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sca
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/dependencycheck:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60
+  description: OWASP Dependency-Check SCA vulnerability report
+  detect:
+    filenames:
+    - '*dependency-check*.json'
+    probes:
+    - jsonHasKeys:
+      - reportSchema
+      - dependencies
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "bandit").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: bandit
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sast
+  runtime: lua
+  description: Bandit Python SAST vulnerability report
+  detect:
+    filenames:
+    - '*bandit*.json'
+    probes:
+    - jsonHasKeys:
+      - results
+      - metrics
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if doc and\
+    \ doc.results then\n    for _, r in ipairs(doc.results) do\n      local cwes = {}\n\
+    \      if r.issue_cwe and r.issue_cwe.id then\n        table.insert(cwes, r.issue_cwe.id)\n\
+    \      end\n      emit({\n        rule_id = r.test_id or \"bandit-rule\",\n    \
+    \    title = r.issue_text or r.test_name or \"Bandit finding\",\n        description\
+    \ = r.issue_text,\n        severity = string.lower(r.issue_severity or \"medium\"\
+    ),\n        tool_severity = r.issue_severity or \"MEDIUM\",\n        category =\
+    \ \"sast\",\n        scanner_family = \"bandit\",\n        cwes = cwes,\n      \
+    \  location = {\n          code = {\n            file_path = r.filename,\n     \
+    \       start_line = r.line_number\n          }\n        }\n      })\n    end\n\
+    \  end\nend\n"
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "zap").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: zap
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: dast
+  runtime: lua
+  description: OWASP ZAP DAST alert report
+  detect:
+    filenames:
+    - '*zap*.json'
+    probes:
+    - jsonHasKeys:
+      - site
+      - '@programName'
+    - jsonHasKeys:
+      - site
+      - alerts
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if not doc\
+    \ or not doc.site then\n    return\n  end\n\n  for _, site in ipairs(doc.site) do\n\
+    \    local site_name = site[\"@name\"] or \"\"\n    if site.alerts then\n      for\
+    \ _, alert in ipairs(site.alerts) do\n        local cwes = {}\n        if alert.cweid\
+    \ and alert.cweid ~= \"\" and alert.cweid ~= \"0\" then\n          local num = tonumber(alert.cweid)\n\
+    \          if num and num > 0 then\n            table.insert(cwes, num)\n      \
+    \    end\n        end\n\n        local sev = \"medium\"\n        local code = tostring(alert.riskcode)\n\
+    \        if code == \"3\" then sev = \"high\"\n        elseif code == \"2\" then\
+    \ sev = \"medium\"\n        elseif code == \"1\" then sev = \"low\"\n        elseif\
+    \ code == \"0\" then sev = \"info\"\n        end\n\n        local title = alert.alert\
+    \ or alert.name or (\"ZAP Alert \" .. (alert.pluginId or \"unknown\"))\n       \
+    \ local desc = alert.desc or \"\"\n        if alert.solution and alert.solution\
+    \ ~= \"\" then\n          desc = desc .. \"\\n\\nSolution: \" .. alert.solution\n\
+    \        end\n\n        local instances = alert.instances\n        if instances\
+    \ and #instances > 0 then\n          for _, inst in ipairs(instances) do\n     \
+    \       local target_url = inst.uri\n            if not target_url or target_url\
+    \ == \"\" then\n              target_url = site_name\n            end\n\n      \
+    \      local inst_desc = desc\n            if inst.evidence and inst.evidence ~=\
+    \ \"\" then\n              inst_desc = inst_desc .. \"\\n\\nEvidence: \" .. inst.evidence\n\
+    \            end\n\n            emit({\n              rule_id = alert.pluginId or\
+    \ \"zap-alert\",\n              rule_name = title,\n              title = title,\n\
+    \              description = inst_desc,\n              severity = sev,\n       \
+    \       tool_severity = alert.riskdesc or sev,\n              category = \"dast\"\
+    ,\n              scanner_family = \"zap\",\n              cwes = cwes,\n       \
+    \       location = {\n                web = {\n                  normalized_url\
+    \ = target_url,\n                  parameter = inst.param or \"\",\n           \
+    \       method = inst.method or \"\"\n                }\n              }\n     \
+    \       })\n          end\n        else\n          emit({\n            rule_id =\
+    \ alert.pluginId or \"zap-alert\",\n            rule_name = title,\n           \
+    \ title = title,\n            description = desc,\n            severity = sev,\n\
+    \            tool_severity = alert.riskdesc or sev,\n            category = \"dast\"\
+    ,\n            scanner_family = \"zap\",\n            cwes = cwes,\n           \
+    \ location = {\n              web = {\n                normalized_url = site_name\n\
+    \              }\n            }\n          })\n        end\n      end\n    end\n\
+    \  end\nend\n"
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "nuclei").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: nuclei
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: dast
+  runtime: lua
+  description: ProjectDiscovery Nuclei vulnerability scanner JSONL
+  detect:
+    filenames:
+    - '*nuclei*.json'
+    - '*nuclei*.jsonl'
+    probes:
+    - jsonHasKeys:
+      - template-id
+      - info
+    - jsonHasKeys:
+      - template_id
+      - info
+  script: "function parse(input, emit)\n  for line in string.gmatch(input, \"[^\\r\\\
+    n]+\") do\n    line = string.match(line, \"^%s*(.-)%s*$\")\n    if line ~= \"\"\
+    \ then\n      local entry = json.decode(line)\n      if entry and entry[\"template-id\"\
+    ] then\n        local info = entry.info or {}\n        local cwes = {}\n       \
+    \ if info.classification and info.classification[\"cwe-id\"] then\n          for\
+    \ _, c in ipairs(info.classification[\"cwe-id\"]) do\n            local num = string.match(c,\
+    \ \"%d+\")\n            if num then table.insert(cwes, tonumber(num)) end\n    \
+    \      end\n        end\n\n        local target_url = entry[\"matched-at\"]\n  \
+    \      if not target_url or target_url == \"\" then\n          target_url = entry.host\
+    \ or \"\"\n        end\n\n        local title = info.name or entry[\"template-id\"\
+    ]\n        local desc = info.description or title\n        if info.remediation and\
+    \ info.remediation ~= \"\" then\n          desc = desc .. \"\\n\\nRemediation: \"\
+    \ .. info.remediation\n        end\n\n        local cvss = \"\"\n        if info.classification\
+    \ and info.classification[\"cvss-metrics\"] then\n          cvss = info.classification[\"\
+    cvss-metrics\"]\n        end\n\n        emit({\n          rule_id = entry[\"template-id\"\
+    ],\n          rule_name = info.name or entry[\"template-id\"],\n          title\
+    \ = title,\n          description = desc,\n          severity = string.lower(info.severity\
+    \ or \"medium\"),\n          tool_severity = info.severity or \"medium\",\n    \
+    \      category = \"dast\",\n          scanner_family = \"nuclei\",\n          cwes\
+    \ = cwes,\n          cvss_vector = cvss,\n          location = {\n            web\
+    \ = {\n              normalized_url = target_url\n            }\n          }\n \
+    \       })\n      end\n    end\n  end\nend\n"
+{{- end }}
+
+{{- if and .Values.parsers (hasKey .Values.parsers "defaultParsers") .Values.parsers.defaultParsers.enabled (index .Values.parsers.defaultParsers "genericjson").enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: genericjson
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  category: sast
+  runtime: lua
+  description: Rampart Generic Findings JSON format (DefectDojo generic import superset)
+  detect:
+    filenames:
+    - '*generic*.json'
+    - '*findings*.json'
+    probes:
+    - jsonHasKeys:
+      - findings
+    - jsonHasKeys:
+      - format
+      - rampart-generic
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if not doc\
+    \ then\n    return\n  end\n\n  local top_tool = doc.tool or doc.name or \"generic\"\
+    \n  local top_ver = doc.version or \"\"\n\n  local items = doc\n  if doc.findings\
+    \ and type(doc.findings) == \"table\" then\n    items = doc.findings\n  end\n\n\
+    \  if type(items) ~= \"table\" then\n    return\n  end\n\n  for _, f in ipairs(items)\
+    \ do\n    if type(f) == \"table\" and (f.title or f.rule_id or f.id) then\n    \
+    \  local rule_id = f.rule_id or f.vuln_id_from_tool or f.id or f.title or \"generic-finding\"\
+    \n      local title = f.title or rule_id\n      local desc = f.description or title\n\
+    \      if f.mitigation and f.mitigation ~= \"\" then\n        desc = desc .. \"\\\
+    n\\nMitigation: \" .. f.mitigation\n      elseif f.remediation and f.remediation\
+    \ ~= \"\" then\n        desc = desc .. \"\\n\\nRemediation: \" .. f.remediation\n\
+    \      end\n\n      local cat = \"sast\"\n      if f.category and f.category ~=\
+    \ \"\" then\n        cat = string.lower(f.category)\n      elseif f.secret and f.secret\
+    \ ~= \"\" then\n        cat = \"secret\"\n      elseif (f.purl and f.purl ~= \"\"\
+    ) or (f.component and f.component ~= \"\") then\n        cat = \"sca\"\n      elseif\
+    \ (f.url and f.url ~= \"\") or f.dynamic_finding then\n        cat = \"dast\"\n\
+    \      elseif f.resource and f.resource ~= \"\" and (not f.file or f.file == \"\"\
+    ) then\n        cat = \"cspm\"\n      end\n\n      local sev = string.lower(f.severity\
+    \ or \"\")\n      if sev == \"\" then\n        if f.cvssv3_score then\n        \
+    \  local score = tonumber(f.cvssv3_score) or 0\n          if score >= 9.0 then sev\
+    \ = \"critical\"\n          elseif score >= 7.0 then sev = \"high\"\n          elseif\
+    \ score >= 4.0 then sev = \"medium\"\n          elseif score > 0 then sev = \"low\"\
+    \n          else sev = \"info\"\n          end\n        else\n          sev = \"\
+    medium\"\n        end\n      end\n\n      local tool = f.tool or top_tool\n    \
+    \  local family = \"generic:\" .. string.lower(string.gsub(tool, \"%s+\", \"-\"\
+    ))\n\n      local cwes = {}\n      if f.cwe then\n        if type(f.cwe) == \"number\"\
+    \ then\n          table.insert(cwes, f.cwe)\n        elseif type(f.cwe) == \"string\"\
+    \ then\n          local n = string.match(f.cwe, \"%d+\")\n          if n then table.insert(cwes,\
+    \ tonumber(n)) end\n        elseif type(f.cwe) == \"table\" then\n          for\
+    \ _, c in ipairs(f.cwe) do\n            local n = tonumber(c) or tonumber(string.match(tostring(c),\
+    \ \"%d+\"))\n            if n then table.insert(cwes, n) end\n          end\n  \
+    \      end\n      end\n\n      local vuln_ids = {}\n      if f.cve and f.cve ~=\
+    \ \"\" then\n        table.insert(vuln_ids, f.cve)\n      end\n      if f.vulnerability_ids\
+    \ and type(f.vulnerability_ids) == \"table\" then\n        for _, v in ipairs(f.vulnerability_ids)\
+    \ do\n          if type(v) == \"string\" then\n            table.insert(vuln_ids,\
+    \ v)\n          elseif type(v) == \"table\" and v.vulnerability_id then\n      \
+    \      table.insert(vuln_ids, v.vulnerability_id)\n          end\n        end\n\
+    \      end\n\n      local loc = {}\n      if f.file or f.file_path then\n      \
+    \  loc.code = {\n          file_path = f.file or f.file_path,\n          start_line\
+    \ = tonumber(f.line) or 1,\n          end_line = tonumber(f.end_line)\n        }\n\
+    \      end\n      if f.url then\n        loc.web = {\n          normalized_url =\
+    \ f.url,\n          method = f.method,\n          parameter = f.param\n        }\n\
+    \      end\n      if f.purl or f.component then\n        loc.package = {\n     \
+    \     purl = f.purl,\n          component_name = f.component or f.component_name,\n\
+    \          installed_version = f.version or f.component_version,\n          fixed_version\
+    \ = f.fixed_version,\n          manifest_path = f.manifest\n        }\n      end\n\
+    \      if f.resource then\n        loc.resource = {\n          address = f.resource,\n\
+    \          type = f.resource_type\n        }\n      end\n\n      emit({\n      \
+    \  rule_id = rule_id,\n        title = title,\n        description = desc,\n   \
+    \     severity = sev,\n        tool_severity = f.severity or sev,\n        category\
+    \ = cat,\n        scanner_family = family,\n        scanner_version = top_ver,\n\
+    \        cwes = cwes,\n        vuln_ids = vuln_ids,\n        cvss_vector = f.cvssv3\
+    \ or f.cvss_vector,\n        secret_value = f.secret,\n        location = loc\n\
+    \      })\n    end\n  end\nend\n"
+{{- end }}

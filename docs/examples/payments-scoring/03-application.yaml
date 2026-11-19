@@ -1,0 +1,26 @@
+# Application: the facts about the product. This is the only resource that describes the thing being scored,
+# and the only one of the six that differs from one application to the next (the policies are per tenant).
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Application
+metadata:
+  name: payments-api                # the slug
+  namespace: acme-payments          # must be a namespace of the Tenant
+spec:
+  displayName: Payments API         # required, free text
+  owners: [team-payments]           # free text, not checked; shown on the page, no effect on the score
+
+  businessCriticality: critical     # low | medium | high | critical (default medium)
+                                    #   -> factors APP_CRITICAL (+100) and APP_HIGH (+50) of the built-in policy
+                                    #   -> and the COLUMN of the SLA matrix: the deadline in days
+  internetFacing: true              # true | false (default false)  -> factor INTERNET_FACING (+100 built in)
+  dataClassification: [pci, pii]    # any of: pii, pci, phi, secret, public (default none)
+                                    #   -> SENSITIVE_DATA (+80, once) when pci, pii or phi is listed; the others add nothing
+  compensatingControls: [waf]       # any of: waf, apiGateway, mtls, privateNetwork (default none)
+                                    #   -> COMPENSATING_CONTROL (-80) when waf or apiGateway is listed, on dynamic-scan findings only
+                                    #   (a policy reads them as waf, api_gateway, mtls, private_network)
+
+  complianceScope: [pci-dss]        # up to 50 labels, [a-z0-9][a-z0-9:._-]{0,63}
+                                    #   picks which ComplianceFramework reads this application. No points.
+  selectors:                        # which assets (repositories, images) belong to this application
+    repositories:
+      - url: github.com/acme/payments   # an exact address, or a prefix ending in * (github.com/acme/*); no branch

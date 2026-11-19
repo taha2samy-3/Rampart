@@ -665,6 +665,8 @@ type MemoryStore struct {
 	groupMembers          map[uuid.UUID][]uuid.UUID
 	feedMirror            *domain.FeedMirrorSpec
 	feedStates            map[string]domain.FeedState
+	clusterParsers        []domain.StoredParserObject
+	tenantParsers         map[uuid.UUID][]domain.StoredParserObject
 }
 
 type memBinding struct {
@@ -707,7 +709,42 @@ func NewMemoryStore() *MemoryStore {
 		groups:                make(map[uuid.UUID]*domain.FindingGroup),
 		groupMembers:          make(map[uuid.UUID][]uuid.UUID),
 		feedStates:            make(map[string]domain.FeedState),
+		tenantParsers:         make(map[uuid.UUID][]domain.StoredParserObject),
 	}
+}
+
+// SaveClusterParser adds a cluster-scoped parser to the in-memory store.
+func (m *MemoryStore) SaveClusterParser(name string, spec []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clusterParsers = append(m.clusterParsers, domain.StoredParserObject{
+		Origin: "cluster",
+		Name:   name,
+		Spec:   spec,
+	})
+}
+
+// SaveTenantParser adds a tenant-scoped parser to the in-memory store.
+func (m *MemoryStore) SaveTenantParser(tenantID uuid.UUID, name string, spec []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenantParsers[tenantID] = append(m.tenantParsers[tenantID], domain.StoredParserObject{
+		Origin: "tenant",
+		Name:   name,
+		Spec:   spec,
+	})
+}
+
+// ListParsers lists cluster and tenant parsers.
+func (m *MemoryStore) ListParsers(ctx context.Context, tenantID uuid.UUID) ([]domain.StoredParserObject, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.StoredParserObject
+	out = append(out, m.clusterParsers...)
+	if tenantID != uuid.Nil {
+		out = append(out, m.tenantParsers[tenantID]...)
+	}
+	return out, nil
 }
 
 // UpsertAccessBinding gives subject the role on the application, hierarchy, or tenant.
@@ -2318,38 +2355,6 @@ func (m *MemoryStore) GetQuotaUsage(ctx context.Context, tenantID uuid.UUID, key
 	defer m.mu.RUnlock()
 	mapKey := tenantID.String() + ":" + key + ":" + windowStart.UTC().Format(time.RFC3339)
 	return m.quotaUsage[mapKey], nil
-}
-
-func (m *MemoryStore) EnqueueDTrackSync(ctx context.Context, tenantID, sourceID uuid.UUID, projectUUID string) (bool, error) {
-	return true, nil
-}
-
-func (m *MemoryStore) CompleteDTrackSync(ctx context.Context, tenantID uuid.UUID, projectUUID string, syncErr error) (bool, error) {
-	return false, nil
-}
-
-func (m *MemoryStore) GetDTrackSync(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackSync, error) {
-	return nil, store.ErrNotFound
-}
-
-func (m *MemoryStore) UpsertDTrackProject(ctx context.Context, proj domain.DTrackProjectRecord) error {
-	return nil
-}
-
-func (m *MemoryStore) ListUnmappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
-	return nil, nil
-}
-
-func (m *MemoryStore) MapDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string, appID uuid.UUID) error {
-	return nil
-}
-
-func (m *MemoryStore) ListMappedDTrackProjects(ctx context.Context, tenantID, sourceID uuid.UUID) ([]domain.DTrackProjectRecord, error) {
-	return nil, nil
-}
-
-func (m *MemoryStore) GetDTrackProject(ctx context.Context, tenantID uuid.UUID, projectUUID string) (*domain.DTrackProjectRecord, error) {
-	return nil, nil
 }
 
 func (m *MemoryStore) LookupScanSource(ctx context.Context, sourceID uuid.UUID) (uuid.UUID, string, error) {

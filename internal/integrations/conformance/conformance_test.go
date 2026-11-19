@@ -1,16 +1,12 @@
 package conformance
 
 import (
-	"context"
-	"io"
-	"iter"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"rampart/internal/domain"
-	"rampart/internal/integrations"
-	"rampart/internal/parsers/bandit"
+	"rampart/internal/config/parsers"
+	"rampart/internal/integrations/lua"
 )
 
 func TestConformance_Bandit(t *testing.T) {
@@ -32,27 +28,15 @@ func TestConformance_Bandit(t *testing.T) {
 		t.Fatalf("failed to write test fixture: %v", err)
 	}
 
-	p := bandit.NewParser()
-	adapter := &testParserAdapter{p}
-	RunSuite(t, adapter, tmpDir)
-}
-
-type testParserAdapter struct {
-	p *bandit.Parser
-}
-
-func (a *testParserAdapter) Descriptor() integrations.Descriptor {
-	return integrations.Descriptor{
-		ID:   "builtin:bandit",
-		Name: "Bandit Parser",
-		Kind: integrations.KindParser,
+	banditYAML, err := parsers.GetDefaultParser("bandit")
+	if err != nil {
+		t.Fatalf("failed to load default bandit manifest: %v", err)
 	}
-}
 
-func (a *testParserAdapter) Detect(head []byte, filename string, contentType string) int {
-	return a.p.Detect(head, filename, contentType)
-}
+	p, err := lua.NewLuaParserFromSpec("bandit", banditYAML)
+	if err != nil {
+		t.Fatalf("failed to instantiate bandit lua parser: %v", err)
+	}
 
-func (a *testParserAdapter) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
-	return a.p.Parse(ctx, r, pc)
+	RunSuite(t, p, tmpDir)
 }

@@ -1,0 +1,21 @@
+{
+  "artifacts": [
+    {"id": "a-app", "name": "ecommerce-api", "version": "1.0.0", "type": "npm", "purl": "pkg:npm/ecommerce-api@1.0.0", "licenses": []},
+    {"id": "a-express", "name": "express", "version": "4.18.2", "type": "npm", "purl": "pkg:npm/express@4.18.2", "licenses": [{"value": "MIT", "spdxExpression": "MIT"}]},
+    {"id": "a-debug", "name": "debug", "version": "4.3.4", "type": "npm", "purl": "pkg:npm/debug@4.3.4", "licenses": [{"spdxExpression": "MIT"}]},
+    {"id": "a-busybox", "name": "busybox", "version": "1.36.1", "type": "apk", "licenses": [{"value": "GPL-2.0-only"}]},
+    {"id": "", "name": "", "version": ""}
+  ],
+  "artifactRelationships": [
+    {"parent": "a-express", "child": "a-app", "type": "dependency-of"},
+    {"parent": "a-debug", "child": "a-express", "type": "dependency-of"},
+    {"parent": "a-app", "child": "a-busybox", "type": "contains"},
+    {"parent": "a-app", "child": "a-debug", "type": "ownership-by-file-overlap"},
+    {"parent": "a-app", "child": "", "type": "depends-on"}
+  ],
+  "files": [{"id": "f1", "location": {"path": "/etc/passwd"}, "metadata": {"nested": [1, 2, {"a": "b"}]}}, {"id": "f2"}],
+  "source": {"id": "src-1", "name": "ecommerce-api", "version": "1.0.0", "type": "directory", "target": "."},
+  "distro": {"name": "alpine", "version": "3.18"},
+  "descriptor": {"name": "syft", "version": "1.0.1"},
+  "schema": {"version": "16.0.0", "url": "https://raw.githubusercontent.com/anchore/syft/main/schema/json/schema-16.0.0.json"}
+}

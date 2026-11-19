@@ -61,13 +61,32 @@ export type FindingState =
   | 'out_of_scope'
   | 'duplicate';
 
+/**
+ * Where a finding is, flat, as the screens read it (lib/location.ts makes it from the answer of the server, which nests it
+ * by kind). Which fields are set depends on what the scanner knows: a code scanner gives a file and lines, a dependency
+ * scanner a package, a web scanner an address, an infrastructure scanner a resource, a container scanner an image.
+ */
 export interface FindingLocation {
   file_path?: string;
   start_line?: number;
+  end_line?: number;
+  start_column?: number;
+  end_column?: number;
+  logical_location?: string;
+  snippet?: string;
   purl?: string;
   component_name?: string;
   installed_version?: string;
   fixed_version?: string;
+  manifest_path?: string;
+  dependency_path?: string[];
+  url?: string;
+  method?: string;
+  param?: string;
+  resource_address?: string;
+  resource_key?: string;
+  resource_type?: string;
+  image?: string;
 }
 export interface Finding {
   id: string;
@@ -81,7 +100,10 @@ export interface Finding {
   vulnerability_id?: string | null;
   cwes?: number[];
   cvss_vector?: string;
-  location?: FindingLocation;
+  /** As the server sends it (nested by kind) or flat; read it with locationOf. */
+  location?: unknown;
+  tool_severity?: string;
+  secret_verified?: boolean;
   severity: Severity;
   risk_score: number;
   state: FindingState;
@@ -260,6 +282,8 @@ export interface AppSummary {
   id: string;
   slug: string;
   name: string;
+  version?: string;
+  tags?: string[];
   business_criticality: string;
   internet_facing: boolean;
   open: Record<OpenBand, number>;
@@ -290,7 +314,45 @@ export interface TopFinding {
   vulnerability_id?: string | null;
   rule_id?: string;
 }
+/** What the score reads about an application (D136). */
+export interface ApplicationContext {
+  business_criticality: 'critical' | 'high' | 'medium' | 'low';
+  internet_facing: boolean;
+  data_classification: string[];
+  compensating_controls: string[];
+  lifecycle: 'planning' | 'development' | 'production' | 'deprecated';
+  /** What the application is: "repo" (one branch of one repository) or empty (repository-wide). */
+  type?: 'repo' | '';
+  repository?: string;
+  branch?: string;
+  /** Where it runs; empty when nobody said, and the score then gives it no environment points. */
+  environment: '' | 'production' | 'staging' | 'test' | 'development';
+  /** "crd": an Application resource owns it and it is read only here; "ui" or "none": it can be changed here. */
+  managed_by: 'crd' | 'ui' | 'none' | '';
+}
+export type ApplicationContextUpdate = Partial<Pick<ApplicationContext, 'business_criticality' | 'internet_facing' | 'data_classification' | 'compensating_controls' | 'lifecycle' | 'environment'>>;
+
+/** One factor of the risk policy in force (GET /api/v1/scoring). */
+export interface ScoringFactor {
+  name: string;
+  when: string;
+  points: number;
+  reason?: string;
+  group: 'severity' | 'threat' | 'context' | 'reduction';
+}
+export interface ScoringResponse {
+  product: string;
+  version: string;
+  customised: boolean;
+  risk: { base: Record<string, number>; bands: Record<string, number>; factors: ScoringFactor[] };
+  sla: { matrix: Record<string, Record<string, number>>; kevDueDate: boolean; maxDays: number; startFrom: string; restartOnReactivation: boolean; pauseDuringRiskAcceptance: boolean };
+  /** What an application can say about itself; the screens build their choices from these. */
+  environments: string[];
+  application_types: string[];
+}
+
 export interface ApplicationPage extends AppSummary {
+  context?: ApplicationContext;
   sla: SlaStanding;
   mttr: { band: OpenBand; days: number; fixed: number }[];
   coverage: CoverageRow[];
@@ -390,6 +452,8 @@ export interface VulnerabilityRecord {
   modified?: string;
   links: string[];
   exploited_by?: string[];
+  /** The best public exploit the databases know: none, poc or weaponized. */
+  exploit_maturity?: 'none' | 'poc' | 'weaponized';
 }
 export interface VulnerabilityDetail { id: string; known: boolean; record?: VulnerabilityRecord; links: string[] }
 
@@ -579,6 +643,8 @@ export interface FeedItem {
   url: string;
   is_mirror: boolean;
   enabled: boolean;
+  /** Why a feed that is not enabled is not run: the ClusterFeed switched it off, egress is denied with no mirror, OSV has no ecosystem, or the server's configuration. */
+  disabled_reason?: 'switched_off' | 'egress_denied' | 'no_ecosystem' | 'server_disabled';
   status: 'success' | 'syncing' | 'idle' | 'error' | 'disabled';
   records: number;
   last_sync?: string | null;

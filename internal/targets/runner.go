@@ -7,9 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,14 +14,14 @@ import (
 	"rampart/internal/operator"
 	"rampart/internal/scoring"
 	"rampart/internal/secrets"
-	dtclient "rampart/internal/upstream/dependencytrack/client"
-	dtservice "rampart/internal/upstream/dependencytrack/service"
-	dtwebhook "rampart/internal/upstream/dependencytrack/webhook"
 	"rampart/internal/workflow"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
 	"rampart/internal/auth"
 	"rampart/internal/config"
 	"rampart/internal/config/apply"
@@ -41,6 +38,8 @@ import (
 	"rampart/internal/telemetry"
 	"rampart/internal/ui"
 	"rampart/internal/version"
+
+	"github.com/google/uuid"
 )
 
 // Runner manages the lifecycle of the selected target components (ADR 0004).
@@ -71,6 +70,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		"http_addr", r.cfg.Server.HTTPAddr,
 		"ops_addr", r.cfg.Server.OpsAddr,
 	)
+
+	if err := r.verifyWasmModules(); err != nil {
+		return err
+	}
 
 	// 1. Initialize Storage Layer (Postgres with RLS per D4, or in-memory fallback)
 	var (
@@ -236,8 +239,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	trackerResolver := connectors.NewDefaultTrackerResolver(storeBackend, secretResolver, safeClient, r.cfg.Server.PublicURL)
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
-	// The dtrack-sync worker is registered with River now; its handler is set once the service exists (D92).
-	dtWorker := &jobs.DTrackSyncWorker{}
 	// Notifications are one job per connector and message (docs/23 K4, D97): the worker resolves the connector and
 	// its secrets when it sends.
 	notifyWorker := &jobs.NotifyDeliveryWorker{Handle: func(ctx context.Context, a jobs.NotifyDeliveryArgs) error {
@@ -252,11 +253,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		return err
 	}}
-	var dtHandler *dtwebhook.Handler
-	var dtEnqueuer query.DTrackEnqueuer
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
-		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, dtWorker, notifyWorker))
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, notifyWorker))
 		if err != nil {
 			return fmt.Errorf("initializing river job queue: %w", err)
 		}
@@ -271,23 +270,6 @@ func (r *Runner) Run(ctx context.Context) error {
 		queue = riverQ
 		notifRouter.SetDeliveryQueue(riverQ)
 		r.logger.Info("river job queue started (PostgreSQL backed)")
-
-		// Dependency-Track (docs/10, D92, docs/23 K5): syncs run as dtrack_sync jobs, a schedule starts the portfolio
-		// syncs, and the webhook only enqueues. The schedule lists every tenant's sources, so it needs the system role.
-		dtEngine := ingest.NewEngine(storeBackend)
-		dtEngine.SetScorer(scorer)
-		httpFor := func(tenantID uuid.UUID) (dtclient.HTTPDoer, *domain.PlatformSSRFAllowlist) {
-			return safeClient.Scoped(tenantID, domain.ConnectorTypeDependencyTrack), allowlist.ScopedTo(tenantID, domain.ConnectorTypeDependencyTrack)
-		}
-		if sysStore != nil && secretResolver != nil {
-			dtService := dtservice.New(pgStore, sysStore, secretResolver, httpFor, dtEngine, riverQ, r.logger)
-			dtWorker.Handle = dtService.Handle
-			go dtService.RunScheduler(ctx, sysStore.Pool())
-			dtHandler = dtwebhook.NewHandler(pgStore, secretResolver, riverQ)
-			dtEnqueuer = riverQ
-		} else {
-			r.logger.Warn("dependency-track: the sync needs the system database role (database.systemUrl); DT sources are not synced")
-		}
 	}
 
 	// D4: declarative configuration (tenants, namespaces, sources) is written by rampart_system.
@@ -307,9 +289,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	gw.UseProcessor(processor)
 
 	queryAPI := query.NewAPIWithAuth(storeBackend, feeds, authn)
-	if dtEnqueuer != nil {
-		queryAPI.SetDTrackEnqueuer(dtEnqueuer)
-	}
 	queryAPI.SetSSRFAllowlist(allowlist) // the connector dry-run validation applies the same scoped allowlist (D77, D82)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
@@ -434,9 +413,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		// Public callbacks live under /hooks on the write path (docs/04, 11, 15; D78), addressed by the connector id.
 		mux.Handle("POST /hooks/jira/{id}", inboundHandler)
 		mux.Handle("POST /hooks/github/{id}", inboundHandler)
-		if dtHandler != nil { // addressed by the ScanSource id; the bearer secret is the source's (docs/10 §8)
-			mux.Handle("POST /hooks/dependency-track/{id}", dtHandler)
-		}
+
 	}
 
 	if isAll || contains(targetList, "query-api") {

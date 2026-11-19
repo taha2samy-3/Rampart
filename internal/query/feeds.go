@@ -17,17 +17,21 @@ import (
 
 // FeedItemResponse represents one threat intelligence feed and its live status.
 type FeedItemResponse struct {
-	Name        string     `json:"name"`
-	DisplayName string     `json:"display_name"`
-	Category    string     `json:"category"`
-	Description string     `json:"description"`
-	URL         string     `json:"url"`
-	IsMirror    bool       `json:"is_mirror"`
-	Enabled     bool       `json:"enabled"`
-	Status      string     `json:"status"` // success | syncing | idle | error | disabled
-	Records     int64      `json:"records"`
-	LastSync    *time.Time `json:"last_sync,omitempty"`
-	Error       *string    `json:"error,omitempty"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	IsMirror    bool   `json:"is_mirror"`
+	Enabled     bool   `json:"enabled"`
+	// DisabledReason says why a feed that is not enabled is not run: switched_off (the ClusterFeed says so), egress_denied
+	// (egress is deny and it has no mirror address), no_ecosystem (OSV needs one), server_disabled (the server's own
+	// configuration). Empty when the feed runs.
+	DisabledReason string     `json:"disabled_reason,omitempty"`
+	Status         string     `json:"status"` // success | syncing | idle | error | disabled
+	Records        int64      `json:"records"`
+	LastSync       *time.Time `json:"last_sync,omitempty"`
+	Error          *string    `json:"error,omitempty"`
 }
 
 // FeedsListResponse is the payload for GET /api/v1/feeds.
@@ -88,16 +92,19 @@ func (a *API) handleListFeeds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Any signed-in user reads this page. Where a token is read from is a fact about the server, so it is not sent.
 	writeJSON(w, http.StatusOK, FeedsListResponse{
-		Mirror: mirror,
+		Mirror: mirror.Redacted(),
 		Items:  items,
 	})
 }
 
 // handleTestFeedsConnection performs live reachability probes against upstream threat intelligence endpoints.
+//
+// It makes the server call the feed addresses, which are the platform's and not the caller's, so it is for an
+// administrator, as the sync is; a viewer of any tenant could otherwise use it to probe the networks the server sees.
 func (a *API) handleTestFeedsConnection(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.resolveTenant(r); err != nil {
-		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+	if _, _, ok := a.requireRole(w, r, auth.RoleAdmin); !ok {
 		return
 	}
 
@@ -134,7 +141,7 @@ func (a *API) handleTestFeedsConnection(w http.ResponseWriter, r *http.Request) 
 			})
 			continue
 		}
-		results = append(results, probeFeedURL(r.Context(), it.Name, it.URL))
+		results = append(results, probeFeedURL(r.Context(), a.feedProbeClient(), it.Name, it.URL))
 	}
 
 	if requestedFeed != "" && len(results) == 0 {
@@ -151,6 +158,11 @@ func (a *API) handleTestFeedsConnection(w http.ResponseWriter, r *http.Request) 
 // FeedSyncer starts an on-demand sync. The implementation runs with the system role (enrich.OnDemand).
 type FeedSyncer interface {
 	Start(ctx context.Context, feed string, names []string) error
+}
+
+// FeedExplainer says why the server's configuration does not run a feed ("" when it does). enrich.OnDemand implements it.
+type FeedExplainer interface {
+	Why(ctx context.Context, feed string) string
 }
 
 // SetFeedSyncer wires the on-demand sync. Without it (no database.systemUrl, or feeds off) the sync button answers 501.
@@ -189,7 +201,7 @@ func (a *API) handleSyncFeeds(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		if !it.Enabled {
 			if it.Name == requestedFeed {
-				problem(w, http.StatusConflict, "feed-disabled", "Feed "+requestedFeed+" is switched off (egress deny without a mirror)")
+				problem(w, http.StatusConflict, "feed-disabled", feedOffMessage(requestedFeed, it.DisabledReason))
 				return
 			}
 			continue
@@ -202,7 +214,7 @@ func (a *API) handleSyncFeeds(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.feedSync.Start(r.Context(), requestedFeed, names); err != nil {
 		if errors.Is(err, enrich.ErrFeedOff) {
-			problem(w, http.StatusConflict, "feed-off", "This feed is switched off in the server's configuration (NVD disabled, or OSV with no ecosystem chosen)")
+			problem(w, http.StatusConflict, "feed-off", feedOffMessage(requestedFeed, enrich.FeedOffServerConfig))
 			return
 		}
 		if errors.Is(err, enrich.ErrSyncBusy) {
@@ -236,65 +248,68 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 	}
 
 	isDeny := mirror != nil && mirror.Egress == "deny"
+	explainer, _ := a.feedSync.(FeedExplainer)
 
-	// 1. Standard Built-in Feeds
+	// why is the reason a built-in feed is not run: the ClusterFeed's own switch first, then the egress rule, then what only
+	// the server's configuration decides (NVD switched off, OSV with no ecosystem).
+	why := func(name, mirrorURL string, enabled *bool) string {
+		switch {
+		case !domain.On(enabled):
+			return enrich.FeedOffSwitched
+		case isDeny && mirrorURL == "":
+			return enrich.FeedOffEgress
+		case explainer != nil:
+			return explainer.Why(ctx, name)
+		}
+		return ""
+	}
+	// source reads the address and the switch of a built-in feed from the ClusterFeed.
+	source := func(src *domain.FeedMirrorSource) (url string, enabled *bool) {
+		if src != nil {
+			return src.URL, src.Enabled
+		}
+		return "", nil
+	}
+	pick := func(url, fallback string) (string, bool) {
+		if url != "" {
+			return url, true
+		}
+		return fallback, false
+	}
+
 	items := make([]FeedItemResponse, 0, 8)
 
-	// CISA KEV
-	kevURL := defaultKEVURL
-	kevIsMirror := false
-	kevEnabled := true
-	if mirror != nil && mirror.KEV != nil && mirror.KEV.URL != "" {
-		kevURL = mirror.KEV.URL
-		kevIsMirror = true
-	} else if isDeny {
-		kevEnabled = false
-	}
+	kevMirror, kevOn := source(mirrorKEV(mirror))
+	kevURL, kevIsMirror := pick(kevMirror, defaultKEVURL)
 	items = append(items, buildFeedItem("cisa_kev", "CISA KEV", "Threat Intelligence",
 		"Known Exploited Vulnerabilities catalog published by CISA tracking actively exploited CVEs.",
-		kevURL, kevIsMirror, kevEnabled, stateMap["cisa_kev"]))
+		kevURL, kevIsMirror, why("cisa_kev", kevMirror, kevOn), stateMap["cisa_kev"]))
 
-	// FIRST EPSS
-	epssURL := defaultEPSSURL
-	epssIsMirror := false
-	epssEnabled := true
-	if mirror != nil && mirror.EPSS != nil && mirror.EPSS.URL != "" {
-		epssURL = mirror.EPSS.URL
-		epssIsMirror = true
-	} else if isDeny {
-		epssEnabled = false
-	}
+	epssMirror, epssOn := source(mirrorEPSS(mirror))
+	epssURL, epssIsMirror := pick(epssMirror, defaultEPSSURL)
 	items = append(items, buildFeedItem("first_epss", "FIRST EPSS", "Exploit Prediction",
 		"Exploit Prediction Scoring System probabilities estimating likelihood of active exploitation.",
-		epssURL, epssIsMirror, epssEnabled, stateMap["first_epss"]))
+		epssURL, epssIsMirror, why("first_epss", epssMirror, epssOn), stateMap["first_epss"]))
 
-	// NVD
-	nvdURL := defaultNVDURL
-	nvdIsMirror := false
-	nvdEnabled := true
-	if mirror != nil && mirror.NVD != nil && mirror.NVD.URL != "" {
-		nvdURL = mirror.NVD.URL
-		nvdIsMirror = true
-	} else if isDeny {
-		nvdEnabled = false
+	var nvdMirror string
+	var nvdOn *bool
+	if mirror != nil && mirror.NVD != nil {
+		nvdMirror, nvdOn = mirror.NVD.URL, mirror.NVD.Enabled
 	}
+	nvdURL, nvdIsMirror := pick(nvdMirror, defaultNVDURL)
 	items = append(items, buildFeedItem("nvd", "NVD (National Vulnerability Database)", "Vulnerability Database",
 		"NIST National Vulnerability Database CVE records, CVSS severity metrics, and CWE mappings.",
-		nvdURL, nvdIsMirror, nvdEnabled, stateMap["nvd"]))
+		nvdURL, nvdIsMirror, why("nvd", nvdMirror, nvdOn), stateMap["nvd"]))
 
-	// OSV
-	osvURL := defaultOSVURL
-	osvIsMirror := false
-	osvEnabled := true
-	if mirror != nil && mirror.OSV != nil && mirror.OSV.URL != "" {
-		osvURL = mirror.OSV.URL
-		osvIsMirror = true
-	} else if isDeny {
-		osvEnabled = false
+	var osvMirror string
+	var osvOn *bool
+	if mirror != nil && mirror.OSV != nil {
+		osvMirror, osvOn = mirror.OSV.URL, mirror.OSV.Enabled
 	}
+	osvURL, osvIsMirror := pick(osvMirror, defaultOSVURL)
 	items = append(items, buildFeedItem("osv", "OSV (Open Source Vulnerabilities)", "Package Advisories",
 		"Open Source Vulnerabilities database covering open-source package registries and ecosystems.",
-		osvURL, osvIsMirror, osvEnabled, stateMap["osv"]))
+		osvURL, osvIsMirror, why("osv", osvMirror, osvOn), stateMap["osv"]))
 
 	// 2. Optional sources declared in mirror
 	if mirror != nil {
@@ -305,7 +320,7 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem("vulnrichment", "CISA Vulnrichment (ADP)", "Threat Intelligence",
 				"CISA Authorized Data Publisher enriched CVE data, SSVC assessments, and missing CVSS scores.",
-				u, mirror.Vulnrichment.URL != "", true, stateMap["vulnrichment"]))
+				u, mirror.Vulnrichment.URL != "", sourceOff(mirror.Vulnrichment.Off()), stateMap["vulnrichment"]))
 		}
 		if mirror.ExploitDB != nil {
 			u := mirror.ExploitDB.URL
@@ -314,7 +329,7 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem("exploitdb", "Exploit Database", "Public Exploits",
 				"Public exploit code repository tracking verified proof-of-concept exploits.",
-				u, mirror.ExploitDB.URL != "", true, stateMap["exploitdb"]))
+				u, mirror.ExploitDB.URL != "", sourceOff(mirror.ExploitDB.Off()), stateMap["exploitdb"]))
 		}
 		if mirror.Metasploit != nil {
 			u := mirror.Metasploit.URL
@@ -323,7 +338,7 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem("metasploit", "Metasploit Framework", "Weaponized Modules",
 				"Rapid7 Metasploit Framework database of weaponized exploitation modules.",
-				u, mirror.Metasploit.URL != "", true, stateMap["metasploit"]))
+				u, mirror.Metasploit.URL != "", sourceOff(mirror.Metasploit.Off()), stateMap["metasploit"]))
 		}
 		if mirror.EUVD != nil {
 			u := mirror.EUVD.URL
@@ -332,7 +347,7 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem("euvd", "EUVD (ENISA)", "European Intelligence",
 				"European Union Vulnerability Database tracking vulnerabilities and European exploitation.",
-				u, mirror.EUVD.URL != "", true, stateMap["euvd"]))
+				u, mirror.EUVD.URL != "", sourceOff(mirror.EUVD.Off()), stateMap["euvd"]))
 		}
 		if mirror.VulnCheckKEV != nil {
 			u := mirror.VulnCheckKEV.URL
@@ -341,7 +356,7 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem("vulncheck_kev", "VulnCheck KEV", "Threat Intelligence",
 				"VulnCheck Known Exploited Vulnerabilities catalog with commercial/community intelligence.",
-				u, mirror.VulnCheckKEV.URL != "", true, stateMap["vulncheck_kev"]))
+				u, mirror.VulnCheckKEV.URL != "", sourceOff(mirror.VulnCheckKEV.Off()), stateMap["vulncheck_kev"]))
 		}
 
 		// 3. Custom feeds
@@ -354,18 +369,28 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 			}
 			items = append(items, buildFeedItem(c.Name, strings.ToUpper(c.Name), feedType,
 				"Custom in-house or licensed threat intelligence feed ("+c.Format+" format).",
-				targetURL, true, true, stateMap[c.Name]))
+				targetURL, true, sourceOff(c.Off()), stateMap[c.Name]))
 		}
 	}
 
 	return mirror, items, nil
 }
 
-func probeFeedURL(ctx context.Context, name, targetURL string) FeedTestResult {
+// SetFeedProbeClient replaces the client of the connection test (tests that serve a feed from 127.0.0.1).
+func (a *API) SetFeedProbeClient(c *http.Client) { a.probeClient = c }
+
+func (a *API) feedProbeClient() *http.Client {
+	if a.probeClient != nil {
+		return a.probeClient
+	}
+	return enrich.NewFeedHTTPClient(6*time.Second, false)
+}
+
+func probeFeedURL(ctx context.Context, client *http.Client, name, targetURL string) FeedTestResult {
 	start := time.Now()
 	res := FeedTestResult{
 		Name: name,
-		URL:  targetURL,
+		URL:  redactFeedURL(targetURL),
 	}
 
 	if targetURL == "" || strings.HasPrefix(targetURL, "/") {
@@ -376,20 +401,10 @@ func probeFeedURL(ctx context.Context, name, targetURL string) FeedTestResult {
 		return res
 	}
 
-	client := &http.Client{
-		Timeout: 6 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("stopped after 5 redirects")
-			}
-			return nil
-		},
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, targetURL, nil)
 	if err != nil {
-		res.Error = err.Error()
-		res.Message = "Failed to construct request: " + err.Error()
+		res.Error = "the address is not a valid URL"
+		res.Message = "Failed to construct request"
 		return res
 	}
 	req.Header.Set("User-Agent", "Rampart-FeedProbe/1.0")
@@ -430,7 +445,10 @@ func probeFeedURL(ctx context.Context, name, targetURL string) FeedTestResult {
 	return res
 }
 
-func buildFeedItem(name, displayName, category, description, targetURL string, isMirror, enabled bool, st domain.FeedState) FeedItemResponse {
+func redactFeedURL(raw string) string { return domain.RedactFeedURL(raw) }
+
+func buildFeedItem(name, displayName, category, description, targetURL string, isMirror bool, disabledReason string, st domain.FeedState) FeedItemResponse {
+	enabled := disabledReason == ""
 	status := "idle"
 	if !enabled {
 		status = "disabled"
@@ -439,16 +457,54 @@ func buildFeedItem(name, displayName, category, description, targetURL string, i
 	}
 
 	return FeedItemResponse{
-		Name:        name,
-		DisplayName: displayName,
-		Category:    category,
-		Description: description,
-		URL:         targetURL,
-		IsMirror:    isMirror,
-		Enabled:     enabled,
-		Status:      status,
-		Records:     st.Records,
-		LastSync:    st.LastSync,
-		Error:       st.Error,
+		Name:           name,
+		DisplayName:    displayName,
+		Category:       category,
+		Description:    description,
+		URL:            redactFeedURL(targetURL),
+		IsMirror:       isMirror,
+		Enabled:        enabled,
+		DisabledReason: disabledReason,
+		Status:         status,
+		Records:        st.Records,
+		LastSync:       st.LastSync,
+		Error:          st.Error,
 	}
+}
+
+// sourceOff is the reason of an optional or custom source: only its own switch can turn it off.
+func sourceOff(off bool) string {
+	if off {
+		return enrich.FeedOffSwitched
+	}
+	return ""
+}
+
+func mirrorKEV(m *domain.FeedMirrorSpec) *domain.FeedMirrorSource {
+	if m == nil {
+		return nil
+	}
+	return m.KEV
+}
+
+func mirrorEPSS(m *domain.FeedMirrorSpec) *domain.FeedMirrorSource {
+	if m == nil {
+		return nil
+	}
+	return m.EPSS
+}
+
+// feedOffMessage says, in a sentence, why a feed that was asked for is not run.
+func feedOffMessage(name, reason string) string {
+	switch reason {
+	case enrich.FeedOffSwitched:
+		return "Feed " + name + " is switched off in the ClusterFeed (enabled: false)"
+	case enrich.FeedOffEgress:
+		return "Feed " + name + " is not read: egress is denied and the ClusterFeed gives it no mirror address"
+	case enrich.FeedOffNoEcosystem:
+		return "Feed " + name + " has no ecosystem chosen: name one in the ClusterFeed (osv.ecosystems) or in feeds.osvEcosystems"
+	case enrich.FeedOffServerConfig:
+		return "Feed " + name + " is switched off in the server's configuration (feeds.nvdDisabled)"
+	}
+	return "Feed " + name + " is switched off"
 }

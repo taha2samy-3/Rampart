@@ -98,3 +98,126 @@ func TestParserPackage(t *testing.T) {
 		t.Fatalf("package location: %+v", got[0].Location.Package)
 	}
 }
+
+func TestClusterAndLuaParsers(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemoryStore()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+
+	// 1. Save a ClusterParser with runtime: native (wrapping native sarif)
+	sarifClusterYAML := `
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: sarif
+spec:
+  version: "2.1.0"
+  family: sarif
+  category: sast
+  runtime: native
+  native: sarif
+`
+	st.SaveClusterParser("sarif", []byte(sarifClusterYAML))
+
+	// 2. Save a ClusterParser with runtime: lua
+	luaClusterYAML := `
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: team-scanner
+spec:
+  version: "1.0.0"
+  family: teamscanner
+  category: sast
+  runtime: lua
+  detect:
+    filenames: ["*team*.json"]
+  script: |
+    function parse(input, emit)
+      emit({
+        rule_id = "TEAM-01",
+        title = "Team scanner finding",
+        severity = "HIGH"
+      })
+    end
+`
+	st.SaveClusterParser("team-scanner", []byte(luaClusterYAML))
+
+	set := newParserSet(integrations.DefaultRegistry(), st)
+
+	// Both tenant A and tenant B should resolve the cluster parsers
+	for _, tid := range []uuid.UUID{tenantA, tenantB} {
+		p := set.byName(ctx, tid, "team-scanner")
+		if p == nil {
+			t.Fatalf("tenant %s failed to resolve cluster parser team-scanner", tid)
+		}
+		if p.Descriptor().ID != "lua:team-scanner" {
+			t.Errorf("expected lua:team-scanner, got %s", p.Descriptor().ID)
+		}
+
+		// Detect by file name alone: 50 on the one scale every parser uses, above the 40 the ingest needs to auto-select
+		detected, score := set.detect(ctx, tid, []byte(`{}`), "team-report.json", "application/json")
+		if detected == nil || detected.Descriptor().ID != "lua:team-scanner" || score < 40 {
+			t.Errorf("detection failed: got %v with score %d", detected, score)
+		}
+	}
+
+	// 3. A tenant may not install a script or a module: its Parser is data (mapping). A stored Lua parser of tenant A is
+	// not used, and tenant A still gets the cluster parser (docs/34 F14).
+	tenantOverrideYAML := `
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Parser
+metadata:
+  name: team-scanner
+spec:
+  version: "2.0.0"
+  family: teamscanner
+  category: sast
+  runtime: lua
+  script: |
+    function parse(input, emit)
+      emit({
+        rule_id = "TENANT-A-01",
+        title = "Tenant A overridden finding",
+        severity = "CRITICAL"
+      })
+    end
+`
+	st.SaveTenantParser(tenantA, "team-scanner", []byte(tenantOverrideYAML))
+
+	set2 := newParserSet(integrations.DefaultRegistry(), st)
+	pA := set2.byName(ctx, tenantA, "team-scanner")
+	if pA == nil || pA.Descriptor().Version != "1.0.0" {
+		t.Fatalf("a tenant's Lua parser must be ignored; tenant A should still resolve the cluster v1.0.0, got: %v", pA)
+	}
+	pB := set2.byName(ctx, tenantB, "team-scanner")
+	if pB == nil || pB.Descriptor().Version != "1.0.0" {
+		t.Fatalf("expected tenant B to resolve cluster v1.0.0, got: %v", pB)
+	}
+}
+
+// The readers of SBOM formats are SBOMParser resources, not report parsers: the parser set registers them next to the
+// report parsers, and each is found by its own format (docs/34 section 0b).
+func TestSBOMParsersAreDetected(t *testing.T) {
+	set := newParserSet(integrations.DefaultRegistry(), nil)
+	cases := []struct {
+		name, filename string
+		head           []byte
+		want           string
+	}{
+		{"CycloneDX JSON", "bom.cdx.json", []byte(`{"bomFormat": "CycloneDX", "specVersion": "1.5"}`), "builtin:sbom-cyclonedx"},
+		{"CycloneDX XML", "bom.cdx.xml", []byte(`<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.5"></bom>`), "builtin:sbom-cyclonedx"},
+		{"SPDX JSON", "bom.spdx.json", []byte(`{"spdxVersion": "SPDX-2.3"}`), "builtin:sbom-spdx"},
+		{"SPDX tag-value", "bom.spdx", []byte("SPDXVersion: SPDX-2.3\nPackageName: openssl"), "builtin:sbom-spdx"},
+	}
+	for _, tc := range cases {
+		p, score := set.registry.DetectParser(tc.head, tc.filename, "")
+		if p == nil || score < 50 {
+			t.Fatalf("%s: not detected (score %d)", tc.name, score)
+		}
+		if got := p.Descriptor().ID; got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -1,79 +1,63 @@
 {{- if and .Values.feeds.enabled .Values.feeds.defaultMirror.enabled }}
+{{- $m := .Values.feeds.defaultMirror }}
 apiVersion: rampart.aspm.dev/v1alpha1
 kind: ClusterFeed
 metadata:
-  name: {{ .Values.feeds.defaultMirror.name | default "default" }}
+  name: {{ $m.name | default "default" }}
   labels:
     {{- include "rampart.labels" . | nindent 4 }}
 spec:
-  egress: {{ .Values.feeds.defaultMirror.egress | default "allow" | quote }}
-  storageMode: {{ .Values.feeds.defaultMirror.storageMode | default "lightweight" | quote }}
-  {{- $kevUrl := or .Values.feeds.defaultMirror.kev.url .Values.feeds.kevUrl }}
-  {{- if $kevUrl }}
+  egress: {{ $m.egress | default "allow" | quote }}
+  storageMode: {{ $m.storageMode | default "lightweight" | quote }}
+  {{- if and (not .Values.feeds.tokenSecret) (or $m.nvd.tokenFile $m.vulncheckKev.tokenFile) }}
+  {{- fail "a feed tokenFile is set but feeds.tokenSecret is empty: the Secret holding the tokens is what is mounted at /etc/rampart/feed-secrets" }}
+  {{- end }}
+  {{- /* The four built-in feeds run when their block is absent, so a block is written for each: it carries the switch. */}}
+  {{- $kevUrl := or $m.kev.url .Values.feeds.kevUrl }}
   kev:
-    url: {{ $kevUrl | quote }}
-  {{- end }}
-  {{- $epssUrl := or .Values.feeds.defaultMirror.epss.url .Values.feeds.epssUrl }}
-  {{- if $epssUrl }}
+    enabled: {{ ne (toString $m.kev.enabled) "false" }}
+    url: {{ required "feeds.defaultMirror.kev.url is required (the kev block needs an address)" $kevUrl | quote }}
+  {{- $epssUrl := or $m.epss.url .Values.feeds.epssUrl }}
   epss:
-    url: {{ $epssUrl | quote }}
-  {{- end }}
-  {{- $nvdUrl := or .Values.feeds.defaultMirror.nvd.url .Values.feeds.nvdUrl }}
-  {{- if $nvdUrl }}
+    enabled: {{ ne (toString $m.epss.enabled) "false" }}
+    url: {{ required "feeds.defaultMirror.epss.url is required (the epss block needs an address)" $epssUrl | quote }}
+  {{- $nvdUrl := or $m.nvd.url .Values.feeds.nvdUrl }}
   nvd:
-    url: {{ $nvdUrl | quote }}
-  {{- end }}
-  {{- $osvUrl := or .Values.feeds.defaultMirror.osv.url .Values.feeds.osvBaseUrl }}
-  {{- if $osvUrl }}
+    enabled: {{ ne (toString $m.nvd.enabled) "false" }}
+    {{- with $nvdUrl }}
+    url: {{ . | quote }}
+    {{- end }}
+    {{- with $m.nvd.tokenFile }}
+    tokenFile: {{ . | quote }}
+    {{- end }}
+  {{- $osvUrl := or $m.osv.url .Values.feeds.osvBaseUrl }}
+  {{- $osvEcosystems := or $m.osv.ecosystems .Values.feeds.osvEcosystems }}
   osv:
-    url: {{ $osvUrl | quote }}
+    enabled: {{ ne (toString $m.osv.enabled) "false" }}
+    {{- with $osvUrl }}
+    url: {{ . | quote }}
+    {{- end }}
+    {{- with $osvEcosystems }}
+    ecosystems:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- /* The optional sources are off when their block is absent, so a switched-off one is simply not written. */}}
+  {{- range $name := list "vulnrichment" "exploitdb" "metasploit" "euvd" "vulncheckKev" }}
+  {{- $src := index $m $name }}
+  {{- if and $src (ne (toString $src.enabled) "false") }}
+  {{- if and (eq $name "vulncheckKev") (not $src.tokenFile) }}
+  {{- fail "feeds.defaultMirror.vulncheckKev is enabled but has no tokenFile: VulnCheck answers no request without a token. Set tokenFile (under /etc/rampart/feed-secrets) or switch it off." }}
   {{- end }}
-  {{- with .Values.feeds.defaultMirror.vulnrichment }}
-  {{- if and . .url }}
-  vulnrichment:
-    url: {{ .url | quote }}
-    {{- with .tokenFile }}
+  {{ $name }}:
+    {{- with $src.url }}
+    url: {{ . | quote }}
+    {{- end }}
+    {{- with $src.tokenFile }}
     tokenFile: {{ . | quote }}
     {{- end }}
   {{- end }}
   {{- end }}
-  {{- with .Values.feeds.defaultMirror.exploitdb }}
-  {{- if and . .url }}
-  exploitdb:
-    url: {{ .url | quote }}
-    {{- with .tokenFile }}
-    tokenFile: {{ . | quote }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- with .Values.feeds.defaultMirror.metasploit }}
-  {{- if and . .url }}
-  metasploit:
-    url: {{ .url | quote }}
-    {{- with .tokenFile }}
-    tokenFile: {{ . | quote }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- with .Values.feeds.defaultMirror.euvd }}
-  {{- if and . .url }}
-  euvd:
-    url: {{ .url | quote }}
-    {{- with .tokenFile }}
-    tokenFile: {{ . | quote }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- with .Values.feeds.defaultMirror.vulncheckKev }}
-  {{- if and . .url }}
-  vulncheckKev:
-    url: {{ .url | quote }}
-    {{- with .tokenFile }}
-    tokenFile: {{ . | quote }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-  {{- with .Values.feeds.defaultMirror.custom }}
+  {{- with $m.custom }}
   custom:
     {{- toYaml . | nindent 4 }}
   {{- end }}

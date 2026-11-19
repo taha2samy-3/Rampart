@@ -31,7 +31,6 @@ type Store interface {
 	HeldCloses
 	Federation
 	QuotaStore
-	DTrackStore
 	GroupStore
 	ViewStore
 

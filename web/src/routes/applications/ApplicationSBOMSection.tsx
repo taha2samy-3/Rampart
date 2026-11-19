@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { locationOf } from '@/lib/location';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -196,7 +197,7 @@ export function ApplicationSBOMSection({
                   className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
                 >
                   <span>CycloneDX SBOM</span>
-                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                  <span className="font-mono text-12 text-ink-2">JSON</span>
                 </a>
               </MenuItem>
               <MenuItem asChild>
@@ -206,7 +207,7 @@ export function ApplicationSBOMSection({
                   className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
                 >
                   <span>SPDX SBOM</span>
-                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                  <span className="font-mono text-12 text-ink-2">JSON</span>
                 </a>
               </MenuItem>
               <MenuSeparator />
@@ -218,7 +219,7 @@ export function ApplicationSBOMSection({
                   className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
                 >
                   <span>CycloneDX VEX</span>
-                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                  <span className="font-mono text-12 text-ink-2">JSON</span>
                 </a>
               </MenuItem>
               <MenuItem asChild>
@@ -228,7 +229,7 @@ export function ApplicationSBOMSection({
                   className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
                 >
                   <span>OpenVEX</span>
-                  <span className="font-mono text-10 text-ink-2">JSON</span>
+                  <span className="font-mono text-12 text-ink-2">JSON</span>
                 </a>
               </MenuItem>
             </MenuContent>
@@ -241,15 +242,15 @@ export function ApplicationSBOMSection({
           role="status"
           className={`mt-3 flex items-center justify-between rounded-ctl border px-3 py-2 text-12 font-medium ${
             scanStatus.ok
-              ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-              : 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-400'
+              ? 'border-resolved/20 bg-resolved/10 text-resolved'
+              : 'border-critical/20 bg-critical/10 text-critical'
           }`}
         >
           <span>{scanStatus.message}</span>
           <button
             type="button"
             onClick={() => setScanStatus(null)}
-            className="ml-2 text-11 opacity-70 hover:opacity-100"
+            className="ml-2 text-12 opacity-70 hover:opacity-100"
             aria-label="Dismiss scan status"
           >
             ✕
@@ -370,7 +371,7 @@ function PackageRowGroup({
         <Td className="font-medium text-ink">
           <div className="flex flex-col">
             <span className="font-mono text-12">{pkg.name}</span>
-            <span className="max-w-xs truncate text-11 text-ink-2" title={pkg.purl}>
+            <span className="max-w-xs truncate text-12 text-ink-2" title={pkg.purl}>
               {pkg.purl}
             </span>
           </div>
@@ -382,14 +383,31 @@ function PackageRowGroup({
             {pkg.asset_name || '—'}
           </span>
         </Td>
-        <Td className="text-12 text-ink-2">{pkg.license || 'Unknown'}</Td>
+        <Td className="text-12 text-ink-2">
+          {pkg.license && pkg.license.trim() !== '' ? (
+            <span
+              className={`inline-flex items-center rounded px-2 py-0.5 text-12 font-medium ${
+                pkg.license.toLowerCase().includes('gpl') ||
+                pkg.license.toLowerCase().includes('agpl') ||
+                pkg.license.toLowerCase().includes('lgpl') ||
+                pkg.license.toLowerCase().includes('mpl')
+                  ? 'bg-high text-high border border-high'
+                  : 'bg-resolved text-resolved border border-resolved'
+              }`}
+            >
+              {pkg.license}
+            </span>
+          ) : (
+            <span className="text-12 text-ink-3">Unknown</span>
+          )}
+        </Td>
         <Td align="end">
           {pkg.vulnerabilities > 0 ? (
             <div className="inline-flex items-center gap-1.5">
               <Link
                 to="/findings"
                 search={{ q: `app:${app.slug || `"${app.name}"`} purl:"${purlBase(pkg.purl)}"` }}
-                className="inline-flex items-center gap-1 rounded border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-11 font-medium text-red-600 no-underline hover:underline dark:text-red-400"
+                className="inline-flex items-center gap-1 rounded border border-critical/20 bg-critical/10 px-2 py-0.5 text-12 font-medium text-critical no-underline hover:underline"
                 title={`${pkg.vulnerabilities} open CVEs found in this package`}
               >
                 ⚠️ {pkg.vulnerabilities} open CVE{pkg.vulnerabilities > 1 ? 's' : ''}
@@ -399,7 +417,7 @@ function PackageRowGroup({
                 onClick={onToggleExpand}
                 aria-expanded={isExpanded}
                 aria-controls={`pkg-cves-${pkgKey}`}
-                className="inline-flex h-6 w-6 items-center justify-center rounded border border-red-500/30 bg-red-500/15 text-11 font-bold text-red-600 transition-colors hover:bg-red-500/25 dark:text-red-400"
+                className="inline-flex h-6 w-6 items-center justify-center rounded border border-critical/30 bg-critical/15 text-12 font-bold text-critical transition-colors hover:bg-critical/25"
                 title={isExpanded ? 'Collapse CVE list' : 'Expand CVE list'}
                 aria-label={isExpanded ? `Collapse CVEs for ${pkg.name}` : `Expand CVEs for ${pkg.name}`}
               >
@@ -407,7 +425,7 @@ function PackageRowGroup({
               </button>
             </div>
           ) : (
-            <span className="inline-flex items-center gap-1 rounded border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-11 font-medium text-emerald-600 dark:text-emerald-400">
+            <span className="inline-flex items-center gap-1 rounded border border-resolved/20 bg-resolved/10 px-2 py-0.5 text-12 font-medium text-resolved">
               Clean
             </span>
           )}
@@ -418,7 +436,7 @@ function PackageRowGroup({
             disabled={scanningPurl !== null}
             loading={scanningPurl === pkg.purl}
             onClick={() => void onScan(pkg)}
-            className="h-7 px-2 text-11 text-accent hover:bg-accent/10 hover:text-accent"
+            className="h-7 px-2 text-12 text-accent hover:bg-accent/10 hover:text-accent"
             title={t('inventory.scanNowTooltip', { name: pkg.name })}
             aria-label={`Re-evaluate ${pkg.name}`}
           >
@@ -429,7 +447,7 @@ function PackageRowGroup({
       </Tr>
 
       {isExpanded && (
-        <Tr id={`pkg-cves-${pkgKey}`} className="border-b border-rule bg-surface-2/40">
+        <Tr id={`pkg-cves-${pkgKey}`} className="border-b border-rule bg-chrome/40">
           <Td colSpan={7} className="px-4 py-3">
             <PackageCVEsDrawer app={app} pkg={pkg} onSelectFinding={onSelectFinding} />
           </Td>
@@ -460,20 +478,20 @@ function PackageCVEsDrawer({
   const findings = query.data?.items ?? [];
 
   return (
-    <div className="rounded-md border border-border bg-surface p-3 shadow-sm">
-      <div className="mb-2 flex items-center justify-between border-b border-border pb-2">
+    <div className="rounded-ctl border border-rule bg-surface p-3">
+      <div className="mb-2 flex items-center justify-between border-b border-rule pb-2">
         <div className="flex items-center gap-2">
           <span className="text-12 font-semibold text-ink">
             Vulnerabilities in <span className="font-mono text-accent">{pkg.name}@{pkg.version}</span>
           </span>
-          <span className="rounded bg-surface-2 px-1.5 py-0.5 text-11 font-mono text-ink-2">
+          <span className="rounded bg-chrome px-1.5 py-0.5 text-12 font-mono text-ink-2">
             {pkg.vulnerabilities} reported
           </span>
         </div>
         <Link
           to="/findings"
           search={{ q: `app:${app.slug || `"${app.name}"`} purl:"${base}"` }}
-          className="text-11 font-medium text-accent hover:underline"
+          className="text-12 font-medium text-accent hover:underline"
         >
           View all in Findings Explorer →
         </Link>
@@ -494,7 +512,7 @@ function PackageCVEsDrawer({
           <Link
             to="/findings"
             search={{ q: `purl:"${base}"` }}
-            className="text-11 font-medium text-accent hover:underline"
+            className="text-12 font-medium text-accent hover:underline"
           >
             Search matching findings across all assets →
           </Link>
@@ -503,7 +521,7 @@ function PackageCVEsDrawer({
         <div className="overflow-x-auto">
           <table className="w-full text-left text-12">
             <thead>
-              <tr className="border-b border-border/60 text-11 text-ink-2">
+              <tr className="border-b border-rule/60 text-12 text-ink-2">
                 <th className="py-1 font-medium">CVE / Vulnerability ID</th>
                 <th className="py-1 font-medium">Severity</th>
                 <th className="py-1 font-medium">Title & Summary</th>
@@ -517,7 +535,7 @@ function PackageCVEsDrawer({
                 const cveId = f.vulnerability_id || f.rule_id || f.id;
                 const searchQ = f.vulnerability_id ? `cve:${f.vulnerability_id}` : (f.rule_id ? `rule:${f.rule_id}` : `id:${f.id}`);
                 return (
-                  <tr key={f.id} className="transition-colors hover:bg-surface-2/50">
+                  <tr key={f.id} className="transition-colors hover:bg-chrome/50">
                     <td className="py-2 pr-3 font-mono font-semibold text-ink">
                       <button
                         type="button"
@@ -540,7 +558,7 @@ function PackageCVEsDrawer({
                       </button>
                     </td>
                     <td className="py-2 pr-3">
-                      <span className="inline-flex items-center gap-1.5 text-11">
+                      <span className="inline-flex items-center gap-1.5 text-12">
                         <BandShape band={toBand(f.severity)} size={10} />
                         <span className="capitalize">{f.severity}</span>
                       </span>
@@ -548,8 +566,8 @@ function PackageCVEsDrawer({
                     <td className="max-w-xs truncate py-2 pr-3 text-ink-2" title={f.title}>
                       {f.title}
                     </td>
-                    <td className="py-2 pr-3 font-mono text-11 text-ink-2">
-                      {f.location?.fixed_version || '—'}
+                    <td className="py-2 pr-3 font-mono text-12 text-ink-2">
+                      {locationOf(f.location).fixed_version || '—'}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
@@ -568,7 +586,7 @@ function PackageCVEsDrawer({
                               first_seen: f.first_seen,
                             })
                           }
-                          className="h-6 px-2 text-11"
+                          className="h-6 px-2 text-12"
                         >
                           Details
                         </Button>
@@ -578,7 +596,7 @@ function PackageCVEsDrawer({
                             q: searchQ || undefined,
                             sel: f.id,
                           }}
-                          className="text-11 font-medium text-accent hover:underline"
+                          className="text-12 font-medium text-accent hover:underline"
                           title="Open and filter directly in Findings Explorer"
                         >
                           Explorer →

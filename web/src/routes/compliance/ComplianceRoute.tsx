@@ -63,7 +63,7 @@ export function ComplianceRoute({ search }: { search?: ComplianceSearch } = {}) 
           {fwInfo && (
             <div className="mt-4 flex items-center gap-3">
               <FrameworkMark id={fwInfo.id} name={fwInfo.name} origin={fwInfo.origin} logo={fwInfo.logo} size={36} />
-              <h2 className="display m-0 text-18">{fwInfo.name} <span className="font-normal text-ink-2">{fwInfo.version}</span></h2>
+              <h2 className="display m-0 text-16">{fwInfo.name} <span className="font-normal text-ink-2">{fwInfo.version}</span></h2>
             </div>
           )}
           {st && (

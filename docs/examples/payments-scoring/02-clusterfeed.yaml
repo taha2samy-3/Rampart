@@ -1,0 +1,24 @@
+# ClusterFeed: which threat data the server reads. It decides whether the threat factors can ever apply:
+# no KEV list means vuln.kev is always false, no EPSS means vuln.epss is always 0.
+# Cluster-wide: one for the installation, named "default".
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterFeed
+metadata:
+  name: default
+spec:
+  egress: allow                     # allow (default) | deny: with deny, a feed runs only if it names a mirror url
+  storageMode: lightweight          # lightweight (default) | full | standalone
+  kev:                              # CISA Known Exploited Vulnerabilities  -> factor KEV, and the CISA due date of the SLA
+    url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"   # required, http(s)
+  epss:                             # FIRST EPSS  -> factors EPSS_HIGH and EPSS_MODERATE
+    url: "https://epss.cyentia.com/epss_scores-current.csv.gz"                                    # required, http(s)
+  nvd:                              # NVD: CVE descriptions, CVSS, CWE
+    url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    # tokenFile: /etc/rampart/feed-secrets/nvd   # optional API key, must be a file under /etc/rampart/feed-secrets/
+  osv:                              # OSV: package advisories. Large, so it runs only for the ecosystems named
+    url: "https://osv-vulnerabilities.storage.googleapis.com"
+    ecosystems: [Maven, npm]        # at most 64; an OSV ecosystem name, case as OSV writes it (PyPI, Go, crates.io, ...)
+  vulnrichment: {}                  # optional sources: naming one turns it on, and its url defaults when left out
+  metasploit: {}                    # a Metasploit module gives exploit maturity "weaponized"  -> factor EXPLOIT_WEAPONIZED
+  # Every source also takes: enabled (true by default; false switches only that source off) and schedule.
+  # Others you can add the same way: exploitdb, euvd, vulncheckKev (needs tokenFile), custom[] (osv-zip | intel-jsonl).

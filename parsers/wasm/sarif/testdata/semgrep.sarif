@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "semgrep",
+          "version": "1.45.0",
+          "rules": [
+            {
+              "id": "rules.go.sql-injection",
+              "name": "go-sql-injection",
+              "shortDescription": {
+                "text": "SQL Injection in database query"
+              },
+              "fullDescription": {
+                "text": "User input concatenated into SQL string"
+              },
+              "properties": {
+                "tags": [
+                  "CWE-89",
+                  "security"
+                ],
+                "security-severity": "8.5"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "rules.go.sql-injection",
+          "level": "error",
+          "message": {
+            "text": "Detected SQL injection in query handler"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pkg/auth/store.go"
+                },
+                "region": {
+                  "startLine": 52,
+                  "endLine": 54,
+                  "startColumn": 4,
+                  "endColumn": 40,
+                  "snippet": {
+                    "text": "db.Query(\"SELECT * FROM users WHERE email = '\" + email + \"'\")"
+                  }
+                }
+              },
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "auth.GetUserByEmail"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+

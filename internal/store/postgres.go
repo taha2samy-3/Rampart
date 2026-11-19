@@ -1013,14 +1013,14 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 // applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
 const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
 	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, coalesce(hierarchy_path, ''),
-	compliance_scope`
+	compliance_scope, managed_by, type, repository, branch, environment`
 
 func scanApplication(row pgx.Row, app *domain.Application) error {
 	var owners, selectors []byte
 	var hPath string
 	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
 		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt, &hPath,
-		&app.ComplianceScope); err != nil {
+		&app.ComplianceScope, &app.ManagedBy, &app.Type, &app.Repository, &app.Branch, &app.Environment); err != nil {
 		return err
 	}
 	app.HierarchyPath = hPath
@@ -1543,20 +1543,21 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
 			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by,
-			                         hierarchy_node_id, hierarchy_path, compliance_scope)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15, $16)
+			                         hierarchy_node_id, hierarchy_path, compliance_scope, type, repository, branch, environment)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15, $16, $17, $18, $19, $20)
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET
 				name = EXCLUDED.name, description = EXCLUDED.description,
 				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
 				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
 				owners = EXCLUDED.owners, selectors = EXCLUDED.selectors, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
-				compliance_scope = EXCLUDED.compliance_scope,
+				compliance_scope = EXCLUDED.compliance_scope, type = EXCLUDED.type, repository = EXCLUDED.repository,
+				branch = EXCLUDED.branch, environment = EXCLUDED.environment,
 				hierarchy_node_id = COALESCE(EXCLUDED.hierarchy_node_id, application.hierarchy_node_id),
 				hierarchy_path = COALESCE(EXCLUDED.hierarchy_path, application.hierarchy_path),
 				version = application.version + 1`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
 			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt,
-			hNodeID, nonEmpty(hPath), nonNil(app.ComplianceScope)); err != nil {
+			hNodeID, nonEmpty(hPath), nonNil(app.ComplianceScope), app.Type, app.Repository, app.Branch, app.Environment); err != nil {
 			return err
 		}
 		if hPath != "" {
@@ -1598,6 +1599,7 @@ func scoreContextChanged(a, b domain.Application) bool {
 		return true
 	}
 	return a.BusinessCriticality != b.BusinessCriticality || a.InternetFacing != b.InternetFacing ||
+		a.Environment != b.Environment || a.Type != b.Type ||
 		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls)
 }
 

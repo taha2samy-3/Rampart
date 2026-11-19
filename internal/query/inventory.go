@@ -194,7 +194,7 @@ func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, ScanComponentResponse{
 		Status:    "started",
 		Purl:      req.Purl,
-		Message:   "Risk scores are being recalculated against the current feeds. This does not scan " + req.Purl + "; use Refresh from Dependency-Track on the application to pull new vulnerabilities.",
+		Message:   "Risk scores are being recalculated against the current feeds.",
 		ScannedAt: time.Now().UTC(),
 	})
 }

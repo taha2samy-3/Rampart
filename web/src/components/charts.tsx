@@ -118,7 +118,7 @@ export function BandTrendPanels({ points, days }: { points: BandTrendPoint[]; da
           <TrendPanel key={b} band={b} points={points} hover={hover} onMove={move} onLeave={() => setHover(null)} from={first[b]} to={last[b]} />
         ))}
       </div>
-      <div className="mt-1 flex justify-between text-11 text-ink-2 tnum" aria-hidden="true">
+      <div className="mt-1 flex justify-between text-12 text-ink-2 tnum" aria-hidden="true">
         <span>{dayLabel(first.day)}</span>
         <span>{dayLabel(last.day)}</span>
       </div>
@@ -189,7 +189,7 @@ function TrendPanel({
         <span className="font-medium">{BAND_LABEL[band as Band]}</span>
         <span className="text-14 font-semibold tnum">{to}</span>
         <span className="text-12 text-ink-2">{changeText(from, to)}</span>
-        <span className="ms-auto text-11 text-ink-2 tnum">peak {peak}</span>
+        <span className="ms-auto text-12 text-ink-2 tnum">peak {peak}</span>
       </div>
       <div className="relative mt-1">
         <svg
@@ -359,7 +359,7 @@ export function VelocityBars({ weeks }: { weeks: { end: string; new: number; fix
         })}
         <line x1="0" y1={mid} x2={W} y2={mid} stroke="var(--rule)" strokeWidth="1" />
       </svg>
-      <div className="mt-1 flex justify-between text-11 text-ink-2 tnum" aria-hidden="true">
+      <div className="mt-1 flex justify-between text-12 text-ink-2 tnum" aria-hidden="true">
         <span>{dayLabel(weeks[0]!.end)}</span>
         <span>{dayLabel(weeks[weeks.length - 1]!.end)}</span>
       </div>

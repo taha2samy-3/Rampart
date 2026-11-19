@@ -12,10 +12,14 @@ import { ComplianceSummary } from './ComplianceSummary';
 import { ScanCoverage } from './ScanCoverage';
 import { ApplicationSBOMSection } from './ApplicationSBOMSection';
 import { ApplicationAttestSection } from './ApplicationAttestSection';
+import { cn } from '@/lib/cn';
+import { ApplicationSettingsSection } from './ApplicationSettingsSection';
+import { ApplicationDependencyGraphSection } from './ApplicationDependencyGraphSection';
+import { ApplicationLicensesSection } from './ApplicationLicensesSection';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
-export type AppTab = 'overview' | 'cves' | 'sbom' | 'attest';
+export type AppTab = 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'settings';
 
 /** One application: where it stands, its deadlines, how fast things get fixed, its worst findings and its coverage. */
 export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: string } }) {
@@ -47,7 +51,7 @@ export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: 
 
 function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string } }) {
   const navigate = useNavigate();
-  const tab: AppTab = search?.tab && ['overview', 'cves', 'sbom', 'attest'].includes(search.tab)
+  const tab: AppTab = search?.tab && ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'settings'].includes(search.tab)
     ? (search.tab as AppTab)
     : 'overview';
 
@@ -74,11 +78,33 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
 
   return (
     <div className="h-full overflow-y-auto">
-      <article className="mx-auto max-w-[860px] px-6 py-5">
+      <article className={cn('mx-auto px-6 py-5', tab === 'graph' ? 'max-w-[1400px]' : 'max-w-[860px]')}>
         <Link to="/applications" className="text-13">{t('apps.back')}</Link>
         <div className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
           <div>
-            <h1 className="display text-28 leading-tight">{app.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="display text-28 leading-tight">{app.name}</h1>
+              {app.version && (
+                <span
+                  data-testid="app-version-badge"
+                  className="inline-flex items-center rounded-full bg-chrome border border-rule px-2.5 py-0.5 text-12 font-medium text-ink-2"
+                >
+                  {app.version.startsWith('v') || app.version.startsWith('V') ? app.version : `v${app.version}`}
+                </span>
+              )}
+              {app.tags && app.tags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 ml-1">
+                  {app.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center rounded-full bg-chrome border border-rule px-2.5 py-0.5 text-12 font-medium text-ink-2"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <p className="mt-1 text-13 text-ink-2">
               {t('apps.criticality', { level: app.business_criticality })}
               {app.internet_facing ? `, ${t('apps.internetFacing')}` : ''}
@@ -110,9 +136,16 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
               <TabsTrigger value="sbom">
                 {t('apps.tabSBOM', { defaultValue: 'SBOM & Packages' })}
               </TabsTrigger>
+              <TabsTrigger value="graph">
+                {t('apps.tabGraph', { defaultValue: 'Dependency Graph' })}
+              </TabsTrigger>
+              <TabsTrigger value="licenses">
+                {t('apps.tabLicenses', { defaultValue: 'Licenses' })}
+              </TabsTrigger>
               <TabsTrigger value="attest">
                 {t('apps.tabAttest', { defaultValue: 'Compliance Attestations' })}
               </TabsTrigger>
+              <TabsTrigger value="settings">{t('appSettings.tab')}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
@@ -224,6 +257,18 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
 
             <TabsContent value="sbom" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
               <ApplicationSBOMSection app={app} onSelectFinding={(f) => setSelectedFinding(f)} />
+            </TabsContent>
+
+            <TabsContent value="graph" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationDependencyGraphSection app={app} active={tab === 'graph'} />
+            </TabsContent>
+
+            <TabsContent value="licenses" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationLicensesSection app={app} />
+            </TabsContent>
+
+            <TabsContent value="settings" className="mt-4 focus-visible:outline-none">
+              <ApplicationSettingsSection key={`${app.id}:${app.version}`} app={app} />
             </TabsContent>
 
             <TabsContent value="attest" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">

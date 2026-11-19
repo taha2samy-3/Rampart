@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 
 	"rampart/internal/domain"
@@ -18,6 +17,16 @@ import (
 // MaxFeedPushBytes bounds one pushed file. It is staged in one database row; a larger feed is pulled from a URL
 // (custom[].url), as an OSV zip is.
 const MaxFeedPushBytes = 64 << 20
+
+// SetFeedPushTokenDir sets the directory a feed plugin's token file must be in; tests only.
+func (a *API) SetFeedPushTokenDir(dir string) { a.pushTokenDir = dir }
+
+func (a *API) feedPushDir() string {
+	if a.pushTokenDir != "" {
+		return a.pushTokenDir
+	}
+	return domain.FeedPushTokensDir
+}
 
 type feedPushStore interface {
 	GetClusterFeedMirror(ctx context.Context) (*domain.FeedMirrorSpec, error)
@@ -51,7 +60,7 @@ func (a *API) handleFeedPush(w http.ResponseWriter, r *http.Request) {
 		deny()
 		return
 	}
-	want, err := readSmallFile(feed.PushTokenFile)
+	want, err := enrich.ReadFeedToken(feed.PushTokenFile, a.feedPushDir())
 	got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if err != nil || want == "" || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 		deny()
@@ -78,14 +87,4 @@ func (a *API) handleFeedPush(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"feed": name, "records": len(rows), "sha256": hex.EncodeToString(sum[:]),
 		"status": "staged; loaded on the next feed sync"})
-}
-
-func readSmallFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	b, err := io.ReadAll(io.LimitReader(f, 8<<10))
-	return strings.TrimSpace(string(b)), err
 }

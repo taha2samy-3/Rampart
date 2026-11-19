@@ -15,7 +15,7 @@ type ConnectorCatalogueEntry struct {
 	Kind        string               `json:"kind"` // tracker | notifier | source
 	Directions  []ConnectorDirection `json:"directions"`
 	Description string               `json:"description"`
-	// ConfigKey is the key of the type's block under spec (jira, slack, dependencyTrack …).
+	// ConfigKey is the key of the type's block under spec (jira, slack, webhook …).
 	ConfigKey    string            `json:"config_key"`
 	ConfigSchema map[string]any    `json:"config_schema"`
 	Secrets      []CatalogueSecret `json:"secrets"`
@@ -181,27 +181,6 @@ stringData:
   secret: <random-hmac-key>
 `,
 	}, WebhookConnectorConfig{}},
-	{ConnectorCatalogueEntry{
-		Type: ConnectorTypeDependencyTrack, Name: "Dependency-Track", Kind: "source", ConfigKey: "dependencyTrack",
-		Directions:  []ConnectorDirection{DirectionInbound},
-		Description: "The Dependency-Track API endpoint and key. The projects, mapping and webhook are set on a ScanSource of type apiPull that names this connector (docs/10 §8).",
-		Secrets:     []CatalogueSecret{{Field: "credentialsSecretRef", Holds: "an API key with VIEW_PORTFOLIO and VIEW_VULNERABILITY", Purpose: "sent as X-Api-Key"}},
-		Example: `apiVersion: rampart.aspm.dev/v1alpha1
-kind: Connector
-metadata: {name: dtrack, namespace: <tenant-namespace>}
-spec:
-  type: dependencyTrack
-  dependencyTrack:
-    url: https://dtrack-api.example.com
-    credentialsSecretRef: {name: dtrack-api-key, key: apiKey}
----
-apiVersion: v1
-kind: Secret
-metadata: {name: dtrack-api-key, namespace: <tenant-namespace>}
-stringData:
-  apiKey: <odt_api_key>
-`,
-	}, DependencyTrackConnectorConfig{}},
 	{ConnectorCatalogueEntry{
 		Type: ConnectorTypePlugin, Name: "Installed package", Kind: "notifier", ConfigKey: "plugin",
 		Directions:  []ConnectorDirection{DirectionOutbound},

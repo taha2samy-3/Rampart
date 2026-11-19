@@ -1,0 +1,20 @@
+{{- if and .Values.sbomAnalyzer .Values.sbomAnalyzer.enabled }}
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSBOMAnalyzer
+metadata:
+  name: native-matcher
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+spec:
+  enabled: {{ .Values.sbomAnalyzer.enabled | default true }}
+  engine: {{ .Values.sbomAnalyzer.engine | default "hybrid" | quote }}
+  description: "Native in-process SBOM vulnerability matcher (OSV, GHSA, Advisory-DB)"
+  rules:
+    minConfidence: {{ .Values.sbomAnalyzer.rules.minConfidence | default 0.8 }}
+    includePreRelease: {{ .Values.sbomAnalyzer.rules.includePreRelease | default false }}
+    matchDirectOnly: {{ .Values.sbomAnalyzer.rules.matchDirectOnly | default false }}
+  sources:
+    osv: {{ .Values.sbomAnalyzer.sources.osv | default true }}
+    ghsa: {{ .Values.sbomAnalyzer.sources.ghsa | default true }}
+    nvd: {{ .Values.sbomAnalyzer.sources.nvd | default false }}
+{{- end }}

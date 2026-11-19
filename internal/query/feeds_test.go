@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,14 +197,15 @@ func TestFeedsAPI(t *testing.T) {
 		EPSS: &domain.FeedMirrorSource{
 			URL: ts.URL,
 		},
-		NVD: &domain.FeedMirrorSource{
+		NVD: &domain.NVDSource{
 			URL: ts.URL,
 		},
-		OSV: &domain.FeedMirrorSource{
+		OSV: &domain.OSVSource{
 			URL: ts.URL,
 		},
 	}
 	st.SetClusterFeedMirror(testMirror)
+	api.SetFeedProbeClient(enrich.NewFeedHTTPClient(6*time.Second, true)) // the test feed is on 127.0.0.1
 
 	// Single feed probe
 	req = httptest.NewRequest("POST", "/api/v1/feeds/test-connection?feed=cisa_kev", nil)
@@ -287,4 +289,164 @@ type fakeSyncer struct {
 func (f *fakeSyncer) Start(_ context.Context, feed string, names []string) error {
 	f.feed, f.names = feed, names
 	return f.err
+}
+
+// Any signed-in user reads the feeds page, so it never shows where a token is read from; and the connection test, which
+// makes the server call the feed addresses, is for an administrator.
+func TestFeedsAPIRedactsTokenPathsAndRestrictsTheProbe(t *testing.T) {
+	st := ingest.NewMemoryStore()
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(st)
+	adminToken := authn.DefaultAdminToken(tenantID)
+	viewerToken, _, err := auth.GenerateToken(tenantID, auth.RoleViewer, "viewer@acme.com", []string{"tenant"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SaveToken(context.Background(), &auth.TokenRecord{TokenHash: auth.HashToken(viewerToken), TenantID: tenantID, Role: auth.RoleViewer})
+	api := query.NewAPIWithAuth(st, enrich.NewFeedStore(), authn)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	st.SetClusterFeedMirror(&domain.FeedMirrorSpec{
+		NVD:    &domain.NVDSource{URL: "https://user:pw@mirror.internal/nvd?sig=abc", TokenFile: "/etc/rampart/feed-secrets/nvd-api-key"},
+		Custom: []domain.CustomFeed{{Name: "intel", Format: domain.CustomFeedIntelJSONL, PushTokenFile: "/var/run/rampart/feeds/intel/token"}},
+	})
+	get := func(path, method, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("/api/v1/feeds", "GET", viewerToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a viewer reads the feeds page: %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, leak := range []string{"/etc/rampart/feed-secrets", "/var/run/rampart/feeds", "pw@", "sig=abc"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("the feeds page shows %q: %s", leak, body)
+		}
+	}
+	if !strings.Contains(body, "(set)") || !strings.Contains(body, "mirror.internal/nvd") {
+		t.Errorf("the page must say a token is set and still show the address: %s", body)
+	}
+
+	if rec := get("/api/v1/feeds/test-connection", "POST", viewerToken); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer started a connection test: %d", rec.Code)
+	}
+	if rec := get("/api/v1/feeds/test-connection?feed=nvd", "POST", adminToken); rec.Code != http.StatusOK {
+		t.Errorf("an administrator's connection test: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The connection test uses the guarded client: an address the server must never call is reported unreachable, not called.
+func TestFeedProbeRefusesTheMetadataAddress(t *testing.T) {
+	st := ingest.NewMemoryStore()
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(st)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(st, enrich.NewFeedStore(), authn)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+	st.SetClusterFeedMirror(&domain.FeedMirrorSpec{KEV: &domain.FeedMirrorSource{URL: "http://169.254.169.254/latest/meta-data/"}})
+	req := httptest.NewRequest("POST", "/api/v1/feeds/test-connection?feed=cisa_kev", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var resp query.FeedTestConnectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Results) != 1 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if resp.Results[0].Reachable || !strings.Contains(resp.Results[0].Error, "blocked") {
+		t.Errorf("the metadata address was not refused: %+v", resp.Results[0])
+	}
+}
+
+// fakeSync stands for enrich.OnDemand: it answers the two questions only the server's configuration decides.
+type fakeSync struct{ why map[string]string }
+
+func (f fakeSync) Start(context.Context, string, []string) error { return nil }
+func (f fakeSync) Why(_ context.Context, feed string) string     { return f.why[feed] }
+
+// A feed that is not run says why, in a form the page can use, and the message of a refused sync says the same reason
+// and not always "egress deny": a feed switched off in the ClusterFeed used to be explained as an egress rule.
+func TestFeedsSayWhyAFeedIsNotRun(t *testing.T) {
+	off := false
+	list := func(mirror *domain.FeedMirrorSpec, sync fakeSync) map[string]query.FeedItemResponse {
+		st := ingest.NewMemoryStore()
+		st.SetClusterFeedMirror(mirror)
+		tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+		authn := auth.NewAuthenticatorWithStore(st)
+		token := authn.DefaultAdminToken(tenantID)
+		api := query.NewAPIWithAuth(st, enrich.NewFeedStore(), authn)
+		api.SetFeedSyncer(sync)
+		mux := http.NewServeMux()
+		api.RegisterRoutes(mux)
+		req := httptest.NewRequest("GET", "/api/v1/feeds", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var resp query.FeedsListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]query.FeedItemResponse{}
+		for _, it := range resp.Items {
+			out[it.Name] = it
+		}
+		return out
+	}
+
+	got := list(&domain.FeedMirrorSpec{
+		Egress:       "deny",
+		KEV:          &domain.FeedMirrorSource{URL: "https://mirror.internal/kev.json"},
+		EPSS:         &domain.FeedMirrorSource{Enabled: &off, URL: "https://mirror.internal/epss.gz"},
+		Vulnrichment: &domain.FeedSource{Enabled: &off},
+	}, fakeSync{why: map[string]string{}})
+	for name, want := range map[string]string{
+		"cisa_kev":     "",                     // a mirror address: read, whatever the egress rule
+		"first_epss":   enrich.FeedOffSwitched, // its own switch wins over its mirror address
+		"nvd":          enrich.FeedOffEgress,   // deny and no mirror
+		"osv":          enrich.FeedOffEgress,
+		"vulnrichment": enrich.FeedOffSwitched,
+	} {
+		it := got[name]
+		if it.DisabledReason != want || it.Enabled != (want == "") {
+			t.Errorf("%s: reason %q, enabled %v; want reason %q", name, it.DisabledReason, it.Enabled, want)
+		}
+		if want != "" && it.Status != "disabled" {
+			t.Errorf("%s: a feed that is not run has status %q, want disabled", name, it.Status)
+		}
+	}
+
+	// what only the server's configuration decides
+	got = list(&domain.FeedMirrorSpec{}, fakeSync{why: map[string]string{"nvd": enrich.FeedOffServerConfig, "osv": enrich.FeedOffNoEcosystem}})
+	if got["nvd"].DisabledReason != enrich.FeedOffServerConfig || got["osv"].DisabledReason != enrich.FeedOffNoEcosystem {
+		t.Errorf("the server's own reasons: nvd %q, osv %q", got["nvd"].DisabledReason, got["osv"].DisabledReason)
+	}
+	if !got["cisa_kev"].Enabled || !got["first_epss"].Enabled {
+		t.Error("a feed nothing switches off is enabled")
+	}
+}
+
+func TestSyncRefusalNamesTheRealReason(t *testing.T) {
+	off := false
+	st := ingest.NewMemoryStore()
+	st.SetClusterFeedMirror(&domain.FeedMirrorSpec{KEV: &domain.FeedMirrorSource{Enabled: &off}})
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(st)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(st, enrich.NewFeedStore(), authn)
+	api.SetFeedSyncer(fakeSync{})
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+	req := httptest.NewRequest("POST", "/api/v1/feeds/sync?feed=cisa_kev", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "enabled: false") || strings.Contains(rec.Body.String(), "egress") {
+		t.Errorf("a feed switched off in the ClusterFeed must be explained as that: %d %s", rec.Code, rec.Body.String())
+	}
 }

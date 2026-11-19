@@ -153,7 +153,7 @@ func TestPostgres_GatewayRescanDedups(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	report, err := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	report, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -83,7 +83,7 @@ func newUploadHarness(t *testing.T) *uploadHarness {
 	h.scorer = scoring.New(appStore, h.syncer, scoring.NewDBPolicy(appStore))
 	processor := ingest.NewProcessor(appStore, nil, h.objects, nil)
 	processor.SetScorer(h.scorer)
-	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse, nil))
+	queue, err := jobs.NewRiverQueue(ctx, appStore.Pool(), "", jobs.NewWorkers(processor.HandleParse))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:
 
 func TestPresignedUpload_EndToEnd(t *testing.T) {
 	h := newUploadHarness(t)
-	report, err := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	report, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestPresignedUpload_EndToEnd(t *testing.T) {
 
 func TestPresignedUpload_ShaMismatchFailsTheRun(t *testing.T) {
 	h := newUploadHarness(t)
-	report, _ := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	report, _ := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
 	id, _ := h.upload(report, "")
 	code, body := h.call("POST", "/ingest/v1/uploads/"+id+"/complete", ingest.CompleteUploadRequest{SHA256: strings.Repeat("0", 64)}, nil)
 	if code != http.StatusAccepted {
@@ -354,7 +354,7 @@ func TestPresignedUpload_AppliesTheTokensOptions(t *testing.T) {
 	}
 	h.token = raw
 
-	report, err := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	report, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
 	if err != nil {
 		t.Fatal(err)
 	}

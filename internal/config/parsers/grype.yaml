@@ -1,0 +1,32 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: grype
+spec:
+  category: sca
+  runtime: wasm
+  description: 'Grype JSON: vulnerability matches with their related identifiers'
+  detect:
+    filenames:
+    - '*grype*'
+    filenameWeight: 10
+    reject:
+    - '"runs"'
+    rules:
+    - anyOf:
+      - '"matches"'
+      weight: 45
+    - anyOf:
+      - '"vulnerability"'
+      - '"artifact"'
+      weight: 30
+    - anyOf:
+      - '"descriptor"'
+      - '"matchDetails"'
+      - '"relatedVulnerabilities"'
+      weight: 20
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/grype:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

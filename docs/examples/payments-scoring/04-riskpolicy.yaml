@@ -1,0 +1,43 @@
+# RiskPolicy: how a score is worked out. score = clamp(base[severity] + sum of the points of the factors that apply, 0..1000).
+# One policy per tenant is in force: the namespaced policy named "default", else the first by name; if the tenant has none,
+# the cluster one (ClusterRiskPolicy, same spec, no namespace); if there is none, the built-in policy.
+#
+# When "factors" is given it REPLACES the built-in list, so every factor to keep is written out. Thirteen are listed here:
+# ten with the condition and points of the built-in policy, two marked "changed" and one marked "new". Leave "factors" out
+# to keep the built-in ones.
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: RiskPolicy
+metadata:
+  name: acme-risk
+  namespace: acme-payments
+spec:
+  base: {critical: 600, high: 400, medium: 200, low: 80, info: 10}   # points of the severity the scanner gave; each 0..1000
+  bands: {critical: 800, high: 600, medium: 300}                     # LOWER bounds, each 1..1000; low is everything below medium
+  factors:                          # at most 50. Each: name (required), when (CEL boolean, required), points (-1000..1000, required),
+                                    # reason (shown to the reader), group (severity | threat | context | reduction)
+    # What can be read in "when":
+    #   finding.severity, category (sca, sast, dast, secret, ...), rule_id, scanner, cwes, secret_verified (bool), track
+    #   vuln.id, kev (bool), epss (0..1), exploited (bool), exploited_sources, exploit_maturity (e.g. "weaponized")
+    #   app.criticality, internet_facing (bool), data_classification (list), compensating_controls (list)
+    # A misspelled variable is refused when the policy is applied.
+    - {name: KEV, when: "vuln.kev", points: 300, group: threat, reason: "Listed in the CISA Known Exploited Vulnerabilities catalogue"}
+    - {name: EPSS_HIGH, when: "vuln.epss >= 0.5", points: 150, group: threat, reason: "EPSS probability is 50% or more"}
+    - {name: EPSS_MODERATE, when: "vuln.epss >= 0.1 && vuln.epss < 0.5", points: 60, group: threat, reason: "EPSS probability is 10% or more"}
+    - {name: EXPLOITED_REPORTED, when: "vuln.exploited && !vuln.kev", points: 300, group: threat, reason: "Exploitation reported by another source"}
+    - {name: EXPLOIT_WEAPONIZED, when: 'vuln.exploit_maturity == "weaponized"', points: 120, group: threat, reason: "A weaponized public exploit exists"}
+    - {name: SECRET_VERIFIED, when: "finding.secret_verified", points: 250, group: threat, reason: "The secret was verified live"}
+    - {name: INTERNET_FACING, when: "app.internet_facing", points: 150, group: context, reason: "Reachable from the internet"}   # changed: 100 -> 150
+    - {name: SENSITIVE_DATA, when: 'app.data_classification.exists(d, d in ["pci", "pii", "phi"])', points: 80, group: context, reason: "Holds payment, personal or health data"}
+    - {name: APP_CRITICAL, when: 'app.criticality == "critical"', points: 100, group: context, reason: "The application is critical to the business"}
+    - {name: APP_HIGH, when: 'app.criticality == "high"', points: 50, group: context, reason: "The application is high criticality"}
+    - name: PRODUCTION_ENV                                                                                          # changed: main and release/* count
+      when: 'finding.track in ["production", "prod", "main"] || finding.track.startsWith("release/")'
+      points: 60
+      group: context
+      reason: "Found on a production branch"
+    - name: NON_PRODUCTION                                                                                          # new
+      when: 'finding.track in ["develop", "dev", "staging"]'
+      points: -60
+      group: reduction
+      reason: "Found on a development or staging branch"
+    - {name: COMPENSATING_CONTROL, when: 'finding.category == "dast" && app.compensating_controls.exists(c, c in ["waf", "api_gateway"])', points: -80, group: reduction, reason: "A web application firewall or an API gateway stands in front"}

@@ -7,6 +7,8 @@ import type { FindingEvent, FindingRow } from '@/api/types';
 import { BAND_LABEL, BandShape, Button, EmptyState, Kbd, ProblemMessage, ScoreBar } from '@/components';
 import { toBand } from '@/lib/band';
 import { ComplianceSection } from './ComplianceSection';
+import { locationOf, whereText } from '@/lib/location';
+import { EvidenceSection } from './EvidenceSection';
 import { VulnerabilitySection } from './VulnerabilitySection';
 import { absoluteDate, dueShort, relativeDays, shortAge } from '@/lib/format';
 import { factorKind, factorLabel, type SegmentKind } from '@/lib/score';
@@ -31,8 +33,7 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
   const dueText = row.sla_due_date ? (due.late ? `overdue by ${due.text.replace(' late', '')}` : `due ${relativeDays(row.sla_due_date)}`) : t('findings.noDue').toLowerCase();
   const status = t('findings.statusLine', { state: t(`state.${f.state}`, { defaultValue: f.state }), band: BAND_LABEL[band].toLowerCase(), due: dueText });
   const factors = row.risk?.factors ?? [];
-  const loc = f.location;
-  const where = loc?.purl ?? (loc?.file_path ? (loc.start_line ? `${loc.file_path}:${loc.start_line}` : loc.file_path) : '');
+  const where = whereText(locationOf(f.location));
 
   return (
     <article aria-label={t('findings.inspector')} className="px-4 py-3">
@@ -112,6 +113,8 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
           <Fact label={t('findings.lastSeen')} value={absoluteDate(f.last_seen)} />
         </dl>
       </section>
+
+      <EvidenceSection finding={f} />
 
       <ComplianceSection finding={f} />
 

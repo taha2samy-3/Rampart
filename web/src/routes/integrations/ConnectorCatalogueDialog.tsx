@@ -91,7 +91,7 @@ export function ConnectorCatalogueDialog({ open, onOpenChange }: { open: boolean
                   <button
                     type="button"
                     onClick={() => choose(e)}
-                    className="flex w-full flex-col items-start gap-0.5 px-1 py-2.5 text-start hover:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    className="flex w-full flex-col items-start gap-0.5 px-1 py-2.5 text-start hover:bg-chrome focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                   >
                     <span className="text-13 font-medium text-ink">{e.name}</span>
                     <span className="text-12 text-ink-2">

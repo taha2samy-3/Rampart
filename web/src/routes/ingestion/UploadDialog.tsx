@@ -167,7 +167,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             );
           })}
         </select>
-        <p className="mt-1 text-11 text-ink-2">
+        <p className="mt-1 text-12 text-ink-2">
           {t('ingestion.uploadFormatHelp')}
         </p>
       </div>
@@ -194,14 +194,14 @@ function UploadForm({ onDone }: { onDone: () => void }) {
           <div className="mt-2">
             <label htmlFor={ids.newApp} className="mb-1 block text-12 font-medium text-ink">{t('ingestion.uploadNewApplicationName')}</label>
             <Input id={ids.newApp} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('ingestion.uploadApplicationPlaceholder')} />
-            <p className="mt-1 text-11 text-ink-2">{newSlug ? t('ingestion.uploadNewApplicationHint', { slug: newSlug }) : t('ingestion.uploadNewApplicationEmpty')}</p>
+            <p className="mt-1 text-12 text-ink-2">{newSlug ? t('ingestion.uploadNewApplicationHint', { slug: newSlug }) : t('ingestion.uploadNewApplicationEmpty')}</p>
           </div>
         )}
         {(appsQuery.isError || parsersQuery.isError) && (
-          <p role="alert" className="mt-1 text-11 text-crimson">{t('ingestion.uploadListFailed')}</p>
+          <p role="alert" className="mt-1 text-12 text-crimson">{t('ingestion.uploadListFailed')}</p>
         )}
         {accessibleApps.length === 0 && !appsQuery.isLoading && !appsQuery.isError && (
-          <p className="mt-1 text-11 text-crimson">{t('ingestion.noAccessibleApps')}</p>
+          <p className="mt-1 text-12 text-crimson">{t('ingestion.noAccessibleApps')}</p>
         )}
       </div>
 

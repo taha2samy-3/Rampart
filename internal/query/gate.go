@@ -133,13 +133,6 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 	// The newest run of each expected input.
 	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 	for _, want := range req.Expect {
-		// D92 (docs/23 DT4, option b): in this version the gate does not wait for Dependency-Track. A DT sync run is
-		// started by DT's schedule or webhook, not by the build, and carries no commit, so no run can be tied to this
-		// build. The gate says so instead of waiting for a run that never comes.
-		if w := strings.ToLower(strings.TrimSpace(want)); w == "dependency-track" || w == "dtrack" {
-			resp.Reasons = append(resp.Reasons, "dependency-track is not awaited by the gate in this version: its sync runs are not tied to a build (D92)")
-			continue
-		}
 		var run *domain.IngestRun
 		for _, r := range runs {
 			if a.runMatches(ctx, tenantID, r, want) {
@@ -161,26 +154,6 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 		default:
 			resp.Runs = append(resp.Runs, run.ID.String())
 			a.gateRun(ctx, tenantID, run, failOn, &resp)
-			// When the pipeline uploads an SBOM and has a linked Dependency-Track sync, wait for that sync as well (D23, docs/21 §4.6).
-			if want == "sbom" {
-				for _, other := range runs {
-					if other.ID != run.ID && (strings.EqualFold(other.ScannerFamily, "dependency-track") || strings.EqualFold(other.Format, "dependency-track/api")) {
-						switch {
-						case !other.Status.IsTerminal():
-							resp.Pass = false
-							resp.Reasons = append(resp.Reasons, fmt.Sprintf("waiting for dependency-track: the linked sync run is %s", other.Status))
-						case other.Status == domain.RunFailed, other.Status == domain.RunStale:
-							resp.Pass = false
-							resp.Runs = append(resp.Runs, other.ID.String())
-							resp.Reasons = append(resp.Reasons, fmt.Sprintf("dependency-track: the linked sync run %s (%s)", other.Status, other.Error))
-						default:
-							resp.Runs = append(resp.Runs, other.ID.String())
-							a.gateRun(ctx, tenantID, other, failOn, &resp)
-						}
-						break
-					}
-				}
-			}
 		}
 	}
 	if len(resp.Blocking) > 0 {
@@ -193,24 +166,23 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 	return resp
 }
 
-// runMatches says whether a run is the one the pipeline declared: by scanner family in its report, by the
-// family or format it was uploaded as, or "sbom" for an SBOM format.
+// runMatches says whether a run is the one the pipeline declared: by scanner family in its report, by the family or
+// format it was uploaded as (with or without a `builtin:` prefix), or "sbom" for an SBOM format.
 func (a *API) runMatches(ctx context.Context, tenantID uuid.UUID, r *domain.IngestRun, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
-	if strings.EqualFold(r.ScannerFamily, want) || strings.EqualFold(r.Format, want) {
+	if want == "" {
+		return false
+	}
+	fmtLower := strings.ToLower(strings.TrimSpace(r.Format))
+	if strings.EqualFold(r.ScannerFamily, want) || fmtLower == want ||
+		strings.TrimPrefix(fmtLower, "builtin:") == want || strings.TrimPrefix(fmtLower, "builtin:sbom-") == want ||
+		strings.TrimPrefix(fmtLower, "sbom-") == want {
 		return true
 	}
 	if want == "sbom" {
-		switch strings.ToLower(r.Format) {
-		case "cyclonedx", "spdx", "syft":
-			return true
-		}
+		return strings.Contains(fmtLower, "sbom")
 	}
-	if want == "dependency-track" || want == "dtrack" {
-		if strings.EqualFold(r.ScannerFamily, "dependency-track") || strings.EqualFold(r.Format, "dependency-track/api") {
-			return true
-		}
-	}
+	// A report can carry several scanner families (a SARIF file by Trivy): the run records which.
 	if fams, err := a.store.ListRunScopes(ctx, tenantID, r.ID); err == nil {
 		for _, f := range fams {
 			if strings.EqualFold(f, want) {

@@ -51,6 +51,17 @@ spec:
             summary: "Vulnerability feed synchronization is failing"
             description: "Intelligence feed {{`{{ $labels.feed }}`}} has encountered sync errors in the past hour."
 
+        - alert: RampartFeedStale
+          # A feed that has stopped syncing fails nothing, so the rule above never sees it: this one looks at the age of the last
+          # success. Set feedStaleSeconds to two sync intervals and an hour.
+          expr: time() - rampart_feed_last_success_seconds > {{ .Values.metrics.prometheusRule.feedStaleSeconds | default 46800 }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A vulnerability feed has not synced successfully for a long time"
+            description: "Feed {{`{{ $labels.feed }}`}} last synced successfully {{`{{ $value | humanizeDuration }}`}} ago. Vulnerability scores are being worked out from old data."
+
         - alert: RampartIngestErrorRateHigh
           expr: sum(rate(rampart_ingest_runs_total{status="failed"}[15m])) / sum(rate(rampart_ingest_runs_total[15m])) > 0.1
           for: 10m

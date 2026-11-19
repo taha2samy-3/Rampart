@@ -1,0 +1,23 @@
+{
+  "errors": [],
+  "generated_at": "2026-11-13T10:00:00Z",
+  "metrics": {},
+  "results": [
+    {
+      "code": "12 def exec_code(user_input):\n13     eval(user_input)\n",
+      "filename": "app/vuln.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 95,
+        "url": "https://cwe.mitre.org/data/definitions/95.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Use of possibly insecure function - consider using safer alternatives.",
+      "line_number": 13,
+      "line_range": [13],
+      "more_info": "https://bandit.readthedocs.io/en/latest/plugins/b307_eval.html",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    }
+  ]
+}

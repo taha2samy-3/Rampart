@@ -1,0 +1,20 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: sarif
+spec:
+  category: sast
+  runtime: wasm
+  description: Streaming SARIF 2.1.0 parser with Semgrep, Trivy, Gitleaks enrichers
+  detect:
+    filenames:
+    - '*.sarif'
+    - '*sarif*.json'
+    probes:
+    - jsonHasKeys:
+      - runs
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/sarif:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

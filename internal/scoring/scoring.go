@@ -132,6 +132,14 @@ func New(s store.Store, intel Intel, policy PolicySource) *Scorer {
 	return &Scorer{store: s, intel: intel, policy: policy, now: func() time.Time { return time.Now().UTC() }}
 }
 
+// RiskPolicy is the risk policy of a tenant: what a score is made of.
+func (s *Scorer) RiskPolicy(ctx context.Context, tenantID uuid.UUID) *risk.Policy {
+	if s == nil || s.policy == nil {
+		return risk.Builtin()
+	}
+	return s.policy.RiskPolicy(ctx, tenantID)
+}
+
 // Policy exposes the SLA policy of a tenant, for the steps that move the clock (risk acceptance).
 func (s *Scorer) Policy(ctx context.Context, tenantID uuid.UUID) domain.SLAPolicy {
 	return s.policy.SLAPolicy(ctx, tenantID)
@@ -212,7 +220,8 @@ func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedSto
 	if app != nil {
 		criticality = strings.ToLower(app.BusinessCriticality)
 		in.App = risk.AppInput{Criticality: criticality, InternetFacing: app.InternetFacing,
-			DataClassification: lower(app.DataClassification), CompensatingControls: app.CompensatingControls}
+			DataClassification: lower(app.DataClassification), CompensatingControls: app.CompensatingControls,
+			Type: app.Type, Environment: strings.ToLower(app.Environment)}
 	}
 	return p.Evaluate(in), criticality
 }

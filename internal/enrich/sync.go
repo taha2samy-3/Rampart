@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,16 @@ type OSVRecord struct {
 	Modified   string          `json:"modified"`
 	Affected   json.RawMessage `json:"affected"`
 	References json.RawMessage `json:"references"`
+	Withdrawn  string          `json:"withdrawn"`
+	Severity   []osvSeverity   `json:"severity"`
+
+	raw json.RawMessage // the record as read, kept when the sync stores full payloads (storageMode full)
+}
+
+// osvWrite says how a batch of OSV records is written.
+type osvWrite struct {
+	source string // the feed that wrote them: osv, or the name of a custom osv-zip feed; recorded on the aliases
+	full   bool   // storageMode full: keep the whole record in vulnerability.source_payloads
 }
 
 // FeedSyncer writes global intelligence tables as rampart_system (D19).
@@ -38,7 +49,9 @@ type FeedSyncer struct {
 	pool *pgxpool.Pool
 
 	mu      sync.Mutex
-	results []FeedResult // what each feed did in the round under way (SyncAll)
+	results []FeedResult         // what each feed did in the round under way (SyncAll)
+	starts  map[string]time.Time // when each feed's step began in this round (begin)
+	began   int                  // how many feeds this round began (begin)
 }
 
 // NewFeedSyncer creates a new FeedSyncer backed by a system-privileged connection pool.
@@ -138,14 +151,24 @@ func (s *FeedSyncer) SyncKEV(ctx context.Context, r io.Reader) (int, error) {
 }
 
 // SyncEPSS ingests FIRST EPSS CSV scores (cve, epss, percentile) into global vulnerability table (D19).
+//
+// The file's first line names the day the scores are for: `#model_version:v2025.03.14,score_date:2025-11-17T12:55:00Z`.
+// That day is stored as epss_date, not the day of the sync: a file that FIRST has not refreshed must not read as new.
+// A date passed in wins; a file without the line is dated by the sync.
 func (s *FeedSyncer) SyncEPSS(ctx context.Context, r io.Reader, epssDate ...time.Time) (int, error) {
-	reader := csv.NewReader(bufio.NewReader(r))
-	reader.Comment = '#'
-
+	br := bufio.NewReader(r)
 	date := time.Now().UTC()
+	if first, err := br.Peek(1); err == nil && first[0] == '#' {
+		line, _ := br.ReadString('\n')
+		if d, ok := epssScoreDate(line); ok {
+			date = d
+		}
+	}
 	if len(epssDate) > 0 && !epssDate[0].IsZero() {
 		date = epssDate[0]
 	}
+	reader := csv.NewReader(br)
+	reader.Comment = '#'
 
 	const batchSize = 5000
 	count := 0
@@ -217,6 +240,25 @@ func (s *FeedSyncer) SyncEPSS(ctx context.Context, r io.Reader, epssDate ...time
 	return count, nil
 }
 
+// epssScoreDate reads score_date from the comment line of an EPSS file.
+func epssScoreDate(line string) (time.Time, bool) {
+	const key = "score_date:"
+	i := strings.Index(line, key)
+	if i < 0 {
+		return time.Time{}, false
+	}
+	v := strings.TrimSpace(line[i+len(key):])
+	if j := strings.IndexAny(v, ", \t\r\n"); j >= 0 {
+		v = v[:j]
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
 // SyncOSV ingests OSV JSON records into global vulnerability and vulnerability_alias tables (D19).
 func (s *FeedSyncer) SyncOSV(ctx context.Context, r io.Reader) (int, error) {
 	buffered := bufio.NewReader(r)
@@ -264,7 +306,7 @@ func (s *FeedSyncer) SyncOSV(ctx context.Context, r io.Reader) (int, error) {
 	const batchSize = 1000
 	for i := 0; i < len(records); i += batchSize {
 		chunk := records[i:min(i+batchSize, len(records))]
-		if err := s.writeOSVChunk(ctx, chunk); err != nil {
+		if err := s.writeOSVChunk(ctx, chunk, osvWrite{source: SourceOSV}); err != nil {
 			s.recordFeedError(ctx, "osv", err)
 			return count, err
 		}
@@ -343,68 +385,99 @@ func (s *FeedSyncer) recordFeedError(ctx context.Context, feed string, syncErr e
 			error = EXCLUDED.error`, feed, errMsg)
 }
 
-// writeOSVChunk upserts up to a thousand OSV records and their aliases in one round trip.
-func (s *FeedSyncer) writeOSVChunk(ctx context.Context, chunk []OSVRecord) error {
+// writeOSVChunk upserts up to a thousand OSV records, their aliases and their affected ranges in one round trip.
+func (s *FeedSyncer) writeOSVChunk(ctx context.Context, chunk []OSVRecord, w osvWrite) error {
+	if w.source == "" {
+		w.source = SourceOSV
+	}
 	batch := &pgx.Batch{}
+	sourceIDs := make([]string, 0, len(chunk))
 	for _, rec := range chunk {
-		id := strings.TrimSpace(rec.ID)
-		if id == "" {
+		if strings.TrimSpace(rec.ID) != "" {
+			sourceIDs = append(sourceIDs, strings.TrimSpace(rec.ID))
+		}
+	}
+	// The ranges of a record are replaced as a whole: a version that was fixed, a package that was added, an advisory
+	// that was withdrawn all change the rows, and a row that is no longer true must go.
+	batch.Queue(`DELETE FROM vulnerability_affected WHERE source_id = ANY($1::text[])`, sourceIDs)
+
+	for _, rec := range chunk {
+		osvID := strings.TrimSpace(rec.ID)
+		if osvID == "" {
 			continue
 		}
-
-		var pubTime *time.Time
-		if rec.Published != "" {
-			if t, err := time.Parse(time.RFC3339, rec.Published); err == nil {
-				pubTime = &t
-			}
-		}
-
-		var modTime *time.Time
-		if rec.Modified != "" {
-			if t, err := time.Parse(time.RFC3339, rec.Modified); err == nil {
-				modTime = &t
-			}
-		}
+		pubTime, modTime := parseTime(rec.Published), parseTime(rec.Modified)
 
 		affected := rec.Affected
 		if len(affected) == 0 {
 			affected = []byte("[]")
 		}
-
 		references := rec.References
 		if len(references) == 0 {
 			references = []byte("[]")
 		}
 
-		// D19/D11: the canonical id is the CVE when the record has one, else the OSV id itself. Every other
-		// identifier (the OSV id, GHSA, PYSEC, RUSTSEC...) becomes an alias of it, so KEV and EPSS (keyed by
-		// CVE) land on the same row as the advisory.
-		id, aliases := canonicalVulnID(id, rec.Aliases)
+		// D19/D11: the canonical id is a CVE when the record has one, else the OSV id itself. The ids that mean the same
+		// vulnerability (the OSV id, GHSA, PYSEC, RUSTSEC...) become aliases of it, so KEV and EPSS (keyed by CVE) land
+		// on the same row as the advisory. Another CVE of the same record is a different vulnerability: it is listed on
+		// the row, but never made an alias, which would merge the findings of two CVEs.
+		id, aliases, registerable := canonicalVulnID(osvID, rec.Aliases)
+
+		var payload any // full mode keeps the whole record, under the name of its feed
+		if w.full && len(rec.raw) > 0 {
+			payload = `{"` + w.source + `":` + string(rec.raw) + `}`
+		}
+		cvss, bestVector := osvCVSS(rec.Severity, "osv")
+		cvssJSON, _ := json.Marshal(cvss)
+		if cvss == nil {
+			cvssJSON = []byte("[]")
+		}
+		var vector *string
+		if bestVector != "" {
+			vector = &bestVector
+		}
 
 		batch.Queue(`
 				INSERT INTO vulnerability (
-					id, aliases, summary, description, published, modified, affected, "references", updated_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+					id, aliases, summary, description, published, modified, affected, "references", cvss, cvss_best_vector,
+					source_payloads, updated_at
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, NOW())
 				ON CONFLICT (id) DO UPDATE SET
-					aliases = CASE WHEN cardinality(EXCLUDED.aliases) > 0 THEN EXCLUDED.aliases ELSE vulnerability.aliases END,
+					-- several advisories (GHSA, PYSEC, GO...) name the same CVE: the row lists all their ids
+					aliases = ARRAY(SELECT DISTINCT a FROM unnest(vulnerability.aliases || EXCLUDED.aliases) AS a ORDER BY a),
 					summary = COALESCE(EXCLUDED.summary, vulnerability.summary),
 					description = COALESCE(EXCLUDED.description, vulnerability.description),
 					published = COALESCE(EXCLUDED.published, vulnerability.published),
 					modified = COALESCE(EXCLUDED.modified, vulnerability.modified),
 					affected = COALESCE(EXCLUDED.affected, vulnerability.affected),
 					"references" = COALESCE(EXCLUDED."references", vulnerability."references"),
+					-- OSV's vectors fill in only what NVD (which has the scores) has not given
+					cvss = CASE WHEN jsonb_array_length(vulnerability.cvss) = 0 THEN EXCLUDED.cvss ELSE vulnerability.cvss END,
+					cvss_best_vector = CASE WHEN vulnerability.cvss_best_score IS NULL AND vulnerability.cvss_best_vector IS NULL
+					                        THEN EXCLUDED.cvss_best_vector ELSE vulnerability.cvss_best_vector END,
+					source_payloads = CASE WHEN EXCLUDED.source_payloads IS NULL THEN vulnerability.source_payloads
+					                       ELSE COALESCE(vulnerability.source_payloads, '{}'::jsonb) || EXCLUDED.source_payloads END,
 					updated_at = NOW()
-			`, id, aliases, rec.Summary, rec.Details, pubTime, modTime, affected, references)
+			`, id, aliases, rec.Summary, rec.Details, pubTime, modTime, affected, references, string(cvssJSON), vector, payload)
 
-		for _, alias := range aliases {
-			aliasClean := strings.TrimSpace(alias)
-			if aliasClean != "" {
-				batch.Queue(`
-						INSERT INTO vulnerability_alias (alias, vulnerability_id)
-						VALUES ($1, $2)
-						ON CONFLICT (alias) DO NOTHING
-					`, aliasClean, id)
-			}
+		for _, alias := range registerable {
+			batch.Queue(`
+					INSERT INTO vulnerability_alias (alias, vulnerability_id, source)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (alias) DO UPDATE SET vulnerability_id = EXCLUDED.vulnerability_id, source = EXCLUDED.source
+					WHERE vulnerability_alias.source IS NULL OR vulnerability_alias.source = EXCLUDED.source
+				`, alias, id, w.source)
+		}
+
+		withdrawn := parseWithdrawn(rec.Withdrawn)
+		for _, r := range affectedRows(rec.Affected) {
+			batch.Queue(`
+					INSERT INTO vulnerability_affected (
+						vulnerability_id, source_id, ecosystem, package_name, package_name_normalised, purl_base,
+						range_type, introduced, fixed, last_affected, "limit", versions, withdrawn, updated_at
+					) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), $12, $13, NOW())
+				`, id, osvID, r.Ecosystem, r.Name, r.NameNormalised, r.PurlBase, r.RangeType,
+				r.Introduced, r.Fixed, r.LastAffected, r.Limit, nonNilStrings(r.Versions), withdrawn)
 		}
 	}
 
@@ -421,23 +494,54 @@ func (s *FeedSyncer) writeOSVChunk(ctx context.Context, chunk []OSVRecord) error
 	return nil
 }
 
-// canonicalVulnID picks the canonical id for an OSV record and returns it with the remaining identifiers
-// as aliases: prefer a CVE, else the OSV id (docs/03, D11).
-func canonicalVulnID(osvID string, aliases []string) (string, []string) {
-	canon := osvID
+func parseTime(v string) *time.Time {
+	if v == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return &t
+	}
+	return nil
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+// canonicalVulnID picks the canonical id for an OSV record (docs/03, D11, docs/33 section 5.1).
+//
+// It returns the canonical id, every other identifier of the record (for vulnerability.aliases, which only lists), and
+// the identifiers to register in vulnerability_alias, which makes them mean the canonical id. The canonical id is a
+// CVE when the record names one; when it names several, the smallest, so the answer does not depend on the order the
+// source listed them in. The other CVEs are listed but not registered: they are other vulnerabilities, and an alias
+// would make the findings of two CVEs one. With no CVE the canonical id is the OSV id.
+func canonicalVulnID(osvID string, aliases []string) (canon string, all, registerable []string) {
+	canon = osvID
+	var cves []string
 	for _, a := range aliases {
-		if a = strings.TrimSpace(a); strings.HasPrefix(strings.ToUpper(a), "CVE-") {
-			canon = strings.ToUpper(a)
-			break
+		if a = strings.ToUpper(strings.TrimSpace(a)); strings.HasPrefix(a, "CVE-") {
+			cves = append(cves, a)
 		}
 	}
-	out := []string{}
+	if len(cves) > 0 {
+		sort.Strings(cves)
+		canon = cves[0]
+	}
+	all, registerable = []string{}, []string{}
 	seen := map[string]bool{canon: true}
 	for _, a := range append([]string{osvID}, aliases...) {
-		if a = strings.TrimSpace(a); a != "" && !seen[a] {
-			seen[a] = true
-			out = append(out, a)
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] || seen[strings.ToUpper(a)] {
+			continue
+		}
+		seen[a] = true
+		all = append(all, a)
+		if !strings.HasPrefix(strings.ToUpper(a), "CVE-") {
+			registerable = append(registerable, a)
 		}
 	}
-	return canon, out
+	return canon, all, registerable
 }

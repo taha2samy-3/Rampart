@@ -1,0 +1,36 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: bandit
+spec:
+  category: sast
+  runtime: lua
+  description: Bandit Python SAST vulnerability report
+  detect:
+    filenames:
+    - '*bandit*'
+    filenameWeight: 10
+    rules:
+    - allOf:
+      - '"results"'
+      - '"metrics"'
+      weight: 40
+    - allOf:
+      - '"test_id"'
+      - '"test_name"'
+      weight: 40
+    - allOf:
+      - '"issue_severity"'
+      - '"issue_confidence"'
+      weight: 15
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if doc\
+    \ and doc.results then\n    for _, r in ipairs(doc.results) do\n      local cwes\
+    \ = {}\n      if r.issue_cwe and r.issue_cwe.id then\n        table.insert(cwes,\
+    \ r.issue_cwe.id)\n      end\n      emit({\n        rule_id = r.test_id or \"\
+    bandit-rule\",\n        title = r.issue_text or r.test_name or \"Bandit finding\"\
+    ,\n        description = r.issue_text,\n        severity = string.lower(r.issue_severity\
+    \ or \"medium\"),\n        tool_severity = r.issue_severity or \"MEDIUM\",\n \
+    \       category = \"sast\",\n        scanner_family = \"bandit\",\n        cwes\
+    \ = cwes,\n        location = {\n          code = {\n            file_path = r.filename,\n\
+    \            start_line = r.line_number\n          }\n        }\n      })\n  \
+    \  end\n  end\nend\n"

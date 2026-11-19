@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -148,5 +149,77 @@ func TestInventory_OneSBOMPerTrack_OnPostgreSQL(t *testing.T) {
 	sbom, comps2, err := appStore.GetSBOM(ctx, tn.ID, asset.ID)
 	if err != nil || sbom.Track != "main" || len(comps2) != 1 || comps2[0].Name != "on-main" {
 		t.Fatalf("GetSBOM must prefer main over the newest upload: %+v %v", sbom, err)
+	}
+}
+
+// The graph colours each package by its open findings: counted by severity, a finding once however many occurrences it
+// has, fixed findings not at all, another track and another tenant not at all, and the version a scanner reported kept
+// apart so two versions of a package in one tree do not share findings.
+func TestListPackageRisk_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	tn := &domain.Tenant{ID: uuid.New(), Slug: "risk-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
+	if err := sys.CreateTenant(ctx, tn); err != nil {
+		t.Fatal(err)
+	}
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	app, _ := appStore.LookupApplication(ctx, tn.ID, "shop")
+	asset, _ := appStore.LookupAsset(ctx, tn.ID, domain.AssetRepository, "github.com/acme/shop")
+	run := &domain.IngestRun{ID: uuid.New(), TenantID: tn.ID, ApplicationID: app.ID, AssetID: asset.ID, Track: "main", ScannerFamily: "grype",
+		Format: "grype", Status: domain.RunCompleted, CreatedAt: time.Now().UTC()}
+	if err := appStore.CreateIngestRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	add := func(key string, sev domain.Severity, state domain.FindingState, track, base, version string, occurrences int) {
+		f := &domain.Finding{ID: uuid.New(), TenantID: tn.ID, FindingKey: key, DedupScope: "shop:" + track, AssetID: asset.ID, ApplicationID: app.ID, Track: track,
+			RuleScannerFamily: "grype", RuleID: key, Title: key, Category: domain.CategorySCA, Severity: sev, ToolSeverity: string(sev),
+			State: state, FirstSeen: now, LastSeen: now, OccurrenceCount: occurrences, Version: 1, CreatedAt: now, UpdatedAt: now}
+		if err := appStore.UpsertFindings(ctx, tn.ID, []*domain.Finding{f}); err != nil {
+			t.Fatal(err)
+		}
+		var occs []*domain.Occurrence
+		for i := 0; i < occurrences; i++ {
+			occs = append(occs, &domain.Occurrence{ID: uuid.New(), TenantID: tn.ID, FindingID: f.ID, IngestRunID: run.ID, ScanSourceID: run.ScanSourceID,
+				AssetID: asset.ID, Track: track, OccurrenceKey: fmt.Sprintf("%s-%d", key, i), ScannerFamily: "grype", ScannerName: "grype",
+				Location: domain.Location{Package: &domain.PackageLocation{PurlBase: base, InstalledVersion: version}},
+				Present:  true, SeenCount: 1, FirstSeen: now, LastSeen: now})
+		}
+		if err := appStore.UpsertOccurrences(ctx, occs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("axios-crit", domain.SeverityCritical, domain.StateOpen, "main", "pkg:npm/axios", "0.21.1", 2) // two occurrences, one finding
+	add("axios-high", domain.SeverityHigh, domain.StateOpen, "main", "pkg:npm/axios", "0.21.1", 1)
+	add("axios-fixed", domain.SeverityCritical, domain.StateFixed, "main", "pkg:npm/axios", "0.21.1", 1) // not active
+	add("axios-new", domain.SeverityLow, domain.StateOpen, "main", "pkg:npm/axios", "1.7.0", 1)          // another version
+	add("lodash-other-track", domain.SeverityHigh, domain.StateOpen, "staging", "pkg:npm/lodash", "4.17.20", 1)
+	add("lodash-info", domain.SeverityInfo, domain.StateOpen, "main", "pkg:npm/lodash", "", 1) // no version, info counts as low
+
+	got, err := appStore.ListPackageRisk(ctx, tn.ID, asset.ID, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]store.PackageRisk{}
+	for _, r := range got {
+		byKey[r.PurlBase+"@"+r.Version] = r
+	}
+	if r := byKey["pkg:npm/axios@0.21.1"]; r.Critical != 1 || r.High != 1 || r.Medium != 0 || r.Low != 0 {
+		t.Errorf("axios 0.21.1: %+v (a finding counts once; a fixed one not at all)", r)
+	}
+	if r := byKey["pkg:npm/axios@1.7.0"]; r.Low != 1 || r.Critical != 0 {
+		t.Errorf("axios 1.7.0 is counted apart: %+v", r)
+	}
+	if r := byKey["pkg:npm/lodash@"]; r.Low != 1 {
+		t.Errorf("an info finding with no version counts as low and covers every version: %+v", r)
+	}
+	if _, leaked := byKey["pkg:npm/lodash@4.17.20"]; leaked {
+		t.Error("a finding of another track was counted")
+	}
+	// another tenant, and an asset with nothing, see nothing
+	if other, _ := appStore.ListPackageRisk(ctx, uuid.New(), asset.ID, "main"); len(other) != 0 {
+		t.Errorf("another tenant saw %d rows", len(other))
 	}
 }

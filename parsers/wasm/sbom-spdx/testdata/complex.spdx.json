@@ -1,0 +1,84 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "ecommerce-api",
+  "documentNamespace": "https://example.com/spdx/ecommerce-api-1.0",
+  "creationInfo": {
+    "created": "2026-11-18T00:00:00Z",
+    "creators": ["Tool: rampart-syft-1.0", "Organization: ExampleCorp"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-app",
+      "name": "ecommerce-api",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "Apache-2.0",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/example.com/ecommerce-api@1.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gin",
+      "name": "gin-gonic/gin",
+      "versionInfo": "v1.9.1",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "MIT",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/gin-gonic/gin@v1.9.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-validator",
+      "name": "go-playground/validator",
+      "versionInfo": "v10.14.0",
+      "downloadLocation": "NONE",
+      "licenseConcluded": "MIT",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/go-playground/validator/v10@v10.14.0"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-app"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-app",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-gin"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-gin",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-validator"
+    }
+  ]
+}

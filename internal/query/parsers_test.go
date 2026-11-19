@@ -40,8 +40,8 @@ func TestParsersAPI_List(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if res.Total < 19 {
-		t.Errorf("expected at least 19 parsers, got %d", res.Total)
+	if res.Total < 17 {
+		t.Errorf("expected at least 17 parsers, got %d", res.Total)
 	}
 
 	// 2. Unauthorized request returns 401

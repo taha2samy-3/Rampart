@@ -15,6 +15,8 @@ type AppSummary struct {
 	ID             uuid.UUID `json:"id"`
 	Slug           string    `json:"slug"`
 	Name           string    `json:"name"`
+	Version        string    `json:"version,omitempty"`
+	Tags           []string  `json:"tags,omitempty"`
 	Criticality    string    `json:"business_criticality"`
 	InternetFacing bool      `json:"internet_facing"`
 	// Open counts the active findings (open, under investigation, affected) by risk band.

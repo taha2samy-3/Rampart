@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"rampart/internal/domain"
 	"strings"
@@ -54,12 +55,34 @@ type FeedConfig struct {
 	// SourcePageDelay is the pause between pages of a paged optional source (EUVD); tests only, zero is 1 s.
 	SourcePageDelay time.Duration
 	// Mirror returns the ClusterFeedMirror in force, read at the start of every round (D86); nil when none.
-	Mirror     func(ctx context.Context) (*domain.FeedMirrorSpec, error)
-	Interval   time.Duration
+	Mirror   func(ctx context.Context) (*domain.FeedMirrorSpec, error)
+	Interval time.Duration
+	// OnlyDue makes a round sync only the feeds that are due (see FeedSyncer.due): the scheduler sets it, a manual sync does not.
+	OnlyDue bool
+	// CheckEvery is how often the scheduler looks for a feed that is due; zero is the interval or 30 minutes, whichever is
+	// shorter. It is also how soon a failed feed is tried again.
+	CheckEvery time.Duration
 	HTTPClient *http.Client
 	TempDir    string
+	// StorageFull is storageMode full: the complete source record of every advisory is kept (vulnerability.source_payloads).
+	StorageFull bool
+	// SecretsDir is where token files must be (domain.FeedSecretsDir); tests only.
+	SecretsDir string
+	// AllowLoopback lets the default client reach 127.0.0.1; tests that serve a feed locally only (httpguard.go).
+	AllowLoopback bool
+	// NVDRetryBase is the first wait after a 429 or 503 that names no Retry-After; tests only, zero is 30 s.
+	NVDRetryBase time.Duration
+	guarded      bool // defaults() has already put the feed redirect rule on HTTPClient
+	osvOff       bool // the ClusterFeed switches OSV off: storageMode full does not turn it back on
 	// OnSynced runs after a round that changed the feeds, so findings can be re-scored (docs/16 D28).
 	OnSynced func(ctx context.Context)
+}
+
+func (c *FeedConfig) secretsDir() string {
+	if c.SecretsDir != "" {
+		return c.SecretsDir
+	}
+	return domain.FeedSecretsDir
 }
 
 func (c *FeedConfig) defaults() {
@@ -79,8 +102,11 @@ func (c *FeedConfig) defaults() {
 		c.Interval = 6 * time.Hour
 	}
 	if c.HTTPClient == nil {
-		c.HTTPClient = &http.Client{Timeout: 15 * time.Minute}
+		c.HTTPClient = NewFeedHTTPClient(15*time.Minute, c.AllowLoopback)
+	} else if !c.guarded {
+		c.HTTPClient = withFeedRedirects(c.HTTPClient)
 	}
+	c.guarded = true
 }
 
 // get downloads url, refusing bodies over max bytes, and returns the body.
@@ -91,27 +117,64 @@ func (c *FeedConfig) applyMirror(m *domain.FeedMirrorSpec, log *slog.Logger) (sk
 		return false, false
 	}
 	deny := m.Egress == "deny"
-	if m.KEV != nil {
+	switch {
+	case m.KEV != nil && !domain.On(m.KEV.Enabled):
+		skipKEV = true // switched off in the resource
+	case m.KEV != nil:
 		c.KEVURL = m.KEV.URL
-	} else if deny {
+	case deny:
 		skipKEV = true
 	}
-	if m.EPSS != nil {
+	switch {
+	case m.EPSS != nil && !domain.On(m.EPSS.Enabled):
+		skipEPSS = true
+	case m.EPSS != nil:
 		c.EPSSURL = m.EPSS.URL
-	} else if deny {
+	case deny:
 		skipEPSS = true
 	}
-	if m.NVD != nil {
-		c.NVDURL = m.NVD.URL
-	} else if deny {
+	switch {
+	case m.NVD == nil:
+		if deny {
+			c.NVDDisabled = true
+		}
+	case !domain.On(m.NVD.Enabled):
 		c.NVDDisabled = true
+	case m.NVD.URL != "":
+		c.NVDURL = m.NVD.URL
+	case deny:
+		c.NVDDisabled = true // a block with no address, and no public address allowed
 	}
-	if m.OSV != nil {
-		c.OSVBaseURL = strings.TrimSuffix(m.OSV.URL, "/")
-	} else if deny {
+	if m.NVD != nil && domain.On(m.NVD.Enabled) && m.NVD.TokenFile != "" {
+		// The key of the resource wins over the server's own file. A key that cannot be read leaves the sync
+		// keyless, at NIST's lower rate, and says so; it must not stop the feed.
+		if key, err := ReadFeedToken(m.NVD.TokenFile, c.secretsDir()); err != nil {
+			log.Warn("feeds: nvd.tokenFile could not be read; NVD is synced at the keyless rate", "err", err)
+		} else if key != "" {
+			c.NVDAPIKey = key
+		}
+	}
+	switch {
+	case m.OSV == nil:
+		if deny {
+			c.OSVEcosystems = nil
+		}
+	case !domain.On(m.OSV.Enabled):
 		c.OSVEcosystems = nil
+		c.osvOff = true
+	default:
+		switch {
+		case m.OSV.URL != "":
+			c.OSVBaseURL = strings.TrimSuffix(m.OSV.URL, "/")
+		case deny:
+			c.OSVEcosystems = nil // no mirror, and the public address is not allowed
+		}
+		if len(m.OSV.Ecosystems) > 0 && !(deny && m.OSV.URL == "") {
+			c.OSVEcosystems = append([]string(nil), m.OSV.Ecosystems...)
+		}
 	}
-	if (m.StorageMode == "full" || m.StorageMode == "standalone") && len(c.OSVEcosystems) == 0 && !deny {
+	c.StorageFull = m.StorageMode == "full" || m.StorageMode == "standalone"
+	if (m.StorageMode == "full" || m.StorageMode == "standalone") && len(c.OSVEcosystems) == 0 && !deny && !c.osvOff {
 		// When full local mirror is requested, sync major open-source ecosystems by default like Dependency-Track.
 		c.OSVEcosystems = []string{"Go", "npm", "PyPI", "Maven"}
 		log.Info("feeds: storageMode full; caching complete open-source vulnerability database locally", "ecosystems", c.OSVEcosystems)
@@ -134,11 +197,11 @@ func (c *FeedConfig) get(ctx context.Context, url string, max int64) (io.ReadClo
 	}
 	if res.StatusCode != http.StatusOK {
 		_ = res.Body.Close()
-		return nil, fmt.Errorf("GET %s: status %d", url, res.StatusCode)
+		return nil, fmt.Errorf("GET %s: status %d", redact(url), res.StatusCode)
 	}
 	if res.ContentLength > max {
 		_ = res.Body.Close()
-		return nil, fmt.Errorf("GET %s: %d bytes exceeds the %d byte limit", url, res.ContentLength, max)
+		return nil, fmt.Errorf("GET %s: %d bytes exceeds the %d byte limit", redact(url), res.ContentLength, max)
 	}
 	return &limitedBody{Reader: io.LimitReader(res.Body, max+1), c: res.Body, max: max}, nil
 }
@@ -170,12 +233,15 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 	cfg.defaults()
 	s.mu.Lock()
 	s.results = nil
+	s.starts = map[string]time.Time{}
+	s.began = 0
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		rs := s.results
 		s.results = nil
 		s.mu.Unlock()
+		recordMetrics(context.WithoutCancel(ctx), rs)
 		if cfg.OnRound != nil && len(rs) > 0 {
 			// Not under the sync lock: telling every tenant can be slow, and a click meanwhile would be answered "busy".
 			go func() {
@@ -202,51 +268,27 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		// another feed was asked for
 	} else if skipKEV {
 		// egress deny without a KEV mirror: not read (D86)
-	} else if body, err := cfg.get(ctx, cfg.KEVURL, maxKEVBytes); err != nil {
-		s.recordFeedError(ctx, "cisa_kev", err)
-		errs = append(errs, fmt.Errorf("kev: %w", err))
+	} else if !s.due(ctx, cfg, "cisa_kev") {
+		// fresh: a scheduled round leaves it
 	} else {
-		n, err := s.SyncKEV(ctx, body)
-		_ = body.Close()
-		if err != nil {
-			errs = append(errs, fmt.Errorf("kev: %w", err))
-		} else {
-			log.Info("feed synced", "feed", "cisa_kev", "records", n)
-		}
+		s.begin("cisa_kev")
+		s.syncKEVRound(ctx, cfg, log, &errs)
 	}
 
 	if !cfg.wants("first_epss") {
 		// another feed was asked for
 	} else if skipEPSS {
 		// egress deny without an EPSS mirror: not read (D86)
-	} else if body, err := cfg.get(ctx, cfg.EPSSURL, maxEPSSBytes); err != nil {
-		s.recordFeedError(ctx, "first_epss", err)
-		errs = append(errs, fmt.Errorf("epss: %w", err))
+	} else if !s.due(ctx, cfg, "first_epss") {
+		// fresh
 	} else {
-		var r io.Reader = body
-		if strings.HasSuffix(strings.ToLower(cfg.EPSSURL), ".gz") {
-			gz, gerr := gzip.NewReader(body)
-			if gerr != nil {
-				err = gerr
-			} else {
-				r = gz
-			}
-		}
-		var n int
-		if err == nil {
-			n, err = s.SyncEPSS(ctx, r)
-		}
-		_ = body.Close()
-		if err != nil {
-			s.recordFeedError(ctx, "first_epss", err) // also when the file could not be unpacked, which SyncEPSS never saw
-			errs = append(errs, fmt.Errorf("epss: %w", err))
-		} else {
-			log.Info("feed synced", "feed", "first_epss", "records", n)
-		}
+		s.begin("first_epss")
+		s.syncEPSSRound(ctx, cfg, log, &errs)
 	}
 
-	if !cfg.NVDDisabled && cfg.wants("nvd") {
+	if !cfg.NVDDisabled && cfg.wants("nvd") && s.due(ctx, cfg, "nvd") {
 		started := time.Now()
+		s.begin("nvd")
 		n, err := s.syncNVD(ctx, cfg)
 		if err != nil {
 			s.recordFeedError(ctx, "nvd", err)
@@ -258,7 +300,8 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		}
 	}
 
-	if len(cfg.OSVEcosystems) > 0 && cfg.wants("osv") {
+	if len(cfg.OSVEcosystems) > 0 && cfg.wants("osv") && s.due(ctx, cfg, "osv") {
+		s.begin("osv")
 		total := 0
 		var osvErr error
 		for _, eco := range cfg.OSVEcosystems {
@@ -285,12 +328,127 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 	return errors.Join(errs...)
 }
 
-// syncOSVEcosystem downloads <base>/<ecosystem>/all.zip to a temporary file (a zip needs random access),
-// then streams its JSON files into the database a thousand records at a time.
+// syncEPSSRound downloads the daily EPSS file and applies it.
+func (s *FeedSyncer) syncEPSSRound(ctx context.Context, cfg FeedConfig, log *slog.Logger, errs *[]error) {
+	body, err := cfg.get(ctx, cfg.EPSSURL, maxEPSSBytes)
+	if err != nil {
+		s.recordFeedError(ctx, "first_epss", err)
+		*errs = append(*errs, fmt.Errorf("epss: %w", err))
+		return
+	}
+	defer func() { _ = body.Close() }()
+	var r io.Reader = body
+	if strings.HasSuffix(strings.ToLower(cfg.EPSSURL), ".gz") {
+		gz, gerr := gzip.NewReader(body)
+		if gerr != nil {
+			s.recordFeedError(ctx, "first_epss", gerr) // the file could not be unpacked, which SyncEPSS never saw
+			*errs = append(*errs, fmt.Errorf("epss: %w", gerr))
+			return
+		}
+		r = gz
+	}
+	n, err := s.SyncEPSS(ctx, r)
+	if err != nil {
+		*errs = append(*errs, fmt.Errorf("epss: %w", err))
+		return
+	}
+	log.Info("feed synced", "feed", "first_epss", "records", n)
+}
+
+// syncKEVRound downloads the CISA catalogue unless the server says it has not changed since the last round (docs/33
+// section 3.2: conditional GET), and applies it.
+func (s *FeedSyncer) syncKEVRound(ctx context.Context, cfg FeedConfig, log *slog.Logger, errs *[]error) {
+	body, next, notModified, err := cfg.getIfChanged(ctx, cfg.KEVURL, maxKEVBytes, s.loadConditional(ctx, "cisa_kev"))
+	switch {
+	case err != nil:
+		s.recordFeedError(ctx, "cisa_kev", err)
+		*errs = append(*errs, fmt.Errorf("kev: %w", err))
+	case notModified:
+		if err := s.recordNotModified(ctx, "cisa_kev"); err != nil {
+			*errs = append(*errs, fmt.Errorf("kev: %w", err))
+			return
+		}
+		log.Info("feed unchanged", "feed", "cisa_kev")
+	default:
+		n, err := s.SyncKEV(ctx, body)
+		_ = body.Close()
+		if err != nil {
+			*errs = append(*errs, fmt.Errorf("kev: %w", err))
+			return
+		}
+		if err := s.saveConditional(ctx, "cisa_kev", next); err != nil {
+			log.Warn("feed: the KEV validators were not stored; the next round downloads the file again", "err", err)
+		}
+		log.Info("feed synced", "feed", "cisa_kev", "records", n)
+	}
+}
+
+// osvCursor is what the OSV feed remembers between rounds, in feed_state.cursor: for each ecosystem, the validators of
+// its archive (a server that says "not modified" saves the download) and the latest `modified` seen in it (a record
+// that is no newer is not written again). It is dropped, and everything is rewritten, when the way rows are built
+// changes (Rows) or the storage mode does (Full): a cursor must never skip a record the new rules would write
+// differently.
+type osvCursor struct {
+	V          int                       `json:"v"`
+	Rows       int                       `json:"rows"`
+	Full       bool                      `json:"full"`
+	Ecosystems map[string]osvEcoProgress `json:"ecosystems"`
+}
+
+type osvEcoProgress struct {
+	URL          string    `json:"url"`
+	ETag         string    `json:"etag,omitempty"`
+	LastModified string    `json:"last_modified,omitempty"`
+	Modified     time.Time `json:"modified"` // the newest `modified` of a record in the archive
+	Records      int       `json:"records"`  // records in the archive, so an unchanged round can still say how many there are
+}
+
+const (
+	osvCursorVersion = 1
+	// osvRowsVersion changes when what is written for a record changes (a new column filled, a new rule); bump it and
+	// every ecosystem is rewritten once.
+	osvRowsVersion = 1
+)
+
+func (s *FeedSyncer) loadOSVCursor(ctx context.Context, full bool) osvCursor {
+	cur := osvCursor{V: osvCursorVersion, Rows: osvRowsVersion, Full: full, Ecosystems: map[string]osvEcoProgress{}}
+	st, err := s.GetFeedState(ctx, SourceOSV)
+	if err != nil || st == nil || st.Cursor == nil {
+		return cur
+	}
+	var stored osvCursor
+	if json.Unmarshal([]byte(*st.Cursor), &stored) != nil || stored.V != osvCursorVersion || stored.Rows != osvRowsVersion || stored.Full != full || stored.Ecosystems == nil {
+		return cur
+	}
+	return stored
+}
+
+func (s *FeedSyncer) saveOSVCursor(ctx context.Context, cur osvCursor) error {
+	b, _ := json.Marshal(cur)
+	str := string(b)
+	return s.saveCursor(ctx, SourceOSV, &str)
+}
+
+// syncOSVEcosystem downloads <base>/<ecosystem>/all.zip to a temporary file (a zip needs random access), then streams
+// its JSON files into the database a thousand records at a time. It asks the server whether the archive changed since
+// the last round, and writes only the records whose `modified` is newer than the last round's. It returns the number of
+// records the archive holds.
 func (s *FeedSyncer) syncOSVEcosystem(ctx context.Context, cfg FeedConfig, eco string) (int, error) {
-	body, err := cfg.get(ctx, strings.TrimRight(cfg.OSVBaseURL, "/")+"/"+eco+"/all.zip", maxOSVBytes)
+	u := strings.TrimRight(cfg.OSVBaseURL, "/") + "/" + url.PathEscape(eco) + "/all.zip"
+	cur := s.loadOSVCursor(ctx, cfg.StorageFull)
+	prev, known := cur.Ecosystems[eco]
+	var cond *conditional
+	if known && prev.URL == u {
+		cond = &conditional{URL: u, ETag: prev.ETag, LastModified: prev.LastModified}
+	} else {
+		prev = osvEcoProgress{} // another address (a mirror): its archive is not the one the cursor describes
+	}
+	body, next, notModified, err := cfg.getIfChanged(ctx, u, maxOSVBytes, cond)
 	if err != nil {
 		return 0, err
+	}
+	if notModified {
+		return prev.Records, nil
 	}
 	defer func() { _ = body.Close() }()
 	tmp, err := os.CreateTemp(cfg.TempDir, "osv-*.zip")
@@ -302,27 +460,50 @@ func (s *FeedSyncer) syncOSVEcosystem(ctx context.Context, cfg FeedConfig, eco s
 	if _, err := io.Copy(tmp, body); err != nil {
 		return 0, err
 	}
-	return s.SyncOSVZip(ctx, tmp.Name())
+	res, err := s.syncOSVZip(ctx, tmp.Name(), osvZipOptions{write: osvWrite{source: SourceOSV, full: cfg.StorageFull}, since: prev.Modified})
+	if err != nil {
+		return res.Written + res.Skipped, err
+	}
+	cur.Ecosystems[eco] = osvEcoProgress{URL: u, ETag: next.ETag, LastModified: next.LastModified, Modified: res.MaxModified, Records: res.Written + res.Skipped}
+	if err := s.saveOSVCursor(ctx, cur); err != nil {
+		slog.Warn("feeds: the OSV cursor was not stored; the next round reads the whole archive again", "ecosystem", eco, "err", err)
+	}
+	return res.Written + res.Skipped, nil
+}
+
+type osvZipOptions struct {
+	write osvWrite
+	since time.Time // zero writes every record; otherwise a record whose modified is not after it is skipped
+}
+
+type osvZipResult struct {
+	Written, Skipped int
+	MaxModified      time.Time
 }
 
 // SyncOSVZip applies every .json file of an OSV ecosystem archive.
 func (s *FeedSyncer) SyncOSVZip(ctx context.Context, path string) (int, error) {
+	res, err := s.syncOSVZip(ctx, path, osvZipOptions{write: osvWrite{source: SourceOSV}})
+	return res.Written, err
+}
+
+func (s *FeedSyncer) syncOSVZip(ctx context.Context, path string, opt osvZipOptions) (osvZipResult, error) {
+	var res osvZipResult
 	zr, err := zip.OpenReader(path)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	defer func() { _ = zr.Close() }()
 	const chunkSize = 1000
 	chunk := make([]OSVRecord, 0, chunkSize)
-	count := 0
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		if err := s.writeOSVChunk(ctx, chunk); err != nil {
+		if err := s.writeOSVChunk(ctx, chunk, opt.write); err != nil {
 			return err
 		}
-		count += len(chunk)
+		res.Written += len(chunk)
 		chunk = chunk[:0]
 		return nil
 	}
@@ -332,22 +513,37 @@ func (s *FeedSyncer) SyncOSVZip(ctx context.Context, path string) (int, error) {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return count, err
+			return res, err
+		}
+		b, err := io.ReadAll(io.LimitReader(rc, 32<<20))
+		_ = rc.Close()
+		if err != nil {
+			continue
 		}
 		var rec OSVRecord
-		err = json.NewDecoder(io.LimitReader(rc, 32<<20)).Decode(&rec)
-		_ = rc.Close()
-		if err != nil || rec.ID == "" {
+		if err := json.Unmarshal(b, &rec); err != nil || rec.ID == "" {
 			continue // one malformed advisory must not stop the ecosystem
+		}
+		if mod := parseTime(rec.Modified); mod != nil {
+			if mod.After(res.MaxModified) {
+				res.MaxModified = *mod
+			}
+			if !opt.since.IsZero() && !mod.After(opt.since) {
+				res.Skipped++ // written by an earlier round, and not changed since
+				continue
+			}
+		}
+		if opt.write.full {
+			rec.raw = b
 		}
 		chunk = append(chunk, rec)
 		if len(chunk) == chunkSize {
 			if err := flush(); err != nil {
-				return count, err
+				return res, err
 			}
 		}
 	}
-	return count, flush()
+	return res, flush()
 }
 
 // Lookup returns the intelligence for the given vulnerability ids as a small FeedStore, which
@@ -431,13 +627,33 @@ func (s *FeedSyncer) Lookup(ctx context.Context, ids []string) (*FeedStore, erro
 	return fs, erows.Err()
 }
 
-// RunScheduler syncs the feeds at start and then every cfg.Interval. Only one replica syncs at a time:
-// the others skip the round when they cannot take the advisory lock.
+// feedCheckEvery is how often the scheduler looks for a feed that is due, and so how soon a failed feed is tried again.
+const feedCheckEvery = 30 * time.Minute
+
+// RunScheduler keeps the feeds fresh until ctx ends. At start, and then every check (the interval or 30 minutes, whichever
+// is shorter), it syncs each feed that is due: one that never synced, one whose last round failed, one whose interval has
+// passed. A feed that is fresh is left alone, so a restart does not hit the upstream and a check that finds nothing costs one
+// read of the state. Each feed is judged on its own state, so a feed switched on later, or one that failed while another
+// succeeded, is not held back by the others. Only one replica syncs at a time: the others skip the round when they
+// cannot take the advisory lock.
+//
+// A round that panics is logged and the next one runs on time: the scheduler never stops except when ctx ends.
 func RunScheduler(ctx context.Context, pool *pgxpool.Pool, cfg FeedConfig, log *slog.Logger) {
 	cfg.defaults()
+	cfg.OnlyDue = true
 	syncer := NewFeedSyncer(pool)
 	lockKey := int64(fnvKey("rampart/feed-sync"))
+	every := cfg.CheckEvery
+	if every <= 0 {
+		every = min(cfg.Interval, feedCheckEvery)
+	}
+
 	round := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("feed sync: a round panicked; the next one runs on schedule", "panic", fmt.Sprint(r))
+			}
+		}()
 		conn, err := pool.Acquire(ctx)
 		if err != nil {
 			log.Warn("feed sync: no database connection", "error", err)
@@ -453,15 +669,17 @@ func RunScheduler(ctx context.Context, pool *pgxpool.Pool, cfg FeedConfig, log *
 		if err := syncer.SyncAll(ctx, cfg, log); err != nil {
 			log.Warn("feed sync finished with errors", "error", err)
 		}
-		if cfg.OnSynced != nil {
-			cfg.OnSynced(ctx) // even after a partial round: one feed may have changed
+		// Re-score when a feed was synced, even in a partial round: one feed may have changed. A check that found every
+		// feed fresh changes nothing and must not trigger a re-score of everything.
+		if cfg.OnSynced != nil && syncer.ranFeeds() > 0 {
+			cfg.OnSynced(ctx)
 		}
+		syncer.recordFreshness(ctx)
 	}
-	// Do not hit the upstream on every restart: skip the start-up round when KEV synced recently.
-	if st, err := syncer.GetFeedState(ctx, "cisa_kev"); err != nil || st.LastSync == nil || time.Since(*st.LastSync) > cfg.Interval || st.Status != "success" {
-		round()
-	}
-	t := time.NewTicker(cfg.Interval)
+
+	syncer.recordFreshness(ctx) // the gauge is there from the start, not only after the first sync of this process
+	round()
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {

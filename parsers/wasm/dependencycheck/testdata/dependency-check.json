@@ -1,0 +1,16 @@
+{
+  "reportSchema": "1.1",
+  "dependencies": [
+    {
+      "fileName": "log4j-core-2.14.1.jar",
+      "filePath": "/app/lib/log4j-core-2.14.1.jar",
+      "vulnerabilities": [
+        {
+          "name": "CVE-2021-44228",
+          "severity": "CRITICAL",
+          "description": "Apache Log4j2 JNDI exploit."
+        }
+      ]
+    }
+  ]
+}

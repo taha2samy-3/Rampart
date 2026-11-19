@@ -15,6 +15,7 @@ import (
 	"rampart/internal/enrich"
 	"rampart/internal/ingest"
 	"rampart/internal/query"
+	"rampart/internal/store"
 )
 
 func TestQueryAPIFindings(t *testing.T) {
@@ -242,18 +243,38 @@ func TestQueryAPISBOM(t *testing.T) {
 		TotalComponents      int    `json:"total_components"`
 		DirectComponents     int    `json:"direct_components"`
 		TransitiveComponents int    `json:"transitive_components"`
-		Mermaid              string `json:"mermaid"`
-		Tree                 string `json:"tree"`
+		HasDependencies      bool   `json:"has_dependencies"`
+		Nodes                []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Root   bool   `json:"root"`
+			Direct bool   `json:"direct"`
+			Depth  int    `json:"depth"`
+		} `json:"nodes"`
+		Edges []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"edges"`
+	}
+	if strings.Contains(recGraph.Body.String(), "mermaid") {
+		t.Errorf("the graph answer no longer carries Mermaid text: %s", recGraph.Body.String())
 	}
 	_ = json.NewDecoder(recGraph.Body).Decode(&resGraph)
-	if resGraph.Root != "pkg:npm/my-app@1.0.0" {
-		t.Errorf("expected root 'pkg:npm/my-app@1.0.0', got %q", resGraph.Root)
+	if resGraph.Root != "pkg:npm/my-app@1.0.0" || !resGraph.HasDependencies {
+		t.Errorf("expected root 'pkg:npm/my-app@1.0.0' with dependencies, got %q (%v)", resGraph.Root, resGraph.HasDependencies)
 	}
-	if resGraph.DirectComponents != 1 || resGraph.TransitiveComponents != 2 {
-		t.Errorf("expected 1 direct and 2 transitive components, got direct=%d transitive=%d", resGraph.DirectComponents, resGraph.TransitiveComponents)
+	if resGraph.TotalComponents != 3 || resGraph.DirectComponents != 1 || resGraph.TransitiveComponents != 1 {
+		t.Errorf("expected 3 components, 1 direct and 1 transitive (the root is neither), got total=%d direct=%d transitive=%d",
+			resGraph.TotalComponents, resGraph.DirectComponents, resGraph.TransitiveComponents)
 	}
-	if !strings.Contains(resGraph.Mermaid, "flowchart TD") {
-		t.Errorf("expected Mermaid flowchart output, got %s", resGraph.Mermaid)
+	if len(resGraph.Nodes) != 3 || len(resGraph.Edges) != 2 {
+		t.Fatalf("nodes = %d, edges = %d, want 3 and 2", len(resGraph.Nodes), len(resGraph.Edges))
+	}
+	for _, n := range resGraph.Nodes {
+		want := map[string]int{"my-app": 0, "express": 1, "debug": 2}[n.Name]
+		if n.Depth != want || n.Root != (n.Name == "my-app") || n.Direct != (n.Name == "express") {
+			t.Errorf("node %+v: depth %d, root and direct flags do not follow the edges", n, want)
+		}
 	}
 
 	// Test GET /sbom/path
@@ -393,5 +414,71 @@ func TestQueryAPI_OpenAPISpec(t *testing.T) {
 		if _, ok := paths["/api/v1/findings"]; !ok {
 			t.Errorf("%s: expected /api/v1/findings in paths", p)
 		}
+	}
+}
+
+// riskStore adds the per-package risk the PostgreSQL store has to the in-memory store.
+type riskStore struct {
+	*ingest.MemoryStore
+	rows []store.PackageRisk
+}
+
+func (r riskStore) ListPackageRisk(_ context.Context, _, _ uuid.UUID, _ string) ([]store.PackageRisk, error) {
+	return r.rows, nil
+}
+
+// The graph gives each component its open findings, matched on the package and, when the scanner said which version,
+// on the version: two versions of one package in a tree do not share findings.
+func TestQueryAPISBOMGraphCarriesRiskPerVersion(t *testing.T) {
+	mem := ingest.NewMemoryStore()
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	st := riskStore{MemoryStore: mem, rows: []store.PackageRisk{
+		{PurlBase: "pkg:npm/axios", Version: "0.21.1", Critical: 1, High: 1},
+		{PurlBase: "pkg:npm/lodash", Version: "", Medium: 2}, // a scanner that did not say the version: every version
+	}}
+	authn := auth.NewAuthenticatorWithStore(mem)
+	token := authn.DefaultAdminToken(tenantID)
+	mux := http.NewServeMux()
+	query.NewAPIWithAuth(st, nil, authn).RegisterRoutes(mux)
+
+	assetID := domain.NewID()
+	c := func(name, version string) domain.SBOMComponent {
+		return domain.SBOMComponent{TenantID: tenantID, Ref: name + "@" + version, Name: name, Version: version,
+			Purl: "pkg:npm/" + name + "@" + version, PurlBase: "pkg:npm/" + name}
+	}
+	_ = mem.SaveSBOM(context.Background(), &domain.SBOM{
+		ID: domain.NewID(), TenantID: tenantID, AssetID: assetID, Format: "cyclonedx", RootComponent: "app@1",
+		Dependencies: []domain.DependencyEdge{{FromRef: "app@1", ToRef: "axios@0.21.1"}, {FromRef: "app@1", ToRef: "axios@1.7.0"}, {FromRef: "app@1", ToRef: "lodash@4.17.21"}},
+	}, []domain.SBOMComponent{c("app", "1"), c("axios", "0.21.1"), c("axios", "1.7.0"), c("lodash", "4.17.21")})
+
+	req := httptest.NewRequest("GET", "/api/v1/assets/"+assetID.String()+"/sbom/graph", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Nodes []struct {
+			ID              string `json:"id"`
+			Vulnerabilities struct {
+				Critical, High, Medium, Low int
+			} `json:"vulnerabilities"`
+		} `json:"nodes"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&got)
+	risk := map[string][4]int{}
+	for _, n := range got.Nodes {
+		v := n.Vulnerabilities
+		risk[n.ID] = [4]int{v.Critical, v.High, v.Medium, v.Low}
+	}
+	if risk["axios@0.21.1"] != [4]int{1, 1, 0, 0} {
+		t.Errorf("the vulnerable axios: %v", risk["axios@0.21.1"])
+	}
+	if risk["axios@1.7.0"] != [4]int{} {
+		t.Errorf("another version of the package must not take its findings: %v", risk["axios@1.7.0"])
+	}
+	if risk["lodash@4.17.21"] != [4]int{0, 0, 2, 0} {
+		t.Errorf("a finding without a version covers the version in the tree: %v", risk["lodash@4.17.21"])
 	}
 }

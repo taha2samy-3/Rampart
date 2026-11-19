@@ -104,6 +104,16 @@ func ValidateFramework(name string, spec []byte) error {
 	return err
 }
 
+// ValidateParser checks a ClusterParser resource spec (docs/29).
+func ValidateParser(name string, spec []byte) error {
+	return declarative.ValidateParserSpec(name, spec)
+}
+
+// ValidateTenantParser checks a namespaced Parser: the same, and only a runtime a tenant may use (docs/34 F14).
+func ValidateTenantParser(name string, spec []byte) error {
+	return declarative.ValidateTenantParserSpec(name, spec)
+}
+
 // PolicyObject is a policy as the control plane hands it to the store.
 type PolicyObject struct {
 	Namespace  string
@@ -240,11 +250,33 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("complianceframework.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework":
+	case "parser":
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		obj := PolicyObject{Namespace: namespace, Name: header.Metadata.Name, Spec: header.Spec}
+		if err := ValidateTenantParser(header.Metadata.Name, header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveTenantPolicy(ctx, tenant.ID, "parser", obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: parser %q was stored but is not applied: %s", header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("parser.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
+
+	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework", "clusterparser":
 		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
 		if lk == "clustercomplianceframework" { // D102: a framework every tenant sees
 			name := header.Metadata.Name
 			kind, parse = "compliance", func(b []byte) error { return ValidateFramework(name, b) }
+		}
+		if lk == "clusterparser" { // docs/29: cluster-wide report parser
+			name := header.Metadata.Name
+			kind, parse = "parser", func(b []byte) error { return ValidateParser(name, b) }
 		}
 		if lk == "clusterslapolicy" {
 			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
@@ -300,13 +332,8 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
 			TrackedRefs     []string                `json:"trackedRefs"`
 			TrustRules      []domain.TrustRule      `json:"trustRules"`
-			domain.DTrackSourceInput
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
-		dtSpec, dtSchedule, isDT, dtErr := spec.Check()
-		if dtErr != nil {
-			return "", fmt.Errorf("apply: %w", dtErr)
-		}
 
 		namespace := defaultNamespace(header.Metadata.Namespace)
 		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
@@ -333,15 +360,6 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily, spec.IngestionPolicy)
 		if err != nil {
 			return "", err
-		}
-		if saver, ok := a.store.(interface {
-			SaveDTrackSource(ctx context.Context, tenantID, sourceID uuid.UUID, connector string, spec json.RawMessage, schedule time.Duration) error
-		}); ok {
-			if err := saver.SaveDTrackSource(ctx, tenant.ID, id, spec.Connector, dtSpec, dtSchedule); err != nil {
-				return "", err
-			}
-		} else if isDT {
-			return "", fmt.Errorf("apply: store does not support Dependency-Track sources")
 		}
 
 		if len(spec.TrustRules) > 0 {
@@ -962,6 +980,31 @@ func (m *MemoryConfigStore) SLAPolicy(tenantID uuid.UUID, namespace, name string
 	defer m.mu.RUnlock()
 	p, ok := m.policies[tenantID.String()+":"+namespace+":"+name]
 	return p, ok
+}
+
+// ListParsers returns cluster-scoped and tenant-scoped parsers.
+func (m *MemoryConfigStore) ListParsers(ctx context.Context, tenantID uuid.UUID) ([]domain.StoredParserObject, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.StoredParserObject
+	for k, p := range m.policies {
+		if strings.HasPrefix(k, "cluster:parser:") {
+			out = append(out, domain.StoredParserObject{
+				Origin: "cluster",
+				Name:   p.Name,
+				Spec:   p.Spec,
+				Error:  p.Error,
+			})
+		} else if strings.HasPrefix(k, "parser:"+tenantID.String()+":") {
+			out = append(out, domain.StoredParserObject{
+				Origin: "tenant",
+				Name:   p.Name,
+				Spec:   p.Spec,
+				Error:  p.Error,
+			})
+		}
+	}
+	return out, nil
 }
 
 func (m *MemoryConfigStore) SaveTenant(ctx context.Context, tenant domain.Tenant) error {

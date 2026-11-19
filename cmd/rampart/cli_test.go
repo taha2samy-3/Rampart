@@ -97,15 +97,15 @@ func TestCLIE2EUploadAndSBOM(t *testing.T) {
 	defer ts.Close()
 
 	// 1. Test CLI upload with SARIF fixture
-	sarifPath := filepath.Join("..", "..", "internal", "parsers", "sarif", "testdata", "semgrep.sarif")
-	handled, err := handleCLI([]string{"upload", sarifPath, "--server", ts.URL, "--token", token})
+	sarifPath := filepath.Join("..", "..", "parsers", "wasm", "sarif", "testdata", "semgrep.sarif")
+	handled, err := handleCLI([]string{"upload", sarifPath, "--parser", "sarif", "--server", ts.URL, "--token", token})
 	if err != nil || !handled {
 		t.Fatalf("expected upload command to succeed, got %v", err)
 	}
 
 	// 2. Test CLI sbom upload with CycloneDX XML fixture
-	xmlPath := filepath.Join("..", "..", "internal", "parsers", "cyclonedx", "testdata", "sample.cdx.xml")
-	handled, err = handleCLI([]string{"sbom", "upload", xmlPath, "--server", ts.URL, "--token", token})
+	xmlPath := filepath.Join("..", "..", "parsers", "wasm", "sbom-cyclonedx", "testdata", "sample.cdx.xml")
+	handled, err = handleCLI([]string{"sbom", "upload", xmlPath, "--parser", "cyclonedx", "--server", ts.URL, "--token", token})
 	if err != nil || !handled {
 		t.Fatalf("expected sbom upload command to succeed, got %v", err)
 	}
@@ -133,13 +133,13 @@ spec:
 	}
 
 	// 4. Test CLI sbom graph command
-	handled, err = handleCLI([]string{"sbom", "graph", xmlPath})
+	handled, err = handleCLI([]string{"sbom", "graph", xmlPath, "--parser", "cyclonedx"})
 	if err != nil || !handled {
 		t.Fatalf("expected sbom graph command to succeed, got %v", err)
 	}
 
 	// 5. Test CLI sbom path command
-	handled, err = handleCLI([]string{"sbom", "path", xmlPath, "--target", "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"})
+	handled, err = handleCLI([]string{"sbom", "path", xmlPath, "--parser", "cyclonedx", "--target", "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"})
 	if err != nil || !handled {
 		t.Fatalf("expected sbom path command to succeed, got %v", err)
 	}
@@ -150,7 +150,7 @@ spec:
 	if err := os.WriteFile(gatePath, []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"semgrep","rules":[{"id":"gate.only.rule","properties":{"security-severity":"9.8"}}]}},"results":[{"ruleId":"gate.only.rule","message":{"text":"new problem"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/gate.go"},"region":{"startLine":3}}}]}]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCLI("upload", gatePath, "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--branch", "main"); err != nil {
+	if err := runCLI("upload", gatePath, "--parser", "sarif", "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--branch", "main"); err != nil {
 		t.Fatalf("upload with a commit: %v", err)
 	}
 	if err := runCLI("gate", "--server", ts.URL, "--token", token, "--commit", "gate-c1", "--expect", "semgrep", "--fail-on", "critical", "--wait=false"); err == nil {
@@ -171,14 +171,36 @@ spec:
 		t.Fatalf("upload with explicit --parser and --app failed: %v", err)
 	}
 
-	// 8. Test --require-parser flag
+	// 8. The parser is named, or --detect says the server may choose; the CLI never guesses.
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token); err == nil || !strings.Contains(err.Error(), "--parser") {
+		t.Errorf("an upload with neither --parser nor --detect must be refused, and say what to pass: %v", err)
+	}
 	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--require-parser"); err == nil {
-		t.Error("expected error when --require-parser is set without --parser")
+		t.Error("--require-parser is ignored now and must not make a nameless upload pass")
+	}
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--parser", "sarif", "--detect"); err == nil {
+		t.Error("--parser together with --detect must be refused")
+	}
+	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--detect", "--app", "detected-app"); err != nil {
+		t.Errorf("--detect must let the server choose the parser: %v", err)
+	}
+	if err := runCLI("sbom", "upload", xmlPath, "--server", ts.URL, "--token", token); err == nil {
+		t.Error("an sbom upload without --parser or --detect must be refused")
+	}
+	if err := runCLI("sbom", "graph", xmlPath); err == nil {
+		t.Error("sbom graph reads locally and cannot detect: it needs --parser")
 	}
 
 	// 9. Test upload with unknown --parser fails explicitly
-	if err := runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--parser", "unknown-scanner-xyz"); err == nil {
-		t.Error("expected error when unknown --parser is requested")
+	err = runCLI("upload", sarifPath, "--server", ts.URL, "--token", token, "--parser", "unknown-scanner-xyz")
+	if err == nil {
+		t.Fatal("expected error when unknown --parser is requested")
+	}
+	// The server says which names it knows, from what is installed, not from a list kept by hand.
+	for _, name := range []string{"sarif", "trivy", "cyclonedx"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the error does not list the available parser %q: %v", name, err)
+		}
 	}
 }
 
@@ -368,5 +390,67 @@ func TestCLIFindingsListAndSetState(t *testing.T) {
 	handled, err := handleCLI([]string{"findings", "list", "--server", ts.URL, "--token", "test-cli-token"})
 	if !handled || err != nil {
 		t.Errorf("handleCLI failed for findings list: handled=%v, err=%v", handled, err)
+	}
+}
+
+// The CLI reads a local SBOM with the reader it is told to use; it holds no list of formats and does not try them in
+// turn. A reader refuses a document that is not in its format, so a wrong name is an error, not a wrong answer.
+func TestParseLocalSBOMUsesTheNamedReader(t *testing.T) {
+	dir := filepath.Join("..", "..", "parsers", "wasm")
+	files := map[string]struct{ reader, path string }{
+		"cyclonedx json": {"cyclonedx", filepath.Join(dir, "sbom-cyclonedx", "testdata", "sample.cdx.json")},
+		"spdx":           {"spdx", filepath.Join(dir, "sbom-spdx", "testdata", "sample.spdx.json")},
+		"syft":           {"syft", filepath.Join(dir, "sbom-syft", "testdata", "report.syft.json")},
+	}
+	for name, f := range files {
+		// a file name that says nothing about the format: only the flag decides
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		anon := filepath.Join(t.TempDir(), "inventory.json")
+		if err := os.WriteFile(anon, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		doc, comps, _, err := parseLocalSBOM(anon, f.reader)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if doc == nil || len(comps) == 0 {
+			t.Errorf("%s: no document or no components (%v)", name, doc)
+		}
+	}
+
+	// the wrong reader for a document refuses it, and the error names the reader and the file
+	spdx := filepath.Join(t.TempDir(), "x.json")
+	data, _ := os.ReadFile(files["spdx"].path)
+	_ = os.WriteFile(spdx, data, 0o600)
+	if _, _, _, err := parseLocalSBOM(spdx, "cyclonedx"); err == nil || !strings.Contains(err.Error(), "as cyclonedx") {
+		t.Errorf("an SPDX document read as CycloneDX must be refused with the reader named: %v", err)
+	}
+	// a reader the CLI cannot find says where readers come from and how to use the server's
+	if _, _, _, err := parseLocalSBOM(spdx, "no-such-reader"); err == nil || !strings.Contains(err.Error(), "RAMPART_WASM_DIR") {
+		t.Errorf("a reader the CLI does not have must say where readers are loaded from: %v", err)
+	}
+}
+
+func TestChooseParser(t *testing.T) {
+	cases := []struct {
+		named   string
+		detect  bool
+		want    string
+		wantErr bool
+	}{
+		{"trivy", false, "trivy", false},
+		{"", true, "", false},
+		{"", false, "", true},
+		{"trivy", true, "", true},
+	}
+	for _, c := range cases {
+		got, err := chooseParser(c.named, c.detect)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("chooseParser(%q, %v) = %q, %v", c.named, c.detect, got, err)
+		}
 	}
 }

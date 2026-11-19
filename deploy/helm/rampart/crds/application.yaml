@@ -55,6 +55,25 @@ spec:
                   items:
                     type: string
                     enum: [waf, apiGateway, mtls, privateNetwork]
+                type:
+                  type: string
+                  enum: [repo]
+                  description: >-
+                    What kind of thing the application is. repo is one branch of one repository and needs repository and branch.
+                    machine is designed and not built yet, so it is refused. Left out, the application is repository-wide, as before.
+                repository:
+                  type: string
+                  maxLength: 2048
+                  description: 'The repository address of a repo application: one repository, no pattern. Needs type repo.'
+                branch:
+                  type: string
+                  maxLength: 255
+                  pattern: '^[^\s*]+$'
+                  description: 'The branch of a repo application: one branch, no pattern, because an application is one branch. Needs type repo.'
+                environment:
+                  type: string
+                  enum: [production, staging, test, development]
+                  description: 'Where the application runs. Left out, the application is not described, and the score gives it no environment points.'
                 complianceScope:
                   description: >-
                     The compliance scopes the application is in, for example pci or sox. A ComplianceFramework with

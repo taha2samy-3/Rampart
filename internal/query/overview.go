@@ -31,6 +31,24 @@ type ApplicationPage struct {
 	domain.AppDetail
 	TopFindings  []TopFinding       `json:"top_findings"`
 	ScanCoverage []CategoryCoverage `json:"scan_coverage"`
+	// Context is what the score knows about the application, and who owns it (D136).
+	Context ApplicationContext `json:"context"`
+}
+
+// ApplicationContext is what the score reads about an application.
+type ApplicationContext struct {
+	BusinessCriticality  string   `json:"business_criticality"`
+	InternetFacing       bool     `json:"internet_facing"`
+	DataClassification   []string `json:"data_classification"`
+	CompensatingControls []string `json:"compensating_controls"`
+	Lifecycle            string   `json:"lifecycle"`
+	// What the application is and where it runs (D140). Type is "repo" or empty (repository-wide); Environment is empty when nobody said.
+	Type        string `json:"type,omitempty"`
+	Repository  string `json:"repository,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Environment string `json:"environment"`
+	// ManagedBy is "crd" when an Application resource owns it (read only here), else "ui" or "none".
+	ManagedBy string `json:"managed_by"`
 }
 
 // aggregator returns the store's aggregates, or answers 501 when it has none (the in-memory store).
@@ -103,6 +121,17 @@ func (a *API) handleApplicationSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := ApplicationPage{AppDetail: *detail, TopFindings: []TopFinding{}, ScanCoverage: scanCoverage(*detail, a.familyCategories(r.Context(), tenantID, detail.FamilyCategories))}
+	if app, err := a.store.GetApplication(r.Context(), tenantID, id); err == nil && app != nil {
+		page.Tags = app.Tags
+		page.Context = ApplicationContext{
+			BusinessCriticality: app.BusinessCriticality, InternetFacing: app.InternetFacing, Lifecycle: app.Lifecycle, ManagedBy: app.ManagedBy,
+			DataClassification: nonNilStrings(app.DataClassification), CompensatingControls: nonNilStrings(app.CompensatingControls),
+			Type: app.Type, Repository: app.Repository, Branch: app.Branch, Environment: app.Environment,
+		}
+		if app.Version > 0 {
+			page.Version = "v" + strconv.Itoa(app.Version)
+		}
+	}
 	if fq, ok := a.store.(FindingQuerier); ok {
 		q, _ := grammar.Parse("app:" + id.String() + " state:open,under_investigation,affected")
 		if top, err := fq.QueryFindings(r.Context(), tenantID, &q, "-score", 5, nil); err == nil {
@@ -243,4 +272,11 @@ func (a *API) handleTrend(w http.ResponseWriter, r *http.Request) {
 		out = append(out, point{Day: p.Day.UTC().Format("2006-01-02"), Value: v})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"metric": metric, "points": out})
+}
+
+func nonNilStrings(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }

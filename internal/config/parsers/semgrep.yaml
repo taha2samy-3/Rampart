@@ -1,0 +1,30 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: semgrep
+spec:
+  category: sast
+  runtime: wasm
+  description: 'Semgrep JSON: code findings with CWE, location and code snippet hash'
+  detect:
+    filenames:
+    - '*semgrep*'
+    filenameWeight: 10
+    reject:
+    - '"runs"'
+    rules:
+    - anyOf:
+      - '"results"'
+      weight: 40
+    - anyOf:
+      - '"check_id"'
+      weight: 40
+    - anyOf:
+      - '"extra"'
+      - '"paths"'
+      weight: 15
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/semgrep:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

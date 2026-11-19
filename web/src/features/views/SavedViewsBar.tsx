@@ -123,7 +123,7 @@ export function SavedViewsBar({
               className="flex items-center justify-between text-12"
             >
               <span>CSV (.csv)</span>
-              <span className="text-10 text-ink-2">Spreadsheet</span>
+              <span className="text-12 text-ink-2">Spreadsheet</span>
             </a>
           </MenuItem>
           <MenuItem asChild>
@@ -133,7 +133,7 @@ export function SavedViewsBar({
               className="flex items-center justify-between text-12"
             >
               <span>JSON (.json)</span>
-              <span className="text-10 text-ink-2">Full dump</span>
+              <span className="text-12 text-ink-2">Full dump</span>
             </a>
           </MenuItem>
           <MenuItem asChild>
@@ -143,7 +143,7 @@ export function SavedViewsBar({
               className="flex items-center justify-between text-12"
             >
               <span>OCSF v1.1 (.json)</span>
-              <span className="text-10 text-ink-2">Security Schema</span>
+              <span className="text-12 text-ink-2">Security Schema</span>
             </a>
           </MenuItem>
         </MenuContent>
@@ -184,7 +184,7 @@ export function SavedViewsBar({
               <label className="text-12 font-medium text-ink">
                 {t('views.query', { defaultValue: 'Query' })}
               </label>
-              <pre className="overflow-x-auto rounded border border-rule bg-canvas-2 p-2 text-11 text-ink-2 font-mono">
+              <pre className="overflow-x-auto rounded border border-rule bg-canvas-2 p-2 text-12 text-ink-2 font-mono">
                 {q || 'status:open'}
               </pre>
             </div>

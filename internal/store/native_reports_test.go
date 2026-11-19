@@ -22,11 +22,11 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 		family  string
 		want    int
 	}{
-		{"../parsers/trivy/testdata/image-0.50.json", domain.UploadContext{ImageRef: "registry.acme.example/shop/api:2.14.0", Branch: "main"}, "trivy", 5},
-		{"../parsers/grype/testdata/image-0.74.json", domain.UploadContext{ImageRef: "registry.acme.example/shop/api:2.14.0", Branch: "main"}, "grype", 3},
-		{"../parsers/semgrep/testdata/scan-1.45.json", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "semgrep", 3},
-		{"../parsers/gitleaks/testdata/repo-8.18.json", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "gitleaks", 2},
-		{"../parsers/trufflehog/testdata/scan-3.63.jsonl", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "trufflehog", 3},
+		{"../../parsers/wasm/trivy/testdata/image-0.50.json", domain.UploadContext{ImageRef: "registry.acme.example/shop/api:2.14.0", Branch: "main"}, "trivy", 5},
+		{"../../parsers/wasm/grype/testdata/image-0.74.json", domain.UploadContext{ImageRef: "registry.acme.example/shop/api:2.14.0", Branch: "main"}, "grype", 3},
+		{"../../parsers/wasm/semgrep/testdata/scan-1.45.json", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "semgrep", 3},
+		{"../../parsers/wasm/gitleaks/testdata/repo-8.18.json", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "gitleaks", 2},
+		{"../../parsers/wasm/trufflehog/testdata/scan-3.63.jsonl", domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}, "trufflehog", 3},
 	}
 	for _, r := range reports {
 		report, err := os.ReadFile(r.file)
@@ -119,7 +119,7 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 		t.Fatalf("a live credential must outscore an unverified one by at least the SECRET_VERIFIED 250: %d vs %d", live.RiskScore, dead.RiskScore)
 	}
 	// When it is revoked, the next scan says unverified and the score falls; it is the same finding.
-	report, _ := os.ReadFile("../parsers/trufflehog/testdata/scan-3.63.jsonl")
+	report, _ := os.ReadFile("../../parsers/wasm/trufflehog/testdata/scan-3.63.jsonl")
 	revoked := strings.Replace(string(report), `"Verified":true`, `"Verified":false`, 1)
 	run := h.waitRun(h.uploadAndComplete([]byte(revoked), domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main"}))
 	if run.Status != domain.RunCompleted || run.Stats.Created != 0 || run.Stats.Updated != 1 {

@@ -1,0 +1,94 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clustersbomparsers.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterSBOMParser
+    listKind: ClusterSBOMParserList
+    plural: clustersbomparsers
+    singular: clustersbomparser
+    shortNames:
+      - clsbomparser
+      - csbomparser
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Format, type: string, jsonPath: .spec.format}
+        - {name: Runtime, type: string, jsonPath: .spec.runtime}
+        - {name: Synced, type: string, jsonPath: ".status.conditions[?(@.type=='ArtifactSynced')].status"}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: ClusterSBOMParser configures an SBOM format reader (CycloneDX, SPDX, Syft).
+              properties:
+                format:
+                  type: string
+                  description: Canonical format identifier (cyclonedx, spdx, syft, custom).
+                description:
+                  type: string
+                runtime:
+                  type: string
+                  enum: [wasm, lua, mapping]
+                  default: wasm
+                detect:
+                  type: object
+                  properties:
+                    filenames:
+                      type: array
+                      items:
+                        type: string
+                    contentTypes:
+                      type: array
+                      items:
+                        type: string
+                    probes:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          jsonHasKeys:
+                            type: array
+                            items:
+                              type: string
+                          contains:
+                            type: array
+                            items:
+                              type: string
+                source:
+                  type: object
+                  properties:
+                    oci:
+                      type: string
+                options:
+                  type: object
+                  properties:
+                    buildDependencyGraph:
+                      type: boolean
+                      default: true
+                    extractVulnerabilities:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Turn the vulnerabilities a document states (a CycloneDX VDR) into findings, besides filling
+                        the inventory. Off by default: an SBOM is assets, and what is found in it is the matcher's work.
+                        A format that states none (SPDX, Syft) is unaffected.
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

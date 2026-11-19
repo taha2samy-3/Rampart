@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"net"
 	"net/http"
 	"net/url"
@@ -89,7 +90,7 @@ var MessageFields = []string{"title", "summary", "severity", "url", "appName", "
 // notBuilt names what doc 19 describes and this version refuses, with what to do instead.
 var notBuilt = map[string]string{
 	"tracker":     "declarative trackers are not built yet; use a built-in tracker (Jira, GitHub)",
-	"source":      "declarative sources are not built yet; Dependency-Track is the built-in source",
+	"source":      "declarative sources are not built yet",
 	"wasm":        "code runtimes (wasm) are tier 2 and need a ClusterIntegrationPackage, which is not built",
 	"grpc":        "code runtimes (grpc) are tier 2 and need a ClusterIntegrationPackage, which is not built",
 	"mapping":     "runtime mapping is for kind parser",
@@ -106,10 +107,18 @@ func Parse(raw []byte) (*Spec, error) {
 		Version     string `json:"version"`
 		Description string `json:"description"`
 	}
-	if err := json.Unmarshal(raw, &head); err == nil && head.Kind == "parser" {
-		s := &Spec{Kind: head.Kind, Runtime: head.Runtime, Version: head.Version, Description: head.Description,
-			Raw: append(json.RawMessage(nil), raw...)}
-		return s, validateParser(s)
+	if err := json.Unmarshal(raw, &head); err == nil && (head.Kind == "parser" || head.Kind == "" || head.Runtime != "") {
+		if head.Kind == "" {
+			head.Kind = "parser"
+		}
+		if head.Runtime == "" {
+			head.Runtime = "mapping"
+		}
+		if head.Kind == "parser" {
+			s := &Spec{Kind: head.Kind, Runtime: head.Runtime, Version: head.Version, Description: head.Description,
+				Raw: append(json.RawMessage(nil), raw...)}
+			return s, validateParser(s)
+		}
 	}
 	var s Spec
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -122,19 +131,79 @@ func Parse(raw []byte) (*Spec, error) {
 }
 
 func validateParser(s *Spec) error {
-	if s.Runtime != "mapping" {
-		if why := notBuilt[s.Runtime]; why != "" {
-			return fmt.Errorf("%w: runtime %q: %s", ErrInvalid, s.Runtime, why)
+	switch s.Runtime {
+	case "native":
+		var spec struct {
+			Native string `json:"native"`
 		}
-		return fmt.Errorf("%w: runtime %q: a parser package uses runtime mapping", ErrInvalid, s.Runtime)
+		_ = json.Unmarshal(s.Raw, &spec)
+		if spec.Native == "" {
+			return fmt.Errorf("%w: runtime native requires 'native' engine name", ErrInvalid)
+		}
+		return nil
+	case "lua":
+		var spec struct {
+			Script string `json:"script"`
+		}
+		_ = json.Unmarshal(s.Raw, &spec)
+		if spec.Script == "" {
+			return fmt.Errorf("%w: runtime lua requires 'script'", ErrInvalid)
+		}
+		return nil
+	case "wasm":
+		var spec struct {
+			Source struct {
+				OCI  string `json:"oci"`
+				File string `json:"file"`
+			} `json:"source"`
+		}
+		_ = json.Unmarshal(s.Raw, &spec)
+		if spec.Source.OCI == "" && spec.Source.File == "" {
+			return fmt.Errorf("%w: runtime wasm requires 'source.oci' or 'source.file'", ErrInvalid)
+		}
+		return nil
+	case "mapping":
+		if !verRe.MatchString(s.Version) {
+			return fmt.Errorf("%w: version %q: use a semantic version such as 1.0.0", ErrInvalid, s.Version)
+		}
+		if _, err := mapping.NewParserFromSpec("check", s.Raw); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported parser runtime %q; expected native, lua, wasm, or mapping", ErrInvalid, s.Runtime)
 	}
-	if !verRe.MatchString(s.Version) {
-		return fmt.Errorf("%w: version %q: use a semantic version such as 1.0.0", ErrInvalid, s.Version)
+}
+
+// ValidateParserSpec validates a Parser or ClusterParser resource spec.
+func ValidateParserSpec(name string, raw []byte) error {
+	s, err := Parse(raw)
+	if err != nil {
+		return err
 	}
-	if _, err := mapping.NewParserFromSpec("check", s.Raw); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	if s.Kind != "parser" {
+		return fmt.Errorf("%w: kind %q: expected parser", ErrInvalid, s.Kind)
 	}
 	return nil
+}
+
+// TenantParserRuntimes are the runtimes a parser a tenant owns may use: data only. A tenant's resource is not reviewed by
+// the platform administrator, so it must not run compiled code (WASM, native) or a script (Lua) in the server, which
+// docs/19 reserves for the cluster-scoped kinds that the administrator installs (docs/34 F14).
+var TenantParserRuntimes = map[string]bool{"mapping": true, "declarative": true}
+
+// ValidateTenantParserSpec is ValidateParserSpec for a namespaced Parser: the same checks, and a runtime a tenant may use.
+func ValidateTenantParserSpec(name string, raw []byte) error {
+	var head struct {
+		Runtime string `json:"runtime" yaml:"runtime"`
+	}
+	if err := yaml.Unmarshal(raw, &head); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if head.Runtime != "" && !TenantParserRuntimes[head.Runtime] {
+		return fmt.Errorf("%w: runtime %q is for cluster-scoped parsers (ClusterParser), which the platform administrator installs; a tenant's Parser uses mapping", ErrInvalid, head.Runtime)
+	}
+	return ValidateParserSpec(name, raw)
 }
 
 func (s *Spec) validate() error {

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,9 +36,26 @@ var (
 	heldClosePending, _ = meter.Int64UpDownCounter("rampart.held_close.pending",
 		metric.WithDescription("Held close batches awaiting review."))
 
-	// feedSyncs tracks vulnerability intelligence feed sync attempts (rampart_feed_syncs_total).
+	// feedSyncs tracks vulnerability intelligence feed sync attempts (rampart_feed_syncs_total), by feed and status
+	// (success or failure). The failure rate is rampart_feed_syncs_total{status="failure"}.
 	feedSyncs, _ = meter.Int64Counter("rampart.feed.syncs",
-		metric.WithDescription("Vulnerability intelligence feed sync attempts."))
+		metric.WithDescription("Vulnerability intelligence feed sync attempts, by feed and status (success, failure)."))
+	// feedSyncDuration is how long a feed's step of a round took (rampart_feed_sync_duration_seconds).
+	feedSyncDuration, _ = meter.Float64Histogram("rampart.feed.sync.duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of one feed's sync step, by feed."),
+		metric.WithExplicitBucketBoundaries(1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800))
+	// feedLastSuccess is when a feed last synced successfully (rampart_feed_last_success_seconds): the alert that catches a
+	// feed that has silently stopped, which a counter of failures cannot (a feed that is never tried fails nothing).
+	feedLastSuccess, _ = meter.Float64Gauge("rampart.feed.last.success",
+		metric.WithUnit("s"),
+		metric.WithDescription("Unix time of the last successful sync of a feed, by feed."))
+	// feedRecords counts the records a feed wrote (rampart_feed_records_synced_total).
+	feedRecords, _ = meter.Int64Counter("rampart.feed.records.synced",
+		metric.WithDescription("Records written by feed syncs, by feed."))
+	// findingsRekeyed counts findings renamed or merged after an identifier became an alias (rampart_findings_rekeyed_total).
+	findingsRekeyed, _ = meter.Int64Counter("rampart.findings.rekeyed",
+		metric.WithDescription("Findings re-keyed after an identifier became an alias of a CVE, by outcome (renamed, merged)."))
 )
 
 // logins counts sign-in attempts (rampart_auth_logins_total), by method and result.
@@ -97,4 +115,28 @@ func RecordFeedSync(ctx context.Context, feed, status string) {
 		attribute.String("feed", feed),
 		attribute.String("status", status),
 	))
+}
+
+// RecordFeedLastSuccess records when a feed last synced successfully.
+func RecordFeedLastSuccess(ctx context.Context, feed string, at time.Time) {
+	feedLastSuccess.Record(ctx, float64(at.Unix()), metric.WithAttributes(attribute.String("feed", feed)))
+}
+
+// RecordFeedDuration records how long one feed's step of a sync round took.
+func RecordFeedDuration(ctx context.Context, feed string, d time.Duration) {
+	feedSyncDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("feed", feed)))
+}
+
+// RecordFeedRecords records the records a feed wrote in a round.
+func RecordFeedRecords(ctx context.Context, feed string, n int64) {
+	if n > 0 {
+		feedRecords.Add(ctx, n, metric.WithAttributes(attribute.String("feed", feed)))
+	}
+}
+
+// RecordFindingsRekeyed records findings re-keyed by an alias change, by outcome.
+func RecordFindingsRekeyed(ctx context.Context, outcome string, n int) {
+	if n > 0 {
+		findingsRekeyed.Add(ctx, int64(n), metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
 }

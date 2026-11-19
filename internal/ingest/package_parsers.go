@@ -2,20 +2,28 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
+
+	"rampart/internal/config/sbomparsers"
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
+	"rampart/internal/integrations/lua"
 	"rampart/internal/integrations/mapping"
+	"rampart/internal/integrations/wasm"
+	"rampart/internal/sbom"
 )
 
-// parserSet is the built-in parsers plus the parser packages a tenant installed (IntegrationPackage, kind parser,
-// runtime mapping; docs/19 §4, docs/16 D98). A tenant's package parses only that tenant's uploads. A built-in
-// parser wins a tie and owns its name, so a package cannot take over a format Rampart already reads.
+// parserSet is the built-in parsers plus the custom cluster and tenant parsers (ClusterParser, Parser,
+// IntegrationPackage; docs/19 §4, docs/29).
+// Precedence: Tenant Parser > Cluster Parser > Embedded Built-in defaults.
 type parserSet struct {
 	registry *integrations.Registry
 	store    any
@@ -30,47 +38,163 @@ type cachedParser struct {
 }
 
 func newParserSet(registry *integrations.Registry, store any) *parserSet {
+	if registry != nil {
+		if defaultSBOMs, err := sbomparsers.ListDefaultSBOMParsers(); err == nil {
+			for _, sb := range defaultSBOMs {
+				if p, err := sbom.NewWasmSBOMParserFromSpec(sb.Name, sb.Spec, nil); err == nil {
+					_ = registry.RegisterParser(p)
+				}
+			}
+		}
+	}
 	return &parserSet{registry: registry, store: store, cache: map[string]cachedParser{}}
 }
 
-// tenant returns the tenant's installed, valid parser packages. A package that does not compile is skipped: the
-// operator already marked it Ready=False with its error.
-func (s *parserSet) tenant(ctx context.Context, tenantID uuid.UUID) []integrations.ParserContract {
-	pkgs, ok := s.store.(domain.IntegrationPackages)
-	if !ok || tenantID == uuid.Nil {
-		return nil
+// tenantRuntimeAllowed reports whether a parser stored for a tenant uses a runtime a tenant may use. A row written before
+// the check existed, or by a path that did not run it, is not used.
+func tenantRuntimeAllowed(raw []byte) bool {
+	var head struct {
+		Runtime string `json:"runtime" yaml:"runtime"`
+		Spec    struct {
+			Runtime string `json:"runtime" yaml:"runtime"`
+		} `json:"spec" yaml:"spec"`
 	}
-	list, err := pkgs.ListIntegrationPackages(ctx, tenantID)
-	if err != nil {
-		return nil
+	if json.Unmarshal(raw, &head) != nil || (head.Runtime == "" && head.Spec.Runtime == "") {
+		_ = yaml.Unmarshal(raw, &head)
 	}
+	rt := head.Runtime
+	if rt == "" {
+		rt = head.Spec.Runtime
+	}
+	return rt == "" || rt == "mapping" || rt == "declarative"
+}
+
+func (s *parserSet) compileParser(name string, raw []byte) (integrations.ParserContract, error) {
+	var meta struct {
+		Kind string `json:"kind" yaml:"kind"`
+	}
+	_ = json.Unmarshal(raw, &meta)
+	if meta.Kind == "" {
+		_ = yaml.Unmarshal(raw, &meta)
+	}
+	if meta.Kind == "ClusterSBOMParser" || meta.Kind == "SBOMParser" {
+		return sbom.NewWasmSBOMParserFromSpec(name, raw, nil)
+	}
+	var head struct {
+		Runtime string `json:"runtime" yaml:"runtime"`
+		Native  string `json:"native" yaml:"native"`
+		Spec    struct {
+			Runtime string `json:"runtime" yaml:"runtime"`
+			Native  string `json:"native" yaml:"native"`
+		} `json:"spec" yaml:"spec"`
+	}
+	_ = json.Unmarshal(raw, &head)
+	if head.Runtime == "" && head.Spec.Runtime == "" {
+		_ = yaml.Unmarshal(raw, &head)
+	}
+
+	runtime := head.Runtime
+	if runtime == "" {
+		runtime = head.Spec.Runtime
+	}
+	native := head.Native
+	if native == "" {
+		native = head.Spec.Native
+	}
+
+	switch runtime {
+	case "native":
+		engine := native
+		if engine == "" {
+			engine = name
+		}
+		if p, err := s.registry.GetParser("builtin:" + engine); err == nil {
+			return p, nil
+		}
+		if p, err := s.registry.GetParser(engine); err == nil {
+			return p, nil
+		}
+		return nil, fmt.Errorf("native parser engine %q not registered", engine)
+	case "lua":
+		return lua.NewLuaParserFromSpec(name, raw)
+	case "wasm":
+		return wasm.NewWasmParserFromSpec(name, raw, nil)
+	case "mapping", "":
+		return mapping.NewParserFromSpec(name, raw)
+	default:
+		return nil, fmt.Errorf("unsupported parser runtime %q", runtime)
+	}
+}
+
+// tenantAndCluster returns the tenant's and cluster-wide installed, valid parsers.
+func (s *parserSet) tenantAndCluster(ctx context.Context, tenantID uuid.UUID) (tenantOut []integrations.ParserContract, clusterOut []integrations.ParserContract) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []integrations.ParserContract
-	for _, p := range list {
-		if p.Kind != "parser" || p.Error != "" {
-			continue
+
+	// 1. Check ParserStore (PostgresStore or MemoryConfigStore)
+	if pStore, ok := s.store.(domain.ParserStore); ok && tenantID != uuid.Nil {
+		list, err := pStore.ListParsers(ctx, tenantID)
+		if err == nil {
+			for _, p := range list {
+				if p.Error != "" {
+					continue
+				}
+				if p.Origin == "tenant" && !tenantRuntimeAllowed(p.Spec) {
+					continue // a tenant's parser is data (mapping); code and scripts are for ClusterParser (docs/34 F14)
+				}
+				key := p.Origin + "/" + tenantID.String() + "/" + p.Name
+				if c, ok := s.cache[key]; ok && c.updated.Equal(p.UpdatedAt) {
+					if p.Origin == "tenant" {
+						tenantOut = append(tenantOut, c.parser)
+					} else {
+						clusterOut = append(clusterOut, c.parser)
+					}
+					continue
+				}
+				cp, err := s.compileParser(p.Name, p.Spec)
+				if err != nil {
+					continue
+				}
+				s.cache[key] = cachedParser{updated: p.UpdatedAt, parser: cp}
+				if p.Origin == "tenant" {
+					tenantOut = append(tenantOut, cp)
+				} else {
+					clusterOut = append(clusterOut, cp)
+				}
+			}
 		}
-		key := tenantID.String() + "/" + p.Name
-		if c, ok := s.cache[key]; ok && c.updated.Equal(p.UpdatedAt) {
-			out = append(out, c.parser)
-			continue
-		}
-		mp, err := mapping.NewParserFromSpec(p.Name, p.Spec)
-		if err != nil {
-			continue
-		}
-		s.cache[key] = cachedParser{updated: p.UpdatedAt, parser: mp}
-		out = append(out, mp)
 	}
-	return out
+
+	// 2. Check legacy IntegrationPackages
+	if pkgs, ok := s.store.(domain.IntegrationPackages); ok && tenantID != uuid.Nil {
+		list, err := pkgs.ListIntegrationPackages(ctx, tenantID)
+		if err == nil {
+			for _, p := range list {
+				if p.Kind != "parser" || p.Error != "" {
+					continue
+				}
+				key := "pkg/" + tenantID.String() + "/" + p.Name
+				if c, ok := s.cache[key]; ok && c.updated.Equal(p.UpdatedAt) {
+					tenantOut = append(tenantOut, c.parser)
+					continue
+				}
+				cp, err := s.compileParser(p.Name, p.Spec)
+				if err != nil {
+					continue
+				}
+				s.cache[key] = cachedParser{updated: p.UpdatedAt, parser: cp}
+				tenantOut = append(tenantOut, cp)
+			}
+		}
+	}
+
+	return tenantOut, clusterOut
 }
 
 // formatAliases are the names the documents use for a built-in parser whose id differs (docs/04 acceptedFormats).
-var formatAliases = map[string]string{"generic": "genericjson", "gitlab-sast": "gitlab", "dependency-track": "dependencytrack"}
+var formatAliases = map[string]string{"generic": "genericjson", "gitlab-sast": "gitlab"}
 
-// byName finds the parser a client named: a built-in first ("trivy" or "builtin:trivy"), then the tenant's
-// package ("pip-audit" or "mapping:pip-audit").
+// byName finds the parser a client named: a built-in first ("trivy" or "builtin:trivy"), then the tenant or cluster parser.
 func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string) integrations.ParserContract {
 	hint = strings.ToLower(strings.TrimSpace(hint))
 	if hint == "" {
@@ -79,36 +203,117 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 	if alias, ok := formatAliases[hint]; ok {
 		hint = alias
 	}
+
+	// 1. Built-in defaults own their names
 	if p, err := s.registry.GetParser("builtin:" + hint); err == nil {
 		return p
 	}
 	if p, err := s.registry.GetParser(hint); err == nil {
 		return p
 	}
-	want := "mapping:" + strings.TrimPrefix(hint, "mapping:")
-	for _, p := range s.tenant(ctx, tenantID) {
-		if strings.ToLower(p.Descriptor().ID) == want {
+	if p, err := s.registry.GetParser("builtin:sbom-" + hint); err == nil {
+		return p
+	}
+	if p, err := s.registry.GetParser("sbom-" + hint); err == nil {
+		return p
+	}
+
+	tenantParsers, clusterParsers := s.tenantAndCluster(ctx, tenantID)
+
+	matchName := func(p integrations.ParserContract, target string) bool {
+		id := strings.ToLower(p.Descriptor().ID)
+		name := strings.ToLower(p.Descriptor().Name)
+		return id == target ||
+			id == "mapping:"+target ||
+			id == "lua:"+target ||
+			id == "wasm:"+target ||
+			id == "builtin:"+target ||
+			id == "builtin:sbom-"+target ||
+			id == "sbom-"+target ||
+			strings.TrimPrefix(id, "mapping:") == target ||
+			strings.TrimPrefix(id, "lua:") == target ||
+			strings.TrimPrefix(id, "wasm:") == target ||
+			strings.TrimPrefix(id, "builtin:") == target ||
+			strings.TrimPrefix(id, "builtin:sbom-") == target ||
+			strings.TrimPrefix(id, "sbom-") == target ||
+			strings.HasPrefix(name, target)
+	}
+
+	// 2. Tenant parsers
+	for _, p := range tenantParsers {
+		if matchName(p, hint) {
 			return p
 		}
 	}
+
+	// 3. Cluster parsers
+	for _, p := range clusterParsers {
+		if matchName(p, hint) {
+			return p
+		}
+	}
+
 	return nil
 }
 
-// detect picks the parser that recognises the head best, over the built-ins and the tenant's packages.
+// parserName is the name a client sends in "parser" to select p: its id without the prefix that says where it came from.
+func parserName(p integrations.ParserContract) string {
+	id := strings.ToLower(p.Descriptor().ID)
+	for _, prefix := range []string{"builtin:", "mapping:", "lua:", "wasm:"} {
+		id = strings.TrimPrefix(id, prefix)
+	}
+	return strings.TrimPrefix(id, "sbom-")
+}
+
+// available lists the names a client may send in "parser": the built-in and default parsers, then the cluster and the
+// tenant's own. It is what an error says when a name is not known, so the list is never a copy kept by hand.
+func (s *parserSet) available(ctx context.Context, tenantID uuid.UUID) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p integrations.ParserContract) {
+		if n := parserName(p); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, d := range s.registry.ListParsers() {
+		if p, err := s.registry.GetParser(d.ID); err == nil {
+			add(p)
+		}
+	}
+	tenantParsers, clusterParsers := s.tenantAndCluster(ctx, tenantID)
+	for _, p := range clusterParsers {
+		add(p)
+	}
+	for _, p := range tenantParsers {
+		add(p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// detect picks the parser that recognises the head best, with tie-break precedence: Built-in wins ties over packages.
 func (s *parserSet) detect(ctx context.Context, tenantID uuid.UUID, head []byte, filename, contentType string) (integrations.ParserContract, int) {
 	best, score := s.registry.DetectParser(head, filename, contentType)
-	for _, p := range s.tenant(ctx, tenantID) {
+
+	tenantParsers, clusterParsers := s.tenantAndCluster(ctx, tenantID)
+
+	for _, p := range clusterParsers {
 		if sc := p.Detect(head, filename, contentType); sc > score {
 			best, score = p, sc
 		}
 	}
+
+	for _, p := range tenantParsers {
+		if sc := p.Detect(head, filename, contentType); sc > score {
+			best, score = p, sc
+		}
+	}
+
 	return best, score
 }
 
-// formatMismatch says when a report is of another format than the parser the client named. A parser that scores
-// 0 on the head says "this is not mine" (the Trivy parser reads SARIF as nothing, Detect returns 0 for it), and
-// another parser that recognises the head with confidence says what it is. Without this check, the wrong parser
-// walks the file, finds no record and reports a clean scan, and the close step then closes the real findings.
+// formatMismatch says when a report is of another format than the parser the client named.
 func (s *parserSet) formatMismatch(ctx context.Context, tenantID uuid.UUID, named integrations.ParserContract, head []byte, filename, contentType string) (integrations.ParserContract, bool) {
 	if named == nil || len(head) == 0 || named.Detect(head, filename, contentType) > 0 {
 		return nil, false

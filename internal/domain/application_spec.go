@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -24,6 +25,51 @@ type ApplicationSpec struct {
 	Lifecycle       string    `json:"lifecycle,omitempty"`
 	Hierarchy       []string  `json:"hierarchy,omitempty"`
 	Selectors       Selectors `json:"selectors,omitempty"`
+	// Type is what kind of thing the application is (D140). "repo" is built: it names one branch of one repository, with
+	// Repository and Branch. "machine" is designed and refused until a host source exists. Empty is a repository-wide
+	// application, as before, and takes neither Repository nor Branch.
+	Type        string `json:"type,omitempty"`
+	Repository  string `json:"repository,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Environment string `json:"environment,omitempty"`
+}
+
+// ApplicationTypes are the types an Application resource may name today.
+var ApplicationTypes = []string{"repo"}
+
+// Environments are the values of an application's environment (D140). It has no default: an application that does not
+// say is not described, and the score gives it no environment points.
+var Environments = []string{"production", "staging", "test", "development"}
+
+// validateIdentity checks type, repository, branch and environment together, and returns them normalised.
+func (s ApplicationSpec) validateIdentity() (typ, repository, branch, environment string, err error) {
+	typ = strings.ToLower(strings.TrimSpace(s.Type))
+	repository, branch = strings.TrimSpace(s.Repository), strings.TrimSpace(s.Branch)
+	switch typ {
+	case "", "repo":
+	case "machine":
+		return "", "", "", "", fmt.Errorf("type machine is designed but not built: no host source exists yet, so only type repo is accepted")
+	default:
+		return "", "", "", "", fmt.Errorf("type %q is not one of %s", s.Type, strings.Join(ApplicationTypes, ", "))
+	}
+	if typ == "repo" {
+		if repository == "" || branch == "" {
+			return "", "", "", "", fmt.Errorf("type repo needs repository and branch: an application is one branch of one repository")
+		}
+		if strings.ContainsAny(repository, "* \t") {
+			return "", "", "", "", fmt.Errorf("repository %q must be one repository address, with no * and no spaces", s.Repository)
+		}
+		if strings.ContainsAny(branch, "* \t") {
+			return "", "", "", "", fmt.Errorf("branch %q must be one branch name, with no * and no spaces (an application is one branch)", s.Branch)
+		}
+	} else if repository != "" || branch != "" {
+		return "", "", "", "", fmt.Errorf("repository and branch need type repo")
+	}
+	environment = strings.ToLower(strings.TrimSpace(s.Environment))
+	if environment != "" && !slices.Contains(Environments, environment) {
+		return "", "", "", "", fmt.Errorf("environment %q is not one of %s", s.Environment, strings.Join(Environments, ", "))
+	}
+	return typ, repository, branch, environment, nil
 }
 
 // Selectors attach assets to an application automatically (docs/04, D10 resolution step (b), D56). A pattern is
@@ -126,6 +172,10 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 	if err := s.Selectors.validate(); err != nil {
 		return Application{}, err
 	}
+	typ, repository, branch, environment, err := s.validateIdentity()
+	if err != nil {
+		return Application{}, err
+	}
 	lifecycle := s.Lifecycle
 	if lifecycle == "" {
 		lifecycle = "production"
@@ -148,7 +198,7 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 	return Application{
 		ID: id, TenantID: tenantID, Slug: slug, Name: name, BusinessCriticality: crit, InternetFacing: s.InternetFacing,
 		Owners: s.Owners, DataClassification: classes, CompensatingControls: controls, Lifecycle: lifecycle,
-		ComplianceScope: scopes, HierarchyPath: hierarchyPath,
+		ComplianceScope: scopes, HierarchyPath: hierarchyPath, Type: typ, Repository: repository, Branch: branch, Environment: environment,
 		Selectors: Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
 	}, nil
 }

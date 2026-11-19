@@ -35,6 +35,20 @@ type IntegrationPackages interface {
 	DeleteIntegrationPackage(ctx context.Context, tenantID uuid.UUID, name string) error
 }
 
+// StoredParserObject captures a cluster-wide or tenant-scoped parser (docs/29).
+type StoredParserObject struct {
+	Origin    string    `json:"origin"` // "cluster" or "tenant"
+	Name      string    `json:"name"`
+	Spec      []byte    `json:"spec"`
+	Error     string    `json:"error,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ParserStore lists cluster and tenant parsers.
+type ParserStore interface {
+	ListParsers(ctx context.Context, tenantID uuid.UUID) ([]StoredParserObject, error)
+}
+
 // PackageMap is an in-memory IntegrationPackages, embedded by the in-memory stores.
 type PackageMap struct {
 	mu   sync.RWMutex

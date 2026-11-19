@@ -112,7 +112,7 @@ export function VulnerabilitiesRoute() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
       <div className="mb-6 flex flex-col gap-1">
-        <h1 className="display text-24 font-semibold text-ink">
+        <h1 className="display text-20 font-semibold text-ink">
           {t('nav.vulnerabilities', { defaultValue: 'Enterprise Vulnerability Hub' })}
         </h1>
         <p className="text-13 text-ink-2">
@@ -187,9 +187,9 @@ export function VulnerabilitiesRoute() {
                 <Td>
                   <span
                     className={cn(
-                      'inline-flex items-center gap-1 rounded px-2 py-0.5 text-11 font-medium uppercase',
+                      'inline-flex items-center gap-1 rounded px-2 py-0.5 text-12 font-medium uppercase',
                       v.severity === 'critical' && 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
-                      v.severity === 'high' && 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+                      v.severity === 'high' && 'bg-high/10 text-high',
                     )}
                   >
                     {v.severity} ({v.score.toFixed(1)})
@@ -200,7 +200,7 @@ export function VulnerabilitiesRoute() {
                 </Td>
                 <Td>
                   {v.kev ? (
-                    <span className="inline-flex rounded-full bg-red-500/15 px-2 py-0.5 text-11 font-semibold text-red-600 dark:text-red-400">
+                    <span className="inline-flex rounded-full bg-critical/15 px-2 py-0.5 text-12 font-semibold text-critical">
                       CISA KEV
                     </span>
                   ) : (

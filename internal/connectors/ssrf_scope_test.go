@@ -23,7 +23,7 @@ func TestSafeClientScopedAllowlist(t *testing.T) {
 		AllowedCIDRs:      []*net.IPNet{private},
 		AllowInternalHTTP: true,
 		Tenants:           []string{tenantA.String()},
-		ConnectorTypes:    []string{string(domain.ConnectorTypeDependencyTrack)},
+		ConnectorTypes:    []string{string(domain.ConnectorTypeJira)},
 	}})
 	const target = "https://10.255.255.1:8443/api/version" // internal HTTP is allowed by host name only (D69)
 
@@ -37,7 +37,7 @@ func TestSafeClientScopedAllowlist(t *testing.T) {
 
 	for name, c := range map[string]*connectors.SafeClient{
 		"unscoped":             client,
-		"other tenant":         client.Scoped(tenantB, domain.ConnectorTypeDependencyTrack),
+		"other tenant":         client.Scoped(tenantB, domain.ConnectorTypeJira),
 		"other connector type": client.Scoped(tenantA, domain.ConnectorTypeWebhook),
 	} {
 		if err := send(c); !errors.Is(err, connectors.ErrSSRFDialBlocked) {
@@ -45,7 +45,7 @@ func TestSafeClientScopedAllowlist(t *testing.T) {
 		}
 	}
 	// In scope the guard lets it through; the address is unroutable, so the request then fails on the network.
-	if err := send(client.Scoped(tenantA, domain.ConnectorTypeDependencyTrack)); errors.Is(err, connectors.ErrSSRFDialBlocked) {
+	if err := send(client.Scoped(tenantA, domain.ConnectorTypeJira)); errors.Is(err, connectors.ErrSSRFDialBlocked) {
 		t.Errorf("in scope: the guard refused an allowed address: %v", err)
 	}
 }

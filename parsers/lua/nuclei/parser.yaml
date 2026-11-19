@@ -1,0 +1,42 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: nuclei
+spec:
+  category: dast
+  runtime: lua
+  description: ProjectDiscovery Nuclei vulnerability scanner JSONL
+  detect:
+    filenames:
+    - '*nuclei*.json'
+    - '*nuclei*.jsonl'
+    probes:
+    - jsonHasKeys:
+      - template-id
+      - info
+    - jsonHasKeys:
+      - template_id
+      - info
+  script: "function parse(input, emit)\n  for line in string.gmatch(input, \"[^\\\
+    r\\n]+\") do\n    line = string.match(line, \"^%s*(.-)%s*$\")\n    if line ~=\
+    \ \"\" then\n      local entry = json.decode(line)\n      if entry and entry[\"\
+    template-id\"] then\n        local info = entry.info or {}\n        local cwes\
+    \ = {}\n        if info.classification and info.classification[\"cwe-id\"] then\n\
+    \          for _, c in ipairs(info.classification[\"cwe-id\"]) do\n          \
+    \  local num = string.match(c, \"%d+\")\n            if num then table.insert(cwes,\
+    \ tonumber(num)) end\n          end\n        end\n\n        local target_url =\
+    \ entry[\"matched-at\"]\n        if not target_url or target_url == \"\" then\n\
+    \          target_url = entry.host or \"\"\n        end\n\n        local title\
+    \ = info.name or entry[\"template-id\"]\n        local desc = info.description\
+    \ or title\n        if info.remediation and info.remediation ~= \"\" then\n  \
+    \        desc = desc .. \"\\n\\nRemediation: \" .. info.remediation\n        end\n\
+    \n        local cvss = \"\"\n        if info.classification and info.classification[\"\
+    cvss-metrics\"] then\n          cvss = info.classification[\"cvss-metrics\"]\n\
+    \        end\n\n        emit({\n          rule_id = entry[\"template-id\"],\n\
+    \          rule_name = info.name or entry[\"template-id\"],\n          title =\
+    \ title,\n          description = desc,\n          severity = string.lower(info.severity\
+    \ or \"medium\"),\n          tool_severity = info.severity or \"medium\",\n  \
+    \        category = \"dast\",\n          scanner_family = \"nuclei\",\n      \
+    \    cwes = cwes,\n          cvss_vector = cvss,\n          location = {\n   \
+    \         web = {\n              normalized_url = target_url\n            }\n\
+    \          }\n        })\n      end\n    end\n  end\nend\n"

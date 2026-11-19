@@ -62,12 +62,15 @@ type VulnInput struct {
 	ExploitMaturity  string
 }
 
-// AppInput: `app.criticality`, `.internet_facing`, `.data_classification`, `.compensating_controls`.
+// AppInput: `app.criticality`, `.internet_facing`, `.data_classification`, `.compensating_controls`, `.type`, `.environment`.
+// Type is "repo" or empty; Environment is production, staging, test, development or empty when nobody said (D140).
 type AppInput struct {
 	Criticality          string
 	InternetFacing       bool
 	DataClassification   []string
 	CompensatingControls []string
+	Type                 string
+	Environment          string
 }
 
 func (in Input) activation() map[string]any {
@@ -91,6 +94,7 @@ func (in Input) activation() map[string]any {
 		"app": map[string]any{
 			"criticality": in.App.Criticality, "internet_facing": in.App.InternetFacing,
 			"data_classification": str(in.App.DataClassification), "compensating_controls": str(in.App.CompensatingControls),
+			"type": in.App.Type, "environment": in.App.Environment,
 		},
 	}
 }
@@ -118,12 +122,43 @@ func BuiltinSpec() RiskPolicySpec {
 			{Name: "SENSITIVE_DATA", When: `app.data_classification.exists(d, d in ["pci", "pii", "phi"])`, Points: 80, Group: "context", Reason: "Application handles sensitive data (PCI, PII, or PHI)"},
 			{Name: "APP_CRITICAL", When: `app.criticality == "critical"`, Points: 100, Group: "context", Reason: "Application business criticality is rated Critical"},
 			{Name: "APP_HIGH", When: `app.criticality == "high"`, Points: 50, Group: "context", Reason: "Application business criticality is rated High"},
-			{Name: "PRODUCTION_ENV", When: `finding.track in ["production", "prod"]`, Points: 60, Group: "context", Reason: "Finding detected in production environment"},
+			{Name: "PRODUCTION_ENV", When: `finding.track in ["production", "prod"] || app.environment == "production"`, Points: 60, Group: "context", Reason: "Finding detected in production environment"},
 			{Name: "COMPENSATING_CONTROL", When: `finding.category == "dast" && app.compensating_controls.exists(c, c in ["waf", "api_gateway"])`, Points: -80, Group: "reduction",
 				Reason: "The application is behind a web application firewall or an API gateway, which inspects the HTTP requests this finding needs"},
 		},
 		Bands: map[string]int{"critical": 800, "high": 600, "medium": 300},
 	}
+}
+
+// Description is a compiled policy as a person reads it: every number that decides a score, with the defaults the spec
+// left out filled in.
+type Description struct {
+	Base    map[string]int `json:"base"`
+	Bands   map[string]int `json:"bands"` // lower bounds; low starts at 0
+	Factors []FactorSpec   `json:"factors"`
+}
+
+// Describe returns what the policy does: the points of each severity, the band bounds, and the factors with their
+// group filled in (negative points are a reduction, the rest context, when the spec said nothing).
+func (p *Policy) Describe() Description {
+	d := Description{Base: map[string]int{}, Bands: map[string]int{"low": 0}, Factors: make([]FactorSpec, 0, len(p.factors))}
+	for k, v := range p.base {
+		d.Base[k] = v
+	}
+	for k, v := range p.bands {
+		d.Bands[k] = v
+	}
+	for _, f := range p.factors {
+		spec := f.spec
+		if spec.Group == "" {
+			spec.Group = "context"
+			if spec.Points < 0 {
+				spec.Group = "reduction"
+			}
+		}
+		d.Factors = append(d.Factors, spec)
+	}
+	return d
 }
 
 // Policy is a compiled risk policy.
@@ -263,7 +298,7 @@ func fullInput() Input {
 	return Input{
 		Finding: FindingInput{Severity: "high", Category: "sast", RuleID: "r", Scanner: "s", CWEs: []int{79}, SecretVerified: true, Track: "main"},
 		Vuln:    VulnInput{ID: "CVE-0000-0000", KEV: true, EPSS: 0.5, Exploited: true, ExploitedSources: []string{"s"}, ExploitMaturity: "poc"},
-		App:     AppInput{Criticality: "high", InternetFacing: true, DataClassification: []string{"pii"}, CompensatingControls: []string{"waf"}},
+		App:     AppInput{Criticality: "high", InternetFacing: true, DataClassification: []string{"pii"}, CompensatingControls: []string{"waf"}, Type: "repo", Environment: "production"},
 	}
 }
 

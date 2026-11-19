@@ -22,9 +22,7 @@ import (
 	"rampart/internal/config/apply"
 	"rampart/internal/domain"
 	"rampart/internal/graph"
-	"rampart/internal/parsers/cyclonedx"
-	"rampart/internal/parsers/spdx"
-	"rampart/internal/parsers/syft"
+	"rampart/internal/sbom"
 	"rampart/internal/store"
 	"rampart/internal/version"
 )
@@ -241,11 +239,12 @@ func runUpload(args []string) error {
 	imageDigest := fs.String("image-digest", "", "Container image digest")
 	environment := fs.String("environment", "", "Environment, for example production")
 	scanner := fs.String("scanner", "", "Scanner name when the report does not say")
-	format := fs.String("format", "", "Report format/parser hint")
-	parser := fs.String("parser", "", "Report format/parser name (e.g. trivy, sarif, semgrep, cyclonedx, snyk, gitleaks, spdx, checkov)")
+	format := fs.String("format", "", "Parser name (alias of --parser)")
+	parser := fs.String("parser", "", "Parser that reads the report; the server lists the available names when it does not know the one given")
+	detect := fs.Bool("detect", false, "Let the server pick the parser from the content, instead of naming it with --parser")
 	app := fs.String("app", "", "Application slug or name")
 	application := fs.String("application", "", "Application slug or name (alias for --app)")
-	requireParser := fs.Bool("require-parser", false, "Require an explicit parser name (fails if omitted)")
+	_ = fs.Bool("require-parser", false, "Deprecated and ignored: naming the parser is always required, unless --detect is given")
 	buildID := fs.String("build-id", ci.BuildID, "Build id")
 	pipelineURL := fs.String("pipeline-url", ci.PipelineURL, "Pipeline URL")
 	token := fs.String("token", "", "API token")
@@ -259,9 +258,9 @@ func runUpload(args []string) error {
 		return fmt.Errorf("usage: rampart upload <file> [--parser <name>] [--app <name>] [--source <id>] [--server <url>]")
 	}
 
-	chosenParser := firstNonEmptyCLI(*parser, *format)
-	if *requireParser && chosenParser == "" {
-		return fmt.Errorf("missing required flag: --parser (or --format)")
+	chosenParser, err := chooseParser(firstNonEmptyCLI(*parser, *format), *detect)
+	if err != nil {
+		return err
 	}
 	chosenApp := firstNonEmptyCLI(*app, *application)
 
@@ -328,12 +327,39 @@ func runUpload(args []string) error {
 		Created     int    `json:"created"`
 		Updated     int    `json:"updated"`
 		Closed      int    `json:"closed"`
+		Parser      string `json:"parser"`
+		Detected    bool   `json:"detected"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&res)
 
-	fmt.Printf("Report uploaded successfully!\n  Run ID:  %s\n  Status:  %s\n  Staged:  %d\n  Created: %d\n  Updated: %d\n  Closed:  %d\n",
-		res.IngestRunID, res.Status, res.Staged, res.Created, res.Updated, res.Closed)
+	fmt.Printf("Report uploaded successfully!\n  Run ID:  %s\n  Status:  %s\n", res.IngestRunID, res.Status)
+	printParser(res.Parser, res.Detected)
+	fmt.Printf("  Staged:  %d\n  Created: %d\n  Updated: %d\n  Closed:  %d\n", res.Staged, res.Created, res.Updated, res.Closed)
 	return nil
+}
+
+// chooseParser is the one rule for the parser of an upload: the caller names it, or says --detect and lets the server
+// pick it from the content. The CLI never guesses: it holds no list of formats, so a parser an operator adds to the
+// server works with no change here.
+func chooseParser(named string, detect bool) (string, error) {
+	switch {
+	case named != "" && detect:
+		return "", errors.New("use --parser <name> or --detect, not both")
+	case named == "" && !detect:
+		return "", errors.New("missing required flag: --parser <name>. Name the parser that reads this file (the server lists the names it knows when one is wrong), or pass --detect to let the server choose from the content")
+	}
+	return named, nil
+}
+
+// printParser says which parser read the document, and when the server chose it.
+func printParser(name string, detected bool) {
+	switch {
+	case name == "":
+	case detected:
+		fmt.Printf("  Parser:  %s (detected by the server; name it with --parser to make the run repeatable)\n", name)
+	default:
+		fmt.Printf("  Parser:  %s\n", name)
+	}
 }
 
 func runSBOM(args []string) error {
@@ -361,6 +387,9 @@ func runSBOMUpload(args []string) error {
 	app := fs.String("app", "", "Application slug or name")
 	application := fs.String("application", "", "Application slug or name (alias for --app)")
 	token := fs.String("token", "", "API token")
+	parser := fs.String("parser", "", "SBOM parser that reads the file, for example cyclonedx, spdx or syft")
+	format := fs.String("format", "", "SBOM parser name (alias of --parser)")
+	detect := fs.Bool("detect", false, "Let the server pick the parser from the content, instead of naming it with --parser")
 
 	files, err := parseFlexibleFlags(fs, args)
 	if err != nil {
@@ -368,7 +397,11 @@ func runSBOMUpload(args []string) error {
 	}
 
 	if len(files) < 1 {
-		return fmt.Errorf("usage: rampart sbom upload <file> [--app <name>]")
+		return fmt.Errorf("usage: rampart sbom upload <file> --parser <name> [--app <name>]")
+	}
+	chosenParser, err := chooseParser(firstNonEmptyCLI(*parser, *format), *detect)
+	if err != nil {
+		return err
 	}
 
 	filePath := files[0]
@@ -380,6 +413,9 @@ func runSBOMUpload(args []string) error {
 	targetServer := resolveServer(*server)
 	reqURL := strings.TrimRight(targetServer, "/") + "/ingest/v1/sbom"
 	params := url.Values{}
+	if chosenParser != "" {
+		params.Set("parser", chosenParser)
+	}
 	if *source != "" {
 		params.Set("source", *source)
 	}
@@ -415,48 +451,54 @@ func runSBOMUpload(args []string) error {
 		IngestRunID    string `json:"ingestRunId"`
 		ComponentCount int    `json:"componentCount"`
 		Created        int    `json:"created"`
+		Parser         string `json:"parser"`
+		Detected       bool   `json:"detected"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&res)
 
-	fmt.Printf("SBOM uploaded successfully!\n  Run ID:     %s\n  Components: %d\n  Findings:   %d\n",
-		res.IngestRunID, res.ComponentCount, res.Created)
+	// An SBOM reader fills the inventory; it creates no findings unless the parser is set to extract them.
+	fmt.Printf("SBOM uploaded successfully!\n  Run ID:     %s\n  Components: %d\n", res.IngestRunID, res.ComponentCount)
+	if res.Created > 0 {
+		fmt.Printf("  Findings:   %d\n", res.Created)
+	}
+	printParser(res.Parser, res.Detected)
 	return nil
 }
 
 func runSBOMGraph(args []string) error {
 	fs := flag.NewFlagSet("sbom graph", flag.ContinueOnError)
-	viewFormat := fs.String("format", "all", "Output format: tree, mermaid, or all")
+	viewFormat := fs.String("format", "all", "What to print: tree, mermaid, or all")
+	parser := fs.String("parser", "", "SBOM reader for the file, for example cyclonedx or spdx")
 
 	files, err := parseFlexibleFlags(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(files) < 1 {
-		return fmt.Errorf("usage: rampart sbom graph <file> [--format <tree|mermaid|all>]")
+	if len(files) < 1 || *parser == "" {
+		return fmt.Errorf("usage: rampart sbom graph <file> --parser <name> [--format <tree|mermaid|all>]")
 	}
 
-	sbom, comps, g, err := parseLocalSBOM(files[0])
+	sbom, comps, g, err := parseLocalSBOM(files[0], *parser)
 	if err != nil {
 		return err
 	}
 
-	directCount := 0
-	transitiveCount := 0
-	for _, c := range comps {
-		if c.Direct {
-			directCount++
-		} else {
-			transitiveCount++
-		}
-	}
-
+	// The counts come from the same code as the graph of the web UI, so the two always agree.
+	view := graph.BuildView(comps, sbom.Dependencies, sbom.RootComponent, nil)
 	fmt.Printf("=== SBOM Dependency Graph ===\n")
 	fmt.Printf("Format:               %s (version %s)\n", sbom.Format, sbom.SpecVersion)
-	fmt.Printf("Root Component:       %s\n", sbom.RootComponent)
-	fmt.Printf("Total Components:     %d\n", len(comps))
-	fmt.Printf("Direct Dependencies:  %d\n", directCount)
-	fmt.Printf("Transitive Deps:      %d\n", transitiveCount)
-	fmt.Printf("Total Edges:          %d\n\n", len(sbom.Dependencies))
+	fmt.Printf("Root Component:       %s\n", view.Root)
+	fmt.Printf("Total Components:     %d\n", len(view.Nodes))
+	if !view.HasDependencies {
+		fmt.Printf("Dependencies:         none stated: this SBOM is an inventory, the document does not say what depends on what\n")
+		return nil
+	}
+	fmt.Printf("Direct Dependencies:  %d\n", view.Direct)
+	fmt.Printf("Transitive Deps:      %d\n", view.Transitive)
+	if view.Unreachable > 0 {
+		fmt.Printf("Not reached by root:  %d\n", view.Unreachable)
+	}
+	fmt.Printf("Total Edges:          %d\n\n", len(view.Edges))
 
 	if *viewFormat == "all" || *viewFormat == "tree" {
 		fmt.Printf("--- Hierarchy Tree ---\n")
@@ -474,16 +516,17 @@ func runSBOMGraph(args []string) error {
 func runSBOMPath(args []string) error {
 	fs := flag.NewFlagSet("sbom path", flag.ContinueOnError)
 	target := fs.String("target", "", "Target component identifier (PURL or Name)")
+	parser := fs.String("parser", "", "SBOM reader for the file, for example cyclonedx or spdx")
 
 	files, err := parseFlexibleFlags(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(files) < 1 || *target == "" {
-		return fmt.Errorf("usage: rampart sbom path <file> --target <purl-or-name>")
+	if len(files) < 1 || *target == "" || *parser == "" {
+		return fmt.Errorf("usage: rampart sbom path <file> --parser <name> --target <purl-or-name>")
 	}
 
-	_, _, g, err := parseLocalSBOM(files[0])
+	_, _, g, err := parseLocalSBOM(files[0], *parser)
 	if err != nil {
 		return err
 	}
@@ -508,45 +551,37 @@ func runSBOMPath(args []string) error {
 	return nil
 }
 
-func parseLocalSBOM(filePath string) (*domain.SBOM, []domain.SBOMComponent, *graph.DependencyGraph, error) {
+// parseLocalSBOM reads an SBOM file with the reader the caller names. The CLI does not guess the format: it holds no
+// list of them, and a reader refuses a document that is not in its format (docs/34 C1), so a wrong name is an error
+// that says so. The reader is a module the CLI can find (RAMPART_WASM_DIR); a parser that exists only on the server is
+// not available here.
+func parseLocalSBOM(filePath, parser string) (*domain.SBOM, []domain.SBOMComponent, *graph.DependencyGraph, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to read SBOM file: %w", err)
 	}
-
-	head := data
-	if len(head) > 2048 {
-		head = head[:2048]
+	sbomDoc, comps, edges, err := sbom.ParseSBOMStream(context.Background(), parser, bytes.NewReader(data))
+	if err != nil {
+		if errors.Is(err, sbom.ErrNoModule) {
+			return nil, nil, nil, fmt.Errorf("this CLI has no reader named %q (readers are loaded from RAMPART_WASM_DIR); to read it on the server, use 'rampart sbom upload --parser %s'", parser, parser)
+		}
+		return nil, nil, nil, fmt.Errorf("reading %s as %s: %w", filePath, parser, err)
 	}
 
-	cdxP := cyclonedx.NewParser()
-	spdxP := spdx.NewParser()
-	syftP := syft.NewParser()
-
-	scoreCDX := cdxP.Detect(head, filePath, "")
-	scoreSPDX := spdxP.Detect(head, filePath, "")
-	scoreSyft := syftP.Detect(head, filePath, "")
-
-	if scoreCDX >= scoreSPDX && scoreCDX >= scoreSyft && scoreCDX > 30 {
-		return cdxP.ParseSBOM(bytes.NewReader(data))
-	} else if scoreSPDX >= scoreSyft && scoreSPDX > 30 {
-		return spdxP.ParseSBOM(bytes.NewReader(data))
-	} else if scoreSyft > 30 {
-		return syftP.ParseSBOM(bytes.NewReader(data))
+	// The tree and the paths are drawn from the same view as the web UI, edges inferred for a root with no entry included.
+	rootRef := ""
+	if sbomDoc != nil {
+		rootRef = sbomDoc.RootComponent
 	}
+	view := graph.BuildView(comps, edges, rootRef, nil)
+	viewEdges := make([]domain.DependencyEdge, 0, len(view.Edges))
+	for _, e := range view.Edges {
+		viewEdges = append(viewEdges, domain.DependencyEdge{FromRef: e.From, ToRef: e.To})
+	}
+	depGraph := graph.NewDependencyGraph(comps, viewEdges, view.Root)
+	depGraph.MarkDirectDependencies()
 
-	// Fallback trial
-	if sbom, comps, g, err := cdxP.ParseSBOM(bytes.NewReader(data)); err == nil && len(comps) > 0 {
-		return sbom, comps, g, nil
-	}
-	if sbom, comps, g, err := spdxP.ParseSBOM(bytes.NewReader(data)); err == nil && len(comps) > 0 {
-		return sbom, comps, g, nil
-	}
-	if sbom, comps, g, err := syftP.ParseSBOM(bytes.NewReader(data)); err == nil && len(comps) > 0 {
-		return sbom, comps, g, nil
-	}
-
-	return nil, nil, nil, fmt.Errorf("unable to detect SBOM format for %s", filePath)
+	return sbomDoc, comps, depGraph, nil
 }
 
 func runApply(args []string) error {

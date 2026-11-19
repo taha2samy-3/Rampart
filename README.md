@@ -70,6 +70,10 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [23 Phase 3 design review](docs/23-phase-3-design-review.md) | Decisions to change, Dependency-Track checked against its sources, connectors as plugins |
 | [24 Business value](docs/24-business-value.md) | The problem, the market, how value is measured, how to talk about it |
 | [28 QA report](docs/28-qa-report-2026-11-17.md) | End-to-end test on the dev cluster: 17 bugs fixed with tests, open items, design decisions evaluated |
+| [29 Parsers as resources](docs/29-plan-parsers-as-crds.md) | Plan: every parser a `Parser` resource shipped by default, with no change of output or speed |
+| [30 Native SBOM matching](docs/30-plan-native-sbom-matching.md) | Plan: an SBOM upload becomes findings inside Rampart, and Dependency-Track goes |
+| [34 Review and fix plan](docs/34-review-and-fix-plan.md) | Review of the uncommitted work (docs 29 to 33): what is wrong, with evidence, and how to fix it |
+| [35 Execution plan](docs/35-execution-plan.md) | Ordered phases for what docs 29 to 33 describe and is not built yet; frontend last |
 | [ADRs](docs/adr/) | Six architecture decision records |
 | [Research](docs/research/) | DefectDojo, the ASPM market, standards, Kubernetes-native patterns |
 

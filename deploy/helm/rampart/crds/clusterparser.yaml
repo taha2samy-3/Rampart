@@ -1,0 +1,115 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterparsers.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterParser
+    listKind: ClusterParserList
+    plural: clusterparsers
+    singular: clusterparser
+    shortNames:
+      - clparser
+      - cparser
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Runtime, type: string, jsonPath: .spec.runtime}
+        - {name: Category, type: string, jsonPath: .spec.category}
+        - {name: Synced, type: string, jsonPath: ".status.conditions[?(@.type=='ArtifactSynced')].status"}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                A cluster-wide report parser (docs/19 §4, docs/29). Supports native compiled readers,
+                embedded Lua scripts, and sandboxed WASM OCI modules.
+              properties:
+                version:
+                  type: string
+                description:
+                  type: string
+                family:
+                  type: string
+                category:
+                  type: string
+                runtime:
+                  type: string
+                  enum: [native, lua, wasm, mapping]
+                  default: native
+                native:
+                  type: string
+                  description: Names the compiled reader engine when runtime is native.
+                script:
+                  type: string
+                  description: Embedded Lua script when runtime is lua.
+                source:
+                  type: object
+                  description: OCI artifact reference and verification when runtime is wasm.
+                  properties:
+                    oci:
+                      type: string
+                    verify:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                detect:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                input:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                map:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                severityMap:
+                  type: object
+                  additionalProperties:
+                    type: string
+                limits:
+                  type: object
+                  properties:
+                    maxRecords:
+                      type: integer
+                    maxDepth:
+                      type: integer
+                    maxMemoryMB:
+                      type: integer
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                    required:
+                      - type
+                      - status
+      subresources:
+        status: {}

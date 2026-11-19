@@ -598,18 +598,18 @@ func TestPlatformSSRFAllowlist_InClusterAndOnPrem(t *testing.T) {
 	_, clusterCIDR, _ := net.ParseCIDR("10.96.0.0/12")
 	allowlist := &domain.PlatformSSRFAllowlist{
 		AllowedCIDRs:      []*net.IPNet{clusterCIDR},
-		AllowedHosts:      []string{"dtrack.dtrack.svc", "*.corp.internal"},
+		AllowedHosts:      []string{"service.internal.svc", "*.corp.internal"},
 		AllowInternalHTTP: true,
 	}
 
-	// 1. In-cluster Dependency-Track HTTP on .svc is allowed with allowlist
-	err := domain.ValidateConnectorURLWithAllowlist("http://dtrack.dtrack.svc:8080", allowlist)
+	// 1. In-cluster HTTP on .svc is allowed with allowlist
+	err := domain.ValidateConnectorURLWithAllowlist("http://service.internal.svc:8080", allowlist)
 	if err != nil {
 		t.Fatalf("expected allowed in-cluster HTTP on .svc, got: %v", err)
 	}
 
 	// 2. Normal validation without allowlist rejects in-cluster HTTP
-	err = domain.ValidateConnectorURL("http://dtrack.dtrack.svc:8080")
+	err = domain.ValidateConnectorURL("http://service.internal.svc:8080")
 	if err == nil {
 		t.Fatal("expected rejection without allowlist, got nil")
 	}
@@ -628,17 +628,17 @@ func TestPlatformSSRFAllowlist_InClusterAndOnPrem(t *testing.T) {
 
 	// 5. Host in allowlist WITHOUT CIDRs is permitted for private cluster ranges
 	hostOnlyAllowlist := &domain.PlatformSSRFAllowlist{
-		AllowedHosts:      []string{"dtrack.dtrack.svc"},
+		AllowedHosts:      []string{"service.internal.svc"},
 		AllowInternalHTTP: true,
 	}
-	err = domain.ValidateConnectorURLWithAllowlist("http://dtrack.dtrack.svc:8080", hostOnlyAllowlist)
+	err = domain.ValidateConnectorURLWithAllowlist("http://service.internal.svc:8080", hostOnlyAllowlist)
 	if err != nil {
 		t.Fatalf("expected host-only allowlist to allow internal service, got: %v", err)
 	}
 
 	// 6. Host in allowlist resolving to metadata (169.254.169.254) MUST ALWAYS BE BLOCKED
 	metadataIP := net.ParseIP("169.254.169.254")
-	if !domain.IsBlockedIPWithAllowlistAndHost(metadataIP, "dtrack.dtrack.svc", hostOnlyAllowlist, false) {
+	if !domain.IsBlockedIPWithAllowlistAndHost(metadataIP, "service.internal.svc", hostOnlyAllowlist, false) {
 		t.Fatal("expected metadata IP 169.254.169.254 to be BLOCKED even with matching allowed host!")
 	}
 

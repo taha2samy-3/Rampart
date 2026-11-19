@@ -25,6 +25,7 @@ export const qk = {
     compliance: (id: string) => ['applications', 'compliance', id] as const,
     changes: (id: string, from: string, to: string) => ['applications', 'changes', id, from, to] as const,
   },
+  scoring: () => ['scoring'] as const,
   overview: () => ['overview'] as const,
   trend: (metric: string, days: number) => ['trend', metric, days] as const,
   heldCloses: {
@@ -73,13 +74,6 @@ export const qk = {
   vulnerabilities: {
     all: () => ['vulnerabilities'] as const,
     list: () => ['vulnerabilities', 'list'] as const,
-  },
-  dtrack: {
-    all: () => ['dtrack'] as const,
-    sources: () => ['dtrack', 'sources'] as const,
-    unmapped: (source: string) => ['dtrack', 'unmapped', source] as const,
-    mapped: (source: string) => ['dtrack', 'mapped', source] as const,
-    decisions: (source: string) => ['dtrack', 'decisions', source] as const,
   },
   parsers: {
     all: () => ['parsers'] as const,

@@ -37,26 +37,42 @@ spec:
               properties:
                 nvd:
                   type: object
-                  required: [url]
+                  description: >-
+                    NIST NVD. url is a mirror and is optional (the public API when omitted, unless egress is deny).
                   properties:
+                    enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}
+                    tokenFile:
+                      type: string
+                      pattern: '^/etc/rampart/feed-secrets/'
+                      description: "File with the NVD API key (sent as the apiKey header; raises the limit from 5 to 50 requests per 30 s). Read every round. Must be under /etc/rampart/feed-secrets."
                     schedule: {type: string, description: "Not built; refused. Every feed runs every feeds.interval."}
                 osv:
                   type: object
-                  required: [url]
+                  description: >-
+                    OSV.dev. url is a mirror and is optional. OSV is large, so it runs only for the ecosystems named
+                    here, in the server configuration (feeds.osvEcosystems), or by storageMode full.
                   properties:
+                    enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}
+                    ecosystems:
+                      type: array
+                      maxItems: 64
+                      description: "OSV ecosystems to read, each as <url>/<ecosystem>/all.zip (see ecosystems.txt of the OSV bucket): Go, npm, PyPI, Maven, crates.io, ..."
+                      items: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._:+-]{0,63}$'}
                     schedule: {type: string, description: "Not built; refused."}
                 epss:
                   type: object
                   required: [url]
                   properties:
+                    enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}
                     schedule: {type: string, description: "Not built; refused."}
                 kev:
                   type: object
                   required: [url]
                   properties:
+                    enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}
                     schedule: {type: string, description: "Not built; refused."}
                 cwe:
@@ -65,39 +81,45 @@ spec:
                 vulnrichment:
                   type: object
                   properties:
+                    enabled: {type: boolean, default: true, description: "false is the same as leaving the block out: the source is not read and its rows are removed."}
                     url: {type: string, pattern: '^https?://'}
-                    tokenFile: {type: string, pattern: '^/'}
+                    tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
                 exploitdb:
                   type: object
                   properties:
+                    enabled: {type: boolean, default: true, description: "false is the same as leaving the block out: the source is not read and its rows are removed."}
                     url: {type: string, pattern: '^https?://'}
-                    tokenFile: {type: string, pattern: '^/'}
+                    tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
                 metasploit:
                   type: object
                   properties:
+                    enabled: {type: boolean, default: true, description: "false is the same as leaving the block out: the source is not read and its rows are removed."}
                     url: {type: string, pattern: '^https?://'}
-                    tokenFile: {type: string, pattern: '^/'}
+                    tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
                 euvd:
                   type: object
                   properties:
+                    enabled: {type: boolean, default: true, description: "false is the same as leaving the block out: the source is not read and its rows are removed."}
                     url: {type: string, pattern: '^https?://'}
-                    tokenFile: {type: string, pattern: '^/'}
+                    tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
                 vulncheckKev:
                   type: object
                   properties:
+                    enabled: {type: boolean, default: true, description: "false is the same as leaving the block out: the source is not read and its rows are removed."}
                     url: {type: string, pattern: '^https?://'}
-                    tokenFile: {type: string, pattern: '^/'}
+                    tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
                 custom:
                   type: array
                   items:
                     type: object
                     required: [name, format]
                     properties:
+                      enabled: {type: boolean, default: true, description: "false switches the feed off: not read, rows removed."}
                       name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,40}$'}
                       url: {type: string, pattern: '^https?://'}
                       format: {type: string, enum: [osv-zip, intel-jsonl]}
-                      tokenFile: {type: string, pattern: '^/'}
-                      pushTokenFile: {type: string, pattern: '^/'}
+                      tokenFile: {type: string, pattern: '^/etc/rampart/feed-secrets/'}
+                      pushTokenFile: {type: string, pattern: '^/var/run/rampart/feeds/'}
                 egress:
                   type: string
                   enum: [allow, deny]

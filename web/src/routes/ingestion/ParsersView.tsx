@@ -24,33 +24,34 @@ interface ParsersViewProps {
   onUploadClick?: () => void;
 }
 
-function categorizeParser(id: string): string {
-  if (['builtin:sarif', 'builtin:semgrep', 'builtin:bandit'].includes(id)) return 'SAST';
-  if (['builtin:cyclonedx', 'builtin:spdx', 'builtin:syft', 'builtin:dependencytrack', 'builtin:dependencycheck', 'builtin:grype', 'builtin:snyk', 'builtin:trivy'].includes(id)) return 'SCA & SBOM';
-  if (['builtin:gitleaks', 'builtin:trufflehog'].includes(id)) return 'Secrets';
-  if (['builtin:checkov', 'builtin:kubebench', 'builtin:prowler'].includes(id)) return 'IaC & Cloud';
-  if (['builtin:openvex'].includes(id)) return 'VEX';
-  if (['builtin:zap', 'builtin:nuclei'].includes(id)) return 'DAST';
-  if (id === 'builtin:gitlab') return 'Several';
+function categorizeParser(id: string, name?: string, desc?: string): string {
+  const lower = (id + ' ' + (name || '') + ' ' + (desc || '')).toLowerCase();
+  if (lower.includes('sbom')) return 'SBOM';
+  if (lower.includes('sarif') || lower.includes('semgrep') || lower.includes('bandit') || lower.includes('sast')) return 'SAST';
+  if (lower.includes('gitleaks') || lower.includes('trufflehog') || lower.includes('secret')) return 'Secrets';
+  if (lower.includes('checkov') || lower.includes('kubebench') || lower.includes('prowler') || lower.includes('iac') || lower.includes('cloud')) return 'IaC & Cloud';
+  if (lower.includes('openvex') || lower.includes('vex')) return 'VEX';
+  if (lower.includes('zap') || lower.includes('nuclei') || lower.includes('dast')) return 'DAST';
+  if (lower.includes('sca') || lower.includes('trivy') || lower.includes('grype') || lower.includes('snyk') || lower.includes('dependency')) return 'SCA';
   return 'General';
 }
 
-function parserFormat(id: string): string {
-  if (id === 'builtin:cyclonedx') return 'JSON / XML';
-  if (id === 'builtin:spdx') return 'JSON / Tag-Value';
-  if (['builtin:trufflehog', 'builtin:nuclei'].includes(id)) return 'JSON Lines (.jsonl)';
+function parserFormat(id: string, name?: string): string {
+  const lower = (id + ' ' + (name || '')).toLowerCase();
+  if (lower.includes('cyclonedx')) return 'JSON / XML';
+  if (lower.includes('spdx')) return 'JSON / Tag-Value';
+  if (lower.includes('jsonl') || lower.includes('trufflehog') || lower.includes('nuclei')) return 'JSON Lines (.jsonl)';
+  if (lower.includes('sarif')) return 'SARIF / JSON';
   return 'JSON';
 }
 
 const SAMPLE_CEL_MAPPING_YAML = `apiVersion: rampart.aspm.dev/v1alpha1
-kind: IntegrationPackage
+kind: ClusterParser
 metadata:
   name: custom-scanner-mapping
 spec:
-  kind: parser
   runtime: mapping
   version: 1.0.0
-  family: custom-scanner
   category: sast
   detect:
     filenames: ["*.custom.json"]
@@ -90,7 +91,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
 
   const filtered = useMemo(() => {
     return parsers.filter((p) => {
-      const cat = categorizeParser(p.id);
+      const cat = categorizeParser(p.id, p.name, p.description);
       if (category !== 'all' && cat !== category) return false;
       if (!search.trim()) return true;
       const q = search.toLowerCase();
@@ -109,7 +110,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
       <div className="mb-4 flex flex-col justify-between gap-3 tablet:flex-row tablet:items-center">
         <div>
           <div className="flex items-center gap-2.5">
-            <h2 className="display text-18 font-semibold text-ink">Parsers and formats</h2>
+            <h2 className="display text-16 font-semibold text-ink">Parsers and formats</h2>
             <span className="text-13 text-ink-2">
               {parsers.length - installed} built in{installed > 0 ? `, ${installed} installed as ${installed === 1 ? 'a package' : 'packages'}` : ''}
             </span>
@@ -143,7 +144,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
               className={cn(
                 'rounded-ctl px-2.5 py-1 text-12 font-medium transition-colors',
                 category === cat
-                  ? 'bg-surface font-semibold text-ink shadow-sm'
+                  ? 'bg-surface font-semibold text-ink'
                   : 'text-ink-2 hover:bg-chrome hover:text-ink'
               )}
             >
@@ -189,7 +190,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
             </THead>
             <TBody>
               {filtered.map((p) => {
-                const cat = categorizeParser(p.id);
+                const cat = categorizeParser(p.id, p.name, p.description);
                 const format = parserFormat(p.id);
                 return (
                   <Tr
@@ -200,7 +201,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                     <Td className="font-medium text-ink">
                       <div className="flex flex-col">
                         <span>{p.name}</span>
-                        <span className="font-mono text-11 text-ink-2">{p.id}</span>
+                        <span className="font-mono text-12 text-ink-2">{p.id}</span>
                       </div>
                     </Td>
                     <Td className="text-12 text-ink-2">{cat}</Td>
@@ -243,9 +244,9 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                 <dt className="text-ink-2">Engine ID:</dt>
                 <dd className="m-0 font-mono text-12">{selectedParser.id}</dd>
                 <dt className="text-ink-2">Category:</dt>
-                <dd className="m-0 font-medium">{categorizeParser(selectedParser.id)}</dd>
+                <dd className="m-0 font-medium">{categorizeParser(selectedParser.id, selectedParser.name, selectedParser.description)}</dd>
                 <dt className="text-ink-2">Format:</dt>
-                <dd className="m-0 font-mono text-12">{parserFormat(selectedParser.id)}</dd>
+                <dd className="m-0 font-mono text-12">{parserFormat(selectedParser.id, selectedParser.name)}</dd>
                 <dt className="text-ink-2">Version:</dt>
                 <dd className="m-0 font-mono text-12">{selectedParser.version}</dd>
                 <dt className="text-ink-2">Execution:</dt>
@@ -281,7 +282,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
             </p>
 
             <div className="relative">
-              <div className="flex items-center justify-between pb-1 text-11 font-medium text-ink-2">
+              <div className="flex items-center justify-between pb-1 text-12 font-medium text-ink-2">
                 <span>IntegrationPackage Manifest (docs/19 §4):</span>
                 <button
                   type="button"
@@ -296,7 +297,7 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                   Copy YAML
                 </button>
               </div>
-              <pre className="max-h-56 overflow-auto rounded-ctl border border-rule bg-chrome p-3 font-mono text-11 text-ink">
+              <pre className="max-h-56 overflow-auto rounded-ctl border border-rule bg-chrome p-3 font-mono text-12 text-ink">
                 {SAMPLE_CEL_MAPPING_YAML}
               </pre>
             </div>

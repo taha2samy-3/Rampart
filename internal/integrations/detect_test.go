@@ -12,19 +12,19 @@ import (
 func TestAutodetectPicksTheRightParser(t *testing.T) {
 	reg := integrations.DefaultRegistry()
 	cases := map[string]string{
-		"../parsers/trivy/testdata/image-0.50.json":                        "builtin:trivy",
-		"../parsers/grype/testdata/image-0.74.json":                        "builtin:grype",
-		"../parsers/semgrep/testdata/scan-1.45.json":                       "builtin:semgrep",
-		"../parsers/trufflehog/testdata/scan-3.63.jsonl":                   "builtin:trufflehog",
-		"../parsers/gitleaks/testdata/repo-8.18.json":                      "builtin:gitleaks",
-		"../parsers/sarif/testdata/semgrep.sarif":                          "builtin:sarif",
-		"../parsers/gitlab/testdata/gl-sast-report-15.json":                "builtin:gitlab",
-		"../parsers/gitlab/testdata/gl-secret-detection-report-15.json":    "builtin:gitlab",
-		"../parsers/gitlab/testdata/gl-dependency-scanning-report-15.json": "builtin:gitlab",
-		"../parsers/gitlab/testdata/gl-container-scanning-report-15.json":  "builtin:gitlab",
-		"../parsers/gitlab/testdata/gl-dast-report-15.json":                "builtin:gitlab",
-		"../parsers/genericjson/testdata/rampart-generic-v1.json":          "builtin:genericjson",
-		"../parsers/genericjson/testdata/defectdojo-generic.json":          "builtin:genericjson",
+		"../../parsers/wasm/trivy/testdata/image-0.50.json":                        "builtin:trivy",
+		"../../parsers/wasm/grype/testdata/image-0.74.json":                        "builtin:grype",
+		"../../parsers/wasm/semgrep/testdata/scan-1.45.json":                       "builtin:semgrep",
+		"../../parsers/wasm/trufflehog/testdata/scan-3.63.jsonl":                   "builtin:trufflehog",
+		"../../parsers/wasm/gitleaks/testdata/repo-8.18.json":                      "builtin:gitleaks",
+		"../../parsers/wasm/sarif/testdata/semgrep.sarif":                          "builtin:sarif",
+		"../../parsers/wasm/gitlab/testdata/gl-sast-report-15.json":                "builtin:gitlab",
+		"../../parsers/wasm/gitlab/testdata/gl-secret-detection-report-15.json":    "builtin:gitlab",
+		"../../parsers/wasm/gitlab/testdata/gl-dependency-scanning-report-15.json": "builtin:gitlab",
+		"../../parsers/wasm/gitlab/testdata/gl-container-scanning-report-15.json":  "builtin:gitlab",
+		"../../parsers/wasm/gitlab/testdata/gl-dast-report-15.json":                "builtin:gitlab",
+		"../../parsers/lua/genericjson/testdata/rampart-generic-v1.json":           "builtin:genericjson",
+		"../../parsers/lua/genericjson/testdata/defectdojo-generic.json":           "builtin:genericjson",
 	}
 	for path, want := range cases {
 		b, err := os.ReadFile(path)

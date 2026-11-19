@@ -23,6 +23,8 @@ const ApplicationsRoute = lazy(() => import('@/routes/applications/ApplicationsR
 const AdministrationRoute = lazy(() => import('@/routes/administration/AdministrationRoute').then((m) => ({ default: m.AdministrationRoute })));
 const ComplianceRoute = lazy(() => import('@/routes/compliance/ComplianceRoute').then((m) => ({ default: m.ComplianceRoute })));
 const IngestionRoute = lazy(() => import('@/routes/ingestion/IngestionRoute').then((m) => ({ default: m.IngestionRoute })));
+const AboutRoute = lazy(() => import('@/routes/about/AboutRoute').then((m) => ({ default: m.AboutRoute })));
+const FeedsRoute = lazy(() => import('@/routes/feeds/FeedsRoute').then((m) => ({ default: m.FeedsRoute })));
 const IntegrationsRoute = lazy(() => import('@/routes/integrations/IntegrationsRoute').then((m) => ({ default: m.IntegrationsRoute })));
 const InventoryRoute = lazy(() => import('@/routes/inventory/InventoryRoute').then((m) => ({ default: m.InventoryRoute })));
 const OverviewRoute = lazy(() => import('@/routes/overview/OverviewRoute').then((m) => ({ default: m.OverviewRoute })));
@@ -147,7 +149,7 @@ const workflowRoute = createRoute({
 });
 
 export interface ApplicationSearch {
-  tab?: 'overview' | 'cves' | 'sbom' | 'attest';
+  tab?: 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'settings';
 }
 
 const overviewRoute = createRoute({ getParentRoute: () => appRoute, path: '/overview', component: OverviewRoute });
@@ -156,7 +158,7 @@ const applicationRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/applications/$id',
   validateSearch: (s: Record<string, unknown>): ApplicationSearch => ({
-    tab: ['overview', 'cves', 'sbom', 'attest'].includes(s.tab as string) ? (s.tab as ApplicationSearch['tab']) : undefined,
+    tab: ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'settings'].includes(s.tab as string) ? (s.tab as ApplicationSearch['tab']) : undefined,
   }),
   component: function Application() {
     return <ApplicationRoute id={applicationRoute.useParams().id} search={applicationRoute.useSearch()} />;
@@ -174,13 +176,15 @@ const complianceRoute = createRoute({
   },
 });
 
+const aboutRoute = createRoute({ getParentRoute: () => appRoute, path: '/about', component: AboutRoute });
+const feedsRoute = createRoute({ getParentRoute: () => appRoute, path: '/feeds', component: FeedsRoute });
 const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/integrations', component: IntegrationsRoute });
 
 const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inventory', component: InventoryRoute });
 
 const vulnerabilitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/vulnerabilities', component: VulnerabilitiesRoute });
 
-const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'integrations', 'inventory', 'vulnerabilities']);
+const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -204,6 +208,8 @@ const routeTree = rootRoute.addChildren([
     applicationRoute,
     administrationRoute,
     complianceRoute,
+    aboutRoute,
+    feedsRoute,
     integrationsRoute,
     inventoryRoute,
     vulnerabilitiesRoute,

@@ -192,6 +192,80 @@ CEL: `spec.object` immutable after creation; `spec.object.sha256` matches `^[a-f
 ### `IntegrationPackage` / `ClusterIntegrationPackage`
 Adds an integration without changing the core: a declarative parser mapping, a declarative API source, tracker or notifier, a WebAssembly parser plugin, or a gRPC plugin. Namespaced packages (tenant admins) are limited to the data-only runtimes `mapping` and `declarative`; cluster-scoped packages (platform admins) may also use `wasm` and `grpc` and must be signed. Used through `ScanSource.spec.scannerFamily: <name>` or `Connector.spec.type: plugin`. Full reference: [19-integration-sdk.md](19-integration-sdk.md).
 
+### `ClusterParser` / `Parser` ("All Come In Front Door", docs/29, D127)
+Every parser in Rampart is represented as a CRD resource. `ClusterParser` is cluster-scoped and provides standard or cluster-wide parsers (shipped by default in the Helm chart under `templates/clusterparsers.yaml`). `Parser` is namespaced and allows tenants to introduce or override custom scanners.
+
+Supported runtimes:
+- `native`: Wraps compiled streaming Go parsers for zero key regression and high throughput.
+- `lua`: Sandboxed in-process Lua scripts via `gopher-lua` (JSON decode/encode, `emit` callback, safe sandboxed environment).
+- `wasm`: Sandboxed WebAssembly execution via `wazero` for compiled binary filters (WASI stdin -> stdout JSONL). Runs safely in air-gapped / offline enterprise environments with zero network syscalls.
+- `mapping`: Declarative CEL mapping expressions.
+
+```yaml
+# Example 1: Cluster-wide native parser (wrapping compiled engine)
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: sarif
+spec:
+  version: "2.1.0"
+  family: sarif
+  category: sast
+  runtime: native
+  native: sarif
+  description: "Streaming SARIF 2.1.0 parser with Semgrep, Trivy, Gitleaks enrichers"
+  detect:
+    filenames: ["*.sarif", "*sarif*.json"]
+    probes:
+      - jsonHasKeys: ["runs"]
+---
+# Example 2: Namespaced custom Lua parser
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Parser
+metadata:
+  name: custom-linter
+  namespace: team-payments
+spec:
+  version: "1.0.0"
+  family: custom-linter
+  category: sast
+  runtime: lua
+  detect:
+    filenames: ["*linter*.json"]
+  script: |
+    function parse(input, emit)
+      local report = json.decode(input)
+      for _, item in ipairs(report.results or {}) do
+        emit({
+          rule_id = item.check_id,
+          title = item.message,
+          severity = item.level or "HIGH",
+          file = item.path,
+          line = item.start_line
+        })
+      end
+    end
+---
+# Example 3: Air-Gapped Sandboxed WASM parser (OCI artifact)
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: proprietary-scanner
+spec:
+  version: "1.2.0"
+  family: proprietary
+  category: sast
+  runtime: wasm
+  source:
+    oci: "registry.internal.local/parsers/proprietary-scanner:1.2.0"
+  limits:
+    maxMemoryMB: 128
+  detect:
+    filenames: ["proprietary-report.json"]
+    probes:
+      - jsonHasKeys: ["proprietary_scan_id"]
+```
+
 ## 3. Policies
 
 ### `DedupPolicy` / `ClusterDedupPolicy`
@@ -215,44 +289,23 @@ spec:
 ```
 
 ### `RiskPolicy` / `ClusterRiskPolicy`
+This is the shape the server accepts and runs (`internal/risk/policy.go`, D62, D63). A policy that lists `factors` replaces the whole built-in list, so a tenant restates every factor it wants to keep; omit `factors` to keep the built-in ones. Unknown fields are refused, and each `when` is compiled and probed at apply time, so a misspelled variable is an error then, not a silent `false` later. The built-in list is in [06-risk-and-sla.md](06-risk-and-sla.md) section 2 (which also lists three factors that are not built, see docs/36 section 5); a full worked example with its scores is in [36-application-context-and-scoring.md](36-application-context-and-scoring.md) section 15 and [examples/payments-scoring/](examples/payments-scoring/).
 ```yaml
 kind: RiskPolicy
 spec:
   base: {critical: 600, high: 400, medium: 200, low: 80, info: 10}
-  factors:
-    - name: kev
-      when: 'vuln.kev != null'
-      points: 300
-    - name: epss-high
-      when: 'vuln.epss.score >= 0.5'
-      points: 150
-    - name: epss-medium
-      when: 'vuln.epss.score >= 0.1 && vuln.epss.score < 0.5'
-      points: 60
-    - name: exploit-weaponized
-      when: 'vuln.exploit_maturity in ["functional","weaponized"]'
-      points: 120
-    - name: internet-facing
-      when: 'app.internet_facing || env.internet_facing'
-      points: 100
-    - name: sensitive-data
-      when: 'app.data_classification.exists(d, d in ["pci","pii","phi"])'
-      points: 80
-    - name: business-critical
-      when: 'app.business_criticality == "critical"'
-      points: 100
-    - name: compensating-control
-      when: '"waf" in app.compensating_controls && finding.category == "dast"'
-      points: -80
-    - name: not-reachable
-      when: 'finding.reachability == "unreachable"'
-      points: -200
-    - name: fix-available
-      when: 'finding.location.fixed_version != ""'
-      points: 20
-  bands: {critical: 800, high: 600, medium: 300, low: 0}     # lower bounds, clamp 0..1000
-  recomputeOn: [kevAdded, epssDelta: 0.1, assetContextChanged]
+  factors:                      # name, when (CEL, must be a boolean), points; reason and group are optional
+    - {name: KEV, when: "vuln.kev", points: 300, group: threat}
+    - {name: EPSS_HIGH, when: "vuln.epss >= 0.5", points: 150, group: threat}
+    - {name: EPSS_MODERATE, when: "vuln.epss >= 0.1 && vuln.epss < 0.5", points: 60, group: threat}
+    - {name: EXPLOIT_WEAPONIZED, when: 'vuln.exploit_maturity == "weaponized"', points: 120, group: threat}
+    - {name: INTERNET_FACING, when: "app.internet_facing", points: 100, group: context}
+    - {name: SENSITIVE_DATA, when: 'app.data_classification.exists(d, d in ["pci", "pii", "phi"])', points: 80, group: context}
+    - {name: APP_CRITICAL, when: 'app.criticality == "critical"', points: 100, group: context}
+    - {name: COMPENSATING_CONTROL, when: 'finding.category == "dast" && app.compensating_controls.exists(c, c in ["waf", "api_gateway"])', points: -80, group: reduction}
+  bands: {critical: 800, high: 600, medium: 300}             # lower bounds; low is everything below medium; the score is clamped to 0..1000
 ```
+The variables a `when` can read are `finding.{severity, category, rule_id, scanner, cwes, secret_verified, track}`, `vuln.{id, kev, epss, exploited, exploited_sources, exploit_maturity}` and `app.{criticality, internet_facing, data_classification, compensating_controls}`. An earlier version of this page showed `vuln.epss.score`, `app.business_criticality`, `finding.reachability`, `env.internet_facing` and `recomputeOn`; none of them exists, and the example was refused by the server. Reachability and "fix available" are not scoring inputs in this version (docs/36 section 5).
 
 ### `SLAPolicy` / `ClusterSLAPolicy`
 ```yaml
@@ -406,19 +459,27 @@ The connector holds the API endpoint and key; the scan source holds project filt
 ### `IdentityProvider` / `ClusterIdentityProvider`
 OIDC or SAML configuration per tenant or platform-wide. Full reference: [14-sso-and-identity.md](14-sso-and-identity.md) §7.
 
-### `ClusterFeedMirror`
+### `ClusterFeed` (kind `ClusterFeedMirror` is still accepted)
+Which sources of vulnerability data the server reads, and from where. The full account is [docs/33](33-vulnerability-feeds-and-kev-architecture.md) section 0; the keys are the ones the parser accepts (it refuses any other).
 ```yaml
-kind: ClusterFeedMirror
-metadata: {name: airgap}
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterFeed
+metadata: {name: default}
 spec:
-  nvd:  {url: https://mirror.internal/nvd/rest/json/cves/2.0}
-  osv:  {url: https://mirror.internal/osv}
-  epss: {url: https://mirror.internal/epss/epss_scores-current.csv.gz}
-  kev:  {url: https://mirror.internal/kev/known_exploited_vulnerabilities.json}
-  egress: deny                                   # a feed without a mirror is not read at all
-# Built (D86): every feed runs every feeds.interval; a per-feed schedule and the cwe feed are refused with the reason.
-status: {nvd: {lastSync: ..., records: 285000}, kev: {lastSync: ..., records: 1340}}
+  egress: deny                      # allow (default) | deny: with deny only a feed that has a url (a mirror) is read
+  storageMode: lightweight          # lightweight (default) | full: what is kept, see docs/33 section 4
+  kev:  {url: https://mirror.internal/kev/known_exploited_vulnerabilities.json}   # a full file
+  epss: {url: https://mirror.internal/epss/epss_scores-current.csv.gz}            # a full file
+  nvd:  {url: https://mirror.internal/nvd/rest/json/cves/2.0, tokenFile: /etc/rampart/feed-secrets/nvd}   # an API address
+  osv:  {url: https://mirror.internal/osv, ecosystems: [Go, PyPI, npm]}           # a base address; the ecosystems it reads
+  vulnrichment: {}                  # optional sources: named means on; enabled: false switches one off
+  euvd: {tokenFile: /etc/rampart/feed-secrets/euvd}
+  custom:
+    - {name: inhouse, format: intel-jsonl, url: https://feeds.internal/x.jsonl}
+# kev, epss, nvd and osv run by default without any block; any source takes enabled: false.
+# A token file must be under /etc/rampart/feed-secrets (a push token under /var/run/rampart/feeds).
 ```
+The Feeds page (`/feeds`) shows what each feed did and why a feed that is not run is not (`disabled_reason`: `switched_off`, `egress_denied`, `no_ecosystem`, `server_disabled`).
 
 ### `ScheduledScan` (optional module)
 Launches a Kubernetes Job from a template (e.g. Trivy image scan) and feeds the result as a `ReportIngest`.

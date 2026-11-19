@@ -40,6 +40,7 @@ func TestFeedPush(t *testing.T) {
 	st := &pushStore{MemoryStore: ingest.NewMemoryStore(), staged: map[string]string{},
 		mirror: &domain.FeedMirrorSpec{Custom: []domain.CustomFeed{{Name: "vulndb", Format: domain.CustomFeedIntelJSONL, PushTokenFile: tok}}}}
 	api := query.NewAPIWithAuth(st, nil, auth.NewAuthenticatorWithStore(st))
+	api.SetFeedPushTokenDir(dir)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 	push := func(feed, token, body string) int {
@@ -61,5 +62,27 @@ func TestFeedPush(t *testing.T) {
 	}
 	if c := push("vulndb", "s3cret", good); c != http.StatusAccepted || st.staged["vulndb"] != good {
 		t.Fatalf("a good file is staged: %d", c)
+	}
+}
+
+// A push token file outside the directory kept for them is never read: the endpoint answers as for a wrong token.
+func TestFeedPushTokenOutsideItsDirectory(t *testing.T) {
+	dir, other := t.TempDir(), t.TempDir()
+	secret := filepath.Join(other, "session.key")
+	if err := os.WriteFile(secret, []byte("SESSION"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := &pushStore{MemoryStore: ingest.NewMemoryStore(), staged: map[string]string{},
+		mirror: &domain.FeedMirrorSpec{Custom: []domain.CustomFeed{{Name: "vulndb", Format: domain.CustomFeedIntelJSONL, PushTokenFile: secret}}}}
+	api := query.NewAPIWithAuth(st, nil, auth.NewAuthenticatorWithStore(st))
+	api.SetFeedPushTokenDir(dir)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+	req := httptest.NewRequest("POST", "/api/v1/feeds/vulndb", strings.NewReader(`{"id":"CVE-2024-3094","exploited":true}`+"\n"))
+	req.Header.Set("Authorization", "Bearer SESSION")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || len(st.staged) != 0 {
+		t.Fatalf("a token read from outside its directory was accepted: %d %v", w.Code, st.staged)
 	}
 }

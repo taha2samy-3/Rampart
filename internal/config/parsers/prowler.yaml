@@ -1,0 +1,31 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: prowler
+spec:
+  category: compliance
+  runtime: wasm
+  description: Prowler AWS/Azure/GCP cloud security and compliance report
+  detect:
+    filenames:
+    - '*prowler*'
+    filenameWeight: 15
+    rules:
+    - anyOf:
+      - '"CheckID"'
+      - '"check_id"'
+      weight: 40
+    - anyOf:
+      - '"ServiceName"'
+      - '"service_name"'
+      weight: 30
+    - anyOf:
+      - '"ResourceId"'
+      - '"resource_id"'
+      - '"ResourceArn"'
+      weight: 20
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/prowler:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

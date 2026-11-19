@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { locationOf, whereText } from '@/lib/location';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { createColumnHelper, getCoreRowModel, useReactTable } from '@tanstack/react-table';
@@ -17,10 +18,7 @@ const HIDE_NARROW = '@max-[640px]/list:hidden';
 const HIDE_NARROWER = '@max-[520px]/list:hidden';
 
 function locationText(r: FindingRow): string {
-  const l = r.finding.location;
-  if (l?.purl) return l.purl;
-  if (l?.file_path) return l.start_line ? `${l.file_path}:${l.start_line}` : l.file_path;
-  return r.finding.vulnerability_id ?? r.finding.rule_id ?? '';
+  return whereText(locationOf(r.finding.location)) || (r.finding.vulnerability_id ?? r.finding.rule_id ?? '');
 }
 
 export const ROW_HEIGHT = { comfortable: 46, compact: 32 } as const;

@@ -1,6 +1,6 @@
 import type { ComponentType, SVGProps } from 'react';
 import {
-  IconAdmin, IconApplications, IconCompliance, IconFindings, IconIngestion, IconIntegrations,
+  IconAdmin, IconApplications, IconCompliance, IconFeeds, IconFindings, IconIngestion, IconIntegrations,
   IconInventory, IconOverview, IconPolicies, IconVulnerabilities, IconWorkflow,
 } from '@/components/icons';
 
@@ -25,10 +25,11 @@ export const NAV_GROUPS: NavItem[][] = [
   [
     { id: 'workflow', path: '/workflow', icon: IconWorkflow, phase: 2, what: 'Triage, risk acceptance and your assigned work; tickets follow in Phase 3.' },
     { id: 'compliance', path: '/compliance', icon: IconCompliance, phase: 2, what: 'Framework views with per-control status.' },
-    { id: 'ingestion', path: '/ingestion', icon: IconIngestion, phase: 1, what: 'Ingest runs arrive in Phase 1; sources and the Dependency-Track page in Phase 3.' },
+    { id: 'ingestion', path: '/ingestion', icon: IconIngestion, phase: 1, what: 'Ingest runs, scan sources and the parsers they use.' },
   ],
   [
     { id: 'policies', path: '/policies', icon: IconPolicies, phase: 2, what: 'Risk and SLA policies; automation rules and exceptions follow in Phase 5.' },
+    { id: 'feeds', path: '/feeds', icon: IconFeeds, phase: 3, what: 'Where vulnerability data comes from, and when each source last synced.' },
     { id: 'integrations', path: '/integrations', icon: IconIntegrations, phase: 3, what: 'The catalogue, connectors, webhooks and API tokens.' },
     { id: 'administration', path: '/administration', icon: IconAdmin, phase: 2, what: 'Users, teams, access bindings and the audit log; identity providers follow in Phase 4.' },
   ],

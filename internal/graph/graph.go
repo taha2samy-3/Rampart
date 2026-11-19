@@ -137,14 +137,14 @@ func (g *DependencyGraph) FindShortestPath(targetRef string) []string {
 	return nil
 }
 
-// RenderMermaid generates a visual Mermaid flowchart diagram (flowchart TD).
+// RenderMermaid writes the graph as a Mermaid flowchart, for the CLI to export. The output is the same on every call
+// (nodes and edges are visited in sorted order) and a label can carry no Mermaid syntax.
 func (g *DependencyGraph) RenderMermaid() string {
 	var sb strings.Builder
 	sb.WriteString("flowchart TD\n")
 
 	nodeIDs := make(map[string]string)
 	counter := 1
-
 	getNodeID := func(ref string) string {
 		if id, ok := nodeIDs[ref]; ok {
 			return id
@@ -152,37 +152,62 @@ func (g *DependencyGraph) RenderMermaid() string {
 		id := fmt.Sprintf("N%d", counter)
 		counter++
 		nodeIDs[ref] = id
-
 		label := ref
 		if node, ok := g.Nodes[ref]; ok {
 			label = fmt.Sprintf("%s@%s", node.Name, node.Version)
 		}
-		// Escape quotes for mermaid
-		label = strings.ReplaceAll(label, `"`, `'`)
-		fmt.Fprintf(&sb, "  %s[\"%s\"]\n", id, label)
+		fmt.Fprintf(&sb, "  %s[\"%s\"]\n", id, mermaidLabel(label))
 		return id
 	}
 
-	// Render edges
-	type edgeKey struct {
-		from, to string
+	froms := make([]string, 0, len(g.Children))
+	for from := range g.Children {
+		froms = append(froms, from)
 	}
+	sort.Strings(froms)
+	type edgeKey struct{ from, to string }
 	seenEdges := make(map[edgeKey]bool)
-
-	for from, children := range g.Children {
+	for _, from := range froms {
 		fromID := getNodeID(from)
+		children := append([]string(nil), g.Children[from]...)
+		sort.Strings(children)
 		for _, to := range children {
 			ek := edgeKey{from: from, to: to}
 			if seenEdges[ek] {
 				continue
 			}
 			seenEdges[ek] = true
-			toID := getNodeID(to)
-			fmt.Fprintf(&sb, "  %s --> %s\n", fromID, toID)
+			fmt.Fprintf(&sb, "  %s --> %s\n", fromID, getNodeID(to))
 		}
 	}
-
 	return sb.String()
+}
+
+// mermaidLabel makes text safe inside a quoted Mermaid label: control characters (a newline would end the label and start a
+// statement) become spaces, and the characters Mermaid reads as syntax become entities.
+func mermaidLabel(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			b.WriteByte(' ')
+		case r == '"':
+			b.WriteString("#quot;")
+		case r == '<':
+			b.WriteString("#lt;")
+		case r == '>':
+			b.WriteString("#gt;")
+		case r == '&':
+			b.WriteString("#amp;")
+		case r == '#':
+			b.WriteString("#35;")
+		case r == '`' || r == '\\':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // RenderTextTree generates a hierarchical ASCII tree view of the dependency relationships.

@@ -91,6 +91,13 @@ spec:
             - name: RAMPART_FEEDS_OSV_ECOSYSTEMS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+            # The shipped parser modules, checked against a digest table at start-up (docs/35 B1).
+            - name: RAMPART_WASM_DIR
+              value: {{ .Values.parsers.delivery.mountPath | quote }}
+            - name: RAMPART_WASM_DIGESTS
+              value: /etc/rampart/wasm/digests.json
+            {{- end }}
             - name: RAMPART_LOG_LEVEL
               value: {{ .Values.telemetry.logLevel | quote }}
             - name: RAMPART_LOG_FORMAT
@@ -168,7 +175,39 @@ spec:
               mountPath: /var/run/rampart/feeds
               readOnly: true
             {{- end }}
+            {{- if .Values.feeds.tokenSecret }}
+            - name: feed-secrets
+              mountPath: /etc/rampart/feed-secrets
+              readOnly: true
+            {{- end }}
+            {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+            - name: wasm-digests
+              mountPath: /etc/rampart/wasm
+              readOnly: true
+            {{- range $name, $m := .Values.parsers.modules }}
+            - name: {{ printf "wasm-%s" $name | trunc 63 | trimSuffix "-" }}
+              mountPath: {{ printf "%s/%s" $.Values.parsers.delivery.mountPath $name }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
       volumes:
+        {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+        - name: wasm-digests
+          configMap:
+            name: {{ include "rampart.fullname" . }}-wasm-digests
+        {{- range $name, $m := .Values.parsers.modules }}
+        - name: {{ printf "wasm-%s" $name | trunc 63 | trimSuffix "-" }}
+          image:
+            reference: {{ required (printf "parsers.modules.%s.image is required with parsers.delivery.mode=imageVolume" $name) $m.image | quote }}
+            pullPolicy: {{ default "IfNotPresent" $.Values.parsers.delivery.pullPolicy }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.feeds.tokenSecret }}
+        - name: feed-secrets
+          secret:
+            secretName: {{ .Values.feeds.tokenSecret | quote }}
+            defaultMode: 0440
+        {{- end }}
         {{- if .Values.feeds.plugins }}
         - name: feed-push-tokens
           projected:

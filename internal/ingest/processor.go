@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"io"
+	"iter"
 	"log/slog"
 	"strings"
 	"time"
@@ -18,9 +20,7 @@ import (
 	"rampart/internal/jobs"
 	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
-	"rampart/internal/parsers/cyclonedx"
-	"rampart/internal/parsers/spdx"
-	"rampart/internal/parsers/syft"
+	"rampart/internal/sbom"
 	"rampart/internal/telemetry"
 )
 
@@ -127,7 +127,14 @@ type famState struct {
 // Process streams the report and applies it. Findings committed by earlier batches are kept when a
 // later step fails, and nothing is closed (D2). Errors that retrying cannot fix are *jobs.PermanentError.
 func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, error) {
-	if pp.IsEphemeral && !pp.IsSBOM {
+	if pp.IsSBOM {
+		dr, extracts := pp.Parser.(documentReader)
+		if !extracts || !dr.ExtractsVulnerabilities() {
+			return p.processSBOM(ctx, pp)
+		}
+		return p.processSBOMWithFindings(ctx, pp, dr)
+	}
+	if pp.IsEphemeral {
 		return p.processEphemeral(ctx, pp)
 	}
 	run := pp.Run
@@ -316,15 +323,6 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	}
 
 	res := Result{Status: status, Reason: reason, Stats: stats}
-	// An ephemeral run (a pull request, a feature branch) changes nothing in the inventory (D10); its SBOM used to be
-	// saved and replaced the real one of the asset.
-	if pp.IsSBOM && !pp.IsEphemeral {
-		n, err := p.saveSBOM(ctx, run, parserID, pp.Open)
-		if err != nil {
-			return res, err
-		}
-		res.Components = n
-	}
 	if p.router != nil && len(fresh) > 0 && (status == domain.RunCompleted || status == domain.RunCompletedWithErrors) {
 		p.routeRunFindings(ctx, run, fresh)
 	}
@@ -406,9 +404,94 @@ func (p *Processor) openError(err error) error {
 	return err
 }
 
+// sbomReader is what an SBOM parser offers the processor: the assets of a document, never findings.
+type sbomReader interface {
+	ParseSBOM(ctx context.Context, r io.Reader) (*domain.SBOM, []domain.SBOMComponent, []domain.DependencyEdge, error)
+}
+
+// processSBOM handles a run whose parser is an SBOM reader. An SBOM is an inventory of assets, not a scan: it
+// produces no findings, so it takes no part in the merge, the scan-finished clock or the close of a scope (docs/34
+// C8). Reading it wrongly fails the run instead of storing a part of it. An ephemeral run (a pull request, a feature
+// branch) changes nothing in the inventory (D10), so its SBOM is read for the verdict of the run and not stored.
+func (p *Processor) processSBOM(ctx context.Context, pp ProcessParams) (Result, error) {
+	reader, ok := pp.Parser.(sbomReader)
+	if !ok {
+		return Result{}, &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: fmt.Errorf("parser %q is not an SBOM reader", pp.Parser.Descriptor().ID)}
+	}
+	if pp.IsEphemeral {
+		return Result{Status: domain.RunCompleted}, nil
+	}
+	n, err := p.saveSBOM(ctx, pp.Run, pp.Parser.Descriptor().ID, reader, pp.Open)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Status: domain.RunCompleted, Components: n}, nil
+}
+
+// documentReader is an SBOM reader whose spec turns the vulnerabilities a document states into findings
+// (options.extractVulnerabilities, D131).
+type documentReader interface {
+	ExtractsVulnerabilities() bool
+	ParseDocument(ctx context.Context, r io.Reader) (*sbom.Document, error)
+}
+
+// processSBOMWithFindings is the run of an SBOM whose reader extracts vulnerabilities: the document is read once, the
+// inventory is stored as for any SBOM (not for an ephemeral run), and the vulnerabilities then go through the same merge
+// as the findings of a scanner, in the family "sbom-<format>". The inventory and the findings come from one read, so
+// they cannot disagree.
+func (p *Processor) processSBOMWithFindings(ctx context.Context, pp ProcessParams, dr documentReader) (Result, error) {
+	rc, err := pp.Open(ctx)
+	if err != nil {
+		return Result{}, p.openError(err)
+	}
+	data, err := io.ReadAll(scrubNUL(io.LimitReader(rc, p.maxSBOMBytes+1)))
+	_ = rc.Close()
+	if err != nil {
+		return Result{}, err
+	}
+	if int64(len(data)) > p.maxSBOMBytes {
+		return Result{}, &jobs.PermanentError{Code: ErrCodeSBOMTooLarge, Err: fmt.Errorf("the SBOM is larger than %d bytes", p.maxSBOMBytes)}
+	}
+	doc, err := dr.ParseDocument(ctx, bytes.NewReader(data))
+	if err != nil {
+		return Result{}, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+	}
+	stored := 0
+	if !pp.IsEphemeral {
+		if stored, err = p.storeSBOM(ctx, pp.Run, pp.Parser.Descriptor().ID, doc.SBOM, doc.Components); err != nil {
+			return Result{}, err
+		}
+	}
+	// The findings go through the ordinary path, which reads them from the parser, not from the stream.
+	pp.IsSBOM = false
+	// One family for what the document states, also when it states nothing now, so a rescan closes what it stated before.
+	pp.ScannerOverride = firstNonEmpty(pp.ScannerOverride, doc.Family())
+	pp.Parser = documentFindings{ParserContract: pp.Parser, doc: doc}
+	pp.Open = func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("")), nil }
+	res, err := p.Process(ctx, pp)
+	res.Components = stored
+	return res, err
+}
+
+// documentFindings is the parser of a document already read: it yields the findings of the document and ignores the stream.
+type documentFindings struct {
+	integrations.ParserContract
+	doc *sbom.Document
+}
+
+func (d documentFindings) Parse(_ context.Context, _ io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
+	return func(yield func(domain.RawFinding, error) bool) {
+		for _, f := range d.doc.Findings(pc) {
+			if !yield(f, nil) {
+				return
+			}
+		}
+	}
+}
+
 // saveSBOM stores the component inventory and dependency graph of an SBOM report. SBOM documents are
 // decoded whole (D15), under a size cap.
-func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserID string, open StreamSource) (int, error) {
+func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserID string, reader sbomReader, open StreamSource) (int, error) {
 	rc, err := open(ctx)
 	if err != nil {
 		return 0, p.openError(err)
@@ -421,35 +504,29 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 	if int64(len(data)) > p.maxSBOMBytes {
 		return 0, &jobs.PermanentError{Code: ErrCodeSBOMTooLarge, Err: fmt.Errorf("the SBOM is larger than %d bytes", p.maxSBOMBytes)}
 	}
-	var (
-		sbom       *domain.SBOM
-		components []domain.SBOMComponent
-	)
-	switch {
-	case strings.Contains(parserID, "cyclonedx"):
-		sbom, components, _, _ = cyclonedx.NewParser().ParseSBOM(strings.NewReader(string(data)))
-	case strings.Contains(parserID, "spdx"):
-		sbom, components, _, _ = spdx.NewParser().ParseSBOM(strings.NewReader(string(data)))
-	case strings.Contains(parserID, "syft"):
-		sbom, components, _, _ = syft.NewParser().ParseSBOM(strings.NewReader(string(data)))
+	sbomDoc, components, _, err := reader.ParseSBOM(ctx, bytes.NewReader(data))
+	if err != nil {
+		return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
 	}
-	if len(components) == 0 {
-		return 0, nil
+	return p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+}
+
+// storeSBOM stamps the document and its components with the run and stores them.
+func (p *Processor) storeSBOM(ctx context.Context, run *domain.IngestRun, parserID string, sbomDoc *domain.SBOM, components []domain.SBOMComponent) (int, error) {
+	if sbomDoc == nil {
+		sbomDoc = &domain.SBOM{ID: domain.NewID(), Format: parserID, CreatedAt: time.Now().UTC()}
 	}
-	if sbom == nil {
-		sbom = &domain.SBOM{ID: domain.NewID(), Format: parserID, CreatedAt: time.Now().UTC()}
-	}
-	sbom.TenantID, sbom.AssetID, sbom.IngestRunID, sbom.ComponentCount = run.TenantID, run.AssetID, run.ID, len(components)
-	sbom.Track = run.Track
+	sbomDoc.TenantID, sbomDoc.AssetID, sbomDoc.IngestRunID, sbomDoc.ComponentCount = run.TenantID, run.AssetID, run.ID, len(components)
+	sbomDoc.Track = run.Track
 	for i := range components {
 		if components[i].TenantID == domain.NilID {
 			components[i].TenantID = run.TenantID
 		}
 		if components[i].SBOMID == domain.NilID {
-			components[i].SBOMID = sbom.ID
+			components[i].SBOMID = sbomDoc.ID
 		}
 	}
-	if err := p.store.SaveSBOM(ctx, sbom, components); err != nil {
+	if err := p.store.SaveSBOM(ctx, sbomDoc, components); err != nil {
 		return 0, err
 	}
 	return len(components), nil
@@ -590,11 +667,11 @@ func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint s
 			return nil, false, &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: errors.New("the report format is not recognised")}
 		}
 	}
-	id := parser.Descriptor().ID
-	if strings.Contains(id, "openvex") {
+	desc := parser.Descriptor()
+	if strings.Contains(strings.ToLower(desc.ID), "openvex") {
 		return nil, false, &jobs.PermanentError{Code: ErrCodeVEXDocument, Err: errors.New("an OpenVEX document is a set of decisions, not a scan report: send it to POST /api/v1/vex")}
 	}
-	return parser, strings.Contains(id, "cyclonedx") || strings.Contains(id, "spdx") || strings.Contains(id, "syft"), nil
+	return parser, sbom.IsReader(parser), nil
 }
 
 func scanFinishedOf(c domain.UploadContext) time.Time {

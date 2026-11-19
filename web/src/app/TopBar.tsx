@@ -109,8 +109,11 @@ function UserMenu() {
   const out = useMutation({
     mutationFn: logout,
     onSuccess: () => {
-      qc.clear();
+      // The session first: the bootstrap that is mounted must see "no session" and the login screen must find none. A
+      // clear() before it detached the bootstrap from the session, so it kept the old one and sent the person back.
       qc.setQueryData(qk.session(), null);
+      // Then what belonged to the person who left (the session and the public ui-config stay).
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== qk.session()[0] && q.queryKey[0] !== qk.uiConfig()[0] });
       void navigate({ to: '/login', search: {} });
     },
     onError: (e) => toast.problem(toProblem(e)),
@@ -138,6 +141,7 @@ function UserMenu() {
           <MenuRadioItem value="dark">{t('shell.themeDark')}</MenuRadioItem>
         </MenuRadioGroup>
         <MenuSeparator />
+        <MenuItem onSelect={() => void navigate({ to: '/about' })}>{t('nav.about')}</MenuItem>
         <MenuItem onSelect={() => out.mutate()}>{t('shell.signOut')}</MenuItem>
       </MenuContent>
     </Menu>

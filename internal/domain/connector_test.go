@@ -244,23 +244,6 @@ func TestConnector_Validate(t *testing.T) {
 			},
 			wantErr: true,
 		},
-		{
-			name: "dependency-track with contradictory outbound direction rejected",
-			conn: domain.Connector{
-				ID:       uuid.New(),
-				TenantID: uuid.New(),
-				Name:     "dt-outbound",
-				Type:     domain.ConnectorTypeDependencyTrack,
-				Spec: domain.ConnectorSpec{
-					Type:      domain.ConnectorTypeDependencyTrack,
-					Direction: domain.DirectionOutbound,
-					DependencyTrack: &domain.DependencyTrackConnectorConfig{
-						URL: "https://example.com",
-					},
-				},
-			},
-			wantErr: true,
-		},
 	}
 
 	for _, tc := range tests {
@@ -274,15 +257,7 @@ func TestConnector_Validate(t *testing.T) {
 }
 
 func TestConnector_Direction(t *testing.T) {
-	// 1. Inbound for DependencyTrack
-	dtConn := domain.Connector{
-		Type: domain.ConnectorTypeDependencyTrack,
-	}
-	if dtConn.Direction() != domain.DirectionInbound {
-		t.Errorf("expected DirectionInbound for DT, got %s", dtConn.Direction())
-	}
-
-	// 2. Outbound for Slack
+	// 1. Outbound for Slack
 	slackConn := domain.Connector{
 		Type: domain.ConnectorTypeSlack,
 	}

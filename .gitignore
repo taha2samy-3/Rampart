@@ -1,5 +1,7 @@
 # Binaries
 bin/
+# a binary built at the root with `go build ./cmd/rampart` (anchored: cmd/rampart/ is source)
+/rampart
 *.exe
 *.exe~
 *.dll

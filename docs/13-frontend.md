@@ -62,10 +62,11 @@ Left navigation, in this order:
 | **Vulnerabilities** | Vulnerability explorer by CVE with impact across the tenant, KEV and EPSS watchlists |
 | **Workflow** | Risk acceptances (requests, approvals, expiring), Tickets, SLA breaches, My work (assigned to me or my teams) |
 | **Compliance** | Frameworks (OWASP Top 10, CWE Top 25, PCI DSS, ISO 27001, SSDF, ASVS), per-control status, evidence export |
-| **Ingestion** | Ingest runs, Sources (including Dependency-Track: sync state, unmapped projects, mapping editor), Parsers and formats |
+| **Ingestion** | Ingest runs, scan sources, Parsers and formats |
 | **Policies** | Risk, SLA, Automation (with simulate results), Dedup, Exceptions, Retention |
+| **Feeds** | Where the vulnerability data comes from: each feed, its last sync, its records, Sync and Test, the ClusterFeed in force (D135) |
 | **Integrations** | Catalogue (search, support level, what each needs), Connectors (Jira, GitHub, Slack, Dependency-Track …), Webhooks, API tokens. Every connector form is generated from the integration's config schema, so a new integration needs no frontend change |
-| **Administration** | Users, Teams, Access bindings, Identity providers, Audit log, Tenant settings, Feeds status |
+| **Administration** | Users, Teams, Access bindings, Identity providers, Audit log, Tenant settings |
 
 Objects managed by a CRD show a "Managed by Kubernetes" badge with the namespace/name, are read-only in the UI, and offer "View YAML" and "Copy kubectl command". Objects created in the UI offer "Export as YAML" so teams can move them to GitOps. **Connectors are never created in the UI** (D82): they carry secrets, and the operator is the only reader of Secrets (D1); the catalogue produces a resource and validates it against the server.
 

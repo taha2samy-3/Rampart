@@ -1,0 +1,17 @@
+{
+  "check_type": "terraform",
+  "results": {
+    "passed_checks": [],
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_20",
+        "check_name": "Ensure S3 bucket has an S3 bucket policy",
+        "check_result": {"result": "FAILED"},
+        "file_path": "/modules/s3/main.tf",
+        "file_line_range": [10, 25],
+        "resource": "aws_s3_bucket.data",
+        "severity": "HIGH"
+      }
+    ]
+  }
+}

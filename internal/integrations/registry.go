@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"strings"
 	"sync"
 
 	"rampart/internal/domain"
@@ -39,6 +40,7 @@ type Descriptor struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Kind         IntegrationKind `json:"kind"`
+	Category     string          `json:"category,omitempty"`
 	Version      string          `json:"version"`
 	SupportLevel SupportLevel    `json:"support_level"`
 	Description  string          `json:"description"`
@@ -88,6 +90,12 @@ func (r *Registry) GetParser(id string) (ParserContract, error) {
 	defer r.mu.RUnlock()
 
 	p, exists := r.parsers[id]
+	if !exists && !strings.HasPrefix(id, "builtin:") {
+		p, exists = r.parsers["builtin:"+id]
+	}
+	if !exists && strings.HasPrefix(id, "builtin:") {
+		p, exists = r.parsers[strings.TrimPrefix(id, "builtin:")]
+	}
 	if !exists {
 		return nil, fmt.Errorf("%w: parser %q", ErrIntegrationNotFound, id)
 	}

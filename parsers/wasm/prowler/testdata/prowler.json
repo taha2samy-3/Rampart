@@ -1,0 +1,12 @@
+[
+  {
+    "CheckID": "s3_bucket_default_encryption",
+    "CheckTitle": "S3 Bucket Default Encryption",
+    "Status": "FAIL",
+    "Severity": "high",
+    "ServiceName": "s3",
+    "Region": "us-east-1",
+    "ResourceId": "company-data-lake",
+    "Description": "S3 bucket does not have default encryption enabled."
+  }
+]

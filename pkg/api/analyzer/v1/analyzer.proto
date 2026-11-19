@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package rampart.analyzer.v1;
+option go_package = "rampart/pkg/api/analyzer/v1;analyzerv1";
+
+service AnalyzerService {
+  // Analyze scans a batch of components and returns vulnerability findings.
+  rpc Analyze(AnalyzeRequest) returns (AnalyzeResponse);
+
+  // GetMetadata returns scanner information, name, version, and supported ecosystems.
+  rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+
+  // HealthCheck verifies connectivity and engine status.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message Component {
+  string ref = 1;
+  string name = 2;
+  string group = 3;
+  string version = 4;
+  string purl = 5;
+  string purl_base = 6;
+  string ecosystem = 7;
+  repeated string licenses = 8;
+  bool is_direct = 9;
+  repeated string dependency_path = 10;
+}
+
+message AnalyzeRequest {
+  string scan_id = 1;
+  string asset_id = 2;
+  repeated Component components = 3;
+  map<string, string> options = 4;
+}
+
+message Finding {
+  string vulnerability_id = 1;
+  string title = 2;
+  string severity = 3;
+  double cvss_score = 4;
+  string cvss_vector = 5;
+  repeated int32 cwes = 6;
+  string affected_component_ref = 7;
+  string fixed_version = 8;
+  string description = 9;
+  string recommendation = 10;
+  string source_advisory_url = 11;
+}
+
+message AnalyzeResponse {
+  string scan_id = 1;
+  repeated Finding findings = 2;
+  map<string, string> execution_metrics = 3;
+}
+
+message GetMetadataRequest {}
+
+message GetMetadataResponse {
+  string name = 1;
+  string version = 2;
+  repeated string supported_ecosystems = 3;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+  string message = 2;
+}

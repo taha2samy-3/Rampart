@@ -1,0 +1,32 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: trivy
+spec:
+  category: sca
+  runtime: wasm
+  description: 'Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations,
+    licenses'
+  detect:
+    filenames:
+    - '*trivy*'
+    filenameWeight: 10
+    reject:
+    - '"runs"'
+    - 'sarif'
+    rules:
+    - anyOf:
+      - '"SchemaVersion"'
+      weight: 40
+    - anyOf:
+      - '"ArtifactName"'
+      - '"ArtifactType"'
+      weight: 30
+    - anyOf:
+      - '"Results"'
+      weight: 25
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/trivy:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

@@ -96,13 +96,12 @@ type ConnectorType string
 
 const (
 	// Supported Phase 3 connector types
-	ConnectorTypeJira            ConnectorType = "jira"
-	ConnectorTypeGitHub          ConnectorType = "github"
-	ConnectorTypeSlack           ConnectorType = "slack"
-	ConnectorTypeTeams           ConnectorType = "teams"
-	ConnectorTypeEmail           ConnectorType = "email"
-	ConnectorTypeWebhook         ConnectorType = "webhook"
-	ConnectorTypeDependencyTrack ConnectorType = "dependencyTrack"
+	ConnectorTypeJira    ConnectorType = "jira"
+	ConnectorTypeGitHub  ConnectorType = "github"
+	ConnectorTypeSlack   ConnectorType = "slack"
+	ConnectorTypeTeams   ConnectorType = "teams"
+	ConnectorTypeEmail   ConnectorType = "email"
+	ConnectorTypeWebhook ConnectorType = "webhook"
 	// ConnectorTypePlugin uses an IntegrationPackage installed in the tenant (docs/19 §7, docs/16 D94): the tool is
 	// described as data, so adding one needs no release.
 	ConnectorTypePlugin ConnectorType = "plugin"
@@ -210,26 +209,19 @@ type WebhookConnectorConfig struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 }
 
-// DependencyTrackConnectorConfig holds Dependency-Track API settings (docs/10).
-type DependencyTrackConnectorConfig struct {
-	URL                  string       `json:"url"`
-	CredentialsSecretRef SecretKeyRef `json:"credentialsSecretRef"` // Key: apiKey
-}
-
 // ConnectorSpec represents the configuration of a Connector resource.
 type ConnectorSpec struct {
-	Type            ConnectorType                   `json:"type"`
-	Direction       ConnectorDirection              `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
-	Ticketing       *ConnectorTicketingPolicy       `json:"ticketing,omitempty"` // Automated ticketing policy (D70 B3)
-	Routing         *NotificationRoutingRule        `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
-	Jira            *JiraConnectorConfig            `json:"jira,omitempty"`
-	GitHub          *GitHubConnectorConfig          `json:"github,omitempty"`
-	Slack           *SlackConnectorConfig           `json:"slack,omitempty"`
-	Teams           *TeamsConnectorConfig           `json:"teams,omitempty"`
-	Email           *EmailConnectorConfig           `json:"email,omitempty"`
-	Webhook         *WebhookConnectorConfig         `json:"webhook,omitempty"`
-	DependencyTrack *DependencyTrackConnectorConfig `json:"dependencyTrack,omitempty"`
-	Plugin          *PluginConnectorConfig          `json:"plugin,omitempty"`
+	Type      ConnectorType             `json:"type"`
+	Direction ConnectorDirection        `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
+	Ticketing *ConnectorTicketingPolicy `json:"ticketing,omitempty"` // Automated ticketing policy (D70 B3)
+	Routing   *NotificationRoutingRule  `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
+	Jira      *JiraConnectorConfig      `json:"jira,omitempty"`
+	GitHub    *GitHubConnectorConfig    `json:"github,omitempty"`
+	Slack     *SlackConnectorConfig     `json:"slack,omitempty"`
+	Teams     *TeamsConnectorConfig     `json:"teams,omitempty"`
+	Email     *EmailConnectorConfig     `json:"email,omitempty"`
+	Webhook   *WebhookConnectorConfig   `json:"webhook,omitempty"`
+	Plugin    *PluginConnectorConfig    `json:"plugin,omitempty"`
 }
 
 // PluginConnectorConfig names the IntegrationPackage, the config validated against its configSchema, and the
@@ -287,8 +279,6 @@ func (c *Connector) Direction() ConnectorDirection {
 		return c.Spec.Direction
 	}
 	switch c.Type {
-	case ConnectorTypeDependencyTrack:
-		return DirectionInbound
 	case ConnectorTypeJira:
 		if c.Spec.Jira != nil && c.Spec.Jira.TwoWaySync {
 			return DirectionBidirectional
@@ -326,10 +316,6 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		case ConnectorTypeSlack, ConnectorTypeTeams, ConnectorTypeEmail, ConnectorTypeWebhook:
 			if c.Spec.Direction != DirectionOutbound {
 				return fmt.Errorf("%w: connector type %q only supports outbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
-			}
-		case ConnectorTypeDependencyTrack:
-			if c.Spec.Direction != DirectionInbound {
-				return fmt.Errorf("%w: connector type %q only supports inbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
 			}
 		case ConnectorTypeJira, ConnectorTypeGitHub:
 			if c.Spec.Direction != DirectionOutbound && c.Spec.Direction != DirectionBidirectional {
@@ -425,13 +411,6 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 			if strings.Contains(vLower, "bearer ") || strings.Contains(vLower, "basic ") || strings.Contains(vLower, "token ") || strings.Contains(vLower, "apikey") || strings.Contains(vLower, "secret") {
 				return fmt.Errorf("%w: plaintext credentials or tokens in headers are prohibited; use secretRef", ErrConnectorInvalid)
 			}
-		}
-	case ConnectorTypeDependencyTrack:
-		if c.Spec.DependencyTrack == nil {
-			return fmt.Errorf("%w: dependencyTrack config is required for dependencyTrack connector", ErrConnectorInvalid)
-		}
-		if err := ValidateConnectorURLWithAllowlist(c.Spec.DependencyTrack.URL, allowlist); err != nil {
-			return fmt.Errorf("%w: invalid dependencyTrack url: %w", ErrConnectorInvalid, err)
 		}
 	case ConnectorTypePlugin:
 		// The package is checked by the caller that can read it (the operator, the router); here only the shape.

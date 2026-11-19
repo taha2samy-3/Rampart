@@ -1,0 +1,18 @@
+{
+  "Controls": [
+    {
+      "id": "1",
+      "tests": [
+        {
+          "results": [
+            {
+              "test_number": "1.1.1",
+              "test_desc": "Ensure API server pod specification file permissions are 600",
+              "status": "FAIL"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -141,8 +141,9 @@ Types: `rampart.finding.created`, `.updated`, `.state_changed`, `.reactivated`, 
 
 ```
 rampart login --server https://rampart.example.com
-rampart upload report.sarif --source github-actions --context branch=main,commit=$SHA
-rampart sbom upload bom.json --source github-actions            # forwards to Dependency-Track when configured
+rampart upload report.sarif --parser sarif --source github-actions --branch main --commit $SHA
+rampart sbom upload bom.json --parser cyclonedx --source github-actions   # fills the inventory; creates no findings
+rampart upload report.json --detect                                       # the server chooses the parser from the content (D130)
 rampart gate --source github-actions --commit $SHA --wait --timeout 300
 rampart findings list -q 'severity:critical state:open app:payments-api' -o table|json
 rampart findings set-state <id> not_affected --justification vulnerable_code_not_in_execute_path

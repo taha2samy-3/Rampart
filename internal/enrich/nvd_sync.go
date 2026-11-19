@@ -119,10 +119,43 @@ func (s *FeedSyncer) syncNVD(ctx context.Context, cfg FeedConfig) (int, error) {
 	}
 }
 
+// nvdMaxAttempts is how many times one page is asked for when NIST answers that the client is too fast.
+const nvdMaxAttempts = 4
+
+// fetchNVDPage asks for one page. NIST answers 429 when the client is over its limit (and, with 403, when it was
+// told to slow down), and 503 when it is busy; each is waited out for the time the server names in Retry-After, or
+// 30 seconds, the length of NIST's window, doubled each time, and then asked again. A page that fails otherwise, or
+// after the last attempt, fails the sync, and the cursor stays where it was.
 func (s *FeedSyncer) fetchNVDPage(ctx context.Context, cfg FeedConfig, u string) (*nvdPage, error) {
+	base := cfg.NVDRetryBase
+	if base <= 0 {
+		base = 30 * time.Second
+	}
+	var lastStatus int
+	for attempt := 0; attempt < nvdMaxAttempts; attempt++ {
+		page, status, wait, err := s.fetchNVDPageOnce(ctx, cfg, u, base<<attempt)
+		if err != nil {
+			return nil, err
+		}
+		if page != nil {
+			return page, nil
+		}
+		lastStatus = status
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, fmt.Errorf("GET %s: NVD still answered %d after %d attempts (rate limit); the next round asks again from the same point", redact(cfg.NVDURL), lastStatus, nvdMaxAttempts)
+}
+
+// fetchNVDPageOnce makes one request. It returns the page, or, for an answer worth waiting out (429, 403, 503), the
+// status and how long to wait; any other failure is an error.
+func (s *FeedSyncer) fetchNVDPageOnce(ctx context.Context, cfg FeedConfig, u string, defaultWait time.Duration) (page *nvdPage, status int, wait time.Duration, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	req.Header.Set("User-Agent", "rampart-feed-sync")
 	if cfg.NVDAPIKey != "" {
@@ -130,24 +163,50 @@ func (s *FeedSyncer) fetchNVDPage(ctx context.Context, cfg FeedConfig, u string)
 	}
 	res, err := cfg.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: status %d", cfg.NVDURL, res.StatusCode)
+	switch res.StatusCode {
+	case http.StatusOK:
+	case http.StatusTooManyRequests, http.StatusForbidden, http.StatusServiceUnavailable:
+		return nil, res.StatusCode, retryAfter(res.Header.Get("Retry-After"), defaultWait), nil
+	default:
+		return nil, res.StatusCode, 0, fmt.Errorf("GET %s: status %d", redact(cfg.NVDURL), res.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxNVDPageBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	if int64(len(body)) > maxNVDPageBytes {
-		return nil, fmt.Errorf("nvd page larger than the %d byte limit; refused, not cut", maxNVDPageBytes)
+		return nil, 0, 0, fmt.Errorf("nvd page larger than the %d byte limit; refused, not cut", maxNVDPageBytes)
 	}
-	var page nvdPage
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, fmt.Errorf("nvd page: %w", err)
+	var p nvdPage
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, 0, 0, fmt.Errorf("nvd page: %w", err)
 	}
-	return &page, nil
+	return &p, http.StatusOK, 0, nil
+}
+
+// maxRetryAfter caps what a server can make the sync wait for in one step.
+const maxRetryAfter = 5 * time.Minute
+
+// retryAfter reads a Retry-After header: seconds, or an HTTP date. An absent or unreadable one gives def. The wait
+// is never longer than maxRetryAfter.
+func retryAfter(h string, def time.Duration) time.Duration {
+	h = strings.TrimSpace(h)
+	d := def
+	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(h); err == nil {
+		d = time.Until(t)
+	}
+	if d < 0 {
+		d = 0
+	}
+	if d > maxRetryAfter {
+		d = maxRetryAfter
+	}
+	return d
 }
 
 func (s *FeedSyncer) writeNVDPage(ctx context.Context, page *nvdPage) (int, error) {

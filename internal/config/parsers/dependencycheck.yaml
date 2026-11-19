@@ -1,0 +1,30 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: dependencycheck
+spec:
+  category: sca
+  runtime: wasm
+  description: OWASP Dependency-Check SCA vulnerability report
+  detect:
+    filenames:
+    - '*dependency-check*'
+    filenameWeight: 15
+    rules:
+    - allOf:
+      - '"reportSchema"'
+      - '"dependencies"'
+      weight: 45
+    - allOf:
+      - '"vulnerabilities"'
+      - '"cvssv3"'
+      weight: 35
+    - anyOf:
+      - '"projectInfo"'
+      - '"scanInfo"'
+      weight: 15
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/dependencycheck:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

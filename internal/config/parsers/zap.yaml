@@ -1,0 +1,61 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: zap
+spec:
+  category: dast
+  runtime: lua
+  description: OWASP ZAP DAST alert report
+  detect:
+    filenames:
+    - '*zap*'
+    filenameWeight: 15
+    rules:
+    - allOf:
+      - '"@programName"'
+      - '"ZAP"'
+      weight: 50
+    - allOf:
+      - '"site"'
+      - '"alerts"'
+      weight: 35
+    - allOf:
+      - '"pluginId"'
+      - '"riskcode"'
+      weight: 20
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if not\
+    \ doc or not doc.site then\n    return\n  end\n\n  for _, site in ipairs(doc.site)\
+    \ do\n    local site_name = site[\"@name\"] or \"\"\n    if site.alerts then\n\
+    \      for _, alert in ipairs(site.alerts) do\n        local cwes = {}\n     \
+    \   if alert.cweid and alert.cweid ~= \"\" and alert.cweid ~= \"0\" then\n   \
+    \       local num = tonumber(alert.cweid)\n          if num and num > 0 then\n\
+    \            table.insert(cwes, num)\n          end\n        end\n\n        local\
+    \ sev = \"medium\"\n        local code = tostring(alert.riskcode)\n        if\
+    \ code == \"3\" then sev = \"high\"\n        elseif code == \"2\" then sev = \"\
+    medium\"\n        elseif code == \"1\" then sev = \"low\"\n        elseif code\
+    \ == \"0\" then sev = \"info\"\n        end\n\n        local title = alert.alert\
+    \ or alert.name or (\"ZAP Alert \" .. (alert.pluginId or \"unknown\"))\n     \
+    \   local desc = alert.desc or \"\"\n        if alert.solution and alert.solution\
+    \ ~= \"\" then\n          desc = desc .. \"\\n\\nSolution: \" .. alert.solution\n\
+    \        end\n\n        local instances = alert.instances\n        if instances\
+    \ and #instances > 0 then\n          for _, inst in ipairs(instances) do\n   \
+    \         local target_url = inst.uri\n            if not target_url or target_url\
+    \ == \"\" then\n              target_url = site_name\n            end\n\n    \
+    \        local inst_desc = desc\n            if inst.evidence and inst.evidence\
+    \ ~= \"\" then\n              inst_desc = inst_desc .. \"\\n\\nEvidence: \" ..\
+    \ inst.evidence\n            end\n\n            emit({\n              rule_id\
+    \ = alert.pluginId or \"zap-alert\",\n              rule_name = title,\n     \
+    \         title = title,\n              description = inst_desc,\n           \
+    \   severity = sev,\n              tool_severity = alert.riskdesc or sev,\n  \
+    \            category = \"dast\",\n              scanner_family = \"zap\",\n \
+    \             cwes = cwes,\n              location = {\n                web =\
+    \ {\n                  normalized_url = target_url,\n                  parameter\
+    \ = inst.param or \"\",\n                  method = inst.method or \"\"\n    \
+    \            }\n              }\n            })\n          end\n        else\n\
+    \          emit({\n            rule_id = alert.pluginId or \"zap-alert\",\n  \
+    \          rule_name = title,\n            title = title,\n            description\
+    \ = desc,\n            severity = sev,\n            tool_severity = alert.riskdesc\
+    \ or sev,\n            category = \"dast\",\n            scanner_family = \"zap\"\
+    ,\n            cwes = cwes,\n            location = {\n              web = {\n\
+    \                normalized_url = site_name\n              }\n            }\n\
+    \          })\n        end\n      end\n    end\n  end\nend\n"

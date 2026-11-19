@@ -31,9 +31,19 @@ rules:
       - connectors
       - integrationpackages
       - parsers
+      - clusterparsers
+      - sbomparsers
+      - clustersbomparsers
+      - externalanalyzers
+      - clusterexternalanalyzers
       - connectors/status
       - integrationpackages/status
       - parsers/status
+      - clusterparsers/status
+      - sbomparsers/status
+      - clustersbomparsers/status
+      - externalanalyzers/status
+      - clusterexternalanalyzers/status
       - complianceframeworks
       - complianceframeworks/status
       - clustercomplianceframeworks
@@ -49,6 +59,11 @@ rules:
       - connectors/finalizers
       - integrationpackages/finalizers
       - parsers/finalizers
+      - clusterparsers/finalizers
+      - sbomparsers/finalizers
+      - clustersbomparsers/finalizers
+      - externalanalyzers/finalizers
+      - clusterexternalanalyzers/finalizers
       - complianceframeworks/finalizers
       - clustercomplianceframeworks/finalizers
     verbs:

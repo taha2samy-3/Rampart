@@ -124,7 +124,7 @@ spec:
   severityMap: {CRITICAL: critical, HIGH: high, MODERATE: medium, LOW: low}
 ```
 
-Apply it with `kubectl apply` or `rampart apply -f`. Then upload as usual: `rampart upload --format pip-audit report.json`, or without `--format` when `detect` recognises the file.
+Apply it with `kubectl apply` or `rampart apply -f`. Then upload as usual: `rampart upload --parser pip-audit report.json`. The CLI always needs the name (or `--detect`, which lets the server choose from the file using the `detect` rules); see D130.
 
 ### Fields
 

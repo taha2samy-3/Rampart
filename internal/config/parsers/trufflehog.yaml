@@ -1,0 +1,29 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: trufflehog
+spec:
+  category: secrets
+  runtime: wasm
+  description: 'TruffleHog JSON lines: secrets, with whether the credential is live;
+    the secret is hashed and never stored'
+  detect:
+    filenames:
+    - '*trufflehog*'
+    filenameWeight: 10
+    minScore: 60
+    rules:
+    - anyOf:
+      - '"DetectorName"'
+      weight: 40
+    - anyOf:
+      - '"SourceMetadata"'
+      weight: 30
+    - anyOf:
+      - '"Verified"'
+      weight: 20
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/trufflehog:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

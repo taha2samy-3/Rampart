@@ -33,29 +33,67 @@ func NewOnDemand(base context.Context, pool *pgxpool.Pool, cfg FeedConfig, log *
 	return &OnDemand{base: base, pool: pool, cfg: cfg, log: log}
 }
 
-// runs reports whether a round would run the feed under this configuration.
-func (o *OnDemand) runs(feed string) bool {
+// runs reports whether a round would run the feed: under the server's configuration with the ClusterFeed in force
+// applied to it, as the round itself does. (The ecosystems of OSV and the egress rule can come from the resource, so
+// the configuration alone does not say.)
+func (o *OnDemand) runs(ctx context.Context, feed string) bool {
+	cfg := o.cfg
+	if cfg.Mirror != nil {
+		if m, err := cfg.Mirror(ctx); err == nil {
+			cfg.applyMirror(m, o.log)
+		}
+	}
 	switch feed {
 	case "nvd":
-		return !o.cfg.NVDDisabled
+		return !cfg.NVDDisabled
 	case "osv":
-		return len(o.cfg.OSVEcosystems) > 0
+		return len(cfg.OSVEcosystems) > 0
 	}
 	return true
 }
+
+// Why says why the server's configuration does not run a feed, or "" when it does. The reasons the ClusterFeed gives
+// (a switch, an egress rule) are the caller's to know; these are the two only the server's configuration decides.
+func (o *OnDemand) Why(ctx context.Context, feed string) string {
+	cfg := o.cfg
+	if cfg.Mirror != nil {
+		if m, err := cfg.Mirror(ctx); err == nil {
+			cfg.applyMirror(m, o.log)
+		}
+	}
+	switch feed {
+	case "nvd":
+		if cfg.NVDDisabled {
+			return FeedOffServerConfig
+		}
+	case "osv":
+		if len(cfg.OSVEcosystems) == 0 {
+			return FeedOffNoEcosystem
+		}
+	}
+	return ""
+}
+
+// The reasons a feed is not run, as the API and the Feeds page name them.
+const (
+	FeedOffSwitched     = "switched_off"    // the ClusterFeed says enabled: false
+	FeedOffEgress       = "egress_denied"   // egress is deny and the feed has no mirror address
+	FeedOffNoEcosystem  = "no_ecosystem"    // OSV is large and runs only for the ecosystems named
+	FeedOffServerConfig = "server_disabled" // switched off in the server's configuration (feeds.nvdDisabled)
+)
 
 // Start marks the feeds as syncing, before it returns, so the page sees the state at once, and runs the sync in the
 // background. feed is one feed's name, or empty for all of names (the feeds that are switched on).
 func (o *OnDemand) Start(ctx context.Context, feed string, names []string) error {
 	if feed != "" {
-		if !o.runs(feed) {
+		if !o.runs(ctx, feed) {
 			return ErrFeedOff
 		}
 		names = []string{feed}
 	} else {
 		var run []string
 		for _, n := range names {
-			if o.runs(n) {
+			if o.runs(ctx, n) {
 				run = append(run, n)
 			}
 		}

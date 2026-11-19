@@ -1,0 +1,30 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: snyk
+spec:
+  category: sca
+  runtime: wasm
+  description: Snyk open source and container vulnerability report
+  detect:
+    filenames:
+    - '*snyk*'
+    filenameWeight: 15
+    rules:
+    - allOf:
+      - '"vulnerabilities"'
+      - '"packageManager"'
+      weight: 45
+    - anyOf:
+      - '"SNYK-'
+      - '"snyk"'
+      weight: 35
+    - anyOf:
+      - '"filtered"'
+      - '"uniqueCount"'
+      weight: 15
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/snyk:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

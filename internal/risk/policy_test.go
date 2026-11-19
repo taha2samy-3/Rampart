@@ -130,3 +130,50 @@ func TestBuiltinExploitationFactors(t *testing.T) {
 		t.Fatalf("KEV and another source reporting the same exploitation count once: %d", kev)
 	}
 }
+
+// The environment of an application is a fact the score reads (D140). The built-in production factor applies to a finding found on
+// a production branch (as before) and to any finding of an application whose environment is production; an application that says
+// nothing gets no points, so no score of an existing application moves.
+func TestBuiltin_ProductionEnvironmentFromTheApplication(t *testing.T) {
+	p := risk.Builtin()
+	base := risk.Input{Finding: risk.FindingInput{Severity: "high", Category: "sca", Track: "main"}, App: risk.AppInput{Criticality: "medium"}}
+	if got := p.Evaluate(base).TotalScore; got != 400 {
+		t.Fatalf("nothing said: %d", got)
+	}
+	prod := base
+	prod.App.Environment = "production"
+	if got := p.Evaluate(prod).TotalScore; got != 460 {
+		t.Fatalf("environment production: %d", got)
+	}
+	dev := base
+	dev.App.Environment = "development"
+	if got := p.Evaluate(dev).TotalScore; got != 400 {
+		t.Fatalf("development takes no points: %d", got)
+	}
+	onTrack := base
+	onTrack.Finding.Track = "production"
+	if got := p.Evaluate(onTrack).TotalScore; got != 460 {
+		t.Fatalf("the branch rule still works: %d", got)
+	}
+	both := onTrack
+	both.App.Environment = "production"
+	if got := p.Evaluate(both).TotalScore; got != 460 {
+		t.Fatalf("the two do not add up: %d", got)
+	}
+}
+
+// A tenant's own policy can read app.type and app.environment, and a misspelled one is refused when the policy is applied.
+func TestPolicy_ReadsTypeAndEnvironment(t *testing.T) {
+	good := []byte(`{"factors":[{"name":"STAGING","when":"app.environment == \"staging\" && app.type == \"repo\"","points":-40,"group":"reduction"}]}`)
+	p, err := risk.ParseRiskPolicySpec(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := risk.Input{Finding: risk.FindingInput{Severity: "high"}, App: risk.AppInput{Type: "repo", Environment: "staging"}}
+	if got := p.Evaluate(in).TotalScore; got != 360 {
+		t.Fatalf("got %d, want 360", got)
+	}
+	if _, err := risk.ParseRiskPolicySpec([]byte(`{"factors":[{"name":"X","when":"app.enviroment == \"staging\"","points":1}]}`)); err == nil {
+		t.Fatal("a misspelled variable must be refused")
+	}
+}

@@ -116,7 +116,7 @@ function AcceptancesView({ search, set }: { search: WorkflowSearch; set: (patch:
             <button
               type="button"
               onClick={() => set({ tab: 'acceptances', sel: undefined })}
-              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
+              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink"
             >
               {t('acceptance.tabAcceptances', { defaultValue: 'Risk Acceptances' })}
             </button>
@@ -211,7 +211,7 @@ function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: 
                     <span className="block truncate font-mono text-[11px] text-ink-2">{r.ingest_run_id.slice(0, 8)}</span>
                   </Td>
                   <Td>
-                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-12 font-medium capitalize', status === 'pending' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-ink-3/10 text-ink-2')}>
+                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-12 font-medium capitalize', status === 'pending' ? 'bg-high/10 text-high' : status === 'confirmed' ? 'bg-resolved/10 text-resolved' : 'bg-ink-3/10 text-ink-2')}>
                       {status}
                     </span>
                   </Td>
@@ -241,7 +241,7 @@ function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: 
             <button
               type="button"
               onClick={() => set({ tab: 'held_closes', sel: undefined })}
-              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
+              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink"
             >
               {t('acceptance.tabHeldCloses', { defaultValue: 'Held Closes' })}
             </button>
@@ -317,7 +317,7 @@ function HeldCloseDetail({ hc }: { hc: HeldClose }) {
           ))}
         </ul>
         {findingIds.length > 5 && (
-          <p className="m-0 mt-1 text-11 text-ink-2">...and {findingIds.length - 5} more</p>
+          <p className="m-0 mt-1 text-12 text-ink-2">...and {findingIds.length - 5} more</p>
         )}
       </section>
 

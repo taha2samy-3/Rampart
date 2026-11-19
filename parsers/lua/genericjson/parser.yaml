@@ -1,0 +1,73 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: genericjson
+spec:
+  category: sast
+  runtime: lua
+  description: Rampart Generic Findings JSON format (DefectDojo generic import superset)
+  detect:
+    filenames:
+    - '*generic*.json'
+    - '*findings*.json'
+    probes:
+    - jsonHasKeys:
+      - findings
+    - jsonHasKeys:
+      - format
+      - rampart-generic
+  script: "function parse(input, emit)\n  local doc = json.decode(input)\n  if not\
+    \ doc then\n    return\n  end\n\n  local top_tool = doc.tool or doc.name or \"\
+    generic\"\n  local top_ver = doc.version or \"\"\n\n  local items = doc\n  if\
+    \ doc.findings and type(doc.findings) == \"table\" then\n    items = doc.findings\n\
+    \  end\n\n  if type(items) ~= \"table\" then\n    return\n  end\n\n  for _, f\
+    \ in ipairs(items) do\n    if type(f) == \"table\" and (f.title or f.rule_id or\
+    \ f.id) then\n      local rule_id = f.rule_id or f.vuln_id_from_tool or f.id or\
+    \ f.title or \"generic-finding\"\n      local title = f.title or rule_id\n   \
+    \   local desc = f.description or title\n      if f.mitigation and f.mitigation\
+    \ ~= \"\" then\n        desc = desc .. \"\\n\\nMitigation: \" .. f.mitigation\n\
+    \      elseif f.remediation and f.remediation ~= \"\" then\n        desc = desc\
+    \ .. \"\\n\\nRemediation: \" .. f.remediation\n      end\n\n      local cat =\
+    \ \"sast\"\n      if f.category and f.category ~= \"\" then\n        cat = string.lower(f.category)\n\
+    \      elseif f.secret and f.secret ~= \"\" then\n        cat = \"secret\"\n \
+    \     elseif (f.purl and f.purl ~= \"\") or (f.component and f.component ~= \"\
+    \") then\n        cat = \"sca\"\n      elseif (f.url and f.url ~= \"\") or f.dynamic_finding\
+    \ then\n        cat = \"dast\"\n      elseif f.resource and f.resource ~= \"\"\
+    \ and (not f.file or f.file == \"\") then\n        cat = \"cspm\"\n      end\n\
+    \n      local sev = string.lower(f.severity or \"\")\n      if sev == \"\" then\n\
+    \        if f.cvssv3_score then\n          local score = tonumber(f.cvssv3_score)\
+    \ or 0\n          if score >= 9.0 then sev = \"critical\"\n          elseif score\
+    \ >= 7.0 then sev = \"high\"\n          elseif score >= 4.0 then sev = \"medium\"\
+    \n          elseif score > 0 then sev = \"low\"\n          else sev = \"info\"\
+    \n          end\n        else\n          sev = \"medium\"\n        end\n     \
+    \ end\n\n      local tool = f.tool or top_tool\n      local family = \"generic:\"\
+    \ .. string.lower(string.gsub(tool, \"%s+\", \"-\"))\n\n      local cwes = {}\n\
+    \      if f.cwe then\n        if type(f.cwe) == \"number\" then\n          table.insert(cwes,\
+    \ f.cwe)\n        elseif type(f.cwe) == \"string\" then\n          local n = string.match(f.cwe,\
+    \ \"%d+\")\n          if n then table.insert(cwes, tonumber(n)) end\n        elseif\
+    \ type(f.cwe) == \"table\" then\n          for _, c in ipairs(f.cwe) do\n    \
+    \        local n = tonumber(c) or tonumber(string.match(tostring(c), \"%d+\"))\n\
+    \            if n then table.insert(cwes, n) end\n          end\n        end\n\
+    \      end\n\n      local vuln_ids = {}\n      if f.cve and f.cve ~= \"\" then\n\
+    \        table.insert(vuln_ids, f.cve)\n      end\n      if f.vulnerability_ids\
+    \ and type(f.vulnerability_ids) == \"table\" then\n        for _, v in ipairs(f.vulnerability_ids)\
+    \ do\n          if type(v) == \"string\" then\n            table.insert(vuln_ids,\
+    \ v)\n          elseif type(v) == \"table\" and v.vulnerability_id then\n    \
+    \        table.insert(vuln_ids, v.vulnerability_id)\n          end\n        end\n\
+    \      end\n\n      local loc = {}\n      if f.file or f.file_path then\n    \
+    \    loc.code = {\n          file_path = f.file or f.file_path,\n          start_line\
+    \ = tonumber(f.line) or 1,\n          end_line = tonumber(f.end_line)\n      \
+    \  }\n      end\n      if f.url then\n        loc.web = {\n          normalized_url\
+    \ = f.url,\n          method = f.method,\n          parameter = f.param\n    \
+    \    }\n      end\n      if f.purl or f.component then\n        loc.package =\
+    \ {\n          purl = f.purl,\n          component_name = f.component or f.component_name,\n\
+    \          installed_version = f.version or f.component_version,\n          fixed_version\
+    \ = f.fixed_version,\n          manifest_path = f.manifest\n        }\n      end\n\
+    \      if f.resource then\n        loc.resource = {\n          address = f.resource,\n\
+    \          type = f.resource_type\n        }\n      end\n\n      emit({\n    \
+    \    rule_id = rule_id,\n        title = title,\n        description = desc,\n\
+    \        severity = sev,\n        tool_severity = f.severity or sev,\n       \
+    \ category = cat,\n        scanner_family = family,\n        scanner_version =\
+    \ top_ver,\n        cwes = cwes,\n        vuln_ids = vuln_ids,\n        cvss_vector\
+    \ = f.cvssv3 or f.cvss_vector,\n        secret_value = f.secret,\n        location\
+    \ = loc\n      })\n    end\n  end\nend\n"

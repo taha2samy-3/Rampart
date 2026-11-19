@@ -19,7 +19,7 @@ func TestFeedPush_OnPostgreSQL(t *testing.T) {
 	none := httptest.NewServer(http.NotFoundHandler()) // KEV and EPSS are not what this test reads
 	defer none.Close()
 	mirror := &domain.FeedMirrorSpec{Custom: []domain.CustomFeed{{Name: "vulndb-push", Format: domain.CustomFeedIntelJSONL, PushTokenFile: "/var/run/x"}}}
-	cfg := enrich.FeedConfig{KEVURL: none.URL, EPSSURL: none.URL, NVDURL: none.URL, Mirror: func(context.Context) (*domain.FeedMirrorSpec, error) { return mirror, nil }}
+	cfg := enrich.FeedConfig{AllowLoopback: true, KEVURL: none.URL, EPSSURL: none.URL, NVDURL: none.URL, Mirror: func(context.Context) (*domain.FeedMirrorSpec, error) { return mirror, nil }}
 	syncer := enrich.NewFeedSyncer(sys.Pool())
 	_, _ = sys.Pool().Exec(ctx, `DELETE FROM feed_push WHERE feed = 'vulndb-push'`)
 	_ = syncer.SyncAll(ctx, cfg, slog.Default()) // nothing staged: no error from this feed, nothing written

@@ -1,0 +1,10 @@
+# Tenant: who owns the namespaces. It does not change a score; every resource below is found through it.
+# Cluster-wide: no namespace. Apply it first, because the namespaced files name a namespace the tenant lists.
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: acme
+spec:
+  displayName: Acme                 # required, free text
+  namespaces: [acme-payments]       # each at most 63 characters; a resource in one of these belongs to this tenant
+  # deletionPolicy: Retain          # Retain (default) | Purge: what deleting the Tenant does to its data

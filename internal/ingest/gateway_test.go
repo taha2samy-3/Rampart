@@ -165,7 +165,7 @@ func TestGatewayDirectReportUpload(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	sarifData, err := os.ReadFile("../parsers/sarif/testdata/semgrep.sarif")
+	sarifData, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
 	if err != nil {
 		t.Fatalf("failed to read sarif fixture: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	xmlData, err := os.ReadFile("../parsers/cyclonedx/testdata/sample.cdx.xml")
+	xmlData, err := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
 	if err != nil {
 		t.Fatalf("failed to read CycloneDX XML fixture: %v", err)
 	}
@@ -270,8 +270,81 @@ func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 	if res.ComponentCount != 1 {
 		t.Errorf("expected 1 component extracted, got %d", res.ComponentCount)
 	}
-	if res.Created != 1 {
-		t.Errorf("expected 1 VDR vulnerability created, got %d", res.Created)
+	// An SBOM is assets, not findings (docs/34 C2): the fixture names a vulnerability and none is created from it.
+	if res.Created != 0 {
+		t.Errorf("an SBOM upload created %d finding(s); it must create none", res.Created)
+	}
+	// The client named no parser, so the server chose one and says which.
+	if res.Parser != "cyclonedx" || !res.Detected {
+		t.Errorf("the response must name the parser the server detected: parser=%q detected=%v", res.Parser, res.Detected)
+	}
+
+	// With a name, the same file is read by that parser and the response says it was not detected.
+	req = httptest.NewRequest("POST", "/ingest/v1/sbom?parser=cyclonedx", bytes.NewReader(xmlData))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a named parser: %d %s", rec.Code, rec.Body.String())
+	}
+	var named ingest.DirectReportResponse
+	_ = json.NewDecoder(rec.Body).Decode(&named)
+	if named.Parser != "cyclonedx" || named.Detected {
+		t.Errorf("a named parser must not be reported as detected: parser=%q detected=%v", named.Parser, named.Detected)
+	}
+}
+
+// A name the server does not know is refused with the names it does know, taken from what is installed.
+func TestGatewayUnknownParserListsTheAvailableOnes(t *testing.T) {
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("POST", "/ingest/v1/reports?parser=no-such-parser", strings.NewReader(`{"a":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown parser = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, name := range []string{"no-such-parser", "sarif", "trivy", "cyclonedx", "spdx"} {
+		if !strings.Contains(body, name) {
+			t.Errorf("the refusal does not mention %q: %s", name, body)
+		}
+	}
+	if strings.Contains(body, "builtin:") || strings.Contains(body, "sbom-") {
+		t.Errorf("the names must be the ones a client sends, without internal prefixes: %s", body)
+	}
+}
+
+// The SBOM endpoint takes an SBOM only. A scanner report sent to it is refused, not stored as a "SBOM".
+func TestGatewaySBOMEndpointRefusesAScanReport(t *testing.T) {
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	sarif := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}`
+	req := httptest.NewRequest("POST", "/ingest/v1/sbom?format=sarif", strings.NewReader(sarif))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a scan report sent to the SBOM endpoint = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not an SBOM") {
+		t.Errorf("the refusal does not say why: %s", rec.Body.String())
 	}
 }
 
@@ -285,7 +358,7 @@ func TestGatewaySBOMUploadSPDXTagValue(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	spdxData, err := os.ReadFile("../parsers/spdx/testdata/sample.spdx")
+	spdxData, err := os.ReadFile("../../parsers/wasm/sbom-spdx/testdata/sample.spdx")
 	if err != nil {
 		t.Fatalf("failed to read SPDX Tag-Value fixture: %v", err)
 	}
@@ -417,7 +490,7 @@ func TestGatewaySBOM_AnEphemeralRunLeavesTheInventoryAlone(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	xmlData, err := os.ReadFile("../parsers/cyclonedx/testdata/sample.cdx.xml")
+	xmlData, err := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
 	if err != nil {
 		t.Fatal(err)
 	}

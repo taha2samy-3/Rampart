@@ -49,6 +49,17 @@ type Application struct {
 	// Selectors attach repositories and images to the application (D56).
 	Selectors Selectors `json:"selectors"`
 	Lifecycle string    `json:"lifecycle"` // planning | development | production | deprecated
+	// Type says what kind of thing the application is: "repo" (one branch of one repository, D140) or empty for an application
+	// that is repository-wide, as before. "machine" is designed and refused until a host source exists.
+	Type string `json:"type,omitempty"`
+	// Repository and Branch name a "repo" application: an application is one branch of one repository (D140).
+	Repository string `json:"repository,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	// Environment is where the application runs: production, staging, test or development, or empty when nobody said. The score reads
+	// it as app.environment; an application that does not say is not described, and takes no points from it.
+	Environment string `json:"environment,omitempty"`
+	// ManagedBy says who owns the row: "crd" (an Application resource is the truth), "ui" or "none" (made by ingest).
+	ManagedBy string    `json:"managed_by,omitempty"`
 	Owners    []string  `json:"owners,omitempty"`
 	Tags      []string  `json:"tags,omitempty"`
 	Version   int       `json:"version"`

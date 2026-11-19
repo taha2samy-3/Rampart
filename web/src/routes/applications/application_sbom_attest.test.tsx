@@ -264,6 +264,46 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     expect(explorerLink).toHaveAttribute('href', expect.stringContaining('sel=f-log4shell'));
   });
 
+  // What the databases know of a CVE is shown where the application lists it, with the same section as the Finding page.
+  it('shows what the databases know of the CVE when it is opened from the application', async () => {
+    const baseFinding = finding(1, 'critical');
+    mockFetch({
+      loggedIn: true,
+      appPages: { '01a1e562-93be-7b79-9762-615a097742e5': appSummary },
+      inventory: { components: [appComponent] },
+      findings: [{
+        ...baseFinding,
+        finding: { ...baseFinding.finding, id: 'f-log4shell', title: 'Log4Shell RCE in log4j-core', vulnerability_id: 'CVE-2021-44228',
+          location: { file_path: 'pom.xml', start_line: 1, component_name: 'log4j-core', installed_version: '2.14.1', fixed_version: '2.17.1' } as never },
+      }],
+      vuln: {
+        record: {
+          id: 'CVE-2021-44228', aliases: ['GHSA-jfh8-c2jp-5v3q'], cwes: [502, 917], cvss_score: 10, cvss_vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H',
+          epss_score: 0.94358, kev: true, kev_date_added: '2021-12-10', kev_due_date: '2021-12-24', kev_ransomware: true, exploit_maturity: 'weaponized',
+          description: 'Apache Log4j2 JNDI features do not protect against attacker controlled LDAP and other JNDI related endpoints.',
+          published: '2021-12-10T10:15:00Z', modified: '2025-10-21T00:00:00Z', links: ['https://nvd.nist.gov/vuln/detail/CVE-2021-44228'],
+        },
+        impact: { id: 'CVE-2021-44228', findings: 1, open: 1, applications: [{ id: '01a1e562-93be-7b79-9762-615a097742e5', slug: 'shop', name: 'Shop', findings: 1, open: 1, max_severity: 'critical', max_risk_score: 990, asset_ids: [] }] },
+      },
+    });
+    renderApp('/applications/01a1e562-93be-7b79-9762-615a097742e5');
+    const sbomSection = await screen.findByRole('region', { name: /Software Bill of Materials/i });
+    await userEvent.click(within(await within(sbomSection).findByRole('table', { name: 'Application packages table' })).getByRole('button', { name: /Expand CVEs for log4j-core/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^Details$/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Known exploited')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Added to the CISA catalogue/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/used in ransomware campaigns/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/94\.4% in the next 30 days/)).toBeInTheDocument();
+    expect(within(dialog).getByText('10.0')).toBeInTheDocument();
+    expect(within(dialog).getByText('A working exploit is in circulation')).toBeInTheDocument();
+    expect(within(dialog).getByText('CWE-502')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Apache Log4j2 JNDI features/)).toBeInTheDocument();
+    expect(await within(dialog).findByText('Found in 1 application')).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Where it is' })).toBeInTheDocument();
+  });
+
   it('has no accessibility violations across the application page', async () => {
     mockFetch({
       loggedIn: true,

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { get, getApplicationChanges, qk, toProblem } from '@/api';
 import type { ApplicationChanges, ChangeDay, FindingChange, FindingRow, Reporter } from '@/api/types';
 import {
+  BAND_LABEL,
   BandShape,
   Button,
   Dialog,
@@ -24,7 +25,11 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components';
+import { ComplianceSection } from '@/features/finding-inspector/ComplianceSection';
+import { EvidenceSection } from '@/features/finding-inspector/EvidenceSection';
+import { VulnerabilityDetails } from '@/features/finding-inspector/VulnerabilitySection';
 import { toBand } from '@/lib/band';
+import { locationOf, whereText } from '@/lib/location';
 import { absoluteDate, absoluteDateTime } from '@/lib/format';
 
 type Preset = '7' | '30' | '90' | 'custom';
@@ -115,7 +120,7 @@ function Body({
         {t('apps.changesSummary', { new: s.new, prevNew: s.previous.new, closed: s.closed, prevClosed: s.previous.closed, reopened: s.reopened, start: s.open_at_start, end: s.open_at_end })}
       </p>
       <ChangeBars days={data.daily} label={t('apps.changesChartLabel', { new: s.new, closed: s.closed, days: data.days })} />
-      <p className="m-0 mt-0.5 text-11 text-ink-2">{t('apps.changesChart')}</p>
+      <p className="m-0 mt-0.5 text-12 text-ink-2">{t('apps.changesChart')}</p>
       <Tabs defaultValue="new" className="mt-3">
         <TabsList label={t('apps.changesTitle')}>
           <TabsTrigger value="new">{t('apps.tabNew')} ({s.new})</TabsTrigger>
@@ -195,7 +200,7 @@ function List({
           {rows.map((r) => (
             <Tr
               key={`${r.id}-${kind}`}
-              className="h-9 cursor-pointer transition-colors hover:bg-surface-2"
+              className="h-9 cursor-pointer transition-colors hover:bg-chrome"
               onClick={() => onSelect(r)}
               tabIndex={0}
               onKeyDown={(e) => {
@@ -260,6 +265,7 @@ export interface FindingDetailData extends FindingRow {
 }
 
 export function FindingDetailModal({ change, onClose }: { change: FindingDetailTarget; onClose: () => void }) {
+  const { t } = useTranslation();
   const q = useQuery({
     queryKey: ['findings', 'detail', change.id],
     queryFn: ({ signal }) => get<FindingDetailData>(`/api/v1/findings/${encodeURIComponent(change.id)}`, { signal }),
@@ -269,174 +275,82 @@ export function FindingDetailModal({ change, onClose }: { change: FindingDetailT
 
   const row = q.data;
   const f = row?.finding;
-  const loc = f?.location;
-  const where = loc?.purl ?? (loc?.file_path ? (loc.start_line ? `${loc.file_path}:${loc.start_line}` : loc.file_path) : '');
+  const loc = locationOf(f?.location);
+  const where = whereText(loc);
   const reporters: Reporter[] = row?.reported_by ?? [];
   const occurrences = row?.occurrences ?? [];
+  const band = toBand(change.risk_band || f?.severity || change.severity);
+  const score = row?.risk?.total_score ?? change.risk_score;
+  const state = change.state || f?.state || 'open';
 
-  const vulnId = change.vulnerability_id || f?.vulnerability_id;
+  const vulnId = change.vulnerability_id || f?.vulnerability_id || undefined;
   const ruleId = change.rule_id || f?.rule_id;
   const targetQuery = vulnId ? `cve:${vulnId}` : (ruleId ? `rule:${ruleId}` : `id:${change.id}`);
+  const description = f?.description || change.title;
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        title={vulnId || ruleId || 'Finding Details'}
-        description={change.title || f?.title || 'Security vulnerability details and provenance'}
-        className="w-[700px] max-w-[95vw]"
+        title={vulnId || ruleId || t('apps.detail.fallbackTitle')}
+        description={change.title || f?.title || t('apps.detail.fallbackDescription')}
+        closeLabel={t('common.close')}
+        className="w-[760px] max-w-[95vw]"
       >
-        <div className="flex flex-col gap-4">
-          {/* Header Badges */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded bg-surface-2 px-2.5 py-1 text-12 font-medium">
-                <BandShape band={toBand(change.risk_band || f?.severity)} size={12} />
-                <span className="capitalize">{change.severity || f?.severity || 'medium'}</span>
-              </span>
-              <span className="rounded bg-surface-2 px-2 py-0.5 text-11 font-mono uppercase text-ink-2">
-                {change.state || f?.state || 'open'}
-              </span>
-              {vulnId && (
-                <span className="rounded border border-border bg-surface px-2 py-0.5 text-11 font-mono text-accent">
-                  {vulnId}
-                </span>
-              )}
-            </div>
-            {(row?.risk || change.risk_score !== undefined) && (
-              <span className="text-12 font-semibold">
-                Risk Score: <span className="font-mono text-14">{row?.risk?.total_score ?? change.risk_score}</span>
-              </span>
-            )}
-          </div>
+        <div className="flex max-h-[72vh] flex-col gap-5 overflow-y-auto pe-1">
+          <p className="m-0 flex items-center gap-2 text-13">
+            <BandShape band={band} />
+            <span>{t('apps.detail.statusLine', { state: t(`state.${state}`, { defaultValue: state }), band: BAND_LABEL[band].toLowerCase(), score: score ?? '—' })}</span>
+          </p>
 
-          {/* Where it came from & where it was found */}
-          <div className="rounded-md border border-border bg-surface-2 p-3 text-13">
-            <h4 className="mb-2 text-12 font-semibold uppercase tracking-wider text-ink-2">
-              Source & Location Details
-            </h4>
-            <dl className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-2 text-12">
-              <dt className="text-ink-2">Asset / Service:</dt>
-              <dd className="font-mono font-medium text-ink">{change.asset || 'default-repository'}</dd>
-
-              <dt className="text-ink-2">Location / Path:</dt>
-              <dd className="break-all font-mono text-ink">
-                {where || 'Repository root / package manifest'}
-              </dd>
-
-              {loc?.component_name && (
+          <section aria-labelledby="d-where">
+            <h3 id="d-where" className="text-13 font-semibold">{t('apps.detail.where')}</h3>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13">
+              <dt className="text-ink-2">{t('apps.detail.asset')}</dt>
+              <dd className="m-0 font-mono text-12">{change.asset || '—'}</dd>
+              <dt className="text-ink-2">{t('apps.detail.location')}</dt>
+              <dd className="m-0 break-all font-mono text-12">{where || t('apps.detail.locationNone')}</dd>
+              {loc.component_name && (
                 <>
-                  <dt className="text-ink-2">Component:</dt>
-                  <dd className="font-mono text-ink">
-                    {loc.component_name}
-                    {loc.installed_version ? ` @ ${loc.installed_version}` : ''}
-                    {loc.fixed_version ? ` (Fixed in ${loc.fixed_version})` : ''}
+                  <dt className="text-ink-2">{t('apps.detail.component')}</dt>
+                  <dd className="m-0 font-mono text-12">
+                    {loc.component_name}{loc.installed_version ? ` ${loc.installed_version}` : ''}
+                    {loc.fixed_version ? ` (${t('apps.detail.fixedIn', { version: loc.fixed_version })})` : ''}
                   </dd>
                 </>
               )}
-
-              <dt className="text-ink-2">Detected By:</dt>
-              <dd className="text-ink">
-                {reporters.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {reporters.map((rep) => (
-                      <span key={rep.name || rep.scanner} className="rounded border border-border bg-surface px-1.5 py-0.5 text-11 font-medium">
-                        {rep.name || rep.scanner} {rep.present ? '(Active)' : '(Past)'}
-                      </span>
-                    ))}
-                  </div>
-                ) : occurrences.length > 0 ? (
-                  <span>{occurrences.map((o) => o.scanner).filter(Boolean).join(', ')}</span>
-                ) : (
-                  <span>Automated CI/CD Scanner</span>
-                )}
+              <dt className="text-ink-2">{t('apps.detail.detectedBy')}</dt>
+              <dd className="m-0">
+                {reporters.length > 0
+                  ? reporters.map((r) => `${r.name || r.scanner} (${t(r.present ? 'apps.detail.stillReports' : 'apps.detail.pastReports')})`).join(', ')
+                  : occurrences.length > 0
+                    ? occurrences.map((o) => o.scanner).filter(Boolean).join(', ')
+                    : t('apps.detail.detectedByNone')}
               </dd>
-
-              <dt className="text-ink-2">First Seen:</dt>
-              <dd className="text-ink">{absoluteDateTime(change.first_seen || f?.first_seen)}</dd>
-
-              {change.resolved_at && (
-                <>
-                  <dt className="text-ink-2">Resolved At:</dt>
-                  <dd className="text-ink">{absoluteDateTime(change.resolved_at)}</dd>
-                </>
-              )}
-
-              {change.resolution && (
-                <>
-                  <dt className="text-ink-2">Resolution:</dt>
-                  <dd className="capitalize text-ink">{change.resolution}</dd>
-                </>
-              )}
-
-              {/* External Advisory References */}
-              {vulnId && (
-                <>
-                  <dt className="text-ink-2">Security Advisories:</dt>
-                  <dd className="flex flex-wrap gap-2 text-ink">
-                    {vulnId.startsWith('CVE-') && (
-                      <>
-                        <a
-                          href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vulnId)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-accent underline hover:opacity-80"
-                        >
-                          NVD NIST Advisory ↗
-                        </a>
-                        <a
-                          href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${encodeURIComponent(vulnId)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-accent underline hover:opacity-80"
-                        >
-                          MITRE CVE ↗
-                        </a>
-                      </>
-                    )}
-                    {vulnId.startsWith('GHSA-') && (
-                      <a
-                        href={`https://github.com/advisories/${encodeURIComponent(vulnId)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-accent underline hover:opacity-80"
-                      >
-                        GitHub Advisory Database ↗
-                      </a>
-                    )}
-                  </dd>
-                </>
-              )}
+              <dt className="text-ink-2">{t('apps.detail.firstSeen')}</dt>
+              <dd className="m-0">{absoluteDateTime(change.first_seen || f?.first_seen)}</dd>
+              {change.resolved_at && (<><dt className="text-ink-2">{t('apps.detail.resolvedAt')}</dt><dd className="m-0">{absoluteDateTime(change.resolved_at)}</dd></>)}
+              {change.resolution && (<><dt className="text-ink-2">{t('apps.detail.resolution')}</dt><dd className="m-0 capitalize">{change.resolution}</dd></>)}
             </dl>
-          </div>
+          </section>
 
-          {/* Description if available */}
-          {(f?.description || change.title) && (
-            <div className="text-12">
-              <h4 className="mb-1 text-12 font-semibold uppercase tracking-wider text-ink-2">
-                Description & Impact
-              </h4>
-              <p className="max-h-36 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface p-2.5 text-ink-2">
-                {f?.description || change.title}
-              </p>
-            </div>
+          {f && <EvidenceSection finding={f} />}
+
+          {/* What the databases know, and the controls it breaks: the same sections as on the Finding page. */}
+          {vulnId && <VulnerabilityDetails id={vulnId} finding={f} />}
+          {f && <ComplianceSection finding={f} />}
+
+          {description && (
+            <section aria-labelledby="d-desc">
+              <h3 id="d-desc" className="text-13 font-semibold">{t('apps.detail.description')}</h3>
+              <p className="m-0 mt-1 max-h-36 overflow-auto whitespace-pre-wrap text-13 text-ink-2">{description}</p>
+            </section>
           )}
 
-          {/* Actions Footer */}
-          <div className="mt-1 flex items-center justify-between border-t border-border pt-3">
-            <Link
-              to="/findings"
-              search={{
-                q: targetQuery || undefined,
-                sel: change.id,
-              }}
-              onClick={onClose}
-              className="inline-flex items-center gap-1.5 text-13 font-semibold text-accent hover:underline"
-            >
-              Open in Findings Explorer →
+          <div className="flex items-center justify-between border-t border-rule pt-3">
+            <Link to="/findings" search={{ q: targetQuery || undefined, sel: change.id }} onClick={onClose} className="text-13 font-semibold">
+              {t('apps.detail.openInFindings')}
             </Link>
-            <Button variant="secondary" onClick={onClose}>
-              Close
-            </Button>
+            <Button variant="secondary" onClick={onClose}>{t('apps.detail.close')}</Button>
           </div>
         </div>
       </DialogContent>

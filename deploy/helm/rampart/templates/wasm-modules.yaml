@@ -1,0 +1,22 @@
+{{- /*
+The digest table of the shipped WASM parser modules (docs/35 B1). Rendered only with parsers.delivery.mode=imageVolume;
+the server reads it through RAMPART_WASM_DIGESTS and refuses to start if a module is missing or does not match.
+*/}}
+{{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rampart.fullname" . }}-wasm-digests
+  labels:
+    {{- include "rampart.labels" . | nindent 4 }}
+data:
+  digests.json: |
+    {
+    {{- $first := true }}
+    {{- range $name, $m := .Values.parsers.modules }}
+    {{- if not $first }},{{ end }}
+      {{ $name | quote }}: {{ required (printf "parsers.modules.%s.sha256 is required with parsers.delivery.mode=imageVolume" $name) $m.sha256 | quote }}
+    {{- $first = false }}
+    {{- end }}
+    }
+{{- end }}

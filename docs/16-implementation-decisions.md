@@ -2217,3 +2217,249 @@ Three independent readers went through the code written in this session. What wa
 **The history says which rule made it.** A reading carries `model` (`d120-deadlines`). A kept reading without it was written before D120, when any open finding made a control not met; reading it by day now carries a note saying so. Kept readings are evidence and are not rewritten.
 
 **Attestations covered by a whole-tenant one.** An attestation of one application whose control a newer whole-tenant "passed" attestation outlasts gets no reminder and no ticket: the reading falls back to the tenant-wide one when it ends.
+
+## D127: Parsers as CRDs ("All Come In Front Door") and Multi-Runtime Support (Native, Lua, WASM, Mapping)
+
+**Context and Principles.**
+Rampart previously treated built-in parsers (21 Go parsers, ~7,400 LOC) as special components hardcoded in the Go binary, while custom parsers were isolated in `IntegrationPackage`. To enforce the core architectural principle **"All come in front door"** (docs/29):
+1. No parser is privileged merely because it is compiled into the binary. Every parser is expressed as a Kubernetes Custom Resource (`ClusterParser` cluster-wide, or `Parser` tenant-scoped).
+2. The Helm chart ships all 21 standard parsers as default CRD resources in `templates/clusterparsers.yaml`.
+3. The two foundational promises (docs/29 §1) are strictly preserved:
+   - **Zero finding key regression:** Output finding keys (SHA-256 hashes of location, secret values, snippets, web endpoints, resource keys) remain identical.
+   - **Zero performance degradation:** Standard heavy formats (SARIF, CycloneDX, SPDX, Syft, Trivy) run through compiled streaming iterators with $O(1)$ memory.
+
+**CRD Architecture and Database Storage.**
+- `deploy/crds/clusterparser.yaml` (and synced `deploy/helm/rampart/crds/clusterparser.yaml`): Cluster-scoped `ClusterParser` resource.
+- `deploy/crds/parser.yaml` (and synced `deploy/helm/rampart/crds/parser.yaml`): Namespaced `Parser` resource for tenant-specific parsers.
+- **Database Migration 49 (`00049_cluster_parser.sql`):** Updates `cluster_policy` and `policy_object` check constraints to allow `kind = 'parser'`. `CurrentExpectedSchemaVersion` in `internal/store/migrate.go` and `minSchemaVersion` in `deploy/helm/rampart/values.yaml` bumped to 49.
+- `domain.ParserStore`: Implemented on both `PostgresStore` (`SELECT 'cluster' ... FROM cluster_policy UNION ALL SELECT 'tenant' ... FROM policy_object`) and `MemoryConfigStore`.
+
+**Supported Runtimes.**
+1. **`runtime: native`:** Wraps the compiled streaming Go parsers (`sarif`, `cyclonedx`, `spdx`, `syft`, `openvex`, `trivy`, `grype`, `semgrep`, `gitleaks`, `trufflehog`, `dependencytrack`, `checkov`, `bandit`, `nuclei`, `zap`, `dependencycheck`, `snyk`, `kubebench`, `prowler`, `gitlab`, `genericjson`). Eliminates any risk of finding key mutation or allocation explosion on massive standard reports.
+2. **`runtime: lua`:** Sandboxed in-memory runner (`internal/integrations/lua`) using `github.com/yuin/gopher-lua`. Only safe base libraries (base, table, string, math) are loaded; OS and filesystem access are disabled. Provides built-in `json.decode` and `json.encode` plus an `emit(table)` callback. Yields `domain.RawFinding` iteratively, with instant cancellation if iteration stops or context expires.
+3. **`runtime: wasm`:** Sandboxed WebAssembly execution (`internal/integrations/wasm`) powered by `github.com/tetratelabs/wazero`.
+   - **Air-Gapped / Offline Ready:** Zero Network Syscalls (WASI Preview 1 with stdin/stdout only, no network sockets, no host filesystem bindings). Wazero memory is strictly bounded via `limits.maxMemoryMB`.
+   - Standard UNIX filter model: Input report streams into `stdin`, output findings stream out of `stdout` as newline-delimited JSON (`JSONL`).
+4. **`runtime: mapping`:** Declarative CEL mapping expressions for lightweight JSON transformations.
+
+**Ingestion Resolution Precedence (`internal/ingest/package_parsers.go`).**
+During report uploads or format detection, parsers are resolved in strict order:
+$$\text{Tenant Parser (Parser CRD)} \succ \text{Cluster Parser (ClusterParser CRD)} \succ \text{Embedded Built-in Defaults}$$
+- Built-in scanner names (e.g. `trivy`, `sarif`) are reserved so an unprivileged package cannot inadvertently shadow or misroute standard scanners.
+- Format detection evaluates confidence scores across all active parsers; built-in readers win ties over packages.
+
+**Operator and Deployment Integration.**
+- `internal/operator/manager.go`: Adds controller for `ClusterParser` managed alongside cluster policies.
+- `internal/operator/reconciler.go`: Provides `NewClusterParserReconciler` and `NewParserReconciler` with `apply.ValidateParser` spec validation.
+- `deploy/helm/rampart/templates/rbac.yaml` and `deploy/operator/rbac.yaml`: Grants the operator RBAC rights for `clusterparsers`, `clusterparsers/status`, and `clusterparsers/finalizers`.
+- `internal/config/parsers/`: 21 default manifests embedded into the Go binary with `//go:embed` for out-of-the-box operation in Docker Compose and single-binary environments.
+- `deploy/helm/rampart/templates/clusterparsers.yaml`: Deploys all 21 default `ClusterParser` resources when `parsers.defaultParsers.enabled: true` (the default).
+
+**WASM OCI Publishing, Rigorous Testing & CI/CD Pipeline.**
+- Standalone WASM parsers live in `parsers/wasm/<name>/` (`custom-scanner`, `gitleaks`, `sarif`, `semgrep`).
+- **Equivalence Testing:** Automated tests verify bit-for-bit parity of finding keys and field extractions between native Go parsers and compiled WASM modules under `wazero`.
+- **CI/CD Pipeline (`.github/workflows/wasm-parsers.yml`):** Automatically discovers modules in `parsers/wasm/*/`, compiles to `wasip1/wasm`, runs tests, packages as scratch OCI images, publishes to `ghcr.io/rampart/parsers/<name>`, signs keyless with Cosign, and attests SLSA Level 3 provenance.
+- **OCI Status & Observability:** CRD printer column `SYNCED` reflects condition `Type: ArtifactSynced` (`Status: True/False`, `Reason: Pulled/PullFailed`). Record errors are logged with line numbers and raw snippets to `ingest_run_error`.
+
+## D128: Native SBOM Architecture, Streaming WASM Parsers, Hardcoding Eradication, Dedicated Analyzer CRDs, and Frontend Observability
+
+**1. Separation of Concerns: Findings vs. SBOMs vs. Analyzers.**
+Rampart decomposes security telemetry into three distinct Kubernetes Custom Resource definitions:
+1. `ClusterParser` / `Parser`: Ingests vulnerability and misconfiguration finding reports (SAST, DAST, Container Scanning, Secrets).
+2. `ClusterSBOMParser` / `SBOMParser`: Ingests pure software inventory and dependency graphs (CycloneDX, SPDX, Syft).
+3. `ClusterSBOMAnalyzer` / `SBOMAnalyzer`: Configures the native in-process vulnerability matching engine, enabling/disabling it and tuning matching thresholds.
+4. `ClusterExternalAnalyzer` / `ExternalAnalyzer`: Connects Rampart to external containerized analysis engines over gRPC (`analyzer.proto`).
+
+**2. Eradication of Hardcoding and Native Go Readers.**
+Previous implementations retained in-tree Go readers (`internal/sbom/readers/`) and hardcoded `switch format` cases as a fallback. To uphold the architectural guarantee that any format can be introduced or modified without modifying or recompiling the Go host:
+- The entire `internal/sbom/readers/` directory was completely purged.
+- All format parsing logic for CycloneDX (both JSON and XML) and SPDX (JSON, JSON-LD, Tag-Value) resides exclusively inside sandboxed WASM modules (`parsers/wasm/sbom-cyclonedx/` and `parsers/wasm/sbom-spdx/`).
+- The WASM module decodes documents and streams line-delimited JSON events (`metadata`, `component`, `edge`, `vulnerability`) to `stdout`.
+- The Go host (`internal/sbom/parser.go`) executes the WASM bytecode in a memory-bounded Wazero runtime (< 15MB) with zero network egress, remaining 100% generic and agnostic of format syntax.
+
+**3. Complete Eradication of Upstream Dependency-Track.**
+- Deleted `internal/upstream/dependencytrack/` (`client`, `service`, `sync`, `webhook`) entirely.
+- Decoupled `internal/targets/runner.go` from external sync loops and webhooks. Telemetry is ingested and analyzed immediately upon upload without eventual consistency lag or external JVM container dependencies.
+- Updated `internal/connectors/checker.go` to use native HTTP probes without importing legacy upstream packages.
+
+**4. Dedicated Native SBOM Analyzer CRD & Helm Packaging.**
+- Created `deploy/crds/clustersbomanalyzer.yaml` and `deploy/crds/sbomanalyzer.yaml` (`rampart.aspm.dev/v1alpha1`).
+- Created Helm chart template `deploy/helm/rampart/templates/clustersbomanalyzer.yaml` driven by `sbomAnalyzer` in `values.yaml` (`enabled: true`, `engine: hybrid`, `rules.minConfidence: 0.8`, `sources.osv: true`).
+
+**5. Hybrid Matching Engine Architecture.**
+- **In-Process Go Matcher (`internal/analyzer/matcher/`)**: Executes deterministic $O(1)$ lookup by canonical PURL base followed by semantic version range checking (`IsAffected(v, intro, fixed)`) in < 50ms against local PostgreSQL OSV/advisory tables.
+- **External Analyzer Protocol (`pkg/api/analyzer/v1/analyzer.proto`)**: A standardized Protobuf/gRPC interface (`Analyze`, `GetMetadata`, `HealthCheck`) allowing teams to deploy commercial or proprietary scanner containers in-cluster.
+
+**6. Frontend Observability & Governance Extensions.**
+- **Application Header Metadata (Version Swap)**: In `ApplicationRoute.tsx`, swapped the primary header metadata badge next to `app.name` from `tag` to `version` (e.g. `v1.4.0`), providing instant build and release identification alongside application name. Secondary tags (`tags?: string[]`) remain supported as pill badges.
+- **Dedicated Licenses Tab (`ApplicationLicensesSection.tsx`)**: Aggregates all packages by license with automatic legal risk classification:
+  - *Permissive* (MIT, Apache-2.0, BSD, ISC)
+  - *Copyleft / Restricted* (GPL, AGPL, LGPL, MPL)
+  - *Unknown / Unspecified*
+  Includes metric overview cards, search/filter controls, and an interactive package drilldown panel.
+- **Dedicated Dependency Graph Tab (`ApplicationDependencyGraphSection.tsx`)**:
+  - Connects to `GET /api/v1/applications/{id}/sbom/graph` to display direct vs. transitive dependency counts, hierarchy trees, and Mermaid diagrams.
+  - Features an interactive **Root-Cause Dependency Tracer** connecting to `GET /api/v1/applications/{id}/sbom/path?target={purl}` to trace the shortest path from the root application to any downstream vulnerable package.
+- **Enhanced SBOM Table**: Displays colored badges for license compliance in `ApplicationSBOMSection.tsx`.
+
+## D129: Elimination of Legacy Scanner Family Hardcoding and Purge of Upstream Sync Remnants
+
+**Context & Problem:**
+Following the migration from monolithic hardcoded parsers to dynamic Kubernetes CRDs (`ClusterParser`, `ClusterSBOMParser`), several legacy artifacts remained embedded in the Go host and React frontend:
+1. `internal/query/gate.go` contained legacy `ScannerFamily` equality checks, hardcoded lists of SBOM formats (`cyclonedx`, `spdx`, `syft`), and a polling wait loop for external Dependency-Track background synchronization.
+2. `internal/ingest/gateway.go` hardcoded specific scanner names (`trivy`, `grype`, `cyclonedx`, `spdx`, `syft`, `gitleaks`, `trufflehog`) in `categoryOf` to map parsers to findings categories (SCA, Secret, SAST).
+3. `internal/ingest/processor.go` hardcoded format checks (`strings.Contains(id, "cyclonedx") || strings.Contains(id, "spdx") || strings.Contains(id, "syft")`) in `selectParser` to determine whether an upload was an SBOM.
+4. `web/src/routes/ingestion/ParsersView.tsx` contained static arrays of parser IDs to determine format labels and category badges.
+
+**Decisions & Implementation:**
+1. **Dynamic CRD Category Metadata on `integrations.Descriptor`:**
+   - Extended `integrations.Descriptor` with `Category string json:"category,omitempty"`.
+   - Propagated `Category` across all parser runtimes: built-in ClusterParsers, WASM parsers, Lua parsers, and SBOM parsers.
+   - Refactored `gateway.go` (`categoryOf`) to derive the finding category strictly from `parser.Descriptor().Category` (mapping `"sbom"` to `domain.CategorySCA`, `"secrets"` to `domain.CategorySecret`, etc.) with zero scanner name matching.
+2. **Contract-Based SBOM Detection in Ingestion Processor:**
+   - Refactored `processor.go` (`selectParser`) to check whether the resolved parser implements `sbomParser` (`ParseSBOM(...)`) or specifies `Category: "sbom"` / `"sbom"` descriptor metadata.
+   - Completely eliminated the hardcoded list of `cyclonedx`, `spdx`, and `syft`.
+3. **Pure Format/Name Matching in CI/CD Gate:**
+   - Purged all Dependency-Track waiting loops in `internal/query/gate.go`.
+   - Streamlined `runMatches` to evaluate against the run's dynamic format (`r.Format`) and parser descriptor without relying on static scanner family assumptions.
+4. **Dynamic Frontend Ingestion Catalog:**
+   - Refactored `categorizeParser` and `parserFormat` in `ParsersView.tsx` to inspect parser metadata and tags dynamically.
+   - Replaced legacy `IntegrationPackage` references with standard `ClusterParser` YAML definitions.
+
+## D130: the CLI names the parser and never detects (2026-11-18)
+
+**Context.** `rampart sbom graph` and `path` tried a hard-coded list of readers (`cyclonedx`, `spdx`, `syft`), and `upload` sent no name unless `--parser` was given. A format added to the server as a resource (a `ClusterParser` or `ClusterSBOMParser`) did not work in the CLI until the list was edited, and a CLI of an older version silently disagreed with the server.
+
+**Decision (owner).**
+1. `rampart upload` and `rampart sbom upload` require `--parser <name>` (`--format` is an alias). `--detect` is the explicit opt-in to let the server choose from the content; giving both is an error. `--require-parser` is still accepted and ignored, so no pipeline that passes it breaks.
+2. The CLI holds no list of formats. `rampart sbom graph` and `path` read the file locally, so they need `--parser` too, and only a reader the CLI can load (`RAMPART_WASM_DIR`); for any other the error says so and points to the server. They cannot ask the server for the module list: reading locally needs the module on the machine, not its name.
+3. The server keeps its content detection for API callers that send no name and for `--detect`. A name it does not know is refused (400) with the names it does know, taken from the built-in, cluster and tenant parsers installed, not from a list kept by hand. The upload response now carries `parser` (the name a client sends) and `detected` (true when the server chose it), and the CLI prints them.
+4. `rampart sbom upload` no longer prints a findings line unless a run created some: an SBOM reader fills the inventory (D128, docs/34 C2).
+
+**Why.** A pipeline that names its parser reads the same way every time; detection can change its answer when a file changes shape. A new parser works in the CLI with no release. The flexible variant (the name optional by default, the server detects and the CLI prints the choice) was rejected as the default for the first reason; it remains available as `--detect`.
+
+**Consequence.** An upload without `--parser` or `--detect` now fails in the CLI. The example commands in the UI (`emptyCommand` and the like) must add `--parser` (docs/34 §10). `GET /api/v1/parsers` still lists only the built-in parsers and the tenant's packages; it is to list ClusterParser, ClusterSBOMParser and tenant parsers with their kind (open).
+
+## D131: an SBOM reader can extract the vulnerabilities a document states, behind an option (2026-11-18)
+
+**Context.** C2 (docs/34) removed the extraction of vulnerabilities from SBOM readers, so an SBOM upload created no findings. The owner's design had always been an option, off by default (`extractVulnerabilities: false`, docs/32 section 4.1), not removal: some teams keep a VDR in the document and want it in the findings list.
+
+**Decision.**
+1. `options.extractVulnerabilities` (default `false`) on `SBOMParser` and `ClusterSBOMParser` (both CRD copies, the three YAML specs, the chart value `sbomParsers.defaultSBOMParsers.cyclonedx.extractVulnerabilities`). Off, an SBOM run is assets only, as D128 and C8 say. A format that states no vulnerabilities (SPDX, Syft) is unaffected by it.
+2. **Only what the document states.** The CycloneDX module reads the `vulnerabilities` section (JSON and XML) and nothing else; the CPE of a component is never read, because it names a product and matching on it is a guess. The host asks for the events with `EXTRACT_VULNERABILITIES=true` in the module's environment and ignores a `vulnerability` line it did not ask for.
+3. **One read.** With the option on, the document is read once; the inventory is stored as for any SBOM (not for an ephemeral run), and the statements go through the ordinary merge as findings, so the engine's idempotency, keys and close rules apply unchanged.
+4. **Family `sbom-<format>`** (for example `sbom-cyclonedx`), also when the document states nothing now. It is its own family, so a rescan closes only what an earlier document stated (a statement dropped from the document closes its finding) and never a scanner's finding, and the matcher of phase E will have its own family (decision 8 of docs/35) and cannot be closed by this one.
+5. **Severity:** of several ratings the one with the highest score is used, with its own vector; the label when it is known, else the band of the score (9.0, 7.0, 4.0), else unknown.
+6. **A statement that names a component the document does not contain** is a record error (D13): the run ends completed-with-errors, nothing is closed on it, and the statement is not attached to anything.
+7. XML ratings are read in both forms, `<score><base>7.5</base></score>` (the schema) and `<score>7.5</score>`.
+
+**Why.** Removing the option took a choice from the operator that the design gave them, and it did so silently. Keeping it off by default keeps the position of C2: nothing in an SBOM becomes a finding unless someone asks.
+
+**Tests.** The module (option off, unset, `0`, `false`: no events; on: one event per affected component, the best rating, aliases, no CPE; XML in both score forms), the host (events read only when asked, a statement with no id or component refused), the mapping of a statement to a finding, and the processor end to end (on: inventory and a finding; off or default: no finding; a rescan without the statement closes it and leaves a scanner's finding open; an unknown component is a record error).
+
+## D132: the dependency graph is drawn from a server-built view, without Mermaid (2026-11-18)
+
+**Context.** The Dependency graph tab printed the Mermaid source as text and asked the reader to draw it elsewhere; the tree and the edge list were text; the numbers it showed (a root counted as a direct dependency, "1 direct and 840 transitive" for an SBOM that states no dependency at all) came from three places that did not agree: a flag a module wrote, the edges, and the CLI.
+
+**Decision (owner: draw it like Dependency-Track's graph, without Mermaid).**
+1. **One view, built on the server** (`graph.BuildView`, `internal/graph/view.go`): every component as a node with one id, every dependency as an edge by id (duplicates, self edges and edges to a component the document lacks removed and counted), the depth of each component from the root by breadth-first search (cycles end), `direct` (depth 1) and transitive (deeper), the components no path reaches, and the open findings of each component by severity. The root is the declared one; without one it is the component nothing depends on that reaches the most, the smaller id on a tie, so the answer is the same on every call. The answer is deterministic (sorted nodes and edges).
+2. **An inventory is not a graph.** A document with no dependency edges has `has_dependencies: false` and no direct or transitive counts; the UI says so instead of drawing a flat list.
+3. **Inferred top.** Many generators (the Maven and npm CycloneDX plugins) list the dependencies of every component but none for the root. Then the components nothing depends on are placed under the root with edges marked `inferred`, `inferred_root` is true and the page says it. Nothing is inferred for a root that does state dependencies, nor for an inventory.
+4. **`direct` is computed in one place.** The host (`readEvents`) sets each component's `Direct` from the same view, so the flag stored with a component, the web graph and `rampart sbom graph` agree. A module's own direct flag is no longer used (it could not know the root of a document that lists none).
+5. **Findings per component** come from `ListPackageRisk` (PostgreSQL): the open findings of the asset and track of the SBOM, by purl without version, and by version when the scanner reported one, so two versions of a package in one tree do not share findings. A finding counts once however many occurrences it has.
+6. **Mermaid is gone from the API and the UI.** The graph answer no longer carries `mermaid` or `tree`. `rampart sbom graph --format mermaid` stays as an export, now deterministic and with every syntax character of a label escaped (a name could inject a statement before).
+7. **The drawing** (`web/src/routes/applications/graph/`) is SVG written for this screen, not React Flow (docs/13 section 1 names it): the data is a tree expanded from a DAG with open and close, which React Flow does not lay out, the library is not a dependency of the app, and a layout of our own is small, deterministic and unit tested. Left to right, a level to a column; a component is marked by the shape of its worst open finding (docs/13 section 6); the path from the root to the selected component is drawn in the accent colour and the rest recedes; a component reached by several paths is opened at its first appearance and is a pointer ("shown above") elsewhere, which keeps a shared subtree from exploding; at most 1,500 components are drawn. The same tree is available as an outline list for the keyboard and screen readers (WAI-ARIA tree: arrows, Right, Left, Enter), a search that opens the way to a component, a filter "only paths with open findings", and an inspector docked on the right (path from the application, who uses it, findings by band). No cards, shadows or pills; strings are in i18n.
+8. The tab loads when it is opened (it was loading with the page).
+
+**Tests.** Go: the view (diamond, inventory, root choice, bad edges, risk, inferred top, deterministic Mermaid with a hostile name), the API (shape, counts, risk per version) and the SQL (`ListPackageRisk` on PostgreSQL). Web: the model (index, visible tree, layout, path, search) and the tab (tree, keyboard, search, filter, list, no dependencies, inferred root, no SBOM, failure, axe in both views).
+
+## D133: what the SBOM readers must emit for a graph, and the sibling repositories brought level (2026-11-18)
+
+**Context.** The dependency graph (D132) is only as good as the edges and components the readers write, and the two sibling repositories (`Rampart-Aspm/sbom-parsers`, `Rampart-Aspm/parsers`) still held the earlier code: the Syft finding parser, no per-record error protocol, CycloneDX and SPDX readers from before D128.
+
+**Decision.**
+1. **SPDX** turns every relationship that states a dependency into an edge, whichever way round it is written, in one function (`edgeDirection`): `DEPENDS_ON`, `CONTAINS`, `DYNAMIC_LINK`, `STATIC_LINK` and the SPDX 3 spellings forward; `DEPENDENCY_OF`, `BUILD_`, `DEV_`, `OPTIONAL_`, `PROVIDED_`, `TEST_` and `RUNTIME_DEPENDENCY_OF`, and `CONTAINED_BY` reversed. A relationship about something else (`DEPENDENCY_MANIFEST_OF`, tooling) adds no edge. The same function serves JSON, tag-value and the SPDX 3 form.
+2. **CycloneDX** reads components nested in components (JSON and XML), because a dependency can name one by its bom-ref and the edge would otherwise point at nothing.
+3. **Where a document gives no data, the reader gives none.** A reader does not make up edges. The one inference that exists is made once, by the graph view, and is marked (D132).
+4. **The sibling repositories** were brought level, uncommitted: `sbom-parsers` has `sbom-cyclonedx` and `sbom-spdx` as in this tree (the VDR option, nested components, the relationship types, SPDX refusing a document that is not SPDX), the new `sbom-syft` (Syft is an SBOM reader there, not a finding parser; the old `syft` module is removed), their YAML specs with `options`, and the README; `parsers` has the per-record error protocol (`RAMPART_RECORD_ERRORS`, four lines in each of the 13 `main.go`). The import paths are rewritten; the `.wasm` files are rebuilt from the same sources.
+
+**Still open.** The `pkg/` copies of the domain and the fingerprint in the two repositories can drift from this tree (docs/34 F32): one shared module and a fingerprint golden test in each repository are not done.
+
+## D134: the feed scheduler keeps syncing: per-feed due checks, retry, and no stop on a panic (2026-11-18)
+
+**Context.** The owner asked to be sure the feeds keep syncing. Reading `RunScheduler` found four ways it could stop being true: (1) a panic in a round (or in the re-score that follows it) was not recovered, so it ended the process; (2) the start-up round was skipped when KEV had synced recently, and nothing else was looked at, so a feed switched on later, or one that had failed while KEV succeeded, waited a whole interval (6 hours) after a restart; (3) a failed feed was tried again only at the next interval; (4) `OnSynced` (re-key and re-score everything) ran after every round.
+
+**Decision.**
+1. The scheduler looks every `min(interval, 30 minutes)` (`feeds.checkEvery`, tests) and at start, and syncs only the feeds that are **due**, each judged on its own state (`feed_state`): never synced is due at once; last round failed is due at every check (that is the retry); succeeded is due when its interval has passed; syncing now is not due. A manual sync, and a one-feed round, are not scheduled rounds and do every feed they are asked for.
+2. A round that panics is logged and the loop goes on; it stops only when its context ends.
+3. The re-key and re-score run only when a check synced at least one feed (a check that finds everything fresh costs one read of the state and changes nothing).
+4. One replica syncs at a time (the advisory lock, as before; the sync buttons use the same lock). A `syncing` row left by a process that died is turned into an error at the start of a round, as before.
+
+**Tests (PostgreSQL).** The due rule feed by feed (never synced, fresh, failed, syncing, older than the interval, manual); the scheduler syncs on each interval and not on each check, stops with its context, retries a failure at the next check with an interval of an hour, does not fetch a feed again inside its interval, survives a panic in `OnSynced` and does not re-score on a check that synced nothing. The panic test was run without the recovery and fails, so it tests what it says.
+
+**What an operator should watch.** `rampart_feed_syncs_total{status="success"}` per feed should rise at least once in two intervals, and the Feeds page shows the last sync of each feed. An alert on "no successful sync of a feed for 2 intervals plus an hour" is not shipped yet (docs/35 phase D).
+
+## D135: Feeds in the sidebar, one CVE section for the whole product, evidence by kind, and a location the screens can read (2026-11-18)
+
+**Context.** Four things the owner asked for or that were found while doing them.
+
+**Decision.**
+1. **Feeds is an item of the sidebar** (`/feeds`, between Policies and Integrations), not a tab of Integrations. Everyone signed in reads it; Sync is for an administrator (the feeds are global). The page follows docs/13 section 6: a sentence where there were tiles, a table divided by rules, the selected feed in a docked inspector with Sync and Test, no uppercase labels, no pills, every string in i18n. The tokens it used did not exist (`text-11`, `border-border`, `bg-surface-2`, palette colours); the same replacement was made in 16 other files.
+2. **What the databases know about a CVE is one component** (`VulnerabilityDetails`), used by the Finding inspector and by the Application page (it was the Finding page only; the Application page opened a separate modal with the scanner's description and nothing else). It is grouped in the order an analyst asks: what it is, is it being exploited, how severe, the record, where to read more, where else it is found. The Application modal also shows the evidence and the compliance controls the finding counts against.
+3. **Evidence is shown by kind** (`EvidenceSection`): a code scanner gives file, lines, function and snippet; a dependency scanner the manifest and the dependency path; a web scanner the address, method and parameter; an infrastructure scanner the resource and its type; a container scanner the image; the tool's own rating. Nothing is shown that the scanner did not give. The text of a secret is not stored (only its hash) and is never shown; the page says so, and says when the scanner found the credential live.
+4. **A real contract bug:** the server sends a finding's `location` nested by kind (`{ code: {...}, package: {...} }`, `domain.Location`), while the screens read `location.purl` and `location.file_path` flat, so against the real server the location of every finding was empty (the mock sent it flat and hid it). `lib/location.ts` (`locationOf`, `whereText`) flattens it once, and every screen reads it through that.
+5. **Logout** left the person on the same page: the cache was cleared before the session was set to "none", which detached the mounted bootstrap from the session. The session is set first, then the data of the person who left is removed. A test fails on the old order.
+
+**Not done, in docs/34 section 10:** the link from the dependency graph to the findings of a package (item 14); the affected ranges per package and which source said what in the CVE section (item 15); properties a parser adds itself (item 16); and the rest of the hard-coded English in the screens (`ApplicationSBOMSection`, `InventoryRoute`, `GroupsView`, `SavedViewsBar`, `WorkflowRoute`, `IntegrationsRoute`, `ApplicationAttestSection`, `ParsersView`, `PoliciesRoute`, `ApplicationLicensesSection`, `VulnerabilitiesRoute`, `ApplicationRoute`: about 300 strings counted by a script).
+
+## D137: why a feed is not run, how a stopped feed is noticed, and doc 33 corrected (2026-11-18)
+
+**Context.** The Feeds page showed a feed as "enabled" or not with no reason, and the refusal of a sync said "(egress deny without a mirror)" for every feed, including one switched off with `enabled: false`. The "enabled" state was worked out in four copies of the same block in `internal/query/feeds.go`, separately from the rule the sync itself uses, so the page and the sync could disagree (OSV with no ecosystem looked enabled; NVD switched off in the server configuration looked enabled and then refused). And a feed that silently stops being tried failed nothing, so `RampartFeedSyncFailing` could not see it.
+
+**Decision.**
+1. **One reason per feed that is not run**, in the list (`disabled_reason`): `switched_off` (the ClusterFeed says `enabled: false`; its own switch wins over a mirror address), `egress_denied` (egress is deny and the feed has no mirror address), `no_ecosystem` (OSV runs only for the ecosystems named), `server_disabled` (the server's own configuration: `feeds.nvdDisabled`). The first two come from the ClusterFeed; the last two only the server knows, through `enrich.OnDemand.Why`, which applies the ClusterFeed to the configuration the way a round does. The four built-in blocks became one function.
+2. **The refusal says the reason** (409 `feed-disabled`), and the page shows it, with what to change.
+3. **A stopped feed is noticed.** The gauge `rampart_feed_last_success_seconds{feed}` is read from `feed_state` at the start of the scheduler and after every check, so a sync by another replica or before a restart counts. The chart's `RampartFeedStale` fires when it is older than `metrics.prometheusRule.feedStaleSeconds` (default 46800, two sync intervals and an hour; set it with `feeds.interval`).
+4. **docs/33 carries a section 0** that corrects it against the code (docs/34 section 8, points 1 to 13); the sections it corrects have a note. docs/04 describes the real `ClusterFeed`.
+
+**Tests.** The list gives the right reason for each case (a switch, egress deny with and without a mirror, the server's two reasons, an optional source); the refusal names the real reason and not the egress rule; `Why` for NVD, OSV (also with the ecosystems from the resource) and the feeds that cannot be off by configuration; the page shows each reason.
+
+**Not done:** attribution (D8; the terms of each source are being checked), source precedence (D9), the GHSA and JVN sources (D7: the owner has not decided).
+
+## D138: a worked scoring example that a test applies, and the risk-policy example of doc 04 corrected (2026-11-18)
+
+**Context.** The owner asked for an example of one application together with every resource that controls its score. Writing it showed three things: (1) the `RiskPolicy` example in doc 04 was refused by the server (it used `vuln.epss.score`, `app.business_criticality`, `finding.reachability`, `env.internet_facing` and a `recomputeOn` key, none of which exists); (2) a policy is chosen per tenant, not per application, so only the application's own facts differ between two applications of a tenant (`policySpec`: the namespaced policy named `default`, else the first by name, else the cluster policy by the same rule, else the built-in one); (3) a first draft of the example's `ClusterFeed` was refused because `epss` needs a `url` (the optional sources do not).
+
+**Decision.**
+1. **The example is a file that is applied in a test**, `docs/examples/payments-scoring/` (one commented file per resource), with the scores and deadlines of doc 36 section 15 asserted against the real scoring and SLA code, including the two caps (`maxDays`, `kevDueDate`). Text that quotes numbers is checked by the code that computes them.
+2. **The `RiskPolicy` block of doc 04 is replaced by one that compiles**, with the variables a `when` can read listed, and a test parses that block from the markdown, so it cannot go stale again.
+3. **`ScanSource` is not in the example** (see D139).
+4. **Recorded, not decided:** a tenant that wants one factor changed must restate all twelve and does not receive a factor added later (doc 36 section 15.4, point 3). A way to change a built-in factor by name is an option for the owner; nothing is built.
+
+**Tests.** `TestPaymentsScoringExample` (every document is accepted; three findings score as stated under both policies; the two SLA caps) and `TestRiskPolicyExampleOfDocs04IsAccepted` in `internal/config/apply`.
+
+## D139: `ScanSource` is to be retired, and three roles need a new home first (2026-11-18)
+
+**Context.** While writing the scoring example (D138) the owner said that `ScanSource` is not needed anywhere in the system, because the analyzers (D128: `SBOMAnalyzer`, `ClusterSBOMAnalyzer`, `ExternalAnalyzer`) took its role, and Dependency-Track, which it could point at, is gone. Reading the code for what depends on it (doc 36 section 15.5) shows the analyzers take over only one of its roles, pulling findings in (`connector`, `schedule`, `secretRef`, `dependencyTrack`), and that the analyzers are not built yet (docs/34 F26: nothing matches components to vulnerabilities; F30: the analyzer CRDs have no controller).
+
+**Decision.** `ScanSource` is retired from the product. It is **not deleted in this change**: the working tree holds a large uncommitted change, and the kind carries three things that are not about where findings come from and that nothing else holds:
+1. **CI trust** (`trustRules`, the `source_trust` table, the OIDC token exchange of D-entry "Trust Rules"): without it a CI job cannot authenticate to upload.
+2. **Tracked branches** (`trackedRefs`): which branches are real and which runs are ephemeral (D10).
+3. **What a report may close** (`ingestionPolicy`: `closeOldFindings`, `closeScope`, `maxClosePercent`, `minimumSeverity`, `acceptedFormats`).
+
+**Needed from the owner before any code is removed:** where each of the three lives. Settled by D140 for the branches (the application names its branch); proposed in D140 for the other two.
+
+**Not done:** no code, CRD, migration or chart change. When the three homes are decided: add them, migrate stored `scan_source` rows, remove the kind from `deploy/crds`, the chart, the operator, the apply library and `internal/domain/scansource.go`, and the `dependencyTrack` leftover with it (docs/34 phase F).
+
+## D140: an application is one branch, with a `type`; `ScanSource` is replaced by fields on `Application` and `Tenant` (2026-11-18)
+
+**Context.** Doc 36 section 14 had kept open whether every branch is an application. The owner's answer is that it is, and that it has been the rule from the start. The owner also proposed a `type`, the kind of thing that is watched (a repository, a machine, and so on). A first reading of it was too narrow (a switch between two field sets, with one value built); doc 36 section 16.1 states what the owner meant. This closes the question of D139 for one of the three roles of `ScanSource`.
+
+**Decision.**
+1. **An application is one branch of one repository.** It names `repository` and `branch` (flat, one of each) and carries its own `environment`. D10 (an asset is the repository, branches are tracks) and D56 (selectors match the repository address) are amended for applications of this kind: the asset key includes the branch, and selectors match the repository and the branch. An application with no `type` keeps today's behaviour, so no existing resource breaks.
+2. **`type` is the kind of thing that is watched**: `repository`, `machine`, `image`, `url` (doc 36 section 16.1). It decides what names the application (`repository` and `branch`; `machine.hostname`; `image.repository`; `url.base`), which asset type it claims (D10), what can report on it and what its page shows. It does not decide the score: one risk policy serves every type, and a factor may read `app.type`. `repository` is the only value the CRD accepts until the others are built; the others are refused with a reason, as workload selectors are in D56. The owner's word `machine` is kept and maps to the `host` asset type inside; `node` is not used because the dependency graph calls a component a node. A branch is the version of a repository, so the type is `repository` and `branch` is a required field of it.
+3. **The score reads the environment from the application**: `app.environment` and `app.type` join the variables of a risk policy; the built-in `PRODUCTION_ENV` reads `app.environment == "production"` instead of the branch name. `environment` has no default, so the score of an existing application does not change until its resource says one.
+4. **`ScanSource` is replaced, not kept.** `trackedRefs` is dropped (the application names its branch); `ingestionPolicy` becomes `Application.spec.ingestion`; `trustRules` become `Tenant.spec.ciTrust` (proposed: an administrator's decision, per repository, so not on a team's application). Items 1, 2 and 3 are the owner's decision; the homes in item 4 for `ingestion` and `ciTrust` are my proposal until the owner confirms.
+
+**Progress.** AB1 is done (docs/35): the Application resource, the score's variables, the environment, the settings tab. AB2 to AB6 are not. The slices are in docs/35 (AB1 to AB6); the first two make the rule real and let the guarded example of D138 be rewritten as doc 36 section 16 shows. Doc 36 section 16 lists the defaults taken (exact branch names only, no default environment, how an unclaimed branch is handled, the grouping of applications by repository).
+

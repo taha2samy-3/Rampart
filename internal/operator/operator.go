@@ -11,15 +11,16 @@ import (
 
 // Operator manages Rampart Kubernetes reconciliation loops.
 type Operator struct {
-	logger      *slog.Logger
-	tenants     *TenantReconciler
-	apps        *ApplicationReconciler
-	scanSources *ScanSourceReconciler
-	slaPolicies *SLAPolicyReconciler
-	idps        *IdentityProviderReconciler
-	clusterIdps *ClusterIdentityProviderReconciler
-	connectors  *ConnectorReconciler
-	packages    *IntegrationPackageReconciler
+	logger         *slog.Logger
+	tenants        *TenantReconciler
+	apps           *ApplicationReconciler
+	scanSources    *ScanSourceReconciler
+	slaPolicies    *SLAPolicyReconciler
+	idps           *IdentityProviderReconciler
+	clusterIdps    *ClusterIdentityProviderReconciler
+	connectors     *ConnectorReconciler
+	packages       *IntegrationPackageReconciler
+	clusterParsers *PolicyReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -33,15 +34,16 @@ func NewOperatorWithAllowlist(store apply.ConfigStore, secrets SecretProvider, s
 		logger = slog.Default()
 	}
 	return &Operator{
-		logger:      logger,
-		tenants:     NewTenantReconciler(store),
-		apps:        NewApplicationReconciler(store),
-		scanSources: NewScanSourceReconciler(store, secrets, secretStore),
-		slaPolicies: NewSLAPolicyReconciler(store),
-		idps:        NewIdentityProviderReconciler(store),
-		clusterIdps: NewClusterIdentityProviderReconciler(store),
-		connectors:  NewConnectorReconciler(store, secrets, secretStore, allowlist),
-		packages:    NewIntegrationPackageReconciler(store),
+		logger:         logger,
+		tenants:        NewTenantReconciler(store),
+		apps:           NewApplicationReconciler(store),
+		scanSources:    NewScanSourceReconciler(store, secrets, secretStore),
+		slaPolicies:    NewSLAPolicyReconciler(store),
+		idps:           NewIdentityProviderReconciler(store),
+		clusterIdps:    NewClusterIdentityProviderReconciler(store),
+		connectors:     NewConnectorReconciler(store, secrets, secretStore, allowlist),
+		packages:       NewIntegrationPackageReconciler(store),
+		clusterParsers: NewClusterParserReconciler(store),
 	}
 }
 
@@ -144,4 +146,10 @@ func (op *Operator) ReconcileIntegrationPackage(ctx context.Context, cr *PolicyC
 func (op *Operator) ReconcileParser(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
 	op.logger.Debug("reconciling parser", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
 	return op.packages.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterParser installs a ClusterParser CR.
+func (op *Operator) ReconcileClusterParser(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling cluster parser", "name", cr.Metadata.Name)
+	return op.clusterParsers.Reconcile(ctx, cr)
 }

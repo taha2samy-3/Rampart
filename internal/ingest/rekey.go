@@ -8,6 +8,7 @@ import (
 	"rampart/internal/domain"
 	"rampart/internal/normalize"
 	"rampart/internal/store"
+	"rampart/internal/telemetry"
 )
 
 // RekeyStats says what a pass over a tenant did.
@@ -101,6 +102,8 @@ func RekeyAll(ctx context.Context, st RekeyStore, tenants func(context.Context) 
 			log.Warn("rekey failed", "tenant", t, "error", err)
 			continue
 		}
+		telemetry.RecordFindingsRekeyed(ctx, "renamed", stats.Renamed)
+		telemetry.RecordFindingsRekeyed(ctx, "merged", stats.Merged)
 		if stats.Renamed+stats.Merged+stats.Unverified > 0 {
 			log.Info("findings re-keyed after an alias change", "tenant", t, "renamed", stats.Renamed, "merged", stats.Merged, "unverified", stats.Unverified)
 		}

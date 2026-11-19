@@ -1,0 +1,32 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: checkov
+spec:
+  category: iac
+  runtime: wasm
+  description: Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile
+  detect:
+    filenames:
+    - '*checkov*'
+    filenameWeight: 10
+    reject:
+    - '"runs"'
+    rules:
+    - anyOf:
+      - '"check_type"'
+      - '"results"'
+      weight: 35
+    - anyOf:
+      - '"failed_checks"'
+      - '"passed_checks"'
+      weight: 45
+    - allOf:
+      - '"check_id"'
+      - '"check_name"'
+      weight: 15
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/checkov:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

@@ -36,7 +36,7 @@ func TestRetention_TenantSweep(t *testing.T) {
 	if run2.Stats.Closed != 1 || run1.HoldsSecrets || run2.HoldsSecrets {
 		t.Fatalf("setup: closed %d, secrets %v %v", run2.Stats.Closed, run1.HoldsSecrets, run2.HoldsSecrets)
 	}
-	leaks, err := os.ReadFile("../parsers/gitleaks/testdata/repo-8.18.json")
+	leaks, err := os.ReadFile("../../parsers/wasm/gitleaks/testdata/repo-8.18.json")
 	if err != nil {
 		t.Fatal(err)
 	}

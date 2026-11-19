@@ -54,6 +54,7 @@ var (
 	// D102: user-defined compliance frameworks, for one tenant or for every tenant.
 	gvkComplianceFramework        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ComplianceFramework"}
 	gvkClusterComplianceFramework = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterComplianceFramework"}
+	gvkClusterParser              = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterParser"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -169,6 +170,7 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	clusterFeed := policyCR(gvkClusterFeed, NewClusterFeedReconciler(cfg.Store))
 	frameworks := policyCR(gvkComplianceFramework, NewComplianceFrameworkReconciler(cfg.Store))
 	clusterFrameworks := policyCR(gvkClusterComplianceFramework, NewClusterComplianceFrameworkReconciler(cfg.Store))
+	clusterParsers := policyCR(gvkClusterParser, NewClusterParserReconciler(cfg.Store))
 	pkgR := NewIntegrationPackageReconciler(cfg.Store)
 	packages := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkIntegrationPackage, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
 	parsers := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkParser, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
@@ -179,7 +181,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
 	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
-		"clusterfeed": {gvkClusterFeed, clusterFeed}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks}} {
+		"clusterfeed": {gvkClusterFeed, clusterFeed}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks},
+		"clusterparser": {gvkClusterParser, clusterParsers}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}

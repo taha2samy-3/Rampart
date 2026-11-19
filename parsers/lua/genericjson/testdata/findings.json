@@ -1,0 +1,1 @@
+{"findings": [{"rule_id": "GEN-01", "title": "Insecure config", "severity": "high", "description": "Found bad config"}]}

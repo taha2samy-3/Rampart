@@ -217,7 +217,6 @@ var scopeableConnectorTypes = map[string]bool{
 	string(domain.ConnectorTypeJira): true, string(domain.ConnectorTypeGitHub): true,
 	string(domain.ConnectorTypeSlack): true, string(domain.ConnectorTypeTeams): true,
 	string(domain.ConnectorTypeEmail): true, string(domain.ConnectorTypeWebhook): true,
-	string(domain.ConnectorTypeDependencyTrack): true,
 }
 
 // ToPlatformSSRFAllowlist converts SSRFAllowlistConfig to domain.PlatformSSRFAllowlist.

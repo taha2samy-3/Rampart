@@ -164,7 +164,7 @@ export function GroupsView({
             <button
               type="button"
               onClick={() => set({ tab: 'groups', sel: undefined })}
-              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink shadow-sm"
+              className="rounded-ctl bg-surface px-2.5 py-1 text-13 font-semibold text-ink"
             >
               Finding groups
             </button>
@@ -312,7 +312,7 @@ function GroupDetail({
                     type="button"
                     onClick={() => removeMemberMutation.mutate(fId)}
                     disabled={removeMemberMutation.isPending}
-                    className="text-11 text-critical hover:underline"
+                    className="text-12 text-critical hover:underline"
                     aria-label={`Remove finding ${fId} from group`}
                   >
                     Remove

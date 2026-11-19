@@ -76,7 +76,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 48
+  minSchemaVersion: 51
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -98,7 +98,11 @@ feeds:
   kevUrl: ""
   epssUrl: ""
   osvBaseUrl: ""
-  osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
+  osvEcosystems: []   # for example [Go, PyPI, npm, Maven]; defaultMirror.osv.ecosystems overrides it
+  # A Secret you create with the feed API tokens, one key per token (for example nvd-api-key). It is mounted read-only
+  # at /etc/rampart/feed-secrets, the only directory a ClusterFeed tokenFile may point to; the server's own secrets
+  # (/etc/rampart/secrets) are never readable as a feed token.
+  tokenSecret: ""
   # Declarative ClusterFeed CRD:
   # Deploys a cluster-wide ClusterFeed resource. Users can inspect, customize, or remove
   # this CRD instance using kubectl or Helm values to configure internal mirrors, air-gapped setups,
@@ -107,19 +111,48 @@ feeds:
     enabled: true
     name: "default"
     egress: "allow"   # allow | deny (air-gapped)
-    storageMode: "lightweight" # lightweight (incremental stream) | full (complete offline vulnerability DB like Dependency-Track)
+    # lightweight: what matching, scoring and the screens need. full: also keeps the complete source record of every
+    # advisory (vulnerability.source_payloads), and reads the Go, npm, PyPI and Maven ecosystems of OSV when none is named.
+    storageMode: "lightweight"
+    # With egress deny every url below must be the address of your mirror: a public address is refused by validation.
+    # Every source has its own switch: enabled: true | false. A source that is off is not read, and its rows (the
+    # exploitation evidence of an optional source) are removed. url is optional everywhere: leave it empty for the public
+    # address, or give your mirror's. With egress deny each url must be your mirror's, never a public address.
     kev:
+      enabled: true
       url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
     epss:
+      enabled: true
       url: "https://epss.cyentia.com/epss_scores-current.csv.gz"
     nvd:
+      enabled: true
       url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+      tokenFile: ""   # for example /etc/rampart/feed-secrets/nvd-api-key (key nvd-api-key of feeds.tokenSecret)
     osv:
+      enabled: true
       url: "https://osv-vulnerabilities.storage.googleapis.com"
+      # One archive per ecosystem, downloaded to /tmp: Go is small, npm and PyPI are hundreds of megabytes. Name only
+      # the ecosystems you use (the names are those of ecosystems.txt in the OSV bucket). Empty uses feeds.osvEcosystems.
+      ecosystems: [Go, npm, PyPI, Maven]
     vulnrichment:
+      enabled: true
       url: "https://github.com/cisagov/vulnrichment/archive/refs/heads/develop.zip"
     exploitdb:
+      enabled: true
       url: "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
+    metasploit:
+      enabled: true
+      url: "https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json"
+    euvd:
+      enabled: true
+      url: "https://euvdservices.enisa.europa.eu"
+    # VulnCheck answers no request without a token, so it is off until you give one (community tokens are free).
+    vulncheckKev:
+      enabled: false
+      url: ""
+      tokenFile: ""   # for example /etc/rampart/feed-secrets/vulncheck-token; required when enabled
+    # In-house or licensed feeds: [{name, format: osv-zip | intel-jsonl, url, tokenFile, enabled}] (docs/33 section 6).
+    custom: []
   # Feed plugins (docs/16 D89, D94): one CronJob per plugin, each a container that fetches a vulnerability database
   # and posts it as intel-jsonl to /api/v1/feeds/<name>. tokenSecret holds key "token"; the same Secret is mounted
   # into Rampart at /var/run/rampart/feeds/<name>/token, which the ClusterFeed names as pushTokenFile.
@@ -193,6 +226,7 @@ metrics:
     labels: {}              # for example {release: kube-prometheus-stack}
   prometheusRule:
     enabled: false          # needs prometheus-operator PrometheusRule CRD
+    feedStaleSeconds: 46800 # RampartFeedStale fires when a feed's last success is older than this: two sync intervals and an hour (feeds.interval is 6h)
     namespace: ""
     labels: {}
   grafanaDashboards:
@@ -235,4 +269,110 @@ networkPolicy:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Parsers configuration (docs/29 "All come in front door").
+# Ships the 17 standard finding parsers as ClusterParser CRD resources by default.
+# Each parser can be enabled or disabled individually.
+parsers:
+  # How the shipped WASM parser modules reach the pod (docs/35 B1). The modules are built, signed and published by the
+  # Rampart-Aspm/parsers and Rampart-Aspm/sbom-parsers repositories as scratch images holding /parser.wasm.
+  #   none:        nothing is mounted. Only the Lua parsers work, unless RAMPART_WASM_DIR points at modules you provide.
+  #                For development; the server then warns that nothing is verified.
+  #   imageVolume: every module image below is mounted read-only as an image volume (Kubernetes with the ImageVolume
+  #                feature; check your version), and the server REFUSES TO START unless each shipped module is present and
+  #                its parser.wasm has the SHA-256 listed here. Signature verification belongs to the cluster: an
+  #                admission policy (Kyverno or the sigstore policy-controller) for the images.
+  # `python3 hack/wasm-modules.py <path of the parsers repository>` prints the sha256 values.
+  delivery:
+    mode: none
+    mountPath: /opt/rampart/wasm
+    pullPolicy: IfNotPresent
+  # name -> image (pin by digest) and the SHA-256 (hex) of the parser.wasm file inside it.
+  modules:
+    sarif: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/sarif@sha256:...
+    trivy: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/trivy@sha256:...
+    grype: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/grype@sha256:...
+    semgrep: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/semgrep@sha256:...
+    gitleaks: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/gitleaks@sha256:...
+    trufflehog: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/trufflehog@sha256:...
+    checkov: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/checkov@sha256:...
+    snyk: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/snyk@sha256:...
+    kubebench: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/kubebench@sha256:...
+    prowler: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/prowler@sha256:...
+    gitlab: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/gitlab@sha256:...
+    dependencycheck: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/dependencycheck@sha256:...
+    openvex: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/parsers/openvex@sha256:...
+    sbom-cyclonedx: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-cyclonedx@sha256:...
+    sbom-spdx: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-spdx@sha256:...
+    sbom-syft: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-syft@sha256:...
+  defaultParsers:
+    enabled: true
+    sarif:
+      enabled: true
+    openvex:
+      enabled: true
+    trivy:
+      enabled: true
+    grype:
+      enabled: true
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    checkov:
+      enabled: true
+    snyk:
+      enabled: true
+    kubebench:
+      enabled: true
+    prowler:
+      enabled: true
+    gitlab:
+      enabled: true
+    dependencycheck:
+      enabled: true
+    bandit:
+      enabled: true
+    zap:
+      enabled: true
+    nuclei:
+      enabled: true
+    genericjson:
+      enabled: true
+
+# Ships default ClusterSBOMParser CRDs for CycloneDX, SPDX and Syft. An SBOM reader produces assets (components and
+# dependency edges), never findings.
+sbomParsers:
+  defaultSBOMParsers:
+    enabled: true
+    cyclonedx:
+      enabled: true
+      # Turn the vulnerabilities a CycloneDX document states (a VDR) into findings, besides filling the inventory.
+      # Off: an SBOM is assets, and what is found in it is the matcher's work (D131).
+      extractVulnerabilities: false
+    spdx:
+      enabled: true
+    syft:
+      enabled: true
+
+# Native in-process SBOM vulnerability matcher via ClusterSBOMAnalyzer CRD.
+# Off until the matcher is wired into ingest and an operator controller reads this resource (docs/34 F26 and F30): today
+# nothing consumes it, so enabling it would only create a resource that says the matcher is on.
+sbomAnalyzer:
+  enabled: false
+  engine: hybrid
+  rules:
+    minConfidence: 0.8
+    includePreRelease: false
+    matchDirectOnly: false
+  sources:
+    osv: true
+    ghsa: true
+    nvd: false
+
+
+
+
 

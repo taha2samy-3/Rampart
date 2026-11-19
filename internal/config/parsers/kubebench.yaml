@@ -1,0 +1,31 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: kubebench
+spec:
+  category: compliance
+  runtime: wasm
+  description: Aqua Security kube-bench CIS Kubernetes benchmark report
+  detect:
+    filenames:
+    - '*kube-bench*'
+    - '*kubebench*'
+    filenameWeight: 15
+    rules:
+    - anyOf:
+      - '"Controls"'
+      - '"node_type"'
+      weight: 45
+    - allOf:
+      - '"test_number"'
+      - '"test_desc"'
+      weight: 40
+    - allOf:
+      - '"scored"'
+      - '"remediation"'
+      weight: 15
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/kubebench:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

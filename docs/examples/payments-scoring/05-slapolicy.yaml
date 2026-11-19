@@ -1,0 +1,20 @@
+# SLAPolicy: how long you have to fix a finding. due date = start + matrix[band of the finding][criticality of the application] days,
+# then the two caps. Per tenant, chosen like the RiskPolicy (namespaced "default", else first by name, else the cluster one, else built in).
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: SLAPolicy
+metadata:
+  name: acme-sla
+  namespace: acme-payments
+spec:
+  matrix:                           # days, each 1..3650. Rows: the BAND of the score. Columns: businessCriticality of the application.
+    critical: {critical: 2, high: 5, medium: 10, low: 20}      # changed: the built-in row is 3, 7, 14, 30
+    high:     {critical: 7, high: 14, medium: 30, low: 60}
+    medium:   {critical: 30, high: 45, medium: 90, low: 120}
+    low:      {critical: 90, high: 120, medium: 180, low: 365}
+  caps:
+    kevDueDate: true                # a finding on the CISA list is due at the end of the CISA due date if that is earlier
+    maxDays: 90                     # 1..3650: no deadline is longer than this (the built-in policy caps at 365)
+  startFrom: firstSeen              # firstSeen (the only value today)
+  restartOnReactivation: true       # a finding that comes back gets a new clock
+  pauseDuringRiskAcceptance: true   # the clock stops while a risk acceptance is in force
+  # businessDays: false             # count working days instead of calendar days

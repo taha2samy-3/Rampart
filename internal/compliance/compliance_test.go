@@ -86,8 +86,8 @@ func TestCategoriesOf(t *testing.T) {
 	if c := CategoriesOf("builtin:semgrep", nil); len(c) == 0 || c[0] != "sast" {
 		t.Fatalf("builtin:semgrep: %v", c)
 	}
-	if c := CategoriesOf("builtin:dependencytrack", nil); len(c) != 1 || c[0] != "sca" {
-		t.Fatalf("builtin:dependencytrack: %v", c)
+	if c := CategoriesOf("builtin:dependencycheck", nil); len(c) != 1 || c[0] != "sca" {
+		t.Fatalf("builtin:dependencycheck: %v", c)
 	}
 	if c := CategoriesOf("codeql", nil); len(c) != 1 || c[0] != "sast" {
 		t.Fatalf("codeql: %v", c)

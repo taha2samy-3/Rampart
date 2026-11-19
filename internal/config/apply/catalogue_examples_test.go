@@ -19,8 +19,8 @@ func TestConnectorCatalogueExamplesApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries := domain.ConnectorCatalogue()
-	if len(entries) != 8 {
-		t.Fatalf("expected 8 connector types, got %d", len(entries))
+	if len(entries) != 7 {
+		t.Fatalf("expected 7 connector types, got %d", len(entries))
 	}
 	for _, e := range entries {
 		if e.ConfigSchema["type"] != "object" || len(e.Secrets) == 0 {

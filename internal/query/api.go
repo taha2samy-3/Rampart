@@ -45,6 +45,8 @@ type API struct {
 	store         store.Store
 	feeds         *enrich.FeedStore
 	feedSync      FeedSyncer
+	pushTokenDir  string       // where a feed plugin's token file may be; empty is domain.FeedPushTokensDir (tests set a temp directory)
+	probeClient   *http.Client // the connection test of the feeds page; nil is the guarded feed client (enrich.NewFeedHTTPClient)
 	authn         *auth.Authenticator
 	hmacKey       []byte
 	objects       objectstore.Store
@@ -53,7 +55,6 @@ type API struct {
 	scorer        *scoring.Scorer
 	gw            *ingest.Gateway
 	live          *LiveHub
-	dtEnqueue     DTrackEnqueuer
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -195,6 +196,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom", a.handleGetAssetSBOM)
 	routes.HandleFunc("GET /api/v1/applications/{id}/sbom", a.handleApplicationSBOM) // merged, CycloneDX or SPDX (doc 11, D95)
 	routes.HandleFunc("GET /api/v1/applications/{id}/components", a.handleApplicationComponents)
+	routes.HandleFunc("PATCH /api/v1/applications/{id}", a.handleUpdateApplicationContext) // what the score knows about it (D136)
+	routes.HandleFunc("GET /api/v1/scoring", a.handleScoring)                              // the version and what decides a score (D136)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/applications/{id}/sbom/graph", a.handleGetAssetSBOMGraph)
 	routes.HandleFunc("GET /api/v1/assets/{id}/sbom/path", a.handleGetAssetSBOMPath)
@@ -208,13 +211,6 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/held-closes", a.handleListHeldCloses)
 	routes.HandleFunc("POST /api/v1/held-closes/{id}/confirm", a.handleConfirmHeldClose)
 	routes.HandleFunc("POST /api/v1/held-closes/{id}/discard", a.handleDiscardHeldClose)
-
-	// Dependency-Track integration & unmapped projects (docs/10 §3, §13)
-	routes.HandleFunc("GET /api/v1/sources", a.handleListSources)
-	routes.HandleFunc("GET /api/v1/sources/{id}/unmapped", a.handleListUnmapped)
-	routes.HandleFunc("GET /api/v1/sources/{id}/projects", a.handleListMappedProjects)
-	routes.HandleFunc("POST /api/v1/sources/{id}/map", a.handleMapProject)
-	routes.HandleFunc("GET /api/v1/sources/{id}/decisions", a.handleListDecisions)
 
 	// Saved views & finding groups (docs/21 §6.1, §6.2)
 	routes.HandleFunc("GET /api/v1/views", a.handleListViews)
@@ -609,58 +605,75 @@ func (a *API) handleGetAssetSBOMGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idStr := r.PathValue("id")
-	assetID, err := uuid.Parse(idStr)
+	targetID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid asset UUID"}`, http.StatusBadRequest)
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid UUID"}`, http.StatusBadRequest)
 		return
 	}
 
-	sbom, comps, err := a.store.GetSBOM(r.Context(), tenantID, assetID)
-	if err != nil || sbom == nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"SBOM not found for asset"}`, http.StatusNotFound)
-		return
-	}
-
-	depGraph := graph.NewDependencyGraph(comps, sbom.Dependencies, sbom.RootComponent)
-	depGraph.MarkDirectDependencies()
-
-	directCount := 0
-	transitiveCount := 0
-	for _, c := range depGraph.Components {
-		if c.Direct {
-			directCount++
-		} else {
-			transitiveCount++
+	sbom, comps, err := a.store.GetSBOM(r.Context(), tenantID, targetID)
+	if (err != nil || sbom == nil) && a.store != nil {
+		if lister, ok := a.store.(appAssetLister); ok {
+			if assets, lerr := lister.ListApplicationAssets(r.Context(), tenantID, targetID); lerr == nil {
+				for _, as := range assets {
+					if s, c, gerr := a.store.GetSBOM(r.Context(), tenantID, as.ID); gerr == nil && s != nil {
+						sbom, comps = s, c
+						break
+					}
+				}
+			}
 		}
 	}
-
-	res := struct {
-		AssetID              uuid.UUID               `json:"asset_id"`
-		Format               string                  `json:"format"`
-		SpecVersion          string                  `json:"spec_version"`
-		Root                 string                  `json:"root"`
-		TotalComponents      int                     `json:"total_components"`
-		DirectComponents     int                     `json:"direct_components"`
-		TransitiveComponents int                     `json:"transitive_components"`
-		Edges                []domain.DependencyEdge `json:"edges"`
-		Mermaid              string                  `json:"mermaid"`
-		Tree                 string                  `json:"tree"`
-	}{
-		AssetID:              assetID,
-		Format:               sbom.Format,
-		SpecVersion:          sbom.SpecVersion,
-		Root:                 depGraph.RootRef,
-		TotalComponents:      len(comps),
-		DirectComponents:     directCount,
-		TransitiveComponents: transitiveCount,
-		Edges:                depGraph.Edges,
-		Mermaid:              depGraph.RenderMermaid(),
-		Tree:                 depGraph.RenderTextTree(),
+	if sbom == nil {
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"SBOM not found"}`, http.StatusNotFound)
+		return
 	}
+
+	view := graph.BuildView(comps, sbom.Dependencies, sbom.RootComponent, a.packageRisk(r.Context(), tenantID, sbom))
+
+	// The view's own fields (root, nodes, edges, the counts) sit at the top level of the answer, next to the document's.
+	res := struct {
+		AssetID         uuid.UUID `json:"asset_id"`
+		Format          string    `json:"format"`
+		SpecVersion     string    `json:"spec_version"`
+		TotalComponents int       `json:"total_components"`
+		*graph.View
+	}{AssetID: targetID, Format: sbom.Format, SpecVersion: sbom.SpecVersion, TotalComponents: len(view.Nodes), View: view}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// packageRisk returns the function that gives a component of the SBOM its open findings, or nil when the store cannot
+// tell (the graph is then drawn without them). A finding is matched on the package url without its version, and on the
+// version when the scanner reported one, so two versions of a package in one tree are not given each other's findings.
+func (a *API) packageRisk(ctx context.Context, tenantID uuid.UUID, sbom *domain.SBOM) func(domain.SBOMComponent) graph.Risk {
+	rd, ok := a.store.(store.PackageRiskReader)
+	if !ok || sbom == nil {
+		return nil
+	}
+	rows, err := rd.ListPackageRisk(ctx, tenantID, sbom.AssetID, sbom.Track)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	byBase := map[string][]store.PackageRisk{}
+	for _, r := range rows {
+		byBase[r.PurlBase] = append(byBase[r.PurlBase], r)
+	}
+	return func(c domain.SBOMComponent) graph.Risk {
+		var out graph.Risk
+		for _, r := range byBase[c.PurlBase] {
+			if r.Version != "" && r.Version != c.Version {
+				continue
+			}
+			out.Critical += r.Critical
+			out.High += r.High
+			out.Medium += r.Medium
+			out.Low += r.Low
+		}
+		return out
+	}
 }
 
 func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
@@ -673,9 +686,9 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idStr := r.PathValue("id")
-	assetID, err := uuid.Parse(idStr)
+	targetID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid asset UUID"}`, http.StatusBadRequest)
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/validation","title":"Invalid UUID"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -685,9 +698,21 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sbom, comps, err := a.store.GetSBOM(r.Context(), tenantID, assetID)
-	if err != nil || sbom == nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"SBOM not found for asset"}`, http.StatusNotFound)
+	sbom, comps, err := a.store.GetSBOM(r.Context(), tenantID, targetID)
+	if (err != nil || sbom == nil) && a.store != nil {
+		if lister, ok := a.store.(appAssetLister); ok {
+			if assets, lerr := lister.ListApplicationAssets(r.Context(), tenantID, targetID); lerr == nil {
+				for _, as := range assets {
+					if s, c, gerr := a.store.GetSBOM(r.Context(), tenantID, as.ID); gerr == nil && s != nil {
+						sbom, comps = s, c
+						break
+					}
+				}
+			}
+		}
+	}
+	if sbom == nil {
+		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/not-found","title":"SBOM not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -710,7 +735,7 @@ func (a *API) handleGetAssetSBOMPath(w http.ResponseWriter, r *http.Request) {
 		Path    []string  `json:"path"`
 		Depth   int       `json:"depth"`
 	}{
-		AssetID: assetID,
+		AssetID: targetID,
 		Root:    depGraph.RootRef,
 		Target:  target,
 		Path:    path,

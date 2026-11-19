@@ -147,8 +147,8 @@ func Get(id string) (*Framework, bool) {
 // which also reads parser ids and the families a tenant installed (D102).
 var FamilyCategories = map[string][]string{
 	"semgrep": {"sast", "secret"}, "sarif": {"sast"}, "gitleaks": {"secret"}, "trufflehog": {"secret"},
-	"trivy": {"sca", "container", "iac", "secret"}, "grype": {"sca", "container"}, "syft": {"sca"},
-	"dependency-track": {"sca"}, "zap": {"dast"}, "nuclei": {"dast"}, "checkov": {"iac"}, "kics": {"iac"}, "prowler": {"cspm"},
+	"trivy": {"sca", "container", "iac", "secret"}, "grype": {"sca", "container"},
+	"zap": {"dast"}, "nuclei": {"dast"}, "checkov": {"iac"}, "kics": {"iac"}, "prowler": {"cspm"},
 	"bandit": {"sast"}, "dependency-check": {"sca"}, "snyk": {"sca", "sast", "container"}, "kube-bench": {"compliance", "cspm"},
 	"gitlab-sast": {"sast"}, "gitlab-secret-detection": {"secret"}, "gitlab-dependency-scanning": {"sca"},
 	"gitlab-container-scanning": {"sca", "container"}, "gitlab-dast": {"dast"},
@@ -160,7 +160,7 @@ var FamilyCategories = map[string][]string{
 
 // parserFamily is the family a parser id stands for. A run that found nothing is recorded under its parser's id
 // ("builtin:semgrep"), not the tool's name: without this, a clean scan would never count as evidence.
-var parserFamily = map[string]string{"dependencytrack": "dependency-track", "dependencycheck": "dependency-check", "kubebench": "kube-bench"}
+var parserFamily = map[string]string{"dependencycheck": "dependency-check", "kubebench": "kube-bench"}
 
 // CategoriesOf returns what a scanner family evidences: the built-in map, then the parser id it may be written as,
 // then extra (what the tenant knows: a parser package's declared category, or what the family produced). A family

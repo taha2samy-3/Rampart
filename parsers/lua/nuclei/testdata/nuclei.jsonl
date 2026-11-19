@@ -1,0 +1,1 @@
+{"template-id":"cve-2023-24489","info":{"name":"Citrix ADC and Gateway - Remote Code Execution","severity":"critical","description":"Citrix Gateway vulnerability."},"type":"http","host":"https://vpn.example.com"}

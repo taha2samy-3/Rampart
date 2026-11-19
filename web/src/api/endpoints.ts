@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, DTrackProjectRecord, MappedProject, ParserDescriptor, SourceStatus, UpstreamDecision, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -250,29 +250,6 @@ export const getApplicationCompliance = (id: string, signal?: AbortSignal) => ge
 export const getApplicationTrend = (id: string, days: number, signal?: AbortSignal) =>
   get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
 
-// --- Upstream sources: Dependency-Track (docs/10 §3, docs/16 D92) ---
-export async function listSources(signal?: AbortSignal): Promise<SourceStatus[]> {
-  const raw = await get<{ sources?: SourceStatus[] | null }>('/api/v1/sources', { signal });
-  return raw.sources ?? [];
-}
-export async function listUnmappedProjects(sourceId: string, signal?: AbortSignal): Promise<DTrackProjectRecord[]> {
-  const raw = await get<{ projects?: DTrackProjectRecord[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/unmapped`, { signal });
-  return raw.projects ?? [];
-}
-export async function listMappedProjects(sourceId: string, signal?: AbortSignal): Promise<MappedProject[]> {
-  const raw = await get<{ projects?: MappedProject[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/projects`, { signal });
-  return raw.projects ?? [];
-}
-export const mapSourceProject = (sourceId: string, projectUuid: string, applicationId: string) =>
-  post<{ status: string; project_uuid: string; application_id: string; sync_queued: boolean }>(
-    `/api/v1/sources/${encodeURIComponent(sourceId)}/map`,
-    { project_uuid: projectUuid, application_id: applicationId },
-  );
-export async function listSourceDecisions(sourceId: string, signal?: AbortSignal): Promise<UpstreamDecision[]> {
-  const raw = await get<{ decisions?: UpstreamDecision[] | null }>(`/api/v1/sources/${encodeURIComponent(sourceId)}/decisions`, { signal });
-  return raw.decisions ?? [];
-}
-
 // --- Parsers Catalogue (docs/19 §2, docs/13 §9) ---
 export async function listParsers(signal?: AbortSignal): Promise<ParserDescriptor[]> {
   const raw = await get<{ parsers?: ParserDescriptor[] | null }>('/api/v1/parsers', { signal });
@@ -281,3 +258,9 @@ export async function listParsers(signal?: AbortSignal): Promise<ParserDescripto
 
 /** Sends a renewal ticket that gave up back to the outbox (administrator). */
 export const retryAttestationTicket = (attestationId: string) => post<void>(`/api/v1/attestation-tickets/${encodeURIComponent(attestationId)}/retry`, {});
+
+/** The version of the program and what decides a score, from the policy in force. */
+export const getScoring = (signal?: AbortSignal) => get<ScoringResponse>('/api/v1/scoring', { signal });
+/** Changes what the score knows about an application; 409 when an Application resource owns it. */
+export const updateApplicationContext = (id: string, body: ApplicationContextUpdate) =>
+  patch<unknown>(`/api/v1/applications/${encodeURIComponent(id)}`, body);

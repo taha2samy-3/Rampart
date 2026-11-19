@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ const (
 	SourceMetasploit   = "metasploit"
 	SourceEUVD         = "euvd"
 	SourceVulnCheckKEV = "vulncheck_kev"
+	SourceOSV          = "osv"
 )
 
 // optionalSource is one source switched on for this round, resolved from the ClusterFeedMirror.
@@ -61,15 +63,15 @@ type optionalSource struct {
 // optionalSources resolves the sources the mirror switches on. With egress deny, a source without its own URL is
 // not read (and is off). A token file that cannot be read fails that source, not the round; it stays on, in keep, so
 // its last good rows are not pruned.
-func optionalSources(m *domain.FeedMirrorSpec) (srcs []optionalSource, keep []string, errs []error) {
+func optionalSources(m *domain.FeedMirrorSpec, secretsDir string) (srcs []optionalSource, keep []string, errs []error) {
 	keep = []string{}
 	if m == nil {
 		return nil, keep, nil
 	}
 	deny := m.Egress == "deny"
 	add := func(name string, fs *domain.FeedSource, def string) {
-		if fs == nil {
-			return
+		if fs == nil || fs.Off() {
+			return // absent or switched off: not read, and not kept, so its rows are removed
 		}
 		u := fs.URL
 		if u == "" {
@@ -79,7 +81,7 @@ func optionalSources(m *domain.FeedMirrorSpec) (srcs []optionalSource, keep []st
 			u = def
 		}
 		keep = append(keep, name)
-		tok, err := readToken(fs.TokenFile)
+		tok, err := ReadFeedToken(fs.TokenFile, secretsDir)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 			return
@@ -92,8 +94,11 @@ func optionalSources(m *domain.FeedMirrorSpec) (srcs []optionalSource, keep []st
 	add(SourceEUVD, m.EUVD, DefaultEUVDURL)
 	add(SourceVulnCheckKEV, m.VulnCheckKEV, DefaultVulnCheckURL)
 	for _, c := range m.Custom {
+		if c.Off() {
+			continue
+		}
 		keep = append(keep, c.Name)
-		tok, err := readToken(c.TokenFile)
+		tok, err := ReadFeedToken(c.TokenFile, secretsDir)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", c.Name, err))
 			continue
@@ -103,15 +108,37 @@ func optionalSources(m *domain.FeedMirrorSpec) (srcs []optionalSource, keep []st
 	return srcs, keep, errs
 }
 
-func readToken(path string) (string, error) {
-	if path == "" {
+// ReadFeedToken reads a token from a file inside dir (domain.FeedSecretsDir for a pulled feed, domain.FeedPushTokensDir
+// for a pushed one). The path is checked again here, when the file is read, whatever the resource said when it was
+// stored: it must be absolute and clean, lie in dir, and, once the symbolic links of a Secret mount are resolved,
+// still lie in dir and name a regular file. A file anywhere else in the pod (the session key, a database password) is
+// never read, so a feed's address cannot be made to receive it.
+func ReadFeedToken(p, dir string) (string, error) {
+	if p == "" {
 		return "", nil
 	}
-	f, err := os.Open(path)
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p || !strings.HasPrefix(p, strings.TrimRight(dir, "/")+"/") {
+		return "", fmt.Errorf("the token file %q is not a file under %s", p, dir)
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", fmt.Errorf("reading the token file: %w", err)
+	}
+	rdir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		rdir = dir
+	}
+	if !domain.FeedTokenPathAllowed(resolved, rdir) && !domain.FeedTokenPathAllowed(resolved, dir) {
+		return "", fmt.Errorf("the token file %q resolves outside %s", p, dir)
+	}
+	f, err := os.Open(resolved)
 	if err != nil {
 		return "", fmt.Errorf("reading the token file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("the token file %q is not a regular file", p)
+	}
 	b, err := io.ReadAll(io.LimitReader(f, maxTokenBytes))
 	if err != nil {
 		return "", err
@@ -145,10 +172,11 @@ func (c *FeedConfig) getWith(ctx context.Context, u, token string, max int64) (i
 	return &limitedBody{Reader: io.LimitReader(res.Body, max+1), c: res.Body, max: max}, nil
 }
 
-// redact drops the query, which on a signed download URL is a credential.
+// redact drops the query, which on a signed download URL is a credential, and any user name and password in the URL.
 func redact(u string) string {
 	if p, err := url.Parse(u); err == nil {
 		p.RawQuery = ""
+		p.User = nil
 		return p.String()
 	}
 	return "the URL"
@@ -177,7 +205,8 @@ func (s *FeedSyncer) syncOptional(ctx context.Context, cfg FeedConfig, src optio
 			return 0, err
 		}
 		defer func() { _ = os.Remove(path) }()
-		return s.SyncOSVZip(ctx, path)
+		res, err := s.syncOSVZip(ctx, path, osvZipOptions{write: osvWrite{source: src.name, full: cfg.StorageFull}})
+		return res.Written + res.Skipped, err
 	}
 	return 0, fmt.Errorf("unknown source %q", src.name)
 }
@@ -462,16 +491,17 @@ func (s *FeedSyncer) pruneSources(ctx context.Context, keep []string) error {
 
 // syncOptionalAll runs every optional source the mirror switches on. One failing source does not stop the others.
 func (s *FeedSyncer) syncOptionalAll(ctx context.Context, cfg FeedConfig, m *domain.FeedMirrorSpec, log *slog.Logger) []error {
-	srcs, keep, errs := optionalSources(m)
+	srcs, keep, errs := optionalSources(m, cfg.secretsDir())
 	if cfg.Only == "" { // a one-feed round must not prune the others
 		if err := s.pruneSources(ctx, keep); err != nil {
 			errs = append(errs, fmt.Errorf("pruning sources: %w", err))
 		}
 	}
 	for _, src := range srcs {
-		if !cfg.wants(src.name) {
+		if !cfg.wants(src.name) || !s.due(ctx, cfg, src.name) {
 			continue
 		}
+		s.begin(src.name)
 		n, err := s.syncOptional(ctx, cfg, src)
 		if err != nil {
 			s.recordFeedError(ctx, src.name, err)

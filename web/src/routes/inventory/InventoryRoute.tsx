@@ -117,7 +117,7 @@ export function InventoryRoute() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
       <div className="mb-6 flex flex-col gap-1">
-        <h1 className="display text-24 font-semibold text-ink">
+        <h1 className="display text-20 font-semibold text-ink">
           {t('nav.inventory', { defaultValue: 'Software & Asset Inventory' })}
         </h1>
         <p className="text-13 text-ink-2">
@@ -203,15 +203,15 @@ export function InventoryRoute() {
               role="status"
               className={`flex items-center justify-between rounded border px-3 py-2 text-12 font-medium ${
                 scanFeedback.ok
-                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-400'
+                  ? 'border-resolved/20 bg-resolved/10 text-resolved'
+                  : 'border-critical/20 bg-critical/10 text-critical'
               }`}
             >
               <span>{scanFeedback.message}</span>
               <button
                 type="button"
                 onClick={() => setScanFeedback(null)}
-                className="ml-2 text-11 opacity-70 hover:opacity-100"
+                className="ml-2 text-12 opacity-70 hover:opacity-100"
                 aria-label="Dismiss scan status"
               >
                 ✕
@@ -255,7 +255,7 @@ export function InventoryRoute() {
                     <Td className="font-medium text-ink">
                       <div className="flex flex-col">
                         <span className="font-mono text-12">{c.name}</span>
-                        <span className="text-11 text-ink-2 truncate max-w-sm">{c.purl}</span>
+                        <span className="text-12 text-ink-2 truncate max-w-sm">{c.purl}</span>
                       </div>
                     </Td>
                     <Td className="font-mono text-12 text-ink-2">{c.version}</Td>
@@ -281,7 +281,7 @@ export function InventoryRoute() {
                         disabled={scanningPurl !== null}
                         loading={scanningPurl === c.purl}
                         onClick={() => void handleScanComponent(c)}
-                        className="h-7 px-2.5 text-11 flex items-center gap-1 text-accent hover:text-accent hover:bg-accent/10"
+                        className="h-7 px-2.5 text-12 flex items-center gap-1 text-accent hover:text-accent hover:bg-accent/10"
                         title={t('inventory.scanNowTooltip', {
                           name: c.name,
                           defaultValue: `Force on-demand vulnerability scan for ${c.name}`,

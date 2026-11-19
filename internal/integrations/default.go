@@ -2,158 +2,112 @@ package integrations
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"iter"
+	"sync"
 
+	"gopkg.in/yaml.v3"
+
+	"rampart/internal/config/parsers"
 	"rampart/internal/domain"
-	"rampart/internal/parsers/bandit"
-	"rampart/internal/parsers/checkov"
-	"rampart/internal/parsers/cyclonedx"
-	"rampart/internal/parsers/dependencycheck"
-	"rampart/internal/parsers/dependencytrack"
-	"rampart/internal/parsers/genericjson"
-	"rampart/internal/parsers/gitlab"
-	"rampart/internal/parsers/gitleaks"
-	"rampart/internal/parsers/grype"
-	"rampart/internal/parsers/kubebench"
-	"rampart/internal/parsers/nuclei"
-	"rampart/internal/parsers/openvex"
-	"rampart/internal/parsers/prowler"
-	"rampart/internal/parsers/sarif"
-	"rampart/internal/parsers/semgrep"
-	"rampart/internal/parsers/snyk"
-	"rampart/internal/parsers/spdx"
-	"rampart/internal/parsers/syft"
-	"rampart/internal/parsers/trivy"
-	"rampart/internal/parsers/trufflehog"
-	"rampart/internal/parsers/zap"
 )
 
-type streamingParser interface {
-	Name() string
-	Detect(head []byte, filename string, contentType string) int
-	Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error]
+var (
+	// LuaParserLoader is registered by internal/integrations/lua on init.
+	LuaParserLoader func(name string, raw []byte) (ParserContract, error)
+
+	// WasmParserLoader is registered by internal/integrations/wasm on init.
+	WasmParserLoader func(name string, raw []byte) (ParserContract, error)
+)
+
+// defaultParserAdapter wraps a parser contract with lazy runtime loading and declarative detection.
+type defaultParserAdapter struct {
+	name     string
+	raw      []byte
+	runtime  string
+	desc     Descriptor
+	detect   domain.DetectSpec
+	parser   ParserContract
+	loadOnce sync.Once
 }
 
-type parserAdapter struct {
-	desc   Descriptor
-	parser streamingParser
+func (a *defaultParserAdapter) getParser() ParserContract {
+	a.loadOnce.Do(func() {
+		if a.runtime == "lua" && LuaParserLoader != nil {
+			a.parser, _ = LuaParserLoader(a.name, a.raw)
+		} else if a.runtime == "wasm" && WasmParserLoader != nil {
+			a.parser, _ = WasmParserLoader(a.name, a.raw)
+		}
+	})
+	return a.parser
 }
 
-func (a *parserAdapter) Descriptor() Descriptor {
+func (a *defaultParserAdapter) Descriptor() Descriptor {
 	return a.desc
 }
 
-func (a *parserAdapter) Detect(head []byte, filename string, contentType string) int {
-	return a.parser.Detect(head, filename, contentType)
+func (a *defaultParserAdapter) Detect(head []byte, filename string, contentType string) int {
+	return a.detect.Score(head, filename, contentType)
 }
 
-func (a *parserAdapter) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
-	return a.parser.Parse(ctx, r, pc)
+func (a *defaultParserAdapter) Parse(ctx context.Context, r io.Reader, pc domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
+	p := a.getParser()
+	if p != nil {
+		return p.Parse(ctx, r, pc)
+	}
+	return func(yield func(domain.RawFinding, error) bool) {
+		yield(domain.RawFinding{}, fmt.Errorf("runtime not loaded for %s", a.desc.ID))
+	}
 }
 
-// DefaultRegistry creates an integration registry pre-loaded with the built-in parsers.
+// DefaultRegistry creates an integration registry pre-loaded with the built-in ClusterParser definitions.
 func DefaultRegistry() *Registry {
 	reg := NewRegistry()
 
-	// 1. SARIF 2.1.0 (Tier 1)
-	_ = reg.RegisterParser(&parserAdapter{
-		desc: Descriptor{
-			ID:           "builtin:sarif",
-			Name:         "SARIF 2.1.0 Parser",
-			Kind:         KindParser,
-			Version:      "2.1.0",
-			SupportLevel: SupportBuiltin,
-			Description:  "Streaming SARIF parser with enrichers for Semgrep, Trivy, Gitleaks",
-		},
-		parser: sarif.NewParser(),
-	})
-
-	// 2. CycloneDX 1.4-1.7 JSON & XML (Tier 1)
-	_ = reg.RegisterParser(&parserAdapter{
-		desc: Descriptor{
-			ID:           "builtin:cyclonedx",
-			Name:         "CycloneDX Parser (JSON/XML)",
-			Kind:         KindParser,
-			Version:      "1.6.0",
-			SupportLevel: SupportBuiltin,
-			Description:  "CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats",
-		},
-		parser: cyclonedx.NewParser(),
-	})
-
-	// 3. SPDX 2.2/2.3 JSON & Tag-Value (Tier 2)
-	_ = reg.RegisterParser(&parserAdapter{
-		desc: Descriptor{
-			ID:           "builtin:spdx",
-			Name:         "SPDX Parser (JSON/Tag-Value)",
-			Kind:         KindParser,
-			Version:      "2.3.0",
-			SupportLevel: SupportBuiltin,
-			Description:  "SPDX 2.2 and 2.3 SBOM parser for JSON and Tag-Value formats",
-		},
-		parser: spdx.NewParser(),
-	})
-
-	// 4. OpenVEX (Tier 1)
-	_ = reg.RegisterParser(&parserAdapter{
-		desc: Descriptor{
-			ID:           "builtin:openvex",
-			Name:         "OpenVEX Parser",
-			Kind:         KindParser,
-			Version:      "0.2.0",
-			SupportLevel: SupportBuiltin,
-			Description:  "OpenVEX triage statements and exploitability assertions parser",
-		},
-		parser: openvex.NewParser(),
-	})
-
-	// 5. Anchore Syft JSON (Tier 2)
-	_ = reg.RegisterParser(&parserAdapter{
-		desc: Descriptor{
-			ID:           "builtin:syft",
-			Name:         "Syft Parser (JSON)",
-			Kind:         KindParser,
-			Version:      "1.0.0",
-			SupportLevel: SupportBuiltin,
-			Description:  "Anchore Syft SBOM parser with artifact catalog and dependency relationships",
-		},
-		parser: syft.NewParser(),
-	})
-
-	// 6. The native JSON reports of the four most used scanners (docs/05, D15). Their SARIF output goes through the
-	// SARIF parser; these read what the tools write by default, with more detail than SARIF carries.
-	for _, p := range []struct {
-		id, name, version, desc string
-		parser                  streamingParser
-	}{
-		{"builtin:trivy", "Trivy Parser (JSON)", "2", "Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations, licenses", trivy.NewParser()},
-		{"builtin:grype", "Grype Parser (JSON)", "1", "Grype JSON: vulnerability matches with their related identifiers", grype.NewParser()},
-		{"builtin:semgrep", "Semgrep Parser (JSON)", "1", "Semgrep JSON: code findings with CWE, location and code snippet hash", semgrep.NewParser()},
-		{"builtin:trufflehog", "TruffleHog Parser (JSON lines)", "3", "TruffleHog JSON lines: secrets, with whether the credential is live; the secret is hashed and never stored", trufflehog.NewParser()},
-		{"builtin:gitleaks", "Gitleaks Parser (JSON)", "1", "Gitleaks JSON: secrets found in a repository; the secret is hashed and never stored", gitleaks.NewParser()},
-		{"builtin:dependencytrack", "Dependency-Track Parser (FPF/JSON)", "1.4", "Dependency-Track FPF export and direct API finding response parser with VEX and attribution", dependencytrack.NewParser()},
-		{"builtin:checkov", "Checkov Parser (JSON)", "3", "Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile", checkov.NewParser()},
-		{"builtin:bandit", "Bandit Parser (JSON)", "1.7", "Bandit Python SAST vulnerability report", bandit.NewParser()},
-		{"builtin:nuclei", "Nuclei Parser (JSONL)", "3", "Nuclei template-based vulnerability scan results", nuclei.NewParser()},
-		{"builtin:zap", "OWASP ZAP Parser (JSON)", "2.14", "OWASP ZAP DAST web application security report", zap.NewParser()},
-		{"builtin:dependencycheck", "OWASP Dependency-Check Parser (JSON)", "8.4", "OWASP Dependency-Check SCA vulnerability report", dependencycheck.NewParser()},
-		{"builtin:snyk", "Snyk Parser (JSON)", "1", "Snyk open source and container vulnerability report", snyk.NewParser()},
-		{"builtin:kubebench", "kube-bench Parser (JSON)", "0.6", "Aqua Security kube-bench CIS Kubernetes benchmark report", kubebench.NewParser()},
-		{"builtin:prowler", "Prowler Parser (JSON)", "4", "Prowler AWS/Azure/GCP cloud security and compliance report", prowler.NewParser()},
-		{"builtin:gitlab", "GitLab Security Report Parser (JSON)", "15", "GitLab security reports (schema v14/v15): SAST, secret detection, dependency and container scanning, DAST; the secret is hashed and never stored", gitlab.NewParser()},
-		// Generic JSON scores low (at most 45 without its format marker), so any parser that knows a report wins.
-		{"builtin:genericjson", "Generic JSON Parser", "1", "Rampart Generic JSON findings (a superset of DefectDojo's Generic Findings Import) for tools with no parser", genericjson.NewParser()},
-	} {
-		_ = reg.RegisterParser(&parserAdapter{
-			desc:   Descriptor{ID: p.id, Name: p.name, Kind: KindParser, Version: p.version, SupportLevel: SupportBuiltin, Description: p.desc},
-			parser: p.parser,
-		})
+	defaultParsers, err := parsers.ListDefaultParsers()
+	if err != nil {
+		return reg
 	}
 
-	// The registry holds parsers only. Trackers and notifiers live in internal/connectors, Dependency-Track in
-	// internal/upstream/dependencytrack, and the connector catalogue the UI reads is domain.ConnectorCatalogue. The
-	// unused tracker, notifier and source contracts were removed (D96, docs/26).
+	for _, pObj := range defaultParsers {
+		name := pObj.Name
+		var manifest struct {
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+			Spec struct {
+				Runtime     string            `yaml:"runtime"`
+				Category    string            `yaml:"category"`
+				Description string            `yaml:"description"`
+				Version     string            `yaml:"version"`
+				Detect      domain.DetectSpec `yaml:"detect"`
+			} `yaml:"spec"`
+		}
+
+		if err := yaml.Unmarshal(pObj.Spec, &manifest); err != nil {
+			continue
+		}
+
+		desc := Descriptor{
+			ID:           "builtin:" + name,
+			Name:         name + " Parser",
+			Kind:         KindParser,
+			Category:     manifest.Spec.Category,
+			Version:      manifest.Spec.Version,
+			SupportLevel: SupportBuiltin,
+			Description:  manifest.Spec.Description,
+		}
+
+		adapter := &defaultParserAdapter{
+			name:    name,
+			raw:     pObj.Spec,
+			runtime: manifest.Spec.Runtime,
+			desc:    desc,
+			detect:  manifest.Spec.Detect,
+		}
+		_ = reg.RegisterParser(adapter)
+	}
 
 	return reg
 }

@@ -40,6 +40,60 @@ type InventoryComponent struct {
 	Vulnerabilities int       `json:"vulnerabilities"` // open findings of this package on this asset
 }
 
+// PackageRisk is the open findings one package has on an asset, by severity band (info counts as low). Version is
+// the version the findings were reported for; empty when a scanner did not say, which then covers every version.
+type PackageRisk struct {
+	PurlBase string
+	Version  string
+	Critical int
+	High     int
+	Medium   int
+	Low      int
+}
+
+// PackageRiskReader tells which packages of an asset have open findings. Only the PostgreSQL store implements it.
+type PackageRiskReader interface {
+	ListPackageRisk(ctx context.Context, tenantID, assetID uuid.UUID, track string) ([]PackageRisk, error)
+}
+
+// ListPackageRisk returns, for the packages of one asset and track that have open findings, how many there are by
+// severity. A finding counts once however many occurrences it has.
+func (s *PostgresStore) ListPackageRisk(ctx context.Context, tenantID, assetID uuid.UUID, track string) ([]PackageRisk, error) {
+	out := []PackageRisk{}
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT pb, ver,
+			       count(*) FILTER (WHERE severity = 'critical'),
+			       count(*) FILTER (WHERE severity = 'high'),
+			       count(*) FILTER (WHERE severity = 'medium'),
+			       count(*) FILTER (WHERE severity NOT IN ('critical', 'high', 'medium'))
+			FROM (
+				SELECT DISTINCT f.id, f.severity,
+				       COALESCE(o.location->'package'->>'purl_base', '') AS pb,
+				       COALESCE(o.location->'package'->>'installed_version', '') AS ver
+				FROM occurrence o JOIN finding f ON f.id = o.finding_id AND f.tenant_id = o.tenant_id
+				WHERE o.tenant_id = $1 AND o.asset_id = $2 AND o.track = $3 AND o.location ? 'package'
+				  AND f.state IN `+activeStates+` AND f.detection = 'present'
+			) x
+			WHERE pb <> ''
+			GROUP BY pb, ver
+			ORDER BY pb, ver`, tenantID, assetID, track)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r PackageRisk
+			if err := rows.Scan(&r.PurlBase, &r.Version, &r.Critical, &r.High, &r.Medium, &r.Low); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // InventoryReader lists the assets and the SBOM packages of a tenant. Only the PostgreSQL store implements it.
 type InventoryReader interface {
 	ListInventoryAssets(ctx context.Context, tenantID uuid.UUID, limit int) ([]InventoryAsset, error)
@@ -160,4 +214,31 @@ func purlType(purl string) string {
 // escapeLike makes a user's text match literally in ILIKE: % and _ are wildcards, \ escapes them.
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// AppAsset is one asset of an application, for the merged SBOM.
+type AppAsset struct {
+	ID   uuid.UUID
+	Name string
+}
+
+// ListApplicationAssets lists the assets attached to an application.
+func (s *PostgresStore) ListApplicationAssets(ctx context.Context, tenantID, appID uuid.UUID) ([]AppAsset, error) {
+	var out []AppAsset
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, COALESCE(NULLIF(display_name, ''), key) FROM asset WHERE tenant_id = $1 AND application_id = $2 ORDER BY key`, tenantID, appID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a AppAsset
+			if err := rows.Scan(&a.ID, &a.Name); err != nil {
+				return err
+			}
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	return out, err
 }

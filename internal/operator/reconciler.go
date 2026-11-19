@@ -164,11 +164,6 @@ func (r *ApplicationReconciler) Reconcile(ctx context.Context, cr *ApplicationCR
 	return status, nil
 }
 
-// dtrackSourceSaver stores the Dependency-Track part of a ScanSource (D92); clearing the connector clears it.
-type dtrackSourceSaver interface {
-	SaveDTrackSource(ctx context.Context, tenantID, sourceID uuid.UUID, connector string, spec json.RawMessage, schedule time.Duration) error
-}
-
 // ScanSourceReconciler handles reconciliation of ScanSource custom resources and secret synchronization.
 type ScanSourceReconciler struct {
 	store       apply.ConfigStore
@@ -233,27 +228,10 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		}
 	}
 
-	dtSpec, dtSchedule, isDT, dtErr := domain.DTrackSourceInput{Type: cr.Spec.Type, Connector: cr.Spec.Connector,
-		Schedule: cr.Spec.Schedule, DependencyTrack: cr.Spec.DependencyTrack}.Check()
-	if dtErr != nil {
-		status.SetCondition("Ready", "False", "InvalidDependencyTrack", dtErr.Error())
-		return status, nil
-	}
-
 	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily, policy)
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
 		return status, err
-	}
-	// Saved every time, so removing the connector turns the source back into an upload source.
-	if saver, ok := r.store.(dtrackSourceSaver); ok {
-		if err := saver.SaveDTrackSource(ctx, tenant.ID, sourceID, cr.Spec.Connector, dtSpec, dtSchedule); err != nil {
-			status.SetCondition("Ready", "False", "StorageError", err.Error())
-			return status, err
-		}
-	} else if isDT {
-		status.SetCondition("Ready", "False", "StorageError", "store does not support Dependency-Track sources")
-		return status, fmt.Errorf("store does not support Dependency-Track sources")
 	}
 
 	if len(cr.Spec.TrustRules) > 0 {
@@ -345,6 +323,16 @@ func NewClusterComplianceFrameworkReconciler(store apply.ConfigStore) *PolicyRec
 	return &PolicyReconciler{store: store, kind: "compliance", cluster: true, label: "ClusterComplianceFramework", check: apply.ValidateFramework}
 }
 
+// NewParserReconciler reconciles namespaced Parser resources (docs/29).
+func NewParserReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "parser", cluster: false, label: "Parser", check: apply.ValidateTenantParser}
+}
+
+// NewClusterParserReconciler reconciles ClusterParser resources (docs/29).
+func NewClusterParserReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "parser", cluster: true, label: "ClusterParser", check: apply.ValidateParser}
+}
+
 func (r *PolicyReconciler) validate(name string, spec []byte) error {
 	if r.check != nil {
 		return r.check(name, spec)
@@ -420,12 +408,34 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 	}
 	status.ObservedGeneration = cr.Metadata.Generation
 	if obj.Error != "" {
+		if r.kind == "parser" {
+			status.SetCondition("ArtifactSynced", "False", "InvalidSpec", obj.Error)
+		}
 		status.SetCondition("Ready", "False", "InvalidSpec", obj.Error)
 		return status, nil
 	}
 	msg := r.label + " reconciled; scores and due dates are recomputed in the background"
 	if r.kind == "compliance" {
 		msg = r.label + " reconciled; the compliance report reads it"
+	}
+	if r.kind == "parser" {
+		msg = r.label + " reconciled; the ingestion pipeline reads it"
+		var pHead struct {
+			Runtime string `json:"runtime"`
+			Source  struct {
+				OCI string `json:"oci"`
+			} `json:"source"`
+		}
+		_ = json.Unmarshal(spec, &pHead)
+		if pHead.Runtime == "wasm" {
+			if pHead.Source.OCI != "" {
+				// Nothing pulls source.oci in this version (docs/34 F15): the module is read from the set the image ships, by
+				// name, and its digest is checked when the server starts. Saying "Pulled" or "verified" here would be false.
+				status.SetCondition("ArtifactSynced", "Unknown", "NotPulled", fmt.Sprintf("source.oci %s is recorded and is not pulled by Rampart; the module is read from the set shipped with the image, by name", pHead.Source.OCI))
+			} else {
+				status.SetCondition("ArtifactSynced", "False", "MissingSource", "source.oci is required for wasm runtime")
+			}
+		}
 	}
 	status.SetCondition("Ready", "True", "Reconciled", msg)
 	return status, nil
@@ -644,10 +654,6 @@ func extractConnectorSecretRef(spec *domain.ConnectorSpec) *domain.SecretKeyRef 
 	case domain.ConnectorTypeWebhook:
 		if spec.Webhook != nil {
 			return &spec.Webhook.SecretRef
-		}
-	case domain.ConnectorTypeDependencyTrack:
-		if spec.DependencyTrack != nil {
-			return &spec.DependencyTrack.CredentialsSecretRef
 		}
 	}
 	return nil

@@ -63,6 +63,8 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
+// An SBOM is assets, not findings, so the readers of SBOM formats are not report parsers: they are SBOMParser resources,
+// registered by the ingest parser set, and their detection is tested there (internal/ingest, TestSBOMParsersAreDetected).
 func TestDefaultRegistryDetect(t *testing.T) {
 	reg := integrations.DefaultRegistry()
 
@@ -78,30 +80,6 @@ func TestDefaultRegistryDetect(t *testing.T) {
 			head:     []byte(`{"$schema": "https://docs.oasis-open.org/sarif/sarif-schema-2.1.0.json"}`),
 			filename: "semgrep.sarif",
 			wantID:   "builtin:sarif",
-		},
-		{
-			name:     "CycloneDX JSON",
-			head:     []byte(`{"bomFormat": "CycloneDX", "specVersion": "1.5"}`),
-			filename: "bom.cdx.json",
-			wantID:   "builtin:cyclonedx",
-		},
-		{
-			name:     "CycloneDX XML",
-			head:     []byte(`<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.5"></bom>`),
-			filename: "bom.cdx.xml",
-			wantID:   "builtin:cyclonedx",
-		},
-		{
-			name:     "SPDX JSON",
-			head:     []byte(`{"spdxVersion": "SPDX-2.3"}`),
-			filename: "bom.spdx.json",
-			wantID:   "builtin:spdx",
-		},
-		{
-			name:     "SPDX Tag-Value",
-			head:     []byte("SPDXVersion: SPDX-2.3\nPackageName: openssl"),
-			filename: "bom.spdx",
-			wantID:   "builtin:spdx",
 		},
 		{
 			name:     "OpenVEX",

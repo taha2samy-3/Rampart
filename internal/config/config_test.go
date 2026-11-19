@@ -180,10 +180,10 @@ func TestConnectorsSSRFAllowlistConfig(t *testing.T) {
 	// 3. Valid CIDR and host converts properly
 	// 3. An exception that names no tenants or connector types is refused (D77)
 	for name, c := range map[string]config.SSRFAllowlistConfig{
-		"no scope":      {Hosts: []string{"dtrack.dtrack.svc"}},
-		"no types":      {Hosts: []string{"dtrack.dtrack.svc"}, Tenants: []string{"*"}},
-		"bad tenant":    {Hosts: []string{"dtrack.dtrack.svc"}, Tenants: []string{"payments"}, ConnectorTypes: []string{"*"}},
-		"unknown type":  {Hosts: []string{"dtrack.dtrack.svc"}, Tenants: []string{"*"}, ConnectorTypes: []string{"sonarqube"}},
+		"no scope":      {Hosts: []string{"service.internal.svc"}},
+		"no types":      {Hosts: []string{"service.internal.svc"}, Tenants: []string{"*"}},
+		"bad tenant":    {Hosts: []string{"service.internal.svc"}, Tenants: []string{"payments"}, ConnectorTypes: []string{"*"}},
+		"unknown type":  {Hosts: []string{"service.internal.svc"}, Tenants: []string{"*"}, ConnectorTypes: []string{"sonarqube"}},
 		"http no scope": {AllowInternalHTTP: true},
 	} {
 		if _, err := c.ToPlatformSSRFAllowlist(); err == nil {
@@ -194,10 +194,10 @@ func TestConnectorsSSRFAllowlistConfig(t *testing.T) {
 	// 4. A scoped allowlist converts properly
 	cValid := config.SSRFAllowlistConfig{
 		CIDRs:             []string{"10.96.0.0/12"},
-		Hosts:             []string{"dtrack.dtrack.svc"},
+		Hosts:             []string{"jira.internal.svc"},
 		AllowInternalHTTP: true,
 		Tenants:           []string{"0193a1c2-0000-7000-8000-000000000001"},
-		ConnectorTypes:    []string{"dependencyTrack"},
+		ConnectorTypes:    []string{"jira"},
 	}
 	al, err := cValid.ToPlatformSSRFAllowlist()
 	if err != nil {

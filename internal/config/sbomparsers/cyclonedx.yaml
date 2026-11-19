@@ -1,0 +1,28 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSBOMParser
+metadata:
+  name: sbom-cyclonedx
+spec:
+  format: cyclonedx
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/sbom-parsers/sbom-cyclonedx:v1
+    file: parsers/wasm/sbom-cyclonedx/parser.wasm
+  description: CycloneDX 1.4-1.6 streaming WASM SBOM parser
+  detect:
+    filenames:
+    - '*cyclonedx*'
+    - '*.cdx.json'
+    - '*.cdx.xml'
+    contentTypes:
+    - '*cyclonedx*'
+    probes:
+    - jsonHasKeys:
+      - bomFormat
+    - contains:
+      - '<bom'
+      - 'cyclonedx.org'
+  options:
+    buildDependencyGraph: true
+    # Findings from the vulnerabilities the document itself states (a VDR). Off: an SBOM is assets (D131).
+    extractVulnerabilities: false

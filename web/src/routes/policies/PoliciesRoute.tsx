@@ -26,7 +26,7 @@ export function PoliciesRoute() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
       <div className="mb-6 flex flex-col gap-1">
-        <h1 className="display text-24 font-semibold text-ink">
+        <h1 className="display text-20 font-semibold text-ink">
           {t('nav.policies', { defaultValue: 'Security & Remediation Policies' })}
         </h1>
         <p className="text-13 text-ink-2">
@@ -38,7 +38,7 @@ export function PoliciesRoute() {
         {/* SLA Policy Section */}
         <section className="flex flex-col gap-3">
           <div className="border-b border-rule pb-2">
-            <h2 className="text-15 font-semibold text-ink">Service Level Agreement (SLA) Targets</h2>
+            <h2 className="text-14 font-semibold text-ink">Service Level Agreement (SLA) Targets</h2>
             <p className="text-12 text-ink-2">Standard remediation deadlines enforced across all applications and asset scans.</p>
           </div>
           <Table aria-label="SLA policies table">
@@ -66,7 +66,7 @@ export function PoliciesRoute() {
         {/* Ticketing Policy Section */}
         <section className="flex flex-col gap-3">
           <div className="border-b border-rule pb-2">
-            <h2 className="text-15 font-semibold text-ink">Automated Ticketing & Issue Dispatch Policy</h2>
+            <h2 className="text-14 font-semibold text-ink">Automated Ticketing & Issue Dispatch Policy</h2>
             <p className="text-12 text-ink-2">Rules governing when and how Rampart automatically creates tracker tickets in Jira or GitHub.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -75,7 +75,7 @@ export function PoliciesRoute() {
               <p className="text-12 text-ink-2">
                 Every newly discovered active Critical finding automatically opens a ticket on the configured tracker with state bound to policy.
               </p>
-              <span className="text-11 font-mono text-emerald-600 dark:text-emerald-400 font-medium">Status: Active (onCritical: true)</span>
+              <span className="text-12 font-mono text-resolved font-medium">Status: Active (onCritical: true)</span>
             </div>
 
             <div className="rounded-ctl border border-rule bg-surface p-4 flex flex-col gap-2">
@@ -83,7 +83,7 @@ export function PoliciesRoute() {
               <p className="text-12 text-ink-2">
                 Prevents tracker API exhaustion by enforcing dynamic connector caps (default 100 tickets/hour) and fair round-robin scheduling.
               </p>
-              <span className="text-11 font-mono text-accent font-medium">Limit: 100 requests / hour / connector</span>
+              <span className="text-12 font-mono text-accent font-medium">Limit: 100 requests / hour / connector</span>
             </div>
           </div>
         </section>
@@ -91,7 +91,7 @@ export function PoliciesRoute() {
         {/* Mass-Close Guard Section */}
         <section className="flex flex-col gap-3">
           <div className="border-b border-rule pb-2">
-            <h2 className="text-15 font-semibold text-ink">Mass-Close Safety Guard (D22 / D71)</h2>
+            <h2 className="text-14 font-semibold text-ink">Mass-Close Safety Guard (D22 / D71)</h2>
             <p className="text-12 text-ink-2">Prevents catastrophic false-positive closures when scanners fail or return partial empty payloads.</p>
           </div>
           <div className="rounded-ctl border border-rule bg-surface p-4 flex flex-col gap-2">

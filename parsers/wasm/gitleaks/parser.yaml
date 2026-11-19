@@ -1,0 +1,22 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterParser
+metadata:
+  name: gitleaks
+spec:
+  category: secrets
+  runtime: wasm
+  description: 'Gitleaks JSON: secrets found in a repository; the secret is hashed
+    and never stored'
+  detect:
+    filenames:
+    - '*gitleaks*.json'
+    probes:
+    - jsonHasKeys:
+      - Description
+      - Secret
+      - Match
+  source:
+    oci: ghcr.io/rampart-aspm/parsers/gitleaks:v1
+  limits:
+    maxMemoryMB: 256
+    timeoutSeconds: 60

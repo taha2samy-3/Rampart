@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, DTrackProjectRecord, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role, SourceStatus, UpstreamDecision } from '@/api/types';
+import type { CorrelatedRef, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -67,12 +67,6 @@ export interface Scenario {
   audit?: { items: Record<string, unknown>[]; next_cursor?: string }[] | 'error';
   groups?: FindingGroup[] | 'error';
   groupFindings?: Record<string, string[]>;
-  /** GET /api/v1/sources (Dependency-Track sources, D92), and per source its unmapped projects and decisions. */
-  dtSources?: SourceStatus[];
-  dtUnmapped?: Record<string, DTrackProjectRecord[]>;
-  /** GET /sources/{id}/projects: the projects in an application, and what put each there. */
-  dtMapped?: Record<string, (DTrackProjectRecord & { application_name: string; application_slug: string; by_rule: boolean })[]>;
-  dtDecisions?: Record<string, UpstreamDecision[]>;
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
   taxonomies?: { id: string; name: string; version: string; origin?: string; error?: string }[];
   taxonomyHistory?: string[];
@@ -306,14 +300,6 @@ export function mockFetch(sc: Scenario): Calls {
       return json(sc.overview ?? overviewData());
     }
     if (path === '/api/v1/views') return json({ views: [] });
-    if (path === '/api/v1/sources') return json({ sources: sc.dtSources ?? [] });
-    if (path.startsWith('/api/v1/sources/')) {
-      const [, , , , sid = '', what] = path.split('/');
-      if (what === 'projects') return json({ projects: sc.dtMapped?.[sid] ?? [], count: sc.dtMapped?.[sid]?.length ?? 0 });
-      if (what === 'unmapped') return json({ projects: sc.dtUnmapped?.[sid] ?? [], count: 0 });
-      if (what === 'decisions') return json({ decisions: sc.dtDecisions?.[sid] ?? [] });
-      if (what === 'map') return json({ status: 'mapped', sync_queued: true });
-    }
     if (path === '/api/v1/groups') {
       if (sc.groups === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
       if (init?.method === 'POST') {
