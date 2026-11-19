@@ -265,3 +265,31 @@ func DefaultRegistry() *Registry {
 	}
 	return reg
 }
+
+// InstalledModuleNames says which WASM module an installed parser needs: the names it is looked up under, or none when it needs no module
+// (a Lua parser). A ClusterSBOMParser is looked up as "sbom-<format>" and then "<format>", as the SBOM reader does.
+func InstalledModuleNames(name string, raw []byte) []string {
+	kind, spec, err := parseInstalled(raw)
+	if err != nil {
+		return nil
+	}
+	if kind == "ClusterSBOMParser" {
+		format := spec.Format
+		if format == "" {
+			format = strings.TrimPrefix(name, domain.SBOMParserNamePrefix)
+		}
+		return []string{"sbom-" + format, format}
+	}
+	if spec.Runtime == "wasm" {
+		return []string{name}
+	}
+	return nil
+}
+
+// RequiredModules is the WASM module this parser runs, by the name it is looked up under; none for a Lua parser.
+func (a *defaultParserAdapter) RequiredModules() []string {
+	if a.runtime == "wasm" {
+		return []string{a.name}
+	}
+	return nil
+}

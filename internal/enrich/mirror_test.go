@@ -23,8 +23,33 @@ func TestApplyMirror(t *testing.T) {
 	}
 	open := FeedConfig{}
 	open.defaults()
-	if k, e := open.applyMirror(&domain.FeedMirrorSpec{NVD: &domain.NVDSource{URL: "https://m/nvd"}}, slog.Default()); k || e || open.NVDURL != "https://m/nvd" || open.KEVURL != DefaultKEVURL {
+	on := true
+	if k, e := open.applyMirror(&domain.FeedMirrorSpec{NVD: &domain.NVDSource{URL: "https://m/nvd", Enabled: &on}}, slog.Default()); k || e || open.NVDURL != "https://m/nvd" || open.KEVURL != DefaultKEVURL || open.NVDDisabled {
 		t.Error("egress allow: mirrored feeds move, the others keep their public address")
+	}
+}
+
+// NVD is the one feed that needs an opt-in (docs/34 item 21, F4): without an API key its first sync is about 165 pages at one page every 6 seconds.
+func TestApplyMirrorNVDIsOptIn(t *testing.T) {
+	off, on := false, true
+	cases := []struct {
+		name string
+		nvd  *domain.NVDSource
+		want bool // NVD runs
+	}{
+		{"no block", nil, false},
+		{"a block with an address only", &domain.NVDSource{URL: "https://m/nvd"}, false},
+		{"a block with a key", &domain.NVDSource{TokenFile: "/etc/rampart/feed-secrets/nvd-api-key"}, true},
+		{"switched on with no key", &domain.NVDSource{Enabled: &on}, true},
+		{"a key but switched off", &domain.NVDSource{Enabled: &off, TokenFile: "/etc/rampart/feed-secrets/nvd-api-key"}, false},
+	}
+	for _, c := range cases {
+		cfg := FeedConfig{}
+		cfg.defaults()
+		cfg.applyMirror(&domain.FeedMirrorSpec{NVD: c.nvd}, slog.Default())
+		if got := !cfg.NVDDisabled; got != c.want {
+			t.Errorf("%s: NVD runs = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

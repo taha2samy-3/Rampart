@@ -161,8 +161,8 @@ function UploadForm({ onDone }: { onDone: () => void }) {
             const cleanId = p.id.replace(/^builtin:/, '');
             const isCustom = p.support_level !== 'builtin';
             return (
-              <option key={p.id} value={cleanId}>
-                {p.name}{isCustom ? ` (${p.support_level}: ${p.id})` : ''}
+              <option key={p.id} value={cleanId} disabled={!!p.unavailable} title={p.unavailable}>
+                {p.name}{isCustom ? ` (${p.support_level}: ${p.id})` : ''}{p.unavailable ? ` (${t('ingestion.parserCannotRun')})` : ''}
               </option>
             );
           })}

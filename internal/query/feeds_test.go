@@ -268,7 +268,7 @@ func TestFeedsAPI(t *testing.T) {
 	if syncResp.Status != "started" || syncResp.Feed != "cisa_kev" || fs.feed != "cisa_kev" {
 		t.Errorf("unexpected sync response: %+v (asked for %q)", syncResp, fs.feed)
 	}
-	if w := post("/api/v1/feeds/sync"); w.Code != http.StatusAccepted || fs.feed != "" || len(fs.names) < 4 {
+	if w := post("/api/v1/feeds/sync"); w.Code != http.StatusAccepted || fs.feed != "" || len(fs.names) < 3 { // NVD is opt-in, so it is not among them
 		t.Errorf("all feeds: %d feed=%q names=%v", w.Code, fs.feed, fs.names)
 	}
 	if w := post("/api/v1/feeds/sync?feed=nope"); w.Code != http.StatusNotFound {
@@ -373,7 +373,7 @@ func (f fakeSync) Why(_ context.Context, feed string) string     { return f.why[
 // A feed that is not run says why, in a form the page can use, and the message of a refused sync says the same reason
 // and not always "egress deny": a feed switched off in the ClusterFeed used to be explained as an egress rule.
 func TestFeedsSayWhyAFeedIsNotRun(t *testing.T) {
-	off := false
+	off, on := false, true
 	list := func(mirror *domain.FeedMirrorSpec, sync fakeSync) map[string]query.FeedItemResponse {
 		st := ingest.NewMemoryStore()
 		st.SetClusterFeedMirror(mirror)
@@ -404,6 +404,7 @@ func TestFeedsSayWhyAFeedIsNotRun(t *testing.T) {
 		KEV:          &domain.FeedMirrorSource{URL: "https://mirror.internal/kev.json"},
 		EPSS:         &domain.FeedMirrorSource{Enabled: &off, URL: "https://mirror.internal/epss.gz"},
 		Vulnrichment: &domain.FeedSource{Enabled: &off},
+		NVD:          &domain.NVDSource{Enabled: &on}, // NVD runs only when it is switched on or has a key
 	}, fakeSync{why: map[string]string{}})
 	for name, want := range map[string]string{
 		"cisa_kev":     "",                     // a mirror address: read, whatever the egress rule
@@ -422,7 +423,7 @@ func TestFeedsSayWhyAFeedIsNotRun(t *testing.T) {
 	}
 
 	// what only the server's configuration decides
-	got = list(&domain.FeedMirrorSpec{}, fakeSync{why: map[string]string{"nvd": enrich.FeedOffServerConfig, "osv": enrich.FeedOffNoEcosystem}})
+	got = list(&domain.FeedMirrorSpec{NVD: &domain.NVDSource{Enabled: &on}}, fakeSync{why: map[string]string{"nvd": enrich.FeedOffServerConfig, "osv": enrich.FeedOffNoEcosystem}})
 	if got["nvd"].DisabledReason != enrich.FeedOffServerConfig || got["osv"].DisabledReason != enrich.FeedOffNoEcosystem {
 		t.Errorf("the server's own reasons: nvd %q, osv %q", got["nvd"].DisabledReason, got["osv"].DisabledReason)
 	}

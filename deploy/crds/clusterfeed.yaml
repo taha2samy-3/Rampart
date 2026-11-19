@@ -40,7 +40,7 @@ spec:
                   description: >-
                     NIST NVD. url is a mirror and is optional (the public API when omitted, unless egress is deny).
                   properties:
-                    enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
+                    enabled: {type: boolean, description: "true switches NVD on, false off. Absent: on only when tokenFile names an API key, because without a key the first sync takes over 15 minutes and holds up the other feeds."}
                     url: {type: string, pattern: '^https?://'}
                     tokenFile:
                       type: string

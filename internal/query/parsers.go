@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"net/http"
+	"rampart/internal/wasmstore"
 
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
@@ -28,6 +29,10 @@ func (a *API) handleListParsers(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if d, err := integrations.InstalledDescriptor(p.Name, p.Spec); err == nil {
+					// Listed means it can run: a parser whose module is not on this server says so, rather than failing at the first upload.
+					if names := integrations.InstalledModuleNames(p.Name, p.Spec); len(names) > 0 && !wasmstore.Default().Has(names...) {
+						d.Unavailable = "its WASM module is not installed on this server (parsers.delivery in the chart)"
+					}
 					parsers = append(parsers, d)
 				}
 			}

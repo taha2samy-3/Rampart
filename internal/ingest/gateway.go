@@ -15,6 +15,7 @@ import (
 	"rampart/internal/normalize"
 	"rampart/internal/objectstore"
 	"rampart/internal/sbom"
+	"rampart/internal/wasmstore"
 	"strconv"
 	"strings"
 	"time"
@@ -670,6 +671,20 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	primaryCategory := domain.CategorySAST
 	if isSBOM {
 		primaryCategory = domain.CategorySCA
+	}
+	// Before anything is created: a parser whose module is not on this server cannot read the file, and the upload must not leave an application, an
+	// asset and a failed run behind for it (docs/34 item 21, W3).
+	if mr, ok := selectedParser.(interface{ RequiredModules() []string }); ok {
+		if names := mr.RequiredModules(); len(names) > 0 && !wasmstore.Default().Has(names...) {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type": "https://rampart.aspm.dev/problems/parser-unavailable", "title": "The parser cannot run on this server", "status": http.StatusServiceUnavailable,
+				"detail": fmt.Sprintf("%s needs a WASM module that is not installed here (parsers.delivery in the chart). Nothing was created.", selectedParser.Descriptor().ID),
+				"code":   "parser_unavailable",
+			})
+			return
+		}
 	}
 	assetType := DetermineAssetType(primaryCategory, uploadCtx)
 	assetKey := DeriveAssetKey(assetType, uploadCtx)

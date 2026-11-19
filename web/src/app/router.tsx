@@ -12,6 +12,7 @@ import type { ComplianceSearch } from '@/routes/compliance/ComplianceRoute';
 import type { WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
 import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
+import { PoliciesRoute } from '@/routes/policies/PoliciesRoute';
 import { Bootstrap } from './Bootstrap';
 import { ErrorView } from './ErrorBoundary';
 import { NAV_ITEMS } from './nav';
@@ -176,6 +177,7 @@ const complianceRoute = createRoute({
   },
 });
 
+const policiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/policies', component: PoliciesRoute });
 const aboutRoute = createRoute({ getParentRoute: () => appRoute, path: '/about', component: AboutRoute });
 const feedsRoute = createRoute({ getParentRoute: () => appRoute, path: '/feeds', component: FeedsRoute });
 const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/integrations', component: IntegrationsRoute });
@@ -184,7 +186,7 @@ const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inv
 
 const vulnerabilitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/vulnerabilities', component: VulnerabilitiesRoute });
 
-const BUILT = new Set(['findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
+const BUILT = new Set(['policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -209,6 +211,7 @@ const routeTree = rootRoute.addChildren([
     administrationRoute,
     complianceRoute,
     aboutRoute,
+    policiesRoute,
     feedsRoute,
     integrationsRoute,
     inventoryRoute,

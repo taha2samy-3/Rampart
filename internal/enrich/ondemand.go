@@ -120,7 +120,7 @@ func (o *OnDemand) Start(ctx context.Context, feed string, names []string) error
 	cfg := o.cfg
 	cfg.Only = feed
 	go func() {
-		bg, cancel := context.WithTimeout(o.base, 30*time.Minute)
+		bg, cancel := context.WithTimeout(o.base, onDemandRoundTimeout)
 		defer cancel()
 		// What follows must run when the sync itself ran out of time, so it has a context of its own.
 		defer func() {
@@ -145,22 +145,37 @@ func (o *OnDemand) Start(ctx context.Context, feed string, names []string) error
 
 func (s *FeedSyncer) markSyncing(ctx context.Context, feeds []string) error {
 	for _, f := range feeds {
-		if _, err := s.pool.Exec(ctx, `INSERT INTO feed_state (feed, status) VALUES ($1, 'syncing')
-			ON CONFLICT (feed) DO UPDATE SET status = 'syncing', error = NULL`, f); err != nil {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO feed_state (feed, status) VALUES ($1, 'queued')
+			ON CONFLICT (feed) DO UPDATE SET status = 'queued', error = NULL`, f); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// clearSyncing puts feeds that still say syncing back to idle.
+// onDemandRoundTimeout bounds a whole round asked for on the page. Each feed has its own deadline inside it (FeedConfig.StepTimeout); this is
+// only the most the round may take altogether (eight feeds, the slow ones last).
+const onDemandRoundTimeout = 4 * time.Hour
+
+// markRunning says which feed the round is working on: the feeds of a round are marked "queued" when it starts and one is "syncing" at a time, so the
+// page does not show six spinners for one download (docs/34 item 21, F3).
+func (s *FeedSyncer) markRunning(ctx context.Context, feed string) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `UPDATE feed_state SET status = 'syncing' WHERE feed = $1 AND status = 'queued'`, feed)
+}
+
+// clearSyncing ends the "syncing" of feeds the round did not finish. A feed that still says syncing when the round is over did not run or was
+// cut off, and the page must say so: it becomes a failure with the reason, not "not synced yet" (docs/34 item 21, F2).
 func (s *FeedSyncer) clearSyncing(ctx context.Context, feeds []string) {
-	_, _ = s.pool.Exec(ctx, `UPDATE feed_state SET status = 'idle' WHERE status = 'syncing' AND feed = ANY($1)`, feeds)
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `UPDATE feed_state SET status = 'error', error = 'the round ended before this feed finished (it did not run, or it ran out of time)' WHERE status IN ('syncing', 'queued') AND feed = ANY($1)`, feeds)
 }
 
 // clearStaleSyncing is called with the sync lock held: no sync is running, so "syncing" is a round a restart cut off.
 func (s *FeedSyncer) clearStaleSyncing(ctx context.Context) {
-	_, _ = s.pool.Exec(ctx, `UPDATE feed_state SET status = 'error', error = 'the sync was interrupted (the server restarted)' WHERE status = 'syncing'`)
+	_, _ = s.pool.Exec(ctx, `UPDATE feed_state SET status = 'error', error = 'the sync was interrupted (the server restarted)' WHERE status IN ('syncing', 'queued')`)
 }
 
 // unlockAndRelease frees a session advisory lock and returns the connection to the pool. When the unlock fails the

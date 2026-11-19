@@ -736,3 +736,116 @@ func TestFeedScheduler_KeepsSyncing(t *testing.T) {
 		}
 	})
 }
+
+// A slow feed does not use up the time of the others, and a feed that ran out of time says so (docs/34 item 21, F1 and F2). On the dev
+// cluster NVD, read first and without an API key, used the one deadline of the round; every feed after it failed at once, and the page
+// showed "not synced yet" and "0 failed" because the error was written with the cancelled context.
+func TestFeedRound_ASlowFeedDoesNotStarveTheOthers_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	_, sysStore := setupStores(t, ctx)
+	cve := "CVE-2098-" + strings.ToUpper(uuid.NewString()[:6])
+	ghsa := "GHSA-" + uuid.NewString()[:4] + "-slow-wxyz"
+
+	upstream := http.NewServeMux()
+	upstream.HandleFunc("/kev.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"vulnerabilities":[{"cveID":"` + cve + `","vulnerabilityName":"x","dateAdded":"2024-05-01","dueDate":"2024-05-22"}]}`))
+	})
+	upstream.HandleFunc("/epss.csv.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(gz("#model_version:v1,score_date:2026-01-01T00:00:00Z\ncve,epss,percentile\n" + cve + ",0.5,0.5\n"))
+	})
+	upstream.HandleFunc("/Go/all.zip", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(osvZip(t, ghsa, cve)) })
+	// NVD never answers: it holds the request until the caller gives up.
+	upstream.HandleFunc("/nvd", func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	srv := httptest.NewServer(upstream)
+	defer srv.Close()
+
+	syncer := enrich.NewFeedSyncer(sysStore.Pool())
+	cfg := enrich.FeedConfig{
+		AllowLoopback: true, KEVURL: srv.URL + "/kev.json", EPSSURL: srv.URL + "/epss.csv.gz", NVDURL: srv.URL + "/nvd",
+		OSVBaseURL: srv.URL, OSVEcosystems: []string{"Go"}, StepTimeout: 2 * time.Second,
+	}
+	started := time.Now()
+	err := syncer.SyncAll(ctx, cfg, slog.Default())
+	if err == nil || !strings.Contains(err.Error(), "nvd") {
+		t.Fatalf("the round should report NVD's failure: %v", err)
+	}
+	if took := time.Since(started); took > 30*time.Second {
+		t.Fatalf("the round took %s: NVD's step did not end at its own deadline", took)
+	}
+	for _, feed := range []string{"cisa_kev", "first_epss", "osv"} {
+		if st, err := syncer.GetFeedState(ctx, feed); err != nil || st.Status != "success" {
+			t.Fatalf("%s must sync although NVD is stuck: %+v %v", feed, st, err)
+		}
+	}
+	st, err := syncer.GetFeedState(ctx, "nvd")
+	if err != nil || st.Status != "error" || st.Error == nil || !strings.Contains(*st.Error, "deadline") {
+		t.Fatalf("NVD must be recorded as failed, with the reason: %+v %v", st, err)
+	}
+
+	// The round's own context ending (the server stopping, or the round's limit) must not lose the error either.
+	// NVD is put back to "syncing", as the page would have it when a round starts, so that the answer below is this round's own.
+	if _, err := sysStore.Pool().Exec(ctx, `UPDATE feed_state SET status = 'syncing', error = NULL WHERE feed = 'nvd'`); err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer stop()
+	_ = syncer.SyncAll(short, enrich.FeedConfig{AllowLoopback: true, KEVURL: cfg.KEVURL, EPSSURL: cfg.EPSSURL, NVDURL: cfg.NVDURL, StepTimeout: time.Minute, Only: "nvd"}, slog.Default())
+	if st, err := syncer.GetFeedState(ctx, "nvd"); err != nil || st.Status != "error" {
+		t.Fatalf("an error written after the context ended was lost: %+v %v", st, err)
+	}
+}
+
+// A round asked for on the page marks every feed "queued" and runs them one after another: one is "syncing", the others wait, and none is left
+// queued when the round ends (docs/34 item 21, F3).
+func TestOnDemandRound_OneFeedSyncsAndTheOthersWait_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	_, sysStore := setupStores(t, ctx)
+	cve := "CVE-2097-" + strings.ToUpper(uuid.NewString()[:6])
+	release := make(chan struct{})
+	upstream := http.NewServeMux()
+	upstream.HandleFunc("/kev.json", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		_, _ = w.Write([]byte(`{"vulnerabilities":[{"cveID":"` + cve + `","vulnerabilityName":"x","dateAdded":"2024-05-01","dueDate":"2024-05-22"}]}`))
+	})
+	upstream.HandleFunc("/epss.csv.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(gz("#model_version:v1,score_date:2026-01-01T00:00:00Z\ncve,epss,percentile\n" + cve + ",0.5,0.5\n"))
+	})
+	srv := httptest.NewServer(upstream)
+	defer srv.Close()
+
+	syncer := enrich.NewFeedSyncer(sysStore.Pool())
+	cfg := enrich.FeedConfig{AllowLoopback: true, NVDDisabled: true, KEVURL: srv.URL + "/kev.json", EPSSURL: srv.URL + "/epss.csv.gz"}
+	od := enrich.NewOnDemand(ctx, sysStore.Pool(), cfg, slog.Default())
+	if err := od.Start(ctx, "", []string{"cisa_kev", "first_epss"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	status := func(feed string) string {
+		st, err := syncer.GetFeedState(ctx, feed)
+		if err != nil {
+			return "?"
+		}
+		return st.Status
+	}
+	waitFor := func(feed, want string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for status(feed) != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s is %q, want %q", feed, status(feed), want)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	waitFor("cisa_kev", "syncing")
+	if got := status("first_epss"); got != "queued" {
+		t.Fatalf("the second feed must wait: %q", got)
+	}
+	close(release)
+	waitFor("cisa_kev", "success")
+	waitFor("first_epss", "success")
+}

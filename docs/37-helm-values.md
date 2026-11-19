@@ -151,7 +151,7 @@ Every source has `enabled` and `url` (empty: the public address, or your mirror'
 |---|---|---|---|
 | `kev` | on | Known exploited vulnerabilities (CISA) | |
 | `epss` | on | Exploitation probability scores | |
-| `nvd` | on | Advisories and CVSS from NIST | `tokenFile` is the file with the NVD API key, under `/etc/rampart/feed-secrets`. |
+| `nvd` | on (the chart writes `enabled: true`) | Advisories and CVSS from NIST | In the **ClusterFeed itself** (the CRD and the server, not the chart) NVD is opt-in: it runs when `enabled: true` is written, or when `enabled` is absent and a `tokenFile` names the API key (free from NIST), and an absent block is off. Without a key its first sync is about 165 pages at one page every 6 seconds (more than 15 minutes of pauses). This chart writes `enabled: true`, so on a cluster installed from it NVD runs, with or without a key, until `feeds.defaultMirror.nvd.enabled` is changed; `tokenFile` is the file with the key, under `/etc/rampart/feed-secrets`. (docs/34 item 21, F4.) |
 | `osv` | on | Advisories by package and ecosystem | `ecosystems` defaults to `[Go, npm, PyPI, Maven]`: four of the 47 OSV has (the list is below). One archive per ecosystem is downloaded to `/tmp`, and npm and PyPI are hundreds of megabytes, so name only the ones you use. Empty falls back to `feeds.osvEcosystems`. |
 | `vulnrichment` | on | SSVC, and CVSS and CWE that NVD has not added (CISA ADP) | |
 | `exploitdb` | on | Public exploit code (maturity `poc`) | |
@@ -227,6 +227,8 @@ they need. The bundled PostgreSQL cluster and SeaweedFS are not denied by this c
 | `networkPolicy.egressExtra` | `[]` | Extra egress rules, verbatim NetworkPolicy entries. |
 
 ### 3.11 `parsers` and `sbomParsers`
+
+**To deliver the modules in one step:** `-f deploy/helm/rampart/values-parsers-v1.yaml` sets `parsers.delivery.mode: imageVolume` and the 16 module images (by digest) with the SHA-256 of each `parser.wasm`, read from the public registry for tag `v1` on 2026-11-19. Without modules the chart's notes print a WARNING: the default parsers are installed and listed `Ready`, and cannot run (docs/34 item 21, W1).
 
 Rampart's server knows no parser by name (D141): each one reaches it as a `ClusterParser` or `ClusterSBOMParser` resource. The defaults are
 installed by the two dependency charts; these keys hold their switches and how the WASM modules the resources name reach the pod.

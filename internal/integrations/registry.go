@@ -48,6 +48,8 @@ type Descriptor struct {
 	Secrets      []string        `json:"secrets,omitempty"`
 	Egress       []string        `json:"egress,omitempty"`
 	Capabilities []string        `json:"capabilities,omitempty"`
+	// Unavailable says why the parser is listed and cannot run (its WASM module is not on this server). Empty: it can.
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 // ParserContract defines the ingestion parsing interface (docs/19 §2).

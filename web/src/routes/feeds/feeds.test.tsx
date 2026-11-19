@@ -157,6 +157,23 @@ describe('Sync', () => {
     expect(screen.queryByRole('status')).toBeNull();
   }, 20000);
 
+  // A round runs its feeds one after another: one is "syncing", the others wait (docs/34 item 21, F3). The page must not show a spinner on all of them.
+  it('shows one feed as syncing and the others as waiting their turn', async () => {
+    withFeeds(() => [
+      feed({ name: 'cisa_kev', display_name: 'CISA KEV', status: 'syncing' }),
+      feed({ name: 'first_epss', display_name: 'FIRST EPSS', status: 'queued' }),
+      feed({ name: 'nvd', display_name: 'NVD', status: 'queued' }),
+    ]);
+    renderApp('/feeds');
+    const table = await screen.findByRole('table', { name: 'Feeds' });
+    const rows = within(table).getAllByRole('row');
+    expect(within(rows.find((r) => within(r).queryByText('CISA KEV'))!).getByText('Syncing')).toBeInTheDocument();
+    expect(within(rows.find((r) => within(r).queryByText('FIRST EPSS'))!).getByText('Waiting for its turn')).toBeInTheDocument();
+    expect(within(rows.find((r) => within(r).queryByText('NVD'))!).getByText('Waiting for its turn')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Syncing CISA KEV');
+    expect(screen.getByRole('status')).toHaveTextContent('2 more are waiting their turn');
+  });
+
   it('syncs one feed from the inspector, by its name', async () => {
     const posts = withFeeds(() => [feed({})]);
     renderApp('/feeds');

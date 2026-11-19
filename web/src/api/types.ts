@@ -593,6 +593,8 @@ export interface ParserDescriptor {
   support_level: 'builtin' | 'certified' | 'community';
   description: string;
   capabilities?: string[];
+  /** Why the parser is listed and cannot run (its WASM module is not installed on the server). Absent: it can. */
+  unavailable?: string;
 }
 
 /**
@@ -710,7 +712,7 @@ export interface FeedItem {
   enabled: boolean;
   /** Why a feed that is not enabled is not run: the ClusterFeed switched it off, egress is denied with no mirror, OSV has no ecosystem, or the server's configuration. */
   disabled_reason?: 'switched_off' | 'egress_denied' | 'no_ecosystem' | 'server_disabled';
-  status: 'success' | 'syncing' | 'idle' | 'error' | 'disabled';
+  status: 'success' | 'syncing' | 'queued' | 'idle' | 'error' | 'disabled';
   records: number;
   last_sync?: string | null;
   error?: string | null;

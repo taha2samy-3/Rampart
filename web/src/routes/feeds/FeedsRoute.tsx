@@ -39,12 +39,13 @@ export function FeedsRoute() {
     queryKey: qk.feeds.list(),
     queryFn: ({ signal }) => get<FeedsResponse>('/api/v1/feeds', { signal }),
     // The server marks a feed "syncing" before it answers the sync request; follow it until it ends.
-    refetchInterval: (query) => (query.state.data?.items.some((i) => i.status === 'syncing') ? 2000 : false),
+    refetchInterval: (query) => (query.state.data?.items.some((i) => i.status === 'syncing' || i.status === 'queued') ? 2000 : false),
   });
   const items = useMemo(() => q.data?.items ?? [], [q.data?.items]);
   const mirror = q.data?.mirror;
   const syncing = items.filter((f) => f.status === 'syncing').map((f) => f.display_name);
-  const busy = syncing.length > 0 || starting;
+  const queued = items.filter((f) => f.status === 'queued').length;
+  const busy = syncing.length > 0 || queued > 0 || starting;
 
   const sync = async (feed?: string) => {
     if (busy) return;
@@ -122,10 +123,13 @@ export function FeedsRoute() {
             <p>{t(mirror?.egress === 'deny' ? 'feeds.egressDeny' : 'feeds.egressAllow')} {t(full ? 'feeds.storageFull' : 'feeds.storageLightweight')}</p>
           </div>
 
-          {syncing.length > 0 && (
+          {(syncing.length > 0 || queued > 0) && (
             <p role="status" className="mt-3 flex items-center gap-2 text-13">
               <Spinner size={14} />
-              {t('feeds.syncingBanner', { names: syncing.join(', ') })}
+              <span>
+                {syncing.length > 0 ? t('feeds.syncingBanner', { names: syncing.join(', ') }) : t('feeds.queuedBanner')}
+                {syncing.length > 0 && queued > 0 && ` ${t('feeds.waitingCount', { count: queued })}`}
+              </span>
             </p>
           )}
           {error && (

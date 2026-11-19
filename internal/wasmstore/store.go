@@ -87,6 +87,33 @@ func Digest(code []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// Has reports whether a module of one of the names is there: the file exists and is not empty, and, with a digest table in force, the table
+// lists it. It does not read the module or check its digest (Load does); it is for a screen that says whether a parser can run.
+func (s *Store) Has(names ...string) bool {
+	for _, name := range names {
+		if name == "" || strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+			continue
+		}
+		if s != nil && s.Dir != "" {
+			for _, cand := range []string{filepath.Join(s.Dir, name+".wasm"), filepath.Join(s.Dir, name, "parser.wasm")} {
+				if fi, err := os.Stat(cand); err == nil && fi.Size() > 0 {
+					if _, listed := s.Digests[name]; !s.Strict() || listed {
+						return true
+					}
+				}
+			}
+		}
+		if !s.Strict() {
+			for _, cand := range devCandidates(name) {
+				if fi, err := os.Stat(cand); err == nil && fi.Size() > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // Load returns the module for the first of names that is found, with the name that matched. In strict mode only Dir is
 // searched and the digest is checked; otherwise Dir is searched first, then the development locations.
 func (s *Store) Load(names ...string) ([]byte, string, error) {

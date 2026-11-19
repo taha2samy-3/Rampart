@@ -50,7 +50,20 @@ type NVDSource struct {
 	URL       string `json:"url,omitempty"`
 	TokenFile string `json:"tokenFile,omitempty"`
 	Schedule  string `json:"schedule,omitempty"`
-	Enabled   *bool  `json:"enabled,omitempty"` // false switches NVD off
+	Enabled   *bool  `json:"enabled,omitempty"` // true switches NVD on, false off; absent is on only with a tokenFile
+}
+
+// On reports whether NVD runs. It is the one feed that needs an opt-in: without an API key its first sync is about 165 pages at one page every 6 seconds
+// (NIST allows 5 requests per 30 seconds), which holds up everything after it, so NVD runs when `enabled: true` is written, or when `enabled` is absent
+// and a tokenFile names the key. An absent block is off. (docs/34 item 21, F4.)
+func (n *NVDSource) On() bool {
+	if n == nil {
+		return false
+	}
+	if n.Enabled != nil {
+		return *n.Enabled
+	}
+	return n.TokenFile != ""
 }
 
 // OSVSource configures the OSV feed. Ecosystems names the OSV ecosystems to read (each is the archive
@@ -321,7 +334,7 @@ func (s *FeedMirrorSpec) refusePublicAddresses() error {
 	if s.EPSS != nil && On(s.EPSS.Enabled) {
 		pairs = append(pairs, struct{ name, url string }{"epss", s.EPSS.URL})
 	}
-	if s.NVD != nil && On(s.NVD.Enabled) {
+	if s.NVD != nil && s.NVD.Enabled == nil || s.NVD != nil && *s.NVD.Enabled { // a block that is not switched off has its address checked, on or not
 		pairs = append(pairs, struct{ name, url string }{"nvd", s.NVD.URL})
 	}
 	if s.OSV != nil && On(s.OSV.Enabled) {

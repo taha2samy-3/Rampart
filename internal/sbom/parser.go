@@ -189,3 +189,12 @@ func IsReader(p integrations.ParserContract) bool {
 	})
 	return ok
 }
+
+// RequiredModules is the module this reader runs, under the names it is looked up as; none when the code was given with the reader.
+func (p *WasmSBOMParser) RequiredModules() []string {
+	if len(p.wasmCode) > 0 {
+		return nil
+	}
+	clean := strings.TrimPrefix(p.name, "sbom-")
+	return []string{p.name, "sbom-" + clean, clean}
+}

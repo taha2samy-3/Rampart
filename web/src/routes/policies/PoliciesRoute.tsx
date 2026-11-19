@@ -1,110 +1,52 @@
 import { useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import {
-  Table,
-  TBody,
-  Td,
-  Th,
-  THead,
-  Tr,
-} from '@/components';
+import { getScoring, qk, toProblem } from '@/api';
+import { ProblemMessage, Spinner } from '@/components';
+import { BaseAndBands, FactorsTable, SlaMatrix } from '@/routes/about/ScoringTables';
 
+/**
+ * The policies in force: how a finding is scored and how long it may stay open, read from the server (the tenant's own policy, else the default
+ * one). Read-only: a policy is changed through its resource (RiskPolicy, SLAPolicy, or the rampart-policies chart), and the page says so. It shows
+ * no number of its own: an earlier version drew a hard-coded table that was not the policy in force (docs/34 item 18).
+ */
 export function PoliciesRoute() {
   const { t } = useTranslation();
-
   useEffect(() => {
-    document.title = `${t('nav.policies', { defaultValue: 'Policies' })} - Rampart`;
+    document.title = `${t('nav.policies')} - Rampart`;
   }, [t]);
-
-  const slaRules = [
-    { severity: 'Critical', breachDays: '7 days', graceDays: '2 days', notifyChannels: 'Jira + Slack + In-App' },
-    { severity: 'High', breachDays: '30 days', graceDays: '5 days', notifyChannels: 'Slack + In-App' },
-    { severity: 'Medium', breachDays: '90 days', graceDays: '14 days', notifyChannels: 'In-App' },
-    { severity: 'Low', breachDays: '180 days', graceDays: '30 days', notifyChannels: 'In-App' },
-  ];
+  const q = useQuery({ queryKey: qk.scoring(), queryFn: ({ signal }) => getScoring(signal), staleTime: 60_000 });
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto p-6">
-      <div className="mb-6 flex flex-col gap-1">
-        <h1 className="display text-20 font-semibold text-ink">
-          {t('nav.policies', { defaultValue: 'Security & Remediation Policies' })}
-        </h1>
-        <p className="text-13 text-ink-2">
-          {t('policies.subtitle', { defaultValue: 'Governing SLA breach targets, automated issue tracking rules, and mass-close safety guard limits.' })}
-        </p>
-      </div>
+    <div className="flex h-full min-h-0 flex-col overflow-auto px-6 py-5">
+      <header className="max-w-[80ch]">
+        <h1 className="display text-20 font-semibold">{t('nav.policies')}</h1>
+        <p className="mt-1 text-13 text-ink-2">{t('policies.subtitle')}</p>
+      </header>
 
-      <div className="flex flex-col gap-8 max-w-4xl">
-        {/* SLA Policy Section */}
-        <section className="flex flex-col gap-3">
-          <div className="border-b border-rule pb-2">
-            <h2 className="text-14 font-semibold text-ink">Service Level Agreement (SLA) Targets</h2>
-            <p className="text-12 text-ink-2">Standard remediation deadlines enforced across all applications and asset scans.</p>
-          </div>
-          <Table aria-label="SLA policies table">
-            <THead>
-              <tr>
-                <Th>Severity Band</Th>
-                <Th>Breach Target (Max Days)</Th>
-                <Th>Grace Period</Th>
-                <Th align="end">Escalation Routing</Th>
-              </tr>
-            </THead>
-            <TBody>
-              {slaRules.map((rule) => (
-                <Tr key={rule.severity} className="h-11">
-                  <Td className="font-semibold text-ink">{rule.severity}</Td>
-                  <Td className="font-mono text-12 text-ink">{rule.breachDays}</Td>
-                  <Td className="text-12 text-ink-2">{rule.graceDays}</Td>
-                  <Td align="end" className="text-12 text-ink-2">{rule.notifyChannels}</Td>
-                </Tr>
-              ))}
-            </TBody>
-          </Table>
-        </section>
+      {q.isPending && <div className="flex h-40 items-center justify-center" aria-busy="true"><Spinner size={24} /></div>}
+      {q.isError && <ProblemMessage problem={toProblem(q.error)} title={t('policies.loadFailed')} onRetry={() => void q.refetch()} className="mt-4" />}
+      {q.data && (
+        <div className="mt-5 max-w-3xl space-y-8">
+          <section aria-labelledby="pol-which">
+            <h2 id="pol-which" className="text-16 font-semibold">{t('policies.whichTitle')}</h2>
+            <p className="mt-1 text-13 text-ink-2">{t(q.data.customised ? 'about.policyCustom' : 'about.policyBuiltin')}</p>
+            <p className="mt-1 text-13 text-ink-2">{t('policies.changeVia')}</p>
+          </section>
 
-        {/* Ticketing Policy Section */}
-        <section className="flex flex-col gap-3">
-          <div className="border-b border-rule pb-2">
-            <h2 className="text-14 font-semibold text-ink">Automated Ticketing & Issue Dispatch Policy</h2>
-            <p className="text-12 text-ink-2">Rules governing when and how Rampart automatically creates tracker tickets in Jira or GitHub.</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="rounded-ctl border border-rule bg-surface p-4 flex flex-col gap-2">
-              <span className="text-13 font-semibold text-ink">Automatic Issue Creation on Critical</span>
-              <p className="text-12 text-ink-2">
-                Every newly discovered active Critical finding automatically opens a ticket on the configured tracker with state bound to policy.
-              </p>
-              <span className="text-12 font-mono text-resolved font-medium">Status: Active (onCritical: true)</span>
-            </div>
+          <section aria-labelledby="pol-sla">
+            <h2 id="pol-sla" className="text-16 font-semibold">{t('about.slaTitle')}</h2>
+            <p className="mb-2 mt-1 text-13 text-ink-2">{t('about.slaBody')}</p>
+            <SlaMatrix scoring={q.data} />
+          </section>
 
-            <div className="rounded-ctl border border-rule bg-surface p-4 flex flex-col gap-2">
-              <span className="text-13 font-semibold text-ink">Hourly Rate Limiting & Fair Cap</span>
-              <p className="text-12 text-ink-2">
-                Prevents tracker API exhaustion by enforcing dynamic connector caps (default 100 tickets/hour) and fair round-robin scheduling.
-              </p>
-              <span className="text-12 font-mono text-accent font-medium">Limit: 100 requests / hour / connector</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Mass-Close Guard Section */}
-        <section className="flex flex-col gap-3">
-          <div className="border-b border-rule pb-2">
-            <h2 className="text-14 font-semibold text-ink">Mass-Close Safety Guard (D22 / D71)</h2>
-            <p className="text-12 text-ink-2">Prevents catastrophic false-positive closures when scanners fail or return partial empty payloads.</p>
-          </div>
-          <div className="rounded-ctl border border-rule bg-surface p-4 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-13 font-semibold text-ink">Close Guard Trigger Threshold</span>
-              <span className="font-mono text-12 font-medium text-ink">maxClosePercent: 20%</span>
-            </div>
-            <p className="text-12 text-ink-2">
-              If an incoming scan report omits more than 20% of previously active findings for its scanner family, Rampart places the closures on hold as a <code>Held Close</code> requiring maintainer approval in the Workflow tab before closing findings.
-            </p>
-          </div>
-        </section>
-      </div>
+          <section aria-labelledby="pol-risk">
+            <h2 id="pol-risk" className="text-16 font-semibold">{t('policies.riskTitle')}</h2>
+            <div className="mt-2"><BaseAndBands scoring={q.data} /></div>
+            <div className="mt-4"><FactorsTable factors={q.data.risk.factors} /></div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

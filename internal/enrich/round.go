@@ -54,7 +54,7 @@ func (s *FeedSyncer) due(ctx context.Context, cfg FeedConfig, feed string) bool 
 	switch st.Status {
 	case "success":
 		return st.LastSync == nil || time.Since(*st.LastSync) >= cfg.Interval
-	case "syncing":
+	case "syncing", "queued":
 		return false
 	}
 	return true // never synced, or the last round failed

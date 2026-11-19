@@ -28,7 +28,7 @@ type FeedItemResponse struct {
 	// (egress is deny and it has no mirror address), no_ecosystem (OSV needs one), server_disabled (the server's own
 	// configuration). Empty when the feed runs.
 	DisabledReason string     `json:"disabled_reason,omitempty"`
-	Status         string     `json:"status"` // success | syncing | idle | error | disabled
+	Status         string     `json:"status"` // success | syncing | queued | idle | error | disabled
 	Records        int64      `json:"records"`
 	LastSync       *time.Time `json:"last_sync,omitempty"`
 	Error          *string    `json:"error,omitempty"`
@@ -293,8 +293,12 @@ func (a *API) getFeedItemsAndMirror(ctx context.Context) (*domain.FeedMirrorSpec
 
 	var nvdMirror string
 	var nvdOn *bool
-	if mirror != nil && mirror.NVD != nil {
-		nvdMirror, nvdOn = mirror.NVD.URL, mirror.NVD.Enabled
+	if mirror != nil {
+		if mirror.NVD != nil {
+			nvdMirror = mirror.NVD.URL
+		}
+		on := mirror.NVD.On() // opt-in: an absent block is off
+		nvdOn = &on
 	}
 	nvdURL, nvdIsMirror := pick(nvdMirror, defaultNVDURL)
 	items = append(items, buildFeedItem("nvd", "NVD (National Vulnerability Database)", "Vulnerability Database",

@@ -545,6 +545,14 @@ export function mockFetch(sc: Scenario): Calls {
       const found = (Array.isArray(sc.runs) ? sc.runs.flat() : []).find((r) => r.id === id);
       return found ? json(found) : json({ title: 'Run not found', status: 404 }, 404);
     }
+    if (path === '/api/v1/scoring') {
+      return json({
+        product: 'Rampart', version: 'test', customised: false,
+        risk: { base: { critical: 900, high: 600, medium: 300, low: 100 }, bands: { critical: 800, high: 500, medium: 250, low: 0 }, factors: [{ name: 'KEV', when: 'The vulnerability is on the CISA list', points: 100, reason: 'Known exploited', group: 'threat' }] },
+        sla: { matrix: { critical: { critical: 3, high: 7, medium: 14, low: 30 }, high: { critical: 7, high: 14, medium: 30, low: 60 }, medium: { critical: 30, high: 45, medium: 90, low: 120 }, low: { critical: 90, high: 120, medium: 180, low: 365 } }, kevDueDate: true, maxDays: 365, startFrom: 'firstSeen', restartOnReactivation: true, pauseDuringRiskAcceptance: true },
+        environments: ['production', 'staging'], application_types: ['repo'],
+      });
+    }
     if (path === '/api/v1/analyzers/analyze' && (init?.method ?? 'GET') === 'POST') {
       if (sc.analyzerAnalyze === 409) return json({ type: 'u', title: 'Analysis is switched off on this server (analysis.enabled)', status: 409, request_id: 'req_an' }, 409);
       if (sc.analyzerAnalyze === 500) return json({ type: 'u', title: 'boom', status: 500, request_id: 'req_an' }, 500);

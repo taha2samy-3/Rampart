@@ -191,10 +191,17 @@ describe('findings route', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('other sections say which phase ships them', async () => {
+  it('Policies shows the policy in force from the server, and no number of its own', async () => {
     mockFetch({ loggedIn: true, findings: [] });
     renderApp('/policies');
-    expect(await screen.findByText(/ships in Phase 2/)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Policies' })).toBeInTheDocument();
+    expect(screen.queryByText(/Not built yet/)).toBeNull();
+    // read from /api/v1/scoring: the whole-tenant default or custom line, the SLA matrix and the factors
+    expect(await screen.findByText(/This page only shows it/)).toBeInTheDocument();
+    expect(await screen.findByText('No deadline is longer than 365 days.')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Factors' })).toBeInTheDocument();
+    // the table that used to be drawn from invented numbers is gone
+    expect(screen.queryByText('Jira + Slack + In-App')).toBeNull();
   });
 
   it('mutating calls send X-CSRF-Token from the session', async () => {

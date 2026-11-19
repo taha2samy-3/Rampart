@@ -502,7 +502,10 @@ func (s *FeedSyncer) syncOptionalAll(ctx context.Context, cfg FeedConfig, m *dom
 			continue
 		}
 		s.begin(src.name)
-		n, err := s.syncOptional(ctx, cfg, src)
+		s.markRunning(ctx, src.name)
+		sctx, cancel := cfg.step(ctx)
+		n, err := s.syncOptional(sctx, cfg, src)
+		cancel()
 		if err != nil {
 			s.recordFeedError(ctx, src.name, err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.name, err))

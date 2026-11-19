@@ -21,3 +21,9 @@ Lost the password? Set a new one with:  rampart admin set-password  (reads the n
 {{- end }}
 
 Open the UI:  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rampart.fullname" . }} 8080:8080   then http://localhost:8080
+{{- if and (eq (default "none" .Values.parsers.delivery.mode) "none") (or .Values.parsers.defaultParsers.enabled .Values.sbomParsers.defaultSBOMParsers.enabled) }}
+
+WARNING: the WASM parsers cannot run. parsers.delivery.mode is "none", so no parser module reaches the pod, yet the default parsers are installed:
+they are listed as Ready, and an upload of a SARIF, Semgrep, Trivy or SBOM file fails with "no wasm module for the format". Only the Lua parsers
+(bandit, genericjson, nuclei) work. Deliver the modules:  -f deploy/helm/rampart/values-parsers-v1.yaml   (docs/34 item 21, W1)
+{{- end }}

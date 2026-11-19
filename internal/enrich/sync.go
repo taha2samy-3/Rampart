@@ -358,7 +358,15 @@ func (s *FeedSyncer) ListFeedStates(ctx context.Context) ([]FeedState, error) {
 	return states, rows.Err()
 }
 
+// stateCtx is the context a write of a feed's state runs under: it outlives the step that ended it. A step that ran out of time has a
+// cancelled context, and an error written with it is lost, which left the feed "syncing" and then "not synced yet" (docs/34 item 21, F2).
+func stateCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+}
+
 func (s *FeedSyncer) recordFeedSuccess(ctx context.Context, feed string, records int64) error {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	s.note(FeedResult{Feed: feed, Records: records})
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO feed_state (feed, last_sync, records, status, error)
@@ -375,6 +383,8 @@ func (s *FeedSyncer) recordFeedSuccess(ctx context.Context, feed string, records
 }
 
 func (s *FeedSyncer) recordFeedError(ctx context.Context, feed string, syncErr error) {
+	ctx, cancel := stateCtx(ctx)
+	defer cancel()
 	s.note(FeedResult{Feed: feed, Err: syncErr})
 	errMsg := syncErr.Error()
 	_, _ = s.pool.Exec(ctx, `

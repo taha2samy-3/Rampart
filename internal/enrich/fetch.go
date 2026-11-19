@@ -43,6 +43,10 @@ type FeedConfig struct {
 	// Only, when set, limits one SyncAll round to that feed (an on-demand sync of one row of the feeds page).
 	Only string
 
+	// StepTimeout is how long one feed may take (default 45 minutes). Each feed has its own, so a slow one (NVD's first read, without an
+	// API key, is about 165 pages at one page every 6 seconds) cannot use up the time of the ones after it (docs/34 item 21, F1).
+	StepTimeout time.Duration
+
 	KEVURL        string
 	EPSSURL       string
 	OSVBaseURL    string
@@ -101,6 +105,9 @@ func (c *FeedConfig) defaults() {
 	if c.Interval <= 0 {
 		c.Interval = 6 * time.Hour
 	}
+	if c.StepTimeout <= 0 {
+		c.StepTimeout = 45 * time.Minute
+	}
 	if c.HTTPClient == nil {
 		c.HTTPClient = NewFeedHTTPClient(15*time.Minute, c.AllowLoopback)
 	} else if !c.guarded {
@@ -134,18 +141,14 @@ func (c *FeedConfig) applyMirror(m *domain.FeedMirrorSpec, log *slog.Logger) (sk
 		skipEPSS = true
 	}
 	switch {
-	case m.NVD == nil:
-		if deny {
-			c.NVDDisabled = true
-		}
-	case !domain.On(m.NVD.Enabled):
+	case !m.NVD.On(): // an absent block, `enabled: false`, or no `enabled` and no key: NVD is opt-in (docs/34 item 21, F4)
 		c.NVDDisabled = true
 	case m.NVD.URL != "":
 		c.NVDURL = m.NVD.URL
 	case deny:
 		c.NVDDisabled = true // a block with no address, and no public address allowed
 	}
-	if m.NVD != nil && domain.On(m.NVD.Enabled) && m.NVD.TokenFile != "" {
+	if m.NVD.On() && m.NVD.TokenFile != "" {
 		// The key of the resource wins over the server's own file. A key that cannot be read leaves the sync
 		// keyless, at NIST's lower rate, and says so; it must not stop the feed.
 		if key, err := ReadFeedToken(m.NVD.TokenFile, c.secretsDir()); err != nil {
@@ -226,6 +229,11 @@ func (l *limitedBody) Close() error { return l.c.Close() }
 
 // SyncAll downloads and applies every configured feed. One feed failing does not stop the others;
 // the errors are joined.
+// step is the context of one feed's work: the round's, with the feed's own deadline.
+func (c FeedConfig) step(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, c.StepTimeout)
+}
+
 // wants reports whether this round is to run the feed: all of them, or the one named in Only.
 func (c FeedConfig) wants(feed string) bool { return c.Only == "" || c.Only == feed }
 
@@ -272,7 +280,10 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		// fresh: a scheduled round leaves it
 	} else {
 		s.begin("cisa_kev")
-		s.syncKEVRound(ctx, cfg, log, &errs)
+		s.markRunning(ctx, "cisa_kev")
+		sctx, cancel := cfg.step(ctx)
+		s.syncKEVRound(sctx, cfg, log, &errs)
+		cancel()
 	}
 
 	if !cfg.wants("first_epss") {
@@ -283,29 +294,20 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 		// fresh
 	} else {
 		s.begin("first_epss")
-		s.syncEPSSRound(ctx, cfg, log, &errs)
-	}
-
-	if !cfg.NVDDisabled && cfg.wants("nvd") && s.due(ctx, cfg, "nvd") {
-		started := time.Now()
-		s.begin("nvd")
-		n, err := s.syncNVD(ctx, cfg)
-		if err != nil {
-			s.recordFeedError(ctx, "nvd", err)
-			errs = append(errs, fmt.Errorf("nvd: %w", err))
-		} else if err := s.recordNVDSuccess(ctx, started, int64(n)); err != nil {
-			errs = append(errs, err)
-		} else {
-			log.Info("feed synced", "feed", "nvd", "records", n)
-		}
+		s.markRunning(ctx, "first_epss")
+		sctx, cancel := cfg.step(ctx)
+		s.syncEPSSRound(sctx, cfg, log, &errs)
+		cancel()
 	}
 
 	if len(cfg.OSVEcosystems) > 0 && cfg.wants("osv") && s.due(ctx, cfg, "osv") {
 		s.begin("osv")
+		s.markRunning(ctx, "osv")
 		total := 0
 		var osvErr error
+		octx, ocancel := cfg.step(ctx)
 		for _, eco := range cfg.OSVEcosystems {
-			n, err := s.syncOSVEcosystem(ctx, cfg, eco)
+			n, err := s.syncOSVEcosystem(octx, cfg, eco)
 			total += n
 			if err != nil {
 				osvErr = fmt.Errorf("osv %s: %w", eco, err)
@@ -313,6 +315,7 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 				break
 			}
 		}
+		ocancel()
 		if osvErr != nil {
 			s.recordFeedError(ctx, "osv", osvErr)
 		} else if err := s.recordFeedSuccess(ctx, "osv", int64(total)); err != nil {
@@ -325,6 +328,24 @@ func (s *FeedSyncer) SyncAll(ctx context.Context, cfg FeedConfig, log *slog.Logg
 	// The optional sources (D88): exploitation evidence, SSVC, licensed feeds. Without a mirror, none is on, and the
 	// rows of any source switched off are removed.
 	errs = append(errs, s.syncOptionalAll(ctx, cfg, mirror, log)...)
+
+	// NVD goes last: without an API key it is by far the slowest feed, and the others should not wait behind it.
+	if !cfg.NVDDisabled && cfg.wants("nvd") && s.due(ctx, cfg, "nvd") {
+		started := time.Now()
+		s.begin("nvd")
+		s.markRunning(ctx, "nvd")
+		sctx, cancel := cfg.step(ctx)
+		n, err := s.syncNVD(sctx, cfg)
+		cancel()
+		if err != nil {
+			s.recordFeedError(ctx, "nvd", err)
+			errs = append(errs, fmt.Errorf("nvd: %w", err))
+		} else if err := s.recordNVDSuccess(ctx, started, int64(n)); err != nil {
+			errs = append(errs, err)
+		} else {
+			log.Info("feed synced", "feed", "nvd", "records", n)
+		}
+	}
 	return errors.Join(errs...)
 }
 

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { listParsers, qk } from '@/api';
 import type { ParserDescriptor } from '@/api/types';
 import {
@@ -74,6 +75,7 @@ spec:
     maxDepth: 64`;
 
 export function ParsersView({ onUploadClick }: ParsersViewProps) {
+  const { t } = useTranslation();
   const toast = useToast();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string>('all');
@@ -202,6 +204,11 @@ export function ParsersView({ onUploadClick }: ParsersViewProps) {
                       <div className="flex flex-col">
                         <span>{p.name}</span>
                         <span className="font-mono text-12 text-ink-2">{p.id}</span>
+                        {p.unavailable && (
+                          <span className="text-12 font-normal text-critical">
+                            {t('ingestion.parserCannotRun')}: {p.unavailable}
+                          </span>
+                        )}
                       </div>
                     </Td>
                     <Td className="text-12 text-ink-2">{cat}</Td>

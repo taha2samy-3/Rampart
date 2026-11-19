@@ -16,6 +16,7 @@ import (
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
 	"rampart/internal/objectstore"
+	"rampart/internal/wasmstore"
 
 	"github.com/google/uuid"
 )
@@ -530,5 +531,57 @@ func TestGatewaySBOM_AnEphemeralRunLeavesTheInventoryAlone(t *testing.T) {
 	after, _, _ := gw.Store().GetSBOM(t.Context(), tenantID, assetID())
 	if after == nil || after.ID != main.ID {
 		t.Fatalf("the SBOM of main must still be the asset's: %+v", after)
+	}
+}
+
+// A parser whose module is not installed refuses the upload before anything is created: no application, no asset and no run are left behind
+// (docs/34 item 21, W3: the dev cluster's failed SBOM upload had made an empty application).
+func TestGatewayUploadWithoutTheParsersModuleCreatesNothing(t *testing.T) {
+	prev := wasmstore.Default()
+	wasmstore.SetDefault(&wasmstore.Store{Dir: t.TempDir(), Digests: map[string]string{"x": strings.Repeat("0", 64)}}) // strict, empty
+	t.Cleanup(func() { wasmstore.SetDefault(prev) })
+
+	gw := ingest.NewGateway(nil)
+	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	authn := auth.NewAuthenticatorWithStore(gw.Store())
+	token := authn.DefaultAdminToken(tenantID)
+	gw.SetAuthenticator(authn)
+	mux := http.NewServeMux()
+	gw.RegisterRoutes(mux)
+
+	xmlData, err := os.ReadFile("../testdata/reports/sbom-cyclonedx/sample.cdx.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "bom.cdx.xml")
+	_, _ = fw.Write(xmlData)
+	_ = mw.WriteField("format", "cyclonedx")
+	_ = mw.WriteField("application", "brand-new-app")
+	_ = mw.WriteField("createApplication", "true")
+	_ = mw.Close()
+	req := httptest.NewRequest("POST", "/api/v1/uploads/direct", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "parser_unavailable") {
+		// the route may be on the gateway under another path: try the SBOM endpoint the other test uses
+		body2 := bytes.NewReader(xmlData)
+		req2 := httptest.NewRequest("POST", "/ingest/v1/sbom?application=brand-new-app&createApplication=true", body2)
+		req2.Header.Set("Content-Type", "application/vnd.cyclonedx+xml")
+		req2.Header.Set("Authorization", "Bearer "+token)
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, req2)
+	}
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "parser_unavailable") {
+		t.Fatalf("want 503 parser_unavailable, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if app, _ := gw.Store().LookupApplication(context.Background(), tenantID, "brand-new-app"); app != nil {
+		t.Fatalf("an application was created for an upload that could not be read: %+v", app)
+	}
+	if runs, _ := gw.Store().ListIngestRuns(context.Background(), tenantID, 10, nil); len(runs) != 0 {
+		t.Fatalf("a failed run was left behind: %d", len(runs))
 	}
 }

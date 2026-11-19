@@ -172,6 +172,28 @@ describe('ingest runs', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it('says which parsers cannot run, and does not offer them for an upload', async () => {
+    const parsers = [
+      { id: 'builtin:sarif', name: 'sarif Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'SARIF', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' },
+      { id: 'builtin:bandit', name: 'bandit Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'Bandit (Lua)' },
+    ];
+    mockFetch({ loggedIn: true, runs: [], parsers });
+    renderApp('/ingestion');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Parsers & Formats' }));
+    const table = await screen.findByRole('table', { name: 'Supported parsers table' });
+    const sarifRow = within(table).getByText('sarif Parser').closest('tr')!;
+    expect(within(sarifRow).getByText(/Cannot run: its WASM module is not installed/)).toBeInTheDocument();
+    const banditRow = within(table).getByText('bandit Parser').closest('tr')!;
+    expect(within(banditRow).queryByText(/Cannot run/)).toBeNull();
+
+    // the upload dialog does not offer the one that cannot run
+    await userEvent.click(screen.getByRole('tab', { name: 'Ingest Runs' }));
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Upload report' }))[0]!);
+    const option = await screen.findByRole('option', { name: /sarif Parser \(Cannot run\)/ });
+    expect(option).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'bandit Parser' })).toBeEnabled();
+  });
+
   it('says so when the parsers cannot be loaded, instead of showing a made-up list', { timeout: 15000 }, async () => {
     mockFetch({ loggedIn: true, runs: [], parsers: 'error' });
     renderApp('/ingestion');
