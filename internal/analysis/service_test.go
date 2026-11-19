@@ -212,9 +212,12 @@ func TestAnUploadQueuesEveryAnalyzerThatIsOn(t *testing.T) {
 
 	e.svc.SBOMStored(e.ctx, e.tenant, e.sbom.ID)
 
-	got := e.q.names()
-	if len(got) != 2 || !(got[0] == "sonatype" && got[1] == "default" || got[0] == "default" && got[1] == "sonatype") {
-		t.Fatalf("queued %v, want the external analyzer and the matcher, not the switched-off or the refused one", got)
+	got := map[string]bool{}
+	for _, n := range e.q.names() {
+		got[n] = true
+	}
+	if len(e.q.jobs) != 2 || !got["sonatype"] || !got["default"] {
+		t.Fatalf("queued %v, want the external analyzer and the matcher, not the switched-off or the refused one", e.q.names())
 	}
 	for _, j := range e.q.jobs {
 		if j.Trigger != "upload" || j.SBOMID != e.sbom.ID || j.TenantID != e.tenant {

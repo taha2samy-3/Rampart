@@ -147,9 +147,8 @@ func TestAnalyzersTab_ListsEveryKindWithItsOwnFieldsAndTheReasonForARefusal(t *t
 	}
 
 	// another tenant sees the cluster's analyzers and none of this tenant's
-	other := auth.FormatToken(domain.NewID(), "other_tenant_token_analyzers")
 	otherTenant := domain.NewID()
-	other = auth.FormatToken(otherTenant, "other_tenant_token_analyzers")
+	other := auth.FormatToken(otherTenant, "other_tenant_token_analyzers")
 	authn2 := auth.NewAuthenticatorWithStore(r.st)
 	authn2.RegisterToken(other, &auth.TokenRecord{ID: domain.NewID(), TenantID: otherTenant, Subject: "o", Role: auth.RoleViewer, CreatedAt: time.Now().UTC()})
 	mux := http.NewServeMux()

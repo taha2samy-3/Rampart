@@ -117,21 +117,23 @@ export function AnalyzersView() {
             />
           </div>
 
-          <div className="grid min-h-0 grid-cols-1 border-b border-rule lg:grid-cols-[minmax(0,1fr)_22rem]">
+          {/* shrink-0: in a column that scrolls, a grid that may shrink squeezes its first row to nothing (a scroll container has no minimum height)
+                and the inspector then covers the table, on a phone. */}
+          <div className="grid shrink-0 grid-cols-1 border-b border-rule lg:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="min-w-0 overflow-x-auto">
               {items.length === 0 ? (
                 <EmptyState title={t('analyzers.noneConfigured')}>{t('analyzers.noneConfiguredHint')}</EmptyState>
               ) : shown.length === 0 ? (
                 <EmptyState title={t('analyzers.noMatch')}>{t('analyzers.noMatchHint')}</EmptyState>
               ) : (
-                <Table aria-label={t('analyzers.tableLabel')} className="min-w-[44rem]">
+                <Table aria-label={t('analyzers.tableLabel')} className="md:min-w-[44rem]">
                   <THead>
                     <tr>
-                      <Th className="w-[28%]">{t('analyzers.colAnalyzer')}</Th>
-                      <Th className="w-[16%]">{t('analyzers.colKind')}</Th>
-                      <Th className="w-[22%]">{t('analyzers.colWhere')}</Th>
-                      <Th className="w-[12%]">{t('analyzers.colStatus')}</Th>
-                      <Th className="w-[22%]">{t('analyzers.colLastEvent')}</Th>
+                      <Th className="md:w-[28%]">{t('analyzers.colAnalyzer')}</Th>
+                      <Th className="hidden md:table-cell md:w-[16%]">{t('analyzers.colKind')}</Th>
+                      <Th className="hidden md:table-cell md:w-[22%]">{t('analyzers.colWhere')}</Th>
+                      <Th className="md:w-[12%]">{t('analyzers.colStatus')}</Th>
+                      <Th className="md:w-[22%]">{t('analyzers.colLastEvent')}</Th>
                     </tr>
                   </THead>
                   <TBody>
@@ -173,13 +175,14 @@ function AnalyzerRow({ a, selected, onSelect }: { a: AnalyzerItem; selected: boo
         <button type="button" onClick={onSelect} aria-pressed={selected} className="block max-w-full text-start hover:text-accent">
           <span className="block truncate font-medium">{a.name}</span>
           <span className="block truncate text-12 text-ink-2">
+            <span className="md:hidden">{t(`analyzers.kind_${a.kind}`)}, </span>
             {t(`analyzers.scope_${a.scope}`)}
             {a.namespace ? `, ${a.namespace}` : ''}
           </span>
         </button>
       </Td>
-      <Td className="whitespace-normal">{t(`analyzers.kind_${a.kind}`)}</Td>
-      <Td className="whitespace-normal"><span className="block truncate font-mono text-12" title={whereOf(a)}>{whereOf(a)}</span></Td>
+      <Td className="hidden whitespace-normal md:table-cell">{t(`analyzers.kind_${a.kind}`)}</Td>
+      <Td className="hidden whitespace-normal md:table-cell"><span className="block truncate font-mono text-12" title={whereOf(a)}>{whereOf(a)}</span></Td>
       <Td className="whitespace-normal">
         <span className={cn('inline-flex items-center gap-1.5', status === 'refused' && 'text-critical')}>
           {status === 'refused' && <IconWarning className="size-3.5 shrink-0" />}

@@ -2,6 +2,7 @@
 
 This is the record of the analyzer work (decision D143 in [docs/16](16-implementation-decisions.md)): what was built, how it behaves, how to use it, what was checked and what was not.
 It follows how Dependency-Track runs its analyzers, which the owner chose as the model over the older documents (docs/30, 33 and 34 disagreed with each other about it).
+The decisions are D143 (the design) and D144 (the smaller choices, each with its reason) in docs/16.
 
 ## 1. What an analyzer is
 

@@ -2549,3 +2549,81 @@ Dependency-Track's behaviour was taken from its own source and documentation, as
 
 **Known limits, recorded rather than hidden.** The matcher reads `engine`, `rules.minConfidence`, `rules.includePreRelease` and `sources` but does not use them (one matcher, exact matching); it uses `rules.matchDirectOnly` and `schedule`. Severity comes from the CVSS score (the table keeps no severity word). Per-application roles are not consulted by the asset route.
 There is no "analyze again" button on an application's page (the route exists). `openapi.json` documents only a small part of the API and was not extended. The in-memory store does not run analyses. `examples/external-analyzer` keeps gRPC's default 4 MiB receive limit.
+
+## D144: The smaller decisions of the analyzer work, with their reasons (2026-11-19)
+
+D143 records the design. These are the choices made while building it that D143 does not give, each with why. Where a choice is a limit, it is also listed in docs/38 section 9.
+
+**Storage and naming**
+
+| Decision | Why |
+|---|---|
+| Migration 53 (`sbom_analysis`) is a separate file; 52 was not edited. | Migration 52 may already be applied to a development database; goose skips a file it has run, so an edit would leave that database without the table. `database.minSchemaVersion` and `CurrentExpectedSchemaVersion` move to 53. |
+| The analyzers are kept in the existing `cluster_policy` and `policy_object` tables, with their `kind` check widened, not in tables of their own. | They are policy objects with the same last-valid-spec rule (`applied_spec`, `compiled_ok`, `compile_error`): an edit that is refused keeps the spec in force and shows the reason. One mechanism, not two. |
+| Two sets of kind names: `external_analyzer` and `sbom_analyzer` in the store, `external` and `sbom` (with scope `cluster` or `tenant`) in the API, the events and `sbom_analysis`. | The store kinds sit beside `risk`, `sla`, `parser`; the API names are what a person reads. `AnalyzerRef` is the one value that carries the API form everywhere above the store. |
+| The scanner family of a tenant's analyzer is `analyzer:<namespace>/<name>`; a cluster one's is `analyzer:<name>`. | A cluster analyzer and a tenant's can share a name in one tenant. Without the namespace they would share a close scope, and one would close the other's findings. |
+| `analyzer_event` and `sbom_analysis` carry row-level security by tenant; an event belongs to the tenant that caused it; the newest 200 events of each analyzer are kept. | A tenant must not read another's test results or analyses, which name SBOMs and findings. Cluster analyzers are seen by all, but what happened to them for one tenant is that tenant's. 200 is enough to see a pattern and bounded. |
+
+**Who may do what**
+
+| Decision | Why |
+|---|---|
+| Listing and reading the history need only a signed-in user (viewer for the history); Test and "Analyze every SBOM" need an administrator; "analyze one asset" needs the triager role. | Seeing whether an analyzer works helps everyone who reads a finding. Test makes the server dial an address, and analysing every SBOM queues work for the whole tenant, so both are an administrator's. Analysing one asset is what an upload already lets a triager do. |
+| The list shows the address of a cluster analyzer to every user of the tenant. | The address is an in-cluster Service name, not a secret, and a person who sees "Could not reach …" needs it to act. A secret never appears: `auth.secretRef` is refused. |
+| A tenant's `ExternalAnalyzer` may name only a `service`. | An `endpoint` would let a tenant make the server call any address (SSRF; docs/34 F29). |
+| `POST /api/v1/assets/{id}/analyze` does not consult per-application roles. | The tenant role is enough to upload an SBOM for the asset; narrowing it by application is the access model's work, not this feature's. Recorded as a limit. |
+
+**Test**
+
+| Decision | Why |
+|---|---|
+| A test of a service calls `HealthCheck` and `GetMetadata` and sends no component. | A test is an answer to "is it up", and a component could cost money (Sonatype) or change nothing useful. |
+| A test is cut off at 30 seconds, whatever the spec's timeout. | The spec's timeout (up to 600 s) is for a job; a person waiting on a button needs an answer. |
+| Every test is recorded as an event, successful or not, with the person who ran it. | An analyzer that fails its test is exactly what the history is for. |
+| The matcher's test checks that advisory data is loaded (the count of affected ranges and ecosystems), and says so when the OSV feed has not synced. | A matcher with no data matches nothing and looks healthy: this makes the silence visible. |
+
+**Running**
+
+| Decision | Why |
+|---|---|
+| Analyses run on their own queue, `analysis`, with 10 workers and a 20-minute job timeout. | A slow or down analyzer holds one of its workers, never an ingest worker (the reason the notification queue is separate, D97). 20 minutes is the longest analyzer call (10) and the merge after it. |
+| River priority: manual 1, upload 2, scheduled 3. | River has four priorities and serves 1 first; this keeps Dependency-Track's order (manual 75, upload 50, scheduled 0). |
+| The sweep tries a failed or timed-out analysis again after one hour (`FailedRetryAfter`), not at the next minute. | A completed analysis has a time to wait (24 h); a failed one has none, and would be queued every minute against an analyzer that is down. |
+| A pending or running analysis older than an hour is stale and can be claimed again. | A worker that died leaves its row behind; without this the SBOM would never be analysed by that analyzer again. |
+| An analysis creates its ingest run only after the analyzer answered. | A failed call must reach no merge and leave no run in the Ingest runs list; the failure is in the event and in the analysis record. |
+| The trigger is a hook after `SaveSBOM` (`ingest.AnalysisTrigger`), and a failure to queue is logged, not returned. | An upload must not fail because the queue is down; the scheduled sweep finds the SBOM. A parse job that is retried stores the SBOM again and queues again: the older one is `cancelled` as replaced. |
+| The service is built twice in the runner: on the application role for uploads, requests and the worker, on the system role for the sweep only. | The first respects row-level security per tenant; the sweep must see every tenant, which only the system role may. Without `database.systemUrl` the sweep is not started and the log says why (as for the ticket sweeper). |
+| The finding's package (purl, name, installed version) is filled in from the component the analyzer named by reference. | The contract's `affected_component_ref` returns the reference it was given, and the client stores it in the package's purl field. Without this the finding would carry a reference where the identity of a finding needs the package. |
+| The client sends and accepts messages up to 64 MiB; the Sonatype analyzer's receive limit was raised to match. | A whole SBOM in one call is more than gRPC's 4 MiB default (25 000 components are about 8 MiB); the analyzer refused one in a test. |
+| The cron reader is written here (`internal/cron`); it reads numbers, `*`, ranges, lists, steps and five macros, in UTC; names (`mon`, `jan`) are refused. Day of month and day of week are "either matches" when both are set. | No cron library is in the module and none was added for forty lines of logic; refusing what it cannot read (rather than guessing) is the rule of D143 item 7; "either matches" is Vixie cron's rule, which operators know. |
+| `analysis.enabled` defaults to `true`, while the chart's built-in matcher defaults to off. | The switch is for the whole mechanism; what makes an upgrade quiet is that no analyzer is on until the operator turns one on. |
+
+**The matcher**
+
+| Decision | Why |
+|---|---|
+| `engine`, `rules.minConfidence`, `rules.includePreRelease` and `sources` are accepted and not used; `rules.matchDirectOnly` and `schedule` are used. | The first four are in every resource the chart creates with their CRD defaults, so refusing them would refuse the default resource. They cannot change the result today: there is one matcher and a match is exact. (`tls.caSecretRef` and `auth.secretRef` are refused because accepting them would silently drop a security setting.) The page, the chart's comments and docs/37 say which is which. |
+| A pre-release version is not filtered out by default. | The CRD default `includePreRelease: false` would read as "skip pre-release components", which hides vulnerabilities in them with no sign. Doing nothing is the lesser silent loss, and it is stated. |
+| A range with `last_affected` ends at an affected version; a `VERSIONS` row lists exact versions. A withdrawn advisory is left out. | These are OSV's own meanings; `vulnerability_affected` stores them as given. |
+| An advisory with no severity word is graded by its CVSS score; with no score it is `unknown`, not `info`. | The `vulnerability` table keeps a score and no word. `info` would say "harmless" about something that is only unscored. A test found that `unknown` (what an empty word parses to) was not being graded at all: fixed. |
+
+**The page**
+
+| Decision | Why |
+|---|---|
+| The Analyzers are a third tab of Ingestion, next to Ingest runs and Parsers & Formats, not a new place in the navigation. | The owner asked for a tab; analyzers belong beside the readers of reports. |
+| The list shows plain words (Service, Built-in matcher, Ready, Switched off, Refused), no coloured pills; a failure is shown by text with an icon, in the red the Feeds page uses for errors. | The design rule: colour is for risk, and state is said in words. |
+| A button an administrator alone may press is shown disabled with the reason beside it, not hidden. | A reader needs to know the action exists and who may do it. |
+| "Analyze every SBOM" is disabled for an analyzer that is switched off or refused. | The server would queue nothing; the page says why instead of answering "0 queued". |
+| The inspector says that engine, minimum confidence, advisory sources and pre-release do not change what the matcher matches yet. | A page that shows a setting implies it works. |
+| The history lists tests and analyses together, newest first, in one phrase style ("Test worked", "Analysis failed"), with who and how long. | One list answers "did it work lately", whichever way it was started. |
+
+**What was left alone**
+
+| Decision | Why |
+|---|---|
+| `openapi.json` was not extended. | It documents findings, bulk and gate only; the parsers, feeds and every other route are missing from it too. Extending it for these five alone would make it look complete when it is not. |
+| The in-memory store (no PostgreSQL) does not run analyses; the server starts them only with a database. | River, the claim table and the sweep are PostgreSQL's; a second implementation would test the copy, not the thing. The in-memory store implements the store interfaces so that the service is tested on the real merge engine. |
+| `examples/external-analyzer` keeps the default 4 MiB receive limit. | It is a sample with two toy rules; the limit is noted (docs/38) rather than changed there. |
+| There is no "analyze again" button on an application's page yet. | The route exists; the application page has its own design work. |
+

@@ -972,7 +972,7 @@ export const en = {
     analyzeNothing: 'Nothing was queued: every SBOM is already being analyzed by this analyzer, or there is no SBOM yet.',
     analyzeFailed: 'The analyses could not be queued',
     matcherNote: 'The matcher compares every package with all the advisories Rampart has loaded. Engine, minimum confidence, advisory sources and pre-release are read but do not change what it matches yet. "Direct dependencies only" and the schedule do.',
-    lastResult: 'Last result',
+    lastResult: 'Test result',
     history: 'History',
     historyFailed: 'The history could not be loaded',
     noEvents: 'Nothing is recorded yet. Press Test to check that it answers.',

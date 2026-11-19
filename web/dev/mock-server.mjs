@@ -668,6 +668,57 @@ const server = http.createServer((req, res) => {
         return;
       }
     }
+    // Analyzers (internal/query/analyzers.go): a service, the built-in matcher, one refused resource; Test and Analyze add events.
+    if (p.startsWith('/api/v1/analyzers')) {
+      const ago = (m) => new Date(Date.now() - m * 60_000).toISOString();
+      const key = (a) => [a.kind, a.scope, a.namespace ?? '', a.name].join('/');
+      globalThis.__analyzers ??= {
+        items: [
+          { kind: 'external', scope: 'cluster', name: 'sonatype-oss-index', enabled: true, ready: true, protocol: 'grpc', target: 'sonatype-analyzer.rampart-system.svc.cluster.local:9090', timeout_seconds: 60, secure: false, updated_at: ago(3000) },
+          { kind: 'sbom', scope: 'cluster', name: 'native-matcher', enabled: true, ready: true, engine: 'hybrid', min_confidence: 0.8, match_direct_only: false, sources: { osv: true, ghsa: true, nvd: false }, schedule: '0 3 * * *', updated_at: ago(3000) },
+          { kind: 'external', scope: 'tenant', namespace: 'acme', name: 'internal-scanner', enabled: true, ready: false, error: 'spec.protocol: "http" is not supported: the server has no HTTP client', updated_at: ago(90) },
+        ],
+        events: {},
+      };
+      const st = globalThis.__analyzers;
+      const withLast = (a) => ({ ...a, last_event: st.events[key(a)]?.[0] });
+      const ev = (a, event, outcome, message, actor, ms) => {
+        const e = { id: 'ev-' + Math.random().toString(36).slice(2, 8), event, outcome, message, duration_ms: ms, actor, created_at: new Date().toISOString() };
+        (st.events[key(a)] ??= []).unshift(e);
+        return e;
+      };
+      if (p === '/api/v1/analyzers' && req.method === 'GET') return json(res, { analyzers: st.items.map(withLast), total: st.items.length });
+      if (p === '/api/v1/analyzers/events' && req.method === 'GET') {
+        const a = { kind: url.searchParams.get('kind'), scope: url.searchParams.get('scope'), namespace: url.searchParams.get('namespace') ?? '', name: url.searchParams.get('name') };
+        return json(res, { events: st.events[key(a)] ?? [], total: (st.events[key(a)] ?? []).length });
+      }
+      if ((p === '/api/v1/analyzers/test' || p === '/api/v1/analyzers/analyze') && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const a = JSON.parse(body || '{}');
+          const found = st.items.find((i) => key(i) === key(a));
+          if (!found) return problem(res, 404, 'No such analyzer', undefined);
+          if (p.endsWith('/analyze')) {
+            if (!found.ready || !found.enabled) return json(res, { queued: 0 }, 202);
+            ev(found, 'analysis', 'succeeded', 'Analysed 212 components: 7 findings, 2 new, 1 no longer reported', undefined, 1840);
+            return json(res, { queued: 3 }, 202);
+          }
+          if (!found.ready) {
+            const e = ev(found, 'test', 'failed', "The analyzer's spec is refused, so there is nothing to call: " + found.error, 'user:admin', 1);
+            return json(res, { ok: false, outcome: 'failed', message: e.message, latency_ms: 1, event: e });
+          }
+          const ok = found.kind === 'sbom' || Math.random() > 0.35;
+          const message = found.kind === 'sbom' ? '1,284,903 affected ranges in 6 ecosystems are loaded for the matcher'
+            : ok ? 'Serving: Sonatype OSS Index 0.1.0, 9 package types'
+            : 'Could not reach ' + found.target + ': nothing answers there (the Service or the pod is down, the port is wrong, or TLS does not match)';
+          const detail = found.kind === 'sbom' ? { affected_ranges: '1284903', ecosystems: '6' } : { target: found.target, enabled: 'true', secure: 'false', ...(ok ? { answered_in_ms: '9', name: 'Sonatype OSS Index', version: '0.1.0', package_types: 'npm,maven,pypi,golang,cargo,nuget,gem,composer,cocoapods' } : {}) };
+          const e = ev(found, 'test', ok ? 'succeeded' : 'failed', message, 'user:admin', ok ? 9 : 5003);
+          return json(res, { ok, outcome: e.outcome, message, latency_ms: e.duration_ms, detail, event: e });
+        });
+        return;
+      }
+    }
     if (p === '/api/v1/parsers') return json(res, { parsers: PARSERS });
     if (p === '/api/v1/feeds/sync') {
       const feedParam = url.searchParams.get('feed') || 'all';

@@ -12,10 +12,11 @@ export function eventPhrase(t: (k: string) => string, e: Pick<AnalyzerEvent, 'ev
   return t(`analyzers.eventOutcome.${e.event}_${e.outcome}`);
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+/** A label and its value side by side; a long value (an address) goes under its label, where it has the whole width. */
+function Row({ label, children, stacked }: { label: string; children: React.ReactNode; stacked?: boolean }) {
   return (
-    <div className="flex gap-3">
-      <dt className="w-36 shrink-0 text-ink-2">{label}</dt>
+    <div className={stacked ? 'flex flex-col' : 'flex gap-3'}>
+      <dt className={stacked ? 'text-ink-2' : 'w-36 shrink-0 text-ink-2'}>{label}</dt>
       <dd className="min-w-0 break-words">{children}</dd>
     </div>
   );
@@ -26,7 +27,7 @@ function Setup({ a }: { a: AnalyzerItem }) {
   if (a.kind === 'external') {
     return (
       <dl className="mt-1 space-y-1">
-        <Row label={t('analyzers.address')}><span className="font-mono text-12">{a.target}</span></Row>
+        {a.target && <Row label={t('analyzers.address')} stacked><span className="font-mono text-12">{a.target}</span></Row>}
         <Row label={t('analyzers.connection')}>{a.secure ? t('analyzers.connectionSecure') : t('analyzers.connectionPlain')}</Row>
         {a.timeout_seconds ? <Row label={t('analyzers.timeLimit')}>{t('analyzers.timeLimitValue', { seconds: a.timeout_seconds })}</Row> : null}
       </dl>
@@ -53,7 +54,7 @@ function DetailList({ detail }: { detail?: Record<string, string> }) {
   return (
     <dl className="mt-2 space-y-1 text-12">
       {entries.map(([k, v]) => (
-        <Row key={k} label={t(`analyzers.detail.${k}`, { defaultValue: k })}>
+        <Row key={k} label={t(`analyzers.detail.${k}`, { defaultValue: k })} stacked={v.length > 24}>
           <span className="font-mono">{v}</span>
         </Row>
       ))}
