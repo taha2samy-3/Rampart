@@ -1022,6 +1022,8 @@ spec:
                       type: integer
                     maxMemoryMB:
                       type: integer
+                    timeoutSeconds:
+                      type: integer
             status:
               type: object
               properties:
@@ -1290,33 +1292,19 @@ spec:
                   default: wasm
                 detect:
                   type: object
-                  properties:
-                    filenames:
-                      type: array
-                      items:
-                        type: string
-                    contentTypes:
-                      type: array
-                      items:
-                        type: string
-                    probes:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          jsonHasKeys:
-                            type: array
-                            items:
-                              type: string
-                          contains:
-                            type: array
-                            items:
-                              type: string
+                  x-kubernetes-preserve-unknown-fields: true
                 source:
                   type: object
                   properties:
                     oci:
                       type: string
+                limits:
+                  type: object
+                  properties:
+                    maxMemoryMB:
+                      type: integer
+                    timeoutSeconds:
+                      type: integer
                 options:
                   type: object
                   properties:
@@ -2370,6 +2358,8 @@ spec:
                       type: integer
                     maxMemoryMB:
                       type: integer
+                    timeoutSeconds:
+                      type: integer
             status:
               type: object
               properties:
@@ -2631,33 +2621,19 @@ spec:
                   default: wasm
                 detect:
                   type: object
-                  properties:
-                    filenames:
-                      type: array
-                      items:
-                        type: string
-                    contentTypes:
-                      type: array
-                      items:
-                        type: string
-                    probes:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          jsonHasKeys:
-                            type: array
-                            items:
-                              type: string
-                          contains:
-                            type: array
-                            items:
-                              type: string
+                  x-kubernetes-preserve-unknown-fields: true
                 source:
                   type: object
                   properties:
                     oci:
                       type: string
+                limits:
+                  type: object
+                  properties:
+                    maxMemoryMB:
+                      type: integer
+                    timeoutSeconds:
+                      type: integer
                 options:
                   type: object
                   properties:
