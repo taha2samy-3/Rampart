@@ -2,6 +2,8 @@
 bin/
 # a binary built at the root with `go build ./cmd/rampart` (anchored: cmd/rampart/ is source)
 /rampart
+# the subcharts `helm dependency update` pulls into the chart
+deploy/helm/rampart/charts/*.tgz
 *.exe
 *.exe~
 *.dll

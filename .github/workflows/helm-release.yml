@@ -74,6 +74,9 @@ jobs:
             cp artifacthub-repo.yml "$CHART_DIR/artifacthub-repo.yml"
           fi
 
+      - name: Pull the rampart-policies chart (a dependency of this chart)
+        run: helm dependency update "$CHART_DIR"
+
       - name: Lint Helm Chart
         run: |
           helm lint --strict "$CHART_DIR"

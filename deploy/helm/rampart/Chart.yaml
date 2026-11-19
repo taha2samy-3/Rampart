@@ -14,6 +14,15 @@ keywords:
   - security
   - sbom
   - kubernetes
+dependencies:
+  # The default scoring policies and compliance frameworks of Rampart (the risk policy, the SLA policy and eleven compliance frameworks),
+  # as the default of every tenant: https://github.com/Rampart-Aspm/policies. On by default; policies.enabled: false leaves them out.
+  # It is an OCI chart: `helm dependency update` pulls it, so the package ghcr.io/rampart-aspm/charts/rampart-policies must be public.
+  - name: rampart-policies
+    alias: policies
+    version: 0.2.1
+    repository: oci://ghcr.io/rampart-aspm/charts
+    condition: policies.enabled
 maintainers:
   - name: rampart-team
     email: security@rampart.aspm.dev

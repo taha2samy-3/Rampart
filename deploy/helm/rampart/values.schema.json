@@ -156,6 +156,17 @@
           "type": "string"
         }
       }
+    },
+    "policies": {
+      "type": "object",
+      "description": "The default scoring policies and compliance frameworks (the rampart-policies chart). Its other values are the chart's own (slaPolicy, riskPolicy, compliance, scope, logos).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Install them as the default of every tenant."
+        }
+      }
     }
   }
 }

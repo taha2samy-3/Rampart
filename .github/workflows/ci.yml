@@ -139,6 +139,12 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Chart CRDs match deploy/crds
         run: diff -r deploy/crds deploy/helm/rampart/crds
+      - name: The one-file CRD bundle is up to date
+        run: python3 hack/crds-bundle.py --check
+      # The chart depends on the rampart-policies chart (an OCI chart, Rampart-Aspm/policies). The package must be public: a private one
+      # cannot be pulled from this repository's token.
+      - name: helm dependency update (the rampart-policies chart)
+        run: helm dependency update deploy/helm/rampart
       - name: helm lint
         run: helm lint deploy/helm/rampart
       - name: helm template (bundled CNPG and SeaweedFS)

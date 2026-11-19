@@ -372,7 +372,10 @@ sbomAnalyzer:
     ghsa: true
     nvd: false
 
-
-
-
-
+# The default scoring policies and compliance frameworks of Rampart (the rampart-policies chart, https://github.com/Rampart-Aspm/policies):
+# the risk policy, the SLA policy (profile strictest) and eleven compliance frameworks, installed as the default of every tenant (a tenant
+# that has a policy of its own keeps it). ON by default. Set enabled to false to leave them all out, or tune them here:
+#   policies.slaPolicy.profile=pci-dss   policies.compliance.hipaa.enabled=false   policies.riskPolicy.enabled=false
+# Their risk policy reads app.environment, so they need this server (schema version 51): the chart and the server move together.
+policies:
+  enabled: true

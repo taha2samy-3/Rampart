@@ -21,6 +21,14 @@ docker compose up -d --build    # PostgreSQL, object store, Dex, Rampart (UI inc
 
 Open http://localhost:8080. `init.sh` prints the accounts: two demo users in Dex (single sign-on) and the first administrator inside Rampart. Details in [deploy/compose/README.md](deploy/compose/README.md). On Kubernetes, `deploy/helm/rampart` installs the same thing; the notes printed by `helm install` say where the first administrator's password is.
 
+**The CRDs.** Every CustomResourceDefinition is a file in [deploy/crds](deploy/crds) (one per kind), and all of them are in one file, [deploy/rampart-crds.yaml](deploy/rampart-crds.yaml), written by `hack/crds-bundle.py` and checked in CI:
+
+```sh
+kubectl apply --server-side -f https://raw.githubusercontent.com/taha2samy-3/Rampart/main/deploy/rampart-crds.yaml
+```
+
+The Helm chart carries the same files in its `crds/` folder, and Helm installs that folder on the first install only: it never updates it on an upgrade. So apply the file above before upgrading to a release that changes a CRD. What each resource means is in [docs/04-crds.md](docs/04-crds.md).
+
 ## How people sign in
 
 - **Single sign-on (OIDC)** is the way for everyone: Okta, Entra ID, Keycloak, Dex and the rest ([doc 14](docs/14-sso-and-identity.md)). Roles come from bindings in the configuration, never straight from the provider.
