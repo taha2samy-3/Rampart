@@ -79,4 +79,10 @@ export const qk = {
     all: () => ['parsers'] as const,
     list: () => ['parsers', 'list'] as const,
   },
+  analyzers: {
+    all: () => ['analyzers'] as const,
+    list: () => ['analyzers', 'list'] as const,
+    events: (ref: { kind: string; scope: string; namespace?: string; name: string }) =>
+      ['analyzers', 'events', ref.kind, ref.scope, ref.namespace ?? '', ref.name] as const,
+  },
 };

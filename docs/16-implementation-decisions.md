@@ -2252,8 +2252,8 @@ $$\text{Tenant Parser (Parser CRD)} \succ \text{Cluster Parser (ClusterParser CR
 - `internal/operator/manager.go`: Adds controller for `ClusterParser` managed alongside cluster policies.
 - `internal/operator/reconciler.go`: Provides `NewClusterParserReconciler` and `NewParserReconciler` with `apply.ValidateParser` spec validation.
 - `deploy/helm/rampart/templates/rbac.yaml` and `deploy/operator/rbac.yaml`: Grants the operator RBAC rights for `clusterparsers`, `clusterparsers/status`, and `clusterparsers/finalizers`.
-- `internal/config/parsers/`: 21 default manifests embedded into the Go binary with `//go:embed` for out-of-the-box operation in Docker Compose and single-binary environments.
-- `deploy/helm/rampart/templates/clusterparsers.yaml`: Deploys all 21 default `ClusterParser` resources when `parsers.defaultParsers.enabled: true` (the default).
+- `internal/config/parsers/`: 21 default manifests embedded into the Go binary with `//go:embed` for out-of-the-box operation in Docker Compose and single-binary environments. **Superseded by D141: nothing is embedded any more.**
+- `deploy/helm/rampart/templates/clusterparsers.yaml`: Deploys all 21 default `ClusterParser` resources when `parsers.defaultParsers.enabled: true` (the default). **Superseded by D141: the resources come from the `rampart-parsers` and `rampart-sbom-parsers` charts.**
 
 **WASM OCI Publishing, Rigorous Testing & CI/CD Pipeline.**
 - Standalone WASM parsers live in `parsers/wasm/<name>/` (`custom-scanner`, `gitleaks`, `sarif`, `semgrep`).
@@ -2463,3 +2463,89 @@ Following the migration from monolithic hardcoded parsers to dynamic Kubernetes 
 
 **Progress.** AB1 is done (docs/35): the Application resource, the score's variables, the environment, the settings tab. AB2 to AB6 are not. The slices are in docs/35 (AB1 to AB6); the first two make the rule real and let the guarded example of D138 be rewritten as doc 36 section 16 shows. Doc 36 section 16 lists the defaults taken (exact branch names only, no default environment, how an unclaimed branch is handled, the grouping of applications by repository).
 
+## D141: Rampart is blind about parsers: no parser is compiled in, embedded or named in the server (2026-11-19)
+
+**Context.** D127 principle 1 says that no parser is privileged because it is compiled into the binary, and docs/35 section 0 (owner, 2026-11-18) says the shipped modules reach the process from outside. D127 itself still embedded 20 manifests with `go:embed` "for out-of-the-box operation in Docker Compose and single-binary environments", and gave them the ids `builtin:<name>`, which also reserved their names. The owner confirmed the intent again on 2026-11-19: any parser, WASM, Lua or SBOM reader, can be supplied from outside, and the server knows none of them.
+
+**Decision.**
+1. **Nothing is embedded.** `internal/config/parsers` and `internal/config/sbomparsers` are removed. The server knows no parser by name.
+2. **A parser reaches the server as a resource, in one of two ways.** (a) Through the control plane: `ClusterParser`, and the new `ClusterSBOMParser` (a reconciler, and `rampart apply`). Both are kept in the cluster's parser table; a `ClusterSBOMParser` is kept as the whole resource, so it is told apart from a report parser by its kind and not by its name. (b) From a directory of manifests, `RAMPART_PARSERS_DIR`, read at start: for a deployment with no control plane (Compose, one binary) and for tests. It is read the way `RAMPART_WASM_DIR` is for the modules the manifests name.
+3. **One table, two kinds, so two name spaces.** A `ClusterSBOMParser` is named `sbom-*`; a `ClusterParser` may not be.
+4. **One constructor builds every installed WASM or Lua parser** (`integrations.NewInstalledParser`), from the whole resource or from its spec alone. Its id is `builtin:<name>`, the form stored in runs and read by the compliance report (`CategoriesOf`) and the gate (`runMatches`). It says "installed for the whole cluster", not "compiled in".
+5. **A name is resolved in this order: the registry, then the cluster's parsers, then the tenant's.** A name an administrator installed for the cluster is reserved: a tenant's mapping parser of the same name cannot take its uploads. The compiled-in copies gave the same protection; the order of D127 ("tenant before cluster") was not what the code did.
+6. **The start-up module check reads the digest table**, since the server no longer knows which modules to expect: every module the table lists must be present and match. `GET /api/v1/parsers` lists what is installed.
+
+**Found while doing it, hidden until then by the compiled-in copy.**
+- The control plane keeps a `ClusterParser`'s spec alone. The WASM and Lua runtimes read a whole resource (`metadata.name`, `spec`), so a parser installed through the operator was refused ("source.oci or source.file is required", "script is required") and never ran. Every upload was served by the compiled-in copy. `NewInstalledParser` now wraps a spec alone into the resource before it reaches the runtime.
+- A `ClusterSBOMParser` had a CRD, a chart template and RBAC, and no reconciler: the SBOM readers reached the server only through the embed.
+- The adapter dropped the loader's error and kept a typed nil in a non-nil interface, so a parser that failed to build panicked at the first `Parse`. The error is kept and said ("runtime not loaded for builtin:x: ...").
+
+**Consequences.**
+- An administrator's own cluster parser now has the id `builtin:<name>` for new runs (it was `lua:<name>` or `wasm:<name>`), and the support level `builtin`, which the Integrations page words "Built in". Runs already stored keep their old id. Nothing reads the `lua:` or `wasm:` prefix except the name matching, which still accepts both.
+- The start-up check no longer catches a parser installed with a module the table does not list; that parser is refused when it is used (the store checks the digest), so it never runs unverified.
+- A server with nothing installed answers an upload with "Unknown parser ... Available parsers:" and an empty list. A Compose or one-binary deployment must set `RAMPART_PARSERS_DIR` or apply the resources.
+- A `ClusterParser` with `runtime: native` resolves only against what the registry holds; no manifest of the project uses it.
+
+**How the defaults are delivered now.**
+- **Kubernetes.** Two charts own the default resources, each next to the code of its parsers: `rampart-parsers` (13 WASM and 4 Lua `ClusterParser`) in the parsers repository and `rampart-sbom-parsers` (3 `ClusterSBOMParser`) in the sbom-parsers repository. Rampart's chart depends on both (aliases `parsers` and `sbomParsers`, on by default), so `parsers.defaultParsers.*` and `sbomParsers.defaultSBOMParsers.*` are the values they always were. The chart renders every resource with exactly the spec of its manifest; each repository's CI checks that, and the manifests in `internal/testdata/parsers` are the same files.
+- **Compose and one binary.** `RAMPART_PARSERS_DIR` and `RAMPART_WASM_DIR`, filled by `deploy/compose/fetch-parsers.sh`.
+- **Tests.** Fixtures are in `internal/testdata`. The WASM modules are built from the two repositories by `hack/test-modules.sh` (CI: `.github/actions/parser-modules`, refs pinned in `.github/parser-modules.env`).
+
+**Found on the way: the chart's `detect` was older than the embedded one.** All 20 resources the chart rendered had the first, simple `detect` (filenames and probes), while the embedded manifests, which the tests check and which the server used, have the scored one (`rules`, `filenameWeight`, `reject`). Removing the embed without replacing the chart's copy would have changed detection for every Helm install. The chart's copy is now the embedded manifests, moved to the parsers repositories (without `source.file`, a path of this repository's layout).
+
+**Also fixed.** `templates/clustersbomanalyzer.yaml` used `default true`, which turns an explicit `false` into `true`: `sbomAnalyzer.sources.osv: false` could not be set (nor `minConfidence: 0`). Each key is now looked up by name. The matcher is still not wired (docs/34 F26, F30); this only makes the values mean what they say.
+
+**Not done.**
+- The two charts must be published (`chart-v0.1.0` tags in the two repositories, public packages) before this repository's CI can run `helm dependency update`; and the parser repositories hold uncommitted changes (the record-error support in 13 WASM parsers, the rewritten CycloneDX and SPDX readers, `syft` renamed `sbom-syft`) that Rampart's tests need. The refs in `.github/parser-modules.env` are `main` until then; pin them to commits.
+- No Dockerfile step puts parsers in the image: Compose reads the two directories, and Kubernetes gets the modules as image volumes (`parsers.modules`).
+- The tenant-scoped `SBOMParser` has no controller.
+- The Integrations page words every cluster-installed parser "Built in"; "Installed for the cluster" would be accurate.
+- `internal/targets/runner.go` applies `/etc/rampart/resources.yaml`, while the Compose quick start mounts a directory `/etc/rampart/resources/`, so its `default-resources.yaml` is not applied in the container (seen, not fixed).
+
+## D142: Sonatype OSS Index is an external analyzer, not a feed (2026-11-19)
+
+**Context.** The owner asked for Sonatype OSS Index as a gRPC analyzer, in a repository of its own with a Helm chart, shown in the UI, as a cluster and a namespaced resource. docs/30 says the commercial sources of Dependency-Track (OSS Index, Snyk, VulnDB) are lost "unless a feed brings them"; docs/33 section 1.1 says scanners are never feeds; docs/34 noted the two disagree. The owner's instruction is to do what Dependency-Track does, whatever the docs say.
+
+**Decision.** It is an analyzer. A feed (D88, D89) brings bulk data that is downloaded and keyed by vulnerability id; OSS Index is a service that is asked about packages (`POST /api/v3/component-report`, at most 128 package URLs per request: the service answers 400 above that) and has no data set to download that this work found. It is attached as a `ClusterExternalAnalyzer` or an `ExternalAnalyzer` (the same fields). It lives in its own repository, `sonatype-analyzer` (service, image, chart, CI), outside this one; the contract it implements, `pkg/api/analyzer/v1`, is owned here and copied there.
+
+**How it behaves, taken from Dependency-Track's source and checked against the real service.** The package URL is sent without qualifiers and subpath (with `?type=jar` the service answers no vulnerabilities for log4j-core 2.14.1, which has 7), answers are matched by a key that ignores what the service rewrites in the coordinate it echoes, only the types Dependency-Track asks about are looked up (the others are counted, not guessed), a token that starts `sonatype_pat_` is a Bearer token and any other is basic authentication, answers are cached per package. It differs in one place on purpose: a batch that fails after its retries fails the whole call and returns nothing, where Dependency-Track's analyzer returns an empty list, so a caller cannot read the silence as "fixed".
+
+**What Dependency-Track does around its analyzers, which is the caller's side (not built here).** An analysis starts on a BOM upload, on a manual request, and on a schedule: every 60 s it looks for projects last analysed longer ago than the maximum age (24 h by default), oldest first, at most 50 in flight. One call per project per analyzer per run, with the whole BOM. Findings are attributed to the analyzer that reported them, are removed when it stops reporting them, and are kept when it fails. So an analyzer is called on upload and again daily, not once and not continuously.
+
+**Verified.** With a Sonatype Guide personal access token, on 2026-11-19: `https://api.guide.sonatype.com/api/v3/component-report` answers 200 in OSS Index's format with a Bearer token and 401 without; Log4Shell, Lodash's command injection and the others are found through the built image; the chart renders both scopes with a resource the CRDs accept and refuses seven configurations that cannot work (an empty `networkPolicy.ingressFrom` among them: Helm's `required` accepts an empty list, which a NetworkPolicy reads as "from anywhere").
+
+**Not verified.** Basic authentication with a real OSS Index account; the rate limits (no header was seen); the OSS Index terms of service, which could not be read, so use inside a commercial product is not checked; which package types the service supports (Dependency-Track's list is used). OSS Index is moving to Sonatype Guide; the original `ossindex.sonatype.org` still answered 401 to a made-up token.
+
+**Not built when this was written, and built since.** Rampart had no controller, storage, API, page or caller for external analyzers, so the analyzer did not show in the UI and nothing called it. D143 builds all of it, in the order this paragraph listed.
+
+## D143: Analyzers run like Dependency-Track's, the matcher and the services alike (2026-11-19)
+
+**Context.** After D142 the owner asked that analyzers work the way Dependency-Track's do (analysis on upload, on request and on a schedule; findings attributed to the analyzer; a failed analyzer never closes findings; retries; states), for both kinds: the matcher inside
+the server (`SBOMAnalyzer`, `ClusterSBOMAnalyzer`) and a service called over gRPC (`ExternalAnalyzer`, `ClusterExternalAnalyzer`, such as `sonatype-analyzer`); with a way to test an analyzer, to see its events (did it work, did it fail), and an Analyzers tab in the UI with its kinds.
+Dependency-Track's behaviour was taken from its own source and documentation, as in D142; the full description and the checks are in [docs/38](38-analyzers.md).
+
+**Decisions, and why.**
+
+1. **One job per SBOM and analyzer, for every analyzer that is on, with the whole SBOM.** Dependency-Track does the same (a workflow step per analyzer; "analysis of individual components is not supported"). One analyzer answering for all would hide the others; one call per component would cost the service a request each.
+2. **An analysis is an ingest run.** The answer is merged through the existing pipeline (`Processor.Process` with a parser that yields the answer's findings and `ScannerOverride = analyzer:<name>`): merge, close, the mass-close guard (D22), scoring and notifications are not written twice. The run is created
+   only after the analyzer answered, so a failure leaves no run and reaches the merge with nothing. The scanner family `analyzer:<name>` (`analyzer:<namespace>/<name>` for a tenant's) is the attribution: the close scope is (source, family, asset, track), so an analyzer closes only what it reported.
+3. **Failure is not silence.** A failed call returns an error and the merge is not reached (nothing is closed); five attempts with River's backoff; the last failure raises an in-app notification `analyzer_error`. An empty answer without an error is a success, and the mass-close guard holds a close that would remove more than half of the findings and more than 20: this is what protects against an
+   analyzer whose own data is down. Dependency-Track's OSS Index analyzer returns an empty list when its batch fails (D142), which is what this design refuses to copy.
+4. **Claim in the database, not River's unique jobs.** `sbom_analysis` has a row per (SBOM, analyzer); a claim succeeds only if none is pending or running (a row older than an hour is stale and freed). River keeps a finished job as a duplicate until its cleaner removes it, which would refuse a person who asks again.
+   The row is also the state (`pending`, `running`, `completed`, `failed`, `timed_out`, `cancelled`, `not_applicable`) and what the sweep reads.
+5. **The sweep: every 60 s, `analysis.maxAge` 24 h, `analysis.maxInFlight` 50, oldest first, never-analysed first.** The numbers are Dependency-Track's. It reads every tenant, so it runs on the system role with an advisory lock (one replica), like the SLA and ticket sweepers. A failed analysis is tried again by the sweep after an hour, not every minute.
+   An SBOMAnalyzer's `schedule` is a cron expression (UTC, five fields; `internal/cron`): the SBOM is due when the schedule has fired since its last analysis. It is validated when the resource is accepted. No cron library was added: the reader is small and tested.
+6. **Only the newest SBOM of an application and track is analysed.** An older one would reopen what the newer one dropped; it settles `cancelled`.
+7. **Storage and refusals.** Migration 52 adds the two kinds to `cluster_policy` and `policy_object` and the `analyzer_event` table; migration 53 adds `sbom_analysis`. Last-valid-spec semantics as for the other policy objects. A spec the server cannot honour is refused with its reason, not accepted and ignored: `protocol: http` (no client),
+   `tls.caSecretRef` and `auth.secretRef` (the server cannot read a Secret to use them), a tenant's `endpoint` (SSRF: a tenant may name only a `service`), a `timeoutSeconds` over 600, a bad cron expression. `tls.insecure: false` is honoured (TLS against the system roots); `timeoutSeconds` is honoured.
+8. **Test and events.** Test is an action of an administrator: a service is asked for health and metadata (no component is sent, nothing is changed); the matcher is asked whether advisory data is loaded. Every test and every analysis is an event of the tenant that caused it, newest 200 kept per analyzer. This answers "does it work" without waiting for an upload.
+9. **The page.** Ingestion gets a third tab, Analyzers: by kind (service, built-in matcher), scope, address or engine, status with the reason a resource was refused, the last result, Test, Analyze every SBOM, and the history. It says plainly which matcher settings do not change the matching yet.
+10. **Rollout.** `analysis.enabled` (default true) is the switch. The built-in matcher stays off by default in the chart, so an upgrade analyses nothing until an analyzer is turned on; when one is, every existing SBOM is analysed 50 at a time and opens findings for applications that had none.
+
+**Verified.** The service tests on the real merge engine and again on PostgreSQL with row-level security (the close queries match on the scan source: the doubt before this work), including a mutation check that a failure continuing to the merge fails four tests; the claim, due and in-flight queries; the matcher over `vulnerability_affected`
+(which found that an advisory with a CVSS score and no severity word was graded `unknown`: fixed); the cron reader; the routes with their roles; the page with accessibility checks; the chart render and its schema; the analyzer service with a 5 MiB request (it refused one: its receive limit was gRPC's 4 MiB, and is now 64 MiB, as Rampart's client allows).
+
+**Not verified.** The Sonatype analyzer called by a running Rampart in a cluster (no cluster was touched); River's retry backoff and priorities against a live River; the page in a browser (tests only); the version ordering of ecosystems beyond dotted numbers.
+
+**Known limits, recorded rather than hidden.** The matcher reads `engine`, `rules.minConfidence`, `rules.includePreRelease` and `sources` but does not use them (one matcher, exact matching); it uses `rules.matchDirectOnly` and `schedule`. Severity comes from the CVSS score (the table keeps no severity word). Per-application roles are not consulted by the asset route.
+There is no "analyze again" button on an application's page (the route exists). `openapi.json` documents only a small part of the API and was not extended. The in-memory store does not run analyses. `examples/external-analyzer` keeps gRPC's default 4 MiB receive limit.

@@ -1,0 +1,28 @@
+name: Parser modules
+description: >-
+  Builds the WASM modules the Go tests run, from the two parser repositories at the refs pinned in .github/parser-modules.env,
+  and exports RAMPART_WASM_DIR. Run it after checkout and setup-go.
+runs:
+  using: composite
+  steps:
+    - id: pins
+      shell: bash
+      run: |
+        set -a; . .github/parser-modules.env; set +a
+        {
+          echo "parsers=$PARSERS_REPO"; echo "parsers_ref=$PARSERS_REF"
+          echo "sbom=$SBOM_PARSERS_REPO"; echo "sbom_ref=$SBOM_PARSERS_REF"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ steps.pins.outputs.parsers }}
+        ref: ${{ steps.pins.outputs.parsers_ref }}
+        path: .cache/src/parsers
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ steps.pins.outputs.sbom }}
+        ref: ${{ steps.pins.outputs.sbom_ref }}
+        path: .cache/src/sbom-parsers
+    - name: Build the modules
+      shell: bash
+      run: echo "RAMPART_WASM_DIR=$(hack/test-modules.sh .cache/src/parsers .cache/src/sbom-parsers)" >> "$GITHUB_ENV"

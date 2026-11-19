@@ -16,6 +16,7 @@ const (
 	NotifyAttestationEnding = "attestation_expiring" // a manual control's attestation ends in 14 days, then in 1 day (D123)
 	NotifyFeedSync          = "feed_sync"            // a feed sync round finished, every feed well
 	NotifyFeedSyncFailed    = "feed_sync_failed"     // a feed sync round finished with at least one feed failing
+	NotifyAnalyzerError     = "analyzer_error"       // an analyzer failed on an SBOM through every retry; its findings are kept
 )
 
 // Notification is one message to the people of a tenant: what a sweep found, with a link to where to act.

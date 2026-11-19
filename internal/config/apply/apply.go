@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"rampart/internal/integrations/declarative"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -104,8 +105,12 @@ func ValidateFramework(name string, spec []byte) error {
 	return err
 }
 
-// ValidateParser checks a ClusterParser resource spec (docs/29).
+// ValidateParser checks a ClusterParser resource spec (docs/29). Its name may not start with sbom-: that is how a
+// ClusterSBOMParser is named, and the two are kept in one table.
 func ValidateParser(name string, spec []byte) error {
+	if strings.HasPrefix(name, domain.SBOMParserNamePrefix) {
+		return fmt.Errorf("%w: name %q: names starting with %q are for ClusterSBOMParser, which reads an SBOM format", declarative.ErrInvalid, name, domain.SBOMParserNamePrefix)
+	}
 	return declarative.ValidateParserSpec(name, spec)
 }
 
@@ -268,7 +273,29 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("parser.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework", "clusterparser":
+	case "externalanalyzer", "sbomanalyzer": // D143: one tenant's analyzer
+		kind, parse := domain.AnalyzerKindExternal, func(b []byte) error { _, err := domain.ParseExternalAnalyzerSpec(b, true); return err }
+		if lk == "sbomanalyzer" {
+			kind, parse = domain.AnalyzerKindSBOM, func(b []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(b); return err }
+		}
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
+		if err != nil || tenant == nil {
+			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
+		}
+		obj := PolicyObject{Namespace: namespace, Name: header.Metadata.Name, Spec: header.Spec}
+		if err := parse(header.Spec); err != nil {
+			obj.Error = err.Error()
+		}
+		if err := a.store.SaveTenantPolicy(ctx, tenant.ID, kind, obj); err != nil {
+			return "", err
+		}
+		if obj.Error != "" {
+			return "", fmt.Errorf("apply: %s %q was stored but is not applied: %s", lk, header.Metadata.Name, obj.Error)
+		}
+		return fmt.Sprintf("%s.rampart.aspm.dev/%s configured", lk, header.Metadata.Name), nil
+
+	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework", "clusterparser", "clustersbomparser", "clusterexternalanalyzer", "clustersbomanalyzer":
 		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
 		if lk == "clustercomplianceframework" { // D102: a framework every tenant sees
 			name := header.Metadata.Name
@@ -278,13 +305,25 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			name := header.Metadata.Name
 			kind, parse = "parser", func(b []byte) error { return ValidateParser(name, b) }
 		}
+		shape := func(b []byte) []byte { return b }
+		if lk == "clustersbomparser" { // docs/29: cluster-wide SBOM reader, kept as the whole resource
+			name := header.Metadata.Name
+			kind, parse = "parser", func(b []byte) error { return domain.ValidateClusterSBOMParserSpec(name, b) }
+			shape = func(b []byte) []byte { return domain.StoredSBOMParser(name, b) }
+		}
+		if lk == "clusterexternalanalyzer" { // D143: an analyzer every tenant may use
+			kind, parse = domain.AnalyzerKindExternal, func(b []byte) error { _, err := domain.ParseExternalAnalyzerSpec(b, false); return err }
+		}
+		if lk == "clustersbomanalyzer" {
+			kind, parse = domain.AnalyzerKindSBOM, func(b []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(b); return err }
+		}
 		if lk == "clusterslapolicy" {
 			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
 		}
 		if lk == "clusterfeedmirror" || lk == "clusterfeed" { // D86: where the feeds are read from; kept with the cluster-wide configuration
 			kind, parse = "feeds", func(b []byte) error { _, err := domain.ParseFeedMirrorSpec(b); return err }
 		}
-		obj := PolicyObject{Name: header.Metadata.Name, Spec: header.Spec}
+		obj := PolicyObject{Name: header.Metadata.Name, Spec: shape(header.Spec)}
 		if err := parse(header.Spec); err != nil {
 			obj.Error = err.Error()
 		}
@@ -1004,6 +1043,37 @@ func (m *MemoryConfigStore) ListParsers(ctx context.Context, tenantID uuid.UUID)
 			})
 		}
 	}
+	return out, nil
+}
+
+// ListAnalyzers returns the cluster's analyzers and the tenant's own, for tests and the in-memory server.
+func (m *MemoryConfigStore) ListAnalyzers(ctx context.Context, tenantID uuid.UUID) ([]domain.StoredAnalyzerObject, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.StoredAnalyzerObject
+	for k, p := range m.policies {
+		for _, kind := range []string{domain.AnalyzerKindExternal, domain.AnalyzerKindSBOM} {
+			switch {
+			case strings.HasPrefix(k, "cluster:"+kind+":"):
+				out = append(out, domain.StoredAnalyzerObject{Kind: kind, Origin: "cluster", Name: p.Name, Spec: p.Spec, Error: p.Error})
+			case strings.HasPrefix(k, kind+":"+tenantID.String()+":"):
+				out = append(out, domain.StoredAnalyzerObject{Kind: kind, Origin: "tenant", Namespace: p.Namespace, Name: p.Name, Spec: p.Spec, Error: p.Error})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Origin != b.Origin {
+			return a.Origin < b.Origin
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
 	return out, nil
 }
 

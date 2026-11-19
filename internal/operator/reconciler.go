@@ -311,6 +311,8 @@ type PolicyReconciler struct {
 	parse   func([]byte) error
 	// check, when set, validates instead of parse and also sees the resource's name.
 	check func(name string, spec []byte) error
+	// shape, when set, is the form the spec is stored in (a ClusterSBOMParser is kept as the whole resource, with its kind).
+	shape func(name string, spec []byte) []byte
 }
 
 // NewComplianceFrameworkReconciler reconciles namespaced ComplianceFramework resources (D102).
@@ -331,6 +333,37 @@ func NewParserReconciler(store apply.ConfigStore) *PolicyReconciler {
 // NewClusterParserReconciler reconciles ClusterParser resources (docs/29).
 func NewClusterParserReconciler(store apply.ConfigStore) *PolicyReconciler {
 	return &PolicyReconciler{store: store, kind: "parser", cluster: true, label: "ClusterParser", check: apply.ValidateParser}
+}
+
+// NewClusterSBOMParserReconciler reconciles ClusterSBOMParser resources: the readers of SBOM formats (docs/29). They are
+// kept with the cluster's other parsers, as the whole resource so the server can tell them from a report parser.
+func NewClusterSBOMParserReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "parser", cluster: true, label: "ClusterSBOMParser",
+		check: domain.ValidateClusterSBOMParserSpec, shape: domain.StoredSBOMParser}
+}
+
+// NewClusterExternalAnalyzerReconciler reconciles ClusterExternalAnalyzer resources: a service that Rampart calls over gRPC (docs/16 D143).
+func NewClusterExternalAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.AnalyzerKindExternal, cluster: true, label: "ClusterExternalAnalyzer",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalAnalyzerSpec(spec, false); return err }}
+}
+
+// NewExternalAnalyzerReconciler reconciles the namespaced ExternalAnalyzer: the same, for one tenant, which may name a Service and not an address.
+func NewExternalAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.AnalyzerKindExternal, label: "ExternalAnalyzer",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalAnalyzerSpec(spec, true); return err }}
+}
+
+// NewClusterSBOMAnalyzerReconciler reconciles ClusterSBOMAnalyzer resources: the matcher inside the server.
+func NewClusterSBOMAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.AnalyzerKindSBOM, cluster: true, label: "ClusterSBOMAnalyzer",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(spec); return err }}
+}
+
+// NewSBOMAnalyzerReconciler reconciles the namespaced SBOMAnalyzer: the same, for one tenant.
+func NewSBOMAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.AnalyzerKindSBOM, label: "SBOMAnalyzer",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(spec); return err }}
 }
 
 func (r *PolicyReconciler) validate(name string, spec []byte) error {
@@ -388,6 +421,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 	if perr := r.validate(cr.Metadata.Name, spec); perr != nil {
 		obj.Error = perr.Error()
 	}
+	if r.shape != nil {
+		obj.Spec = r.shape(cr.Metadata.Name, spec)
+	}
 	if r.cluster {
 		err = r.store.SaveClusterPolicy(ctx, r.kind, obj)
 	} else {
@@ -417,6 +453,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 	msg := r.label + " reconciled; scores and due dates are recomputed in the background"
 	if r.kind == "compliance" {
 		msg = r.label + " reconciled; the compliance report reads it"
+	}
+	if r.kind == domain.AnalyzerKindExternal || r.kind == domain.AnalyzerKindSBOM {
+		msg = r.label + " reconciled; the Analyzers tab lists it and can test it"
 	}
 	if r.kind == "parser" {
 		msg = r.label + " reconciled; the ingestion pipeline reads it"

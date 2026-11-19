@@ -49,7 +49,7 @@ func TestProcessSBOMStoresAssetsAndTouchesNoFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, err := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
+	data, err := os.ReadFile("../testdata/reports/sbom-cyclonedx/sample.cdx.xml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestProcessSBOMFailsOnAnUnreadableDocument(t *testing.T) {
 func TestProcessSBOMEphemeralStoresNothing(t *testing.T) {
 	proc, st, parser := sbomProcessor(t)
 	run := sbomRun()
-	data, _ := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
+	data, _ := os.ReadFile("../testdata/reports/sbom-cyclonedx/sample.cdx.xml")
 	res, err := proc.Process(context.Background(), ingest.ProcessParams{Run: run, Parser: parser, IsSBOM: true, IsEphemeral: true, Open: openString(string(data))})
 	if err != nil || res.Components != 0 {
 		t.Fatalf("res = %+v, err = %v", res, err)

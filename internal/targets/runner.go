@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"rampart/internal/analysis"
 	"rampart/internal/auth"
 	"rampart/internal/config"
 	"rampart/internal/config/apply"
@@ -192,7 +193,17 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	feeds := enrich.NewFeedStore()
-	registry := integrations.DefaultRegistry()
+	// Nothing is compiled in: a parser reaches this process as a ClusterParser or ClusterSBOMParser through the control plane,
+	// or, with no control plane (Compose, one binary), from the manifests in RAMPART_PARSERS_DIR. A manifest that cannot be
+	// installed is said here, once, with the file.
+	registry := integrations.NewRegistry()
+	if dir := os.Getenv(integrations.ParsersDirEnv); dir != "" {
+		n, err := integrations.LoadManifestDir(registry, dir)
+		if err != nil {
+			r.logger.Error("some parser manifests were not installed", "dir", dir, "error", err)
+		}
+		r.logger.Info("parsers installed from a directory", "dir", dir, "count", n)
+	}
 
 	// One processor serves direct uploads and the River parse worker (D2).
 	objects, err := r.buildObjectStore(ctx)
@@ -253,11 +264,28 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		return err
 	}}
+	// Analyzers on SBOMs (docs/16 D143): the worker that runs one analysis, and the service that queues them.
+	analysisWorker := &jobs.AnalyzeSBOMWorker{}
+	var analysisSvc *analysis.Service
 	if pgStore != nil {
 		directURL := firstNonEmpty(r.cfg.Database.DirectURL, r.cfg.Database.URL)
-		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkers(processor.HandleParse, notifyWorker))
+		riverQ, err := jobs.NewRiverQueue(ctx, pgStore.Pool(), directURL, jobs.NewWorkersWithAnalysis(processor.HandleParse, analysisWorker, notifyWorker))
 		if err != nil {
 			return fmt.Errorf("initializing river job queue: %w", err)
+		}
+		if r.cfg.Analysis.Enabled {
+			acfg := analysis.Config{MaxAge: r.cfg.Analysis.MaxAge, MaxInFlight: r.cfg.Analysis.MaxInFlight}
+			analysisSvc = analysis.New(pgStore, processor, riverQ, pgStore, acfg, r.logger)
+			analysisWorker.Handle = analysisSvc.Run
+			processor.SetAnalysisTrigger(analysisSvc)
+			// The sweep reads the SBOMs and analyzers of every tenant, which row-level security allows only the system role.
+			if sysStore != nil {
+				go analysis.RunSweeper(ctx, analysis.New(sysStore, processor, riverQ, pgStore, acfg, r.logger), sysStore.Pool(), analysis.SweepInterval, r.logger)
+			} else {
+				r.logger.Warn("analysis: the scheduled sweep needs the system database role (database.systemUrl); SBOMs are analysed when uploaded or asked for, not on a schedule")
+			}
+		} else {
+			r.logger.Info("analysis is switched off (analysis.enabled): analyzers are listed and can be tested, and nothing runs them")
 		}
 		if err := riverQ.Start(ctx); err != nil {
 			return fmt.Errorf("starting river job queue: %w", err)
@@ -292,6 +320,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	queryAPI.SetSSRFAllowlist(allowlist) // the connector dry-run validation applies the same scoped allowlist (D77, D82)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
+	if analysisSvc != nil {
+		queryAPI.SetAnalysisDispatcher(analysisSvc)
+	}
 
 	// Inbound signed webhooks for ticket updates & resolution requests (D27, Milestone 3.2)
 	wfService := workflow.New(storeBackend)

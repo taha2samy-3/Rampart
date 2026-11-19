@@ -166,3 +166,68 @@ func TestVersion_IsAffected(t *testing.T) {
 		}
 	}
 }
+
+// An advisory with no severity word is graded by its CVSS score (the vulnerability table keeps a score, not a word), and one with neither
+// stays unknown rather than being called informational.
+func TestMatcher_GradesByScoreWhenTheAdvisoryNamesNoSeverity(t *testing.T) {
+	adv := func(id string, score float64) matcher.Advisory {
+		return matcher.Advisory{ID: id, PurlBase: "pkg:npm/x", Introduced: "0", Fixed: "9", CVSSScore: score, RangeType: "SEMVER"}
+	}
+	m := matcher.New(&mockAdvisoryStore{advisories: []matcher.Advisory{adv("crit", 9.8), adv("high", 7.0), adv("med", 4.0), adv("low", 2.1), adv("none", 0)}})
+	got, err := m.MatchComponents(context.Background(), []domain.SBOMComponent{{Name: "x", Version: "1.0.0", Purl: "pkg:npm/x@1.0.0", PurlBase: "pkg:npm/x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]domain.Severity{"crit": domain.SeverityCritical, "high": domain.SeverityHigh, "med": domain.SeverityMedium, "low": domain.SeverityLow, "none": domain.SeverityUnknown}
+	for _, f := range got {
+		if f.Severity != want[f.RuleID] {
+			t.Errorf("%s: severity %s, want %s", f.RuleID, f.Severity, want[f.RuleID])
+		}
+		delete(want, f.RuleID)
+	}
+	if len(want) != 0 {
+		t.Errorf("not reported: %v", want)
+	}
+}
+
+// last_affected ends a range at a version that is itself affected; a VERSIONS range names exact versions.
+func TestAdvisory_Affects(t *testing.T) {
+	cases := []struct {
+		name string
+		adv  matcher.Advisory
+		ver  string
+		want bool
+	}{
+		{"inside a fixed range", matcher.Advisory{Introduced: "1.0.0", Fixed: "1.4.2"}, "1.2.0", true},
+		{"the fixed version is not affected", matcher.Advisory{Introduced: "1.0.0", Fixed: "1.4.2"}, "1.4.2", false},
+		{"below the start", matcher.Advisory{Introduced: "1.0.0", Fixed: "1.4.2"}, "0.9.0", false},
+		{"last affected is itself affected", matcher.Advisory{LastAffected: "2.5.0"}, "2.5.0", true},
+		{"after last affected", matcher.Advisory{LastAffected: "2.5.0"}, "2.5.1", false},
+		{"last affected with a start", matcher.Advisory{Introduced: "2.0.0", LastAffected: "2.5.0"}, "1.9.0", false},
+		{"fixed wins over last affected", matcher.Advisory{Fixed: "3.0.0", LastAffected: "2.0.0"}, "2.5.0", true},
+		{"an exact version", matcher.Advisory{RangeType: "VERSIONS", Versions: []string{"3.0.0", "3.0.1"}}, "3.0.1", true},
+		{"not an exact version", matcher.Advisory{RangeType: "VERSIONS", Versions: []string{"3.0.0", "3.0.1"}}, "3.0.2", false},
+		{"no version is never affected", matcher.Advisory{Introduced: "0"}, "", false},
+	}
+	for _, c := range cases {
+		if got := c.adv.Affects(c.ver); got != c.want {
+			t.Errorf("%s: Affects(%q) = %v, want %v", c.name, c.ver, got, c.want)
+		}
+	}
+}
+
+func TestMatcher_DirectOnlyLeavesTheOthersOut(t *testing.T) {
+	m := matcher.New(&mockAdvisoryStore{advisories: []matcher.Advisory{
+		{ID: "d", PurlBase: "pkg:npm/direct", Introduced: "0", Fixed: "9", RangeType: "SEMVER"},
+		{ID: "t", PurlBase: "pkg:npm/transitive", Introduced: "0", Fixed: "9", RangeType: "SEMVER"},
+	}})
+	comps := []domain.SBOMComponent{
+		{Name: "direct", Version: "1.0.0", PurlBase: "pkg:npm/direct", Direct: true},
+		{Name: "transitive", Version: "1.0.0", PurlBase: "pkg:npm/transitive"},
+	}
+	all, _ := m.MatchComponents(context.Background(), comps)
+	direct, _ := m.MatchComponentsWith(context.Background(), comps, matcher.Options{DirectOnly: true})
+	if len(all) != 2 || len(direct) != 1 || direct[0].RuleID != "d" {
+		t.Fatalf("all=%d direct=%+v", len(all), direct)
+	}
+}

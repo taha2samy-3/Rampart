@@ -35,3 +35,10 @@ deploy/compose/dex/config.yaml
 
 # Working review/planning notes, not part of the project docs
 NOTES_*.md
+# WASM modules built for the tests (hack/test-modules.sh) and the parser repositories CI checks out
+/.cache/
+# The default parsers the Compose quick start reads (deploy/compose/fetch-parsers.sh fills them)
+/deploy/compose/parsers/*
+/deploy/compose/wasm/*
+!/deploy/compose/parsers/.gitkeep
+!/deploy/compose/wasm/.gitkeep

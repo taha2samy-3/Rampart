@@ -39,16 +39,8 @@ service:
   port: 8080
   opsPort: 9090
 
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: rampart.local
-      paths:
-        - path: /
-          pathType: ImplementationSpecific
-  tls: []
+# This chart has no Ingress template. Expose the Service (port 8080) with your own Ingress or Gateway API route. The ops port
+# (9090: /metrics, /healthz, /readyz) is never meant to be routed.
 
 resources:
   limits:
@@ -61,6 +53,8 @@ resources:
 telemetry:
   logLevel: info
   logFormat: json
+  # Where traces and metrics go over OTLP/HTTP, for example http://otel-collector:4318. Empty turns OTLP export off. With
+  # networkPolicy.enabled, allow that address in networkPolicy.egressExtra: allowHttpsEgress covers port 443 only.
   otlpEndpoint: ""
 
 database:
@@ -76,7 +70,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 51
+  minSchemaVersion: 53
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -87,26 +81,28 @@ objectStorage:
   externalEndpoint: ""
   region: "us-east-1"
   bucketRaw: "rampart-raw-reports"
-  bucketExports: "rampart-exports"
+  bucketExports: "rampart-exports"   # reserved: nothing reads it yet (the server has no export that writes to a bucket)
   usePathStyle: true
 
-# Threat intelligence feeds (docs/16 D35). KEV and EPSS are small; OSV is large, so it is opt-in per ecosystem.
-# For an air-gapped cluster, point the URLs at an internal mirror (same file layout as upstream).
+# Threat intelligence feeds (docs/16 D35). KEV and EPSS are small; OSV is large (the npm and PyPI archives are hundreds of
+# megabytes each), so name only the ecosystems you use. For an air-gapped cluster, point the URLs at an internal mirror
+# (same file layout as upstream).
 feeds:
   enabled: true
   interval: 6h
+  # The addresses of the built-in feeds. Empty is the public address. They are passed to the server as environment variables, and
+  # they fill in a source of `defaultMirror` below whose own `url` (or `ecosystems`) is empty: the one in `defaultMirror` wins.
   kevUrl: ""
   epssUrl: ""
+  nvdUrl: ""
   osvBaseUrl: ""
-  osvEcosystems: []   # for example [Go, PyPI, npm, Maven]; defaultMirror.osv.ecosystems overrides it
+  osvEcosystems: []   # for example [Go, PyPI, npm, Maven]
   # A Secret you create with the feed API tokens, one key per token (for example nvd-api-key). It is mounted read-only
   # at /etc/rampart/feed-secrets, the only directory a ClusterFeed tokenFile may point to; the server's own secrets
   # (/etc/rampart/secrets) are never readable as a feed token.
   tokenSecret: ""
-  # Declarative ClusterFeed CRD:
-  # Deploys a cluster-wide ClusterFeed resource. Users can inspect, customize, or remove
-  # this CRD instance using kubectl or Helm values to configure internal mirrors, air-gapped setups,
-  # or optional feeds.
+  # The ClusterFeed resource of the cluster: where each feed is read from and which are on. Inspect or change it with kubectl or
+  # with these values. `enabled: false` installs no resource.
   defaultMirror:
     enabled: true
     name: "default"
@@ -114,7 +110,6 @@ feeds:
     # lightweight: what matching, scoring and the screens need. full: also keeps the complete source record of every
     # advisory (vulnerability.source_payloads), and reads the Go, npm, PyPI and Maven ecosystems of OSV when none is named.
     storageMode: "lightweight"
-    # With egress deny every url below must be the address of your mirror: a public address is refused by validation.
     # Every source has its own switch: enabled: true | false. A source that is off is not read, and its rows (the
     # exploitation evidence of an optional source) are removed. url is optional everywhere: leave it empty for the public
     # address, or give your mirror's. With egress deny each url must be your mirror's, never a public address.
@@ -132,7 +127,9 @@ feeds:
       enabled: true
       url: "https://osv-vulnerabilities.storage.googleapis.com"
       # One archive per ecosystem, downloaded to /tmp: Go is small, npm and PyPI are hundreds of megabytes. Name only
-      # the ecosystems you use (the names are those of ecosystems.txt in the OSV bucket). Empty uses feeds.osvEcosystems.
+      # the ecosystems you use. OSV has 47 (the names are those of ecosystems.txt in the OSV bucket; docs/37 lists them), and
+      # this default names four: add the ones your applications use, for example NuGet, RubyGems, Packagist, crates.io,
+      # or Debian, Alpine and Ubuntu for container images. Empty uses feeds.osvEcosystems.
       ecosystems: [Go, npm, PyPI, Maven]
     vulnrichment:
       enabled: true
@@ -167,6 +164,15 @@ feeds:
 # tenant data every interval as the application role. The partitioned event and audit logs are maintained by the
 # CronJob below as the owner role (it also creates the coming months' partitions, so keep it on even with
 # retention off). Minimums are enforced: auditDays and eventsDays 365 (PCI DSS 10.5.1), resolvedFindingsDays 180.
+# Analyzers look for vulnerabilities in the packages of an SBOM: the ones you add as ClusterExternalAnalyzer, ExternalAnalyzer,
+# ClusterSBOMAnalyzer and SBOMAnalyzer resources. They run as Dependency-Track runs its own: when an SBOM is uploaded, when a person asks,
+# and on a schedule. Switching this on for a cluster that already holds SBOMs analyses them all (50 at a time), so findings appear for
+# applications that had none: set enabled: false first if that is not wanted yet.
+analysis:
+  enabled: true
+  maxAge: 24h        # an SBOM is analysed again by an analyzer when its last analysis is older than this
+  maxInFlight: 50    # analyses queued or running at once, in every tenant
+
 retention:
   enabled: true
   interval: 6h
@@ -213,7 +219,10 @@ auth:
     #  - {kind: user, name: alice@example.com, role: triager}
 
 operator:
+  # Installs the operator's permissions (RBAC) and lets the pod use the Kubernetes API.
   enabled: true
+  # auto | on | off. auto starts the operator when the pod runs in a cluster (or has a kubeconfig) and carries on without it
+  # otherwise; on refuses to start when there is no cluster configuration; off never starts it.
   mode: auto
 
 # Prometheus (docs/15 section 7). The ops port serves /metrics and is never routed through the ingress.
@@ -270,9 +279,11 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Parsers configuration (docs/29 "All come in front door").
-# Ships the 17 standard finding parsers as ClusterParser CRD resources by default.
-# Each parser can be enabled or disabled individually.
+# Parsers (docs/29 "All come in front door", D141). Rampart's server knows no parser by name: each one reaches it as a
+# ClusterParser or ClusterSBOMParser resource. The defaults are two charts this chart depends on, both on:
+#   rampart-parsers       (alias `parsers`)     17 report parsers: 13 WASM and 4 Lua
+#   rampart-sbom-parsers  (alias `sbomParsers`)  3 SBOM readers
+# What follows holds their switches, and how the WASM modules they run reach the pod.
 parsers:
   # How the shipped WASM parser modules reach the pod (docs/35 B1). The modules are built, signed and published by the
   # Rampart-Aspm/parsers and Rampart-Aspm/sbom-parsers repositories as scratch images holding /parser.wasm.
@@ -305,45 +316,33 @@ parsers:
     sbom-cyclonedx: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-cyclonedx@sha256:...
     sbom-spdx: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-spdx@sha256:...
     sbom-syft: {image: "", sha256: ""}   # ghcr.io/rampart-aspm/sbom-parsers/sbom-syft@sha256:...
+  # The default report parsers (the rampart-parsers chart): one ClusterParser each, all on. `enabled: false` installs none; a
+  # parser's own `enabled: false` leaves just that one out. A parser that is not listed here is on, as the chart defaults it.
   defaultParsers:
     enabled: true
-    sarif:
-      enabled: true
-    openvex:
-      enabled: true
-    trivy:
-      enabled: true
-    grype:
-      enabled: true
-    semgrep:
-      enabled: true
-    gitleaks:
-      enabled: true
-    trufflehog:
-      enabled: true
-    checkov:
-      enabled: true
-    snyk:
-      enabled: true
-    kubebench:
-      enabled: true
-    prowler:
-      enabled: true
-    gitlab:
-      enabled: true
-    dependencycheck:
-      enabled: true
-    bandit:
-      enabled: true
-    zap:
-      enabled: true
-    nuclei:
-      enabled: true
-    genericjson:
-      enabled: true
+    # WASM: a module runs the parser (see `modules` above)
+    sarif: {enabled: true}
+    openvex: {enabled: true}
+    trivy: {enabled: true}
+    grype: {enabled: true}
+    semgrep: {enabled: true}
+    gitleaks: {enabled: true}
+    trufflehog: {enabled: true}
+    checkov: {enabled: true}
+    snyk: {enabled: true}
+    kubebench: {enabled: true}
+    prowler: {enabled: true}
+    gitlab: {enabled: true}
+    dependencycheck: {enabled: true}
+    # Lua: a script in the resource, no module
+    bandit: {enabled: true}
+    zap: {enabled: true}
+    nuclei: {enabled: true}
+    genericjson: {enabled: true}
 
-# Ships default ClusterSBOMParser CRDs for CycloneDX, SPDX and Syft. An SBOM reader produces assets (components and
-# dependency edges), never findings.
+# The default SBOM readers (the rampart-sbom-parsers chart): one ClusterSBOMParser each, all on. An SBOM reader produces assets
+# (components and dependency edges), never findings. `enabled: false` installs none; a reader's own `enabled: false` leaves
+# just that one out.
 sbomParsers:
   defaultSBOMParsers:
     enabled: true
@@ -357,20 +356,37 @@ sbomParsers:
     syft:
       enabled: true
 
-# Native in-process SBOM vulnerability matcher via ClusterSBOMAnalyzer CRD.
-# Off until the matcher is wired into ingest and an operator controller reads this resource (docs/34 F26 and F30): today
-# nothing consumes it, so enabling it would only create a resource that says the matcher is on.
+# The native SBOM vulnerability matcher (ClusterSBOMAnalyzer, D128, D143): it matches the components of an SBOM (by package URL and version)
+# against the advisories the OSV feed loaded (feeds.defaultMirror.osv), and opens findings for them, in place of Dependency-Track.
+# OFF by default: turning it on analyses every SBOM the cluster already holds (50 at a time, see `analysis` above) and opens findings for
+# applications that had none. Turn it on when you want that. It needs the OSV feed to have synced; the Analyzers tab, Test, says how many
+# affected ranges are loaded.
+# What changes the matching: `rules.matchDirectOnly`, and `schedule` (a cron expression, UTC: when the SBOMs are matched again; without one
+# the matcher follows analysis.maxAge). What is read and accepted but does not change what is matched yet: `engine`, `rules.minConfidence`,
+# `rules.includePreRelease` and `sources` (the matcher compares every package with all the advisories loaded). The page says so too.
+# The other way to match an SBOM, a service of yours called over gRPC (ClusterExternalAnalyzer, ExternalAnalyzer), has no value here: this
+# chart installs none. Write the resource yourself (examples/external-analyzer/k8s-manifest.yaml) or install an analyzer's own chart, such as
+# rampart-analyzer-sonatype-oss-index. The operator reads these resources; the Analyzers tab lists them.
 sbomAnalyzer:
   enabled: false
+  # Which engine matches: hybrid | osv | in-process | advisory-db. Read, not used yet: there is one matcher.
   engine: hybrid
   rules:
+    # Read, not used yet: the matcher is exact (package URL and version range), so there is no confidence to compare.
     minConfidence: 0.8
+    # Read, not used yet. (A pre-release version, 1.2.0-rc.1, is compared by the matcher's own rule.)
     includePreRelease: false
+    # Used: only the application's direct dependencies are matched, not the ones they pull in.
     matchDirectOnly: false
+  # Which advisory databases the matcher would read. Read, not used yet: it matches against every advisory the OSV feed loaded. These three are all the CRD defines (a key it does not define is dropped).
+  # They are not the feeds above: `feeds` is what Rampart downloads; these choose which of that data a component is matched against.
+  # Only a source that says which package versions are affected can match a component, and of the feeds that is OSV (and a custom
+  # `osv-zip` feed) and, by CPE, NVD. kev, epss, vulnrichment, exploitdb, metasploit, euvd and vulncheckKev enrich a CVE and
+  # cannot name a package, so they are not sources here.
   sources:
-    osv: true
-    ghsa: true
-    nvd: false
+    osv: true    # OSV: advisories keyed by package and version range. Fed by feeds.defaultMirror.osv
+    ghsa: true   # GitHub Security Advisories. No GHSA feed is built (docs/33); a GHSA id reaches Rampart as an alias inside an OSV record
+    nvd: false   # NVD: keyed by CPE (a product name), not by package. Fed by feeds.defaultMirror.nvd. Off; docs/32 gives the value and not the reason
 
 # The default scoring policies and compliance frameworks of Rampart (the rampart-policies chart, https://github.com/Rampart-Aspm/policies):
 # the risk policy, the SLA policy (profile strictest) and eleven compliance frameworks, installed as the default of every tenant (a tenant

@@ -206,7 +206,7 @@ func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:
 
 func TestPresignedUpload_EndToEnd(t *testing.T) {
 	h := newUploadHarness(t)
-	report, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
+	report, err := os.ReadFile("../testdata/reports/sarif/semgrep.sarif")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestPresignedUpload_EndToEnd(t *testing.T) {
 
 func TestPresignedUpload_ShaMismatchFailsTheRun(t *testing.T) {
 	h := newUploadHarness(t)
-	report, _ := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
+	report, _ := os.ReadFile("../testdata/reports/sarif/semgrep.sarif")
 	id, _ := h.upload(report, "")
 	code, body := h.call("POST", "/ingest/v1/uploads/"+id+"/complete", ingest.CompleteUploadRequest{SHA256: strings.Repeat("0", 64)}, nil)
 	if code != http.StatusAccepted {
@@ -354,7 +354,7 @@ func TestPresignedUpload_AppliesTheTokensOptions(t *testing.T) {
 	}
 	h.token = raw
 
-	report, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
+	report, err := os.ReadFile("../testdata/reports/sarif/semgrep.sarif")
 	if err != nil {
 		t.Fatal(err)
 	}

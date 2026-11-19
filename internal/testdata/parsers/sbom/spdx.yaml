@@ -1,0 +1,26 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSBOMParser
+metadata:
+  name: sbom-spdx
+spec:
+  format: spdx
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/sbom-parsers/sbom-spdx:v1
+  description: SPDX 2.2, 2.3, and 3.0 streaming WASM SBOM parser
+  detect:
+    filenames:
+    - '*spdx*'
+    - '*.spdx.json'
+    - '*.spdx'
+    - '*.spdx.jsonld'
+    contentTypes:
+    - '*spdx*'
+    probes:
+    - jsonHasKeys:
+      - spdxVersion
+    - contains:
+      - 'SPDXVersion:'
+      - '@graph'
+  options:
+    buildDependencyGraph: true

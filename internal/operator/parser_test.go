@@ -180,3 +180,73 @@ func TestTenantParserCannotUseCodeRuntimes(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterSBOMParserCRReconciliation(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, nil, nil, nil)
+
+	st, err := op.ReconcileClusterSBOMParser(ctx, &operator.PolicyCR{
+		Metadata: operator.Metadata{Name: "sbom-spdx", Generation: 1},
+		Spec: map[string]any{
+			"format": "spdx", "runtime": "wasm",
+			"source": map[string]any{"oci": "ghcr.io/example/sbom-parsers/sbom-spdx:v1"},
+			"detect": map[string]any{"filenames": []any{"*.spdx"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready := st.GetCondition("Ready"); ready.Status != "True" {
+		t.Fatalf("a valid ClusterSBOMParser must be Ready, got %+v", ready)
+	}
+
+	// It is kept with the cluster's parsers as the whole resource, so the server tells it from a report parser by its kind.
+	list, err := store.ListParsers(ctx, domain.NewID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Origin != "cluster" || list[0].Name != "sbom-spdx" {
+		t.Fatalf("expected one cluster parser named sbom-spdx, got %+v", list)
+	}
+	if !strings.Contains(string(list[0].Spec), `"kind":"ClusterSBOMParser"`) || !strings.Contains(string(list[0].Spec), `"format":"spdx"`) {
+		t.Errorf("the stored form lost the kind or the spec: %s", list[0].Spec)
+	}
+}
+
+func TestClusterSBOMParserRefusedWithReasonAndNameSpacesDoNotCollide(t *testing.T) {
+	ctx := context.Background()
+	store := apply.NewMemoryConfigStore()
+	op := operator.NewOperator(store, nil, nil, nil)
+
+	// A name without the prefix, and a runtime that is not built, are refused with a reason in Ready.
+	for _, c := range []struct {
+		name string
+		spec map[string]any
+		why  string
+	}{
+		{"spdx", map[string]any{"format": "spdx", "runtime": "wasm"}, "sbom-"},
+		{"sbom-lua", map[string]any{"format": "x", "runtime": "lua"}, "only wasm"},
+	} {
+		st, err := op.ReconcileClusterSBOMParser(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: c.name, Generation: 1}, Spec: c.spec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ready := st.GetCondition("Ready")
+		if ready.Status != "False" || ready.Reason != "InvalidSpec" || !strings.Contains(ready.Message, c.why) {
+			t.Errorf("%s: want Ready=False/InvalidSpec mentioning %q, got %+v", c.name, c.why, ready)
+		}
+	}
+
+	// A report parser may not take a name an SBOM reader would: the two kinds share one table.
+	st, err := op.ReconcileClusterParser(ctx, &operator.PolicyCR{
+		Metadata: operator.Metadata{Name: "sbom-spdx", Generation: 1},
+		Spec:     map[string]any{"version": "1.0.0", "family": "x", "category": "sast", "runtime": "wasm", "source": map[string]any{"oci": "ghcr.io/example/x:v1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready := st.GetCondition("Ready"); ready.Status != "False" || !strings.Contains(ready.Message, "ClusterSBOMParser") {
+		t.Errorf("a ClusterParser named sbom-spdx must be refused and say why, got %+v", ready)
+	}
+}

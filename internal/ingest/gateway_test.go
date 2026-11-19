@@ -165,7 +165,7 @@ func TestGatewayDirectReportUpload(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	sarifData, err := os.ReadFile("../../parsers/wasm/sarif/testdata/semgrep.sarif")
+	sarifData, err := os.ReadFile("../testdata/reports/sarif/semgrep.sarif")
 	if err != nil {
 		t.Fatalf("failed to read sarif fixture: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestGatewaySBOMUploadCycloneDX(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	xmlData, err := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
+	xmlData, err := os.ReadFile("../testdata/reports/sbom-cyclonedx/sample.cdx.xml")
 	if err != nil {
 		t.Fatalf("failed to read CycloneDX XML fixture: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestGatewaySBOMUploadSPDXTagValue(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	spdxData, err := os.ReadFile("../../parsers/wasm/sbom-spdx/testdata/sample.spdx")
+	spdxData, err := os.ReadFile("../testdata/reports/sbom-spdx/sample.spdx")
 	if err != nil {
 		t.Fatalf("failed to read SPDX Tag-Value fixture: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestGatewaySBOM_AnEphemeralRunLeavesTheInventoryAlone(t *testing.T) {
 	mux := http.NewServeMux()
 	gw.RegisterRoutes(mux)
 
-	xmlData, err := os.ReadFile("../../parsers/wasm/sbom-cyclonedx/testdata/sample.cdx.xml")
+	xmlData, err := os.ReadFile("../testdata/reports/sbom-cyclonedx/sample.cdx.xml")
 	if err != nil {
 		t.Fatal(err)
 	}

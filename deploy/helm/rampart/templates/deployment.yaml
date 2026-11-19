@@ -70,6 +70,13 @@ spec:
             - name: RAMPART_OBJECT_STORAGE_BUCKET_RAW
               value: {{ .Values.objectStorage.bucketRaw | quote }}
             {{- include "rampart.retentionEnv" . | nindent 12 }}
+            # Analyzers on SBOMs: on upload, on request and on a schedule (docs/16 D143).
+            - name: RAMPART_ANALYSIS_ENABLED
+              value: {{ .Values.analysis.enabled | quote }}
+            - name: RAMPART_ANALYSIS_MAX_AGE
+              value: {{ .Values.analysis.maxAge | quote }}
+            - name: RAMPART_ANALYSIS_MAX_IN_FLIGHT
+              value: {{ .Values.analysis.maxInFlight | quote }}
             # Threat intelligence (KEV, EPSS, optionally OSV). Needs egress, or a mirror set in the URLs below.
             - name: RAMPART_FEEDS_ENABLED
               value: {{ .Values.feeds.enabled | quote }}
@@ -102,6 +109,10 @@ spec:
               value: {{ .Values.telemetry.logLevel | quote }}
             - name: RAMPART_LOG_FORMAT
               value: {{ .Values.telemetry.logFormat | quote }}
+            {{- with .Values.telemetry.otlpEndpoint }}
+            - name: RAMPART_TELEMETRY_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
             - name: RAMPART_OPERATOR_MODE
               value: {{ .Values.operator.mode | quote }}
             # The operator's own identity (D1): the Lease namespace and the per-tenant secret-reader binding.

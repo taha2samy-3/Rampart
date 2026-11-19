@@ -52,6 +52,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
+      # Rampart holds no parser: the tests run the modules the parser repositories build.
+      - uses: ./.github/actions/parser-modules
       - name: Race detector, shuffled order
         run: |
           mapfile -t pkgs < <(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
@@ -92,6 +94,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: ./.github/actions/parser-modules
       - name: Start SeaweedFS (S3 API)
         run: |
           docker run -d --name seaweedfs -p 127.0.0.1:18333:8333 \
@@ -287,7 +290,7 @@ jobs:
         run: hack/e2e/kind.sh
       - name: ShellCheck the e2e script
         if: always()
-        run: shellcheck -S warning hack/e2e/kind.sh deploy/compose/init.sh
+        run: shellcheck -S warning hack/e2e/kind.sh hack/test-modules.sh deploy/compose/init.sh
 
   compose:
     # The quick start from a clean checkout: init.sh, build the image (UI included), start Dex, PostgreSQL

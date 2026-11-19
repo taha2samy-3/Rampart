@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/parsertest"
 	"rampart/internal/store"
 )
 
@@ -24,6 +25,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	parsertest.SetEnv() // no parser is compiled in: the tests install the default manifests from a directory
 	if custom := os.Getenv("RAMPART_TEST_POSTGRES_URL"); custom != "" {
 		// RAMPART_TEST_POSTGRES_URL is the owner (superuser) URL. The application and
 		// system roles are derived from it: a superuser bypasses RLS, so the isolation

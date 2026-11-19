@@ -1,6 +1,10 @@
 package domain
 
 import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,4 +51,52 @@ type SBOMParser struct {
 	Options     SBOMParserOptions    `json:"options"`
 	CreatedAt   time.Time            `json:"created_at"`
 	UpdatedAt   time.Time            `json:"updated_at"`
+}
+
+// SBOMParserNamePrefix starts the name of every ClusterSBOMParser. SBOM readers and report parsers are kept in one table,
+// keyed by kind and name, so the two kinds of resource must never share a name: a ClusterParser may not use this prefix
+// and a ClusterSBOMParser must.
+const SBOMParserNamePrefix = "sbom-"
+
+var sbomFormatRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// ValidateClusterSBOMParserSpec checks the spec of a ClusterSBOMParser resource. Only a WASM reader is built for SBOMs, so
+// another runtime is refused here with its reason instead of being stored and failing at the first upload.
+func ValidateClusterSBOMParserSpec(name string, spec []byte) error {
+	if !strings.HasPrefix(name, SBOMParserNamePrefix) || len(name) == len(SBOMParserNamePrefix) {
+		return fmt.Errorf("name %q: a ClusterSBOMParser name starts with %q (for example sbom-spdx), so it never shares a name with a ClusterParser", name, SBOMParserNamePrefix)
+	}
+	var s struct {
+		Format  string `json:"format"`
+		Runtime string `json:"runtime"`
+	}
+	if err := json.Unmarshal(spec, &s); err != nil {
+		return fmt.Errorf("spec is not a valid ClusterSBOMParser spec: %w", err)
+	}
+	if !sbomFormatRe.MatchString(s.Format) {
+		return fmt.Errorf("format %q: lower-case letters, digits and . _ -, starting with a letter or digit (for example spdx)", s.Format)
+	}
+	if s.Runtime != "wasm" {
+		return fmt.Errorf("runtime %q: only wasm is built for an SBOM reader", s.Runtime)
+	}
+	return nil
+}
+
+// StoredSBOMParser is the form a ClusterSBOMParser is kept in: the whole resource, with its kind, so that the server tells an
+// SBOM reader from a report parser by what is stored and not by its name. A spec that is not JSON is returned as it is (it
+// is kept with the reason it was refused).
+func StoredSBOMParser(name string, spec []byte) []byte {
+	if !json.Valid(spec) {
+		return spec
+	}
+	doc, err := json.Marshal(map[string]any{
+		"apiVersion": "rampart.aspm.dev/v1alpha1",
+		"kind":       "ClusterSBOMParser",
+		"metadata":   map[string]string{"name": name},
+		"spec":       json.RawMessage(spec),
+	})
+	if err != nil {
+		return spec
+	}
+	return doc
 }

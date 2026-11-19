@@ -595,6 +595,71 @@ export interface ParserDescriptor {
   capabilities?: string[];
 }
 
+/**
+ * What an analyzer did, as the server recorded it. A "test" is a person pressing Test; an "analysis" is Rampart asking the
+ * analyzer about an SBOM. Only a test is written today.
+ */
+export interface AnalyzerEvent {
+  id: string;
+  event: 'test' | 'analysis';
+  outcome: 'succeeded' | 'failed';
+  message: string;
+  detail?: Record<string, string>;
+  duration_ms: number;
+  actor?: string;
+  created_at: string;
+}
+
+/**
+ * One analyzer. `external` is a service Rampart calls over gRPC; `sbom` is the matcher inside the server. Which of the
+ * remaining fields are set follows from the kind.
+ */
+export interface AnalyzerItem {
+  kind: 'external' | 'sbom';
+  /** `cluster`: set by an administrator for every tenant; `tenant`: set by this tenant. */
+  scope: 'cluster' | 'tenant';
+  namespace?: string;
+  name: string;
+  enabled: boolean;
+  /** The server accepted the resource as written. When it did not, `error` says why. */
+  ready: boolean;
+  error?: string;
+  protocol?: string;
+  target?: string;
+  timeout_seconds?: number;
+  secure?: boolean;
+  engine?: string;
+  min_confidence?: number;
+  include_pre_release?: boolean;
+  match_direct_only?: boolean;
+  sources?: Record<string, boolean>;
+  schedule?: string;
+  updated_at: string;
+  last_event?: AnalyzerEvent;
+}
+
+export interface AnalyzerTestResult {
+  ok: boolean;
+  outcome: 'succeeded' | 'failed';
+  message: string;
+  latency_ms: number;
+  detail?: Record<string, string>;
+  event?: AnalyzerEvent;
+}
+
+/** What asking an analyzer to analyse every SBOM answers: how many analyses were queued. Those already pending or running are not queued again. */
+export interface AnalyzeResponse {
+  queued: number;
+}
+
+/** What identifies one analyzer to the test and events calls. */
+export interface AnalyzerRef {
+  kind: AnalyzerItem['kind'];
+  scope: AnalyzerItem['scope'];
+  namespace?: string;
+  name: string;
+}
+
 /** Connector status condition (docs/04, docs/20) */
 export interface ConnectorCondition {
   type: string;

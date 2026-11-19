@@ -34,6 +34,8 @@ rules:
       - clusterparsers
       - sbomparsers
       - clustersbomparsers
+      - sbomanalyzers
+      - clustersbomanalyzers
       - externalanalyzers
       - clusterexternalanalyzers
       - connectors/status
@@ -42,6 +44,8 @@ rules:
       - clusterparsers/status
       - sbomparsers/status
       - clustersbomparsers/status
+      - sbomanalyzers/status
+      - clustersbomanalyzers/status
       - externalanalyzers/status
       - clusterexternalanalyzers/status
       - complianceframeworks
@@ -62,6 +66,8 @@ rules:
       - clusterparsers/finalizers
       - sbomparsers/finalizers
       - clustersbomparsers/finalizers
+      - sbomanalyzers/finalizers
+      - clustersbomanalyzers/finalizers
       - externalanalyzers/finalizers
       - clusterexternalanalyzers/finalizers
       - complianceframeworks/finalizers

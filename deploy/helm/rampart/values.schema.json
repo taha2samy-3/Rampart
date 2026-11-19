@@ -2,6 +2,22 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "analysis": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxAge": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(m|h)$"
+        },
+        "maxInFlight": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "replicaCount": {
       "type": "integer",
       "minimum": 1
@@ -52,6 +68,10 @@
             "json",
             "text"
           ]
+        },
+        "otlpEndpoint": {
+          "type": "string",
+          "description": "OTLP/HTTP endpoint for traces and metrics (for example http://otel-collector:4318). Empty turns OTLP export off."
         }
       }
     },

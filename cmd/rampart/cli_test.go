@@ -97,14 +97,14 @@ func TestCLIE2EUploadAndSBOM(t *testing.T) {
 	defer ts.Close()
 
 	// 1. Test CLI upload with SARIF fixture
-	sarifPath := filepath.Join("..", "..", "parsers", "wasm", "sarif", "testdata", "semgrep.sarif")
+	sarifPath := filepath.Join("..", "..", "internal", "testdata", "reports", "sarif", "semgrep.sarif")
 	handled, err := handleCLI([]string{"upload", sarifPath, "--parser", "sarif", "--server", ts.URL, "--token", token})
 	if err != nil || !handled {
 		t.Fatalf("expected upload command to succeed, got %v", err)
 	}
 
 	// 2. Test CLI sbom upload with CycloneDX XML fixture
-	xmlPath := filepath.Join("..", "..", "parsers", "wasm", "sbom-cyclonedx", "testdata", "sample.cdx.xml")
+	xmlPath := filepath.Join("..", "..", "internal", "testdata", "reports", "sbom-cyclonedx", "sample.cdx.xml")
 	handled, err = handleCLI([]string{"sbom", "upload", xmlPath, "--parser", "cyclonedx", "--server", ts.URL, "--token", token})
 	if err != nil || !handled {
 		t.Fatalf("expected sbom upload command to succeed, got %v", err)
@@ -396,11 +396,11 @@ func TestCLIFindingsListAndSetState(t *testing.T) {
 // The CLI reads a local SBOM with the reader it is told to use; it holds no list of formats and does not try them in
 // turn. A reader refuses a document that is not in its format, so a wrong name is an error, not a wrong answer.
 func TestParseLocalSBOMUsesTheNamedReader(t *testing.T) {
-	dir := filepath.Join("..", "..", "parsers", "wasm")
+	dir := filepath.Join("..", "..", "internal", "testdata", "reports")
 	files := map[string]struct{ reader, path string }{
-		"cyclonedx json": {"cyclonedx", filepath.Join(dir, "sbom-cyclonedx", "testdata", "sample.cdx.json")},
-		"spdx":           {"spdx", filepath.Join(dir, "sbom-spdx", "testdata", "sample.spdx.json")},
-		"syft":           {"syft", filepath.Join(dir, "sbom-syft", "testdata", "report.syft.json")},
+		"cyclonedx json": {"cyclonedx", filepath.Join(dir, "sbom-cyclonedx", "sample.cdx.json")},
+		"spdx":           {"spdx", filepath.Join(dir, "sbom-spdx", "sample.spdx.json")},
+		"syft":           {"syft", filepath.Join(dir, "sbom-syft", "report.syft.json")},
 	}
 	for name, f := range files {
 		// a file name that says nothing about the format: only the flag decides

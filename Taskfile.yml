@@ -29,10 +29,16 @@ tasks:
     cmds:
       - golangci-lint run ./...
 
+  modules:
+    desc: Build the WASM parser modules the tests run (from ../parsers and ../sbom-parsers; Rampart holds no parser)
+    cmds:
+      - hack/test-modules.sh >/dev/null
+
   test:
     desc: Run unit tests with race detection
+    deps: [modules]
     cmds:
-      - go test -v -race ./...
+      - RAMPART_WASM_DIR="$PWD/.cache/wasm" go test -v -race ./...
 
   build:
     desc: Build the single rampart binary

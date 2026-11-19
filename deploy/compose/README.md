@@ -16,6 +16,21 @@ docker compose up -d --build
 
 Then open http://localhost:8080. `init.sh` prints the accounts; they are also in `.env`.
 
+## Parsers
+
+Rampart holds no parser: a report is read by a parser that was installed as a resource. In Kubernetes the chart installs the defaults
+(the `rampart-parsers` and `rampart-sbom-parsers` charts). Here there is no operator, so the server reads them from two directories at
+start, `RAMPART_PARSERS_DIR` (the manifests) and `RAMPART_WASM_DIR` (the WASM modules the manifests name), which this quick start mounts from
+`./parsers` and `./wasm`. Fill them once, before `docker compose up`, and again to update:
+
+```bash
+./fetch-parsers.sh                                   # clones Rampart-Aspm/parsers and Rampart-Aspm/sbom-parsers and builds the modules (needs git and Go)
+./fetch-parsers.sh ~/src/parsers ~/src/sbom-parsers  # or use checkouts you already have
+```
+
+Until then the server starts and answers an upload with `Unknown parser` and an empty list. To use only some parsers, delete the others' files
+from `./parsers`; to add your own, put its manifest there (and its module in `./wasm/<name>/parser.wasm`).
+
 ## Signing in
 
 | Who | How | Role |

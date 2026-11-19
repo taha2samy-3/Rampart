@@ -82,6 +82,8 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [30 Native SBOM matching](docs/30-plan-native-sbom-matching.md) | Plan: an SBOM upload becomes findings inside Rampart, and Dependency-Track goes |
 | [34 Review and fix plan](docs/34-review-and-fix-plan.md) | Review of the uncommitted work (docs 29 to 33): what is wrong, with evidence, and how to fix it |
 | [35 Execution plan](docs/35-execution-plan.md) | Ordered phases for what docs 29 to 33 describe and is not built yet; frontend last |
+| [37 Helm values](docs/37-helm-values.md) | Every values file of an installation (the chart, its three dependencies, the GitOps overlays) and what each key does |
+| [38 Analyzers](docs/38-analyzers.md) | How an SBOM is analysed (on upload, on request, on a schedule), the two kinds of analyzer, the Analyzers tab, what was checked and what was not |
 | [ADRs](docs/adr/) | Six architecture decision records |
 | [Research](docs/research/) | DefectDojo, the ASPM market, standards, Kubernetes-native patterns |
 

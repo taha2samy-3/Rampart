@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { vi } from 'vitest';
 import { App } from '@/app/App';
-import type { CorrelatedRef, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role } from '@/api/types';
+import type { AnalyzerEvent, AnalyzerItem, AnalyzerTestResult, CorrelatedRef, FindingGroup, HeldClose, ParserDescriptor, Reporter, Role } from '@/api/types';
 
 export const SESSION = {
   user: { id: 'u1', email: 'sara@acme.example', name: 'Sara Ahmed' },
@@ -95,6 +95,38 @@ export interface Scenario {
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
   parsers?: ParserDescriptor[] | 'error';
+  /** GET /api/v1/analyzers; `error` answers 500. */
+  analyzers?: AnalyzerItem[] | 'error';
+  /** The history GET /api/v1/analyzers/events returns, by `kind/scope/namespace/name`. A test adds its own event to it. */
+  analyzerEvents?: Record<string, AnalyzerEvent[]>;
+  /** What POST /api/v1/analyzers/test answers: this result (default: it worked), 403 for a non-administrator, or 500. */
+  analyzerTest?: AnalyzerTestResult | 403 | 500;
+  /** What POST /api/v1/analyzers/analyze answers: this many queued (default 3), 409 when analysis is switched off, or 500. */
+  analyzerAnalyze?: number | 409 | 500;
+}
+
+export const analyzerKey = (a: Pick<AnalyzerItem, 'kind' | 'scope' | 'namespace' | 'name'>) => [a.kind, a.scope, a.namespace ?? '', a.name].join('/');
+
+export function analyzer(over: Partial<AnalyzerItem> = {}): AnalyzerItem {
+  return {
+    kind: 'external', scope: 'cluster', name: 'sonatype-oss-index', enabled: true, ready: true,
+    protocol: 'grpc', target: 'sonatype-analyzer.rampart-system.svc:9090', timeout_seconds: 60, secure: false,
+    updated_at: '2026-11-10T10:00:00Z', ...over,
+  };
+}
+
+export function matcher(over: Partial<AnalyzerItem> = {}): AnalyzerItem {
+  return {
+    kind: 'sbom', scope: 'cluster', name: 'default', enabled: true, ready: true, engine: 'hybrid', min_confidence: 0.5,
+    sources: { osv: true, ghsa: true, nvd: false }, schedule: '0 3 * * *', updated_at: '2026-11-10T10:00:00Z', ...over,
+  };
+}
+
+export function analyzerEvent(i: number, over: Partial<AnalyzerEvent> = {}): AnalyzerEvent {
+  return {
+    id: `ev-${i}`, event: 'test', outcome: 'succeeded', message: 'Serving: sonatype-oss-index 0.1.0, 9 package types',
+    duration_ms: 12, actor: 'user:ada', created_at: '2026-11-11T10:00:00Z', ...over,
+  };
 }
 
 export function heldClose(i: number, over: Partial<HeldClose> = {}): HeldClose {
@@ -170,6 +202,7 @@ export type Calls = { method: string; url: string; headers: Record<string, strin
 export function mockFetch(sc: Scenario): Calls {
   const calls: Calls = [];
   let auditCalls = 0;
+  const analyzerHistory: Record<string, AnalyzerEvent[]> = { ...(sc.analyzerEvents ?? {}) };
   const json = (body: unknown, status = 200) =>
     new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json' } });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -511,6 +544,31 @@ export function mockFetch(sc: Scenario): Calls {
       const id = decodeURIComponent(path.split('/').pop() ?? '');
       const found = (Array.isArray(sc.runs) ? sc.runs.flat() : []).find((r) => r.id === id);
       return found ? json(found) : json({ title: 'Run not found', status: 404 }, 404);
+    }
+    if (path === '/api/v1/analyzers/analyze' && (init?.method ?? 'GET') === 'POST') {
+      if (sc.analyzerAnalyze === 409) return json({ type: 'u', title: 'Analysis is switched off on this server (analysis.enabled)', status: 409, request_id: 'req_an' }, 409);
+      if (sc.analyzerAnalyze === 500) return json({ type: 'u', title: 'boom', status: 500, request_id: 'req_an' }, 500);
+      return json({ queued: sc.analyzerAnalyze ?? 3 }, 202);
+    }
+    if (path === '/api/v1/analyzers/events') {
+      const u = new URL(url, 'http://localhost').searchParams;
+      const k = [u.get('kind'), u.get('scope'), u.get('namespace') ?? '', u.get('name')].join('/');
+      return json({ events: analyzerHistory[k] ?? [], total: (analyzerHistory[k] ?? []).length });
+    }
+    if (path === '/api/v1/analyzers/test' && (init?.method ?? 'GET') === 'POST') {
+      if (sc.analyzerTest === 403) return json({ type: 'u', title: 'Forbidden', status: 403, request_id: 'req_an' }, 403);
+      if (sc.analyzerTest === 500) return json({ type: 'u', title: 'boom', status: 500, request_id: 'req_an' }, 500);
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      const res: AnalyzerTestResult = sc.analyzerTest ?? { ok: true, outcome: 'succeeded', message: 'Serving: sonatype-oss-index 0.1.0, 9 package types', latency_ms: 7, detail: { target: 'sonatype-analyzer.rampart-system.svc:9090', version: '0.1.0' } };
+      const ev: AnalyzerEvent = analyzerEvent(Object.keys(analyzerHistory).length + 100, { event: 'test', outcome: res.outcome, message: res.message, duration_ms: res.latency_ms, created_at: '2026-11-12T09:00:00Z' });
+      const k = analyzerKey(body);
+      analyzerHistory[k] = [ev, ...(analyzerHistory[k] ?? [])];
+      return json({ ...res, event: ev });
+    }
+    if (path === '/api/v1/analyzers') {
+      if (sc.analyzers === 'error') return json({ type: 'u', title: 'Failed to list analyzers', status: 500, request_id: 'req_an' }, 500);
+      const items = (sc.analyzers ?? []).map((a) => ({ ...a, last_event: analyzerHistory[analyzerKey(a)]?.[0] ?? a.last_event }));
+      return json({ analyzers: items.length ? items : null, total: items.length });
     }
     if (path === '/api/v1/parsers') {
       if (sc.parsers === 'error') return json({ type: 'https://rampart.aspm.dev/problems/internal', title: 'Failed to list parsers', status: 500, request_id: 'req_parsers' }, 500);

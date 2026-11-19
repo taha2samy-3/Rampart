@@ -55,6 +55,12 @@ var (
 	gvkComplianceFramework        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ComplianceFramework"}
 	gvkClusterComplianceFramework = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterComplianceFramework"}
 	gvkClusterParser              = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterParser"}
+	gvkClusterSBOMParser          = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSBOMParser"}
+	// D143: the analyzers: services Rampart calls (external) and the matcher inside the server (SBOM).
+	gvkExternalAnalyzer        = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ExternalAnalyzer"}
+	gvkClusterExternalAnalyzer = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterExternalAnalyzer"}
+	gvkSBOMAnalyzer            = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "SBOMAnalyzer"}
+	gvkClusterSBOMAnalyzer     = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSBOMAnalyzer"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -171,6 +177,11 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	frameworks := policyCR(gvkComplianceFramework, NewComplianceFrameworkReconciler(cfg.Store))
 	clusterFrameworks := policyCR(gvkClusterComplianceFramework, NewClusterComplianceFrameworkReconciler(cfg.Store))
 	clusterParsers := policyCR(gvkClusterParser, NewClusterParserReconciler(cfg.Store))
+	clusterSBOMs := policyCR(gvkClusterSBOMParser, NewClusterSBOMParserReconciler(cfg.Store))
+	externalAnalyzers := policyCR(gvkExternalAnalyzer, NewExternalAnalyzerReconciler(cfg.Store))
+	clusterExternalAnalyzers := policyCR(gvkClusterExternalAnalyzer, NewClusterExternalAnalyzerReconciler(cfg.Store))
+	sbomAnalyzers := policyCR(gvkSBOMAnalyzer, NewSBOMAnalyzerReconciler(cfg.Store))
+	clusterSBOMAnalyzers := policyCR(gvkClusterSBOMAnalyzer, NewClusterSBOMAnalyzerReconciler(cfg.Store))
 	pkgR := NewIntegrationPackageReconciler(cfg.Store)
 	packages := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkIntegrationPackage, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
 	parsers := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkParser, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
@@ -182,7 +193,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		r   reconcile.Reconciler
 	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
 		"clusterfeed": {gvkClusterFeed, clusterFeed}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks},
-		"clusterparser": {gvkClusterParser, clusterParsers}} {
+		"clusterparser": {gvkClusterParser, clusterParsers}, "clustersbomparser": {gvkClusterSBOMParser, clusterSBOMs},
+		"clusterexternalanalyzer": {gvkClusterExternalAnalyzer, clusterExternalAnalyzers}, "clustersbomanalyzer": {gvkClusterSBOMAnalyzer, clusterSBOMAnalyzers}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}
@@ -196,7 +208,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		gvk schema.GroupVersionKind
 		r   reconcile.Reconciler
 	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}, "integrationpackage": {gvkIntegrationPackage, packages},
-		"complianceframework": {gvkComplianceFramework, frameworks}, "parser": {gvkParser, parsers}} {
+		"complianceframework": {gvkComplianceFramework, frameworks}, "parser": {gvkParser, parsers},
+		"externalanalyzer": {gvkExternalAnalyzer, externalAnalyzers}, "sbomanalyzer": {gvkSBOMAnalyzer, sbomAnalyzers}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

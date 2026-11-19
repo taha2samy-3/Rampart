@@ -24,6 +24,7 @@ import {
 import { RunInspector } from '@/features/run-inspector/RunInspector';
 import { UploadDialog } from './UploadDialog';
 import { ParsersView } from './ParsersView';
+import { AnalyzersView } from './AnalyzersView';
 import { cn } from '@/lib/cn';
 import { absoluteDateTime, shortId } from '@/lib/format';
 
@@ -49,7 +50,7 @@ function foundText(r: RunRow): string {
 export function IngestionRoute({ search }: { search: IngestionSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'runs' | 'parsers'>('runs');
+  const [tab, setTab] = useState<'runs' | 'parsers' | 'analyzers'>('runs');
   const [uploadOpen, setUploadOpen] = useState(false);
   useEffect(() => {
     document.title = `${t('ingestion.title')} - Rampart`;
@@ -186,7 +187,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
   }
 
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as 'runs' | 'parsers')} className="flex h-full min-h-0 flex-col">
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'runs' | 'parsers' | 'analyzers')} className="flex h-full min-h-0 flex-col">
       {/* Header with View Tabs */}
       <div className="flex items-center justify-between border-b border-rule px-4 py-2">
         <div className="flex items-center gap-4">
@@ -194,6 +195,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
           <TabsList label="Ingestion Views">
             <TabsTrigger value="runs">{t('ingestion.runsTab', { defaultValue: 'Ingest Runs' })}</TabsTrigger>
             <TabsTrigger value="parsers">Parsers & Formats</TabsTrigger>
+            <TabsTrigger value="analyzers">{t('ingestion.analyzersTab')}</TabsTrigger>
           </TabsList>
         </div>
         {tab === 'runs' && (
@@ -217,6 +219,10 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
 
       <TabsContent value="parsers" className="min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden">
         <ParsersView onUploadClick={() => setUploadOpen(true)} />
+      </TabsContent>
+
+      <TabsContent value="analyzers" className="min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden">
+        <AnalyzersView />
       </TabsContent>
     </Tabs>
   );

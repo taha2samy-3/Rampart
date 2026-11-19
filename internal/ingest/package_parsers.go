@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
-	"rampart/internal/config/sbomparsers"
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
 	"rampart/internal/integrations/lua"
@@ -21,9 +20,12 @@ import (
 	"rampart/internal/sbom"
 )
 
-// parserSet is the built-in parsers plus the custom cluster and tenant parsers (ClusterParser, Parser,
-// IntegrationPackage; docs/19 §4, docs/29).
-// Precedence: Tenant Parser > Cluster Parser > Embedded Built-in defaults.
+// parserSet is the parsers a process was given (the registry), the parsers installed for the whole cluster (ClusterParser,
+// ClusterSBOMParser) and the tenant's own (Parser, IntegrationPackage; docs/19 §4, docs/29). Nothing is compiled in: every
+// parser comes from outside.
+// Precedence by name: the registry, then ClusterParser, then the tenant's Parser. A name an administrator installed for the
+// cluster is reserved: a tenant's parser of the same name never takes its uploads (it did the same when the shipped
+// parsers were compiled in, and a tenant's mapping parser must not be able to misroute a standard scanner).
 type parserSet struct {
 	registry *integrations.Registry
 	store    any
@@ -38,15 +40,6 @@ type cachedParser struct {
 }
 
 func newParserSet(registry *integrations.Registry, store any) *parserSet {
-	if registry != nil {
-		if defaultSBOMs, err := sbomparsers.ListDefaultSBOMParsers(); err == nil {
-			for _, sb := range defaultSBOMs {
-				if p, err := sbom.NewWasmSBOMParserFromSpec(sb.Name, sb.Spec, nil); err == nil {
-					_ = registry.RegisterParser(p)
-				}
-			}
-		}
-	}
 	return &parserSet{registry: registry, store: store, cache: map[string]cachedParser{}}
 }
 
@@ -69,7 +62,9 @@ func tenantRuntimeAllowed(raw []byte) bool {
 	return rt == "" || rt == "mapping" || rt == "declarative"
 }
 
-func (s *parserSet) compileParser(name string, raw []byte) (integrations.ParserContract, error) {
+// compileParser builds a stored parser. A cluster-scoped wasm or lua parser is built by integrations.NewInstalledParser, the
+// one constructor every installed parser goes through, so it has the same id and detection wherever it came from.
+func (s *parserSet) compileParser(name string, raw []byte, cluster bool) (integrations.ParserContract, error) {
 	var meta struct {
 		Kind string `json:"kind" yaml:"kind"`
 	}
@@ -102,6 +97,9 @@ func (s *parserSet) compileParser(name string, raw []byte) (integrations.ParserC
 		native = head.Spec.Native
 	}
 
+	if cluster && (runtime == "wasm" || runtime == "lua") {
+		return integrations.NewInstalledParser(name, raw)
+	}
 	switch runtime {
 	case "native":
 		engine := native
@@ -151,7 +149,7 @@ func (s *parserSet) tenantAndCluster(ctx context.Context, tenantID uuid.UUID) (t
 					}
 					continue
 				}
-				cp, err := s.compileParser(p.Name, p.Spec)
+				cp, err := s.compileParser(p.Name, p.Spec, p.Origin != "tenant")
 				if err != nil {
 					continue
 				}
@@ -178,7 +176,7 @@ func (s *parserSet) tenantAndCluster(ctx context.Context, tenantID uuid.UUID) (t
 					tenantOut = append(tenantOut, c.parser)
 					continue
 				}
-				cp, err := s.compileParser(p.Name, p.Spec)
+				cp, err := s.compileParser(p.Name, p.Spec, false)
 				if err != nil {
 					continue
 				}
@@ -194,7 +192,7 @@ func (s *parserSet) tenantAndCluster(ctx context.Context, tenantID uuid.UUID) (t
 // formatAliases are the names the documents use for a built-in parser whose id differs (docs/04 acceptedFormats).
 var formatAliases = map[string]string{"generic": "genericjson", "gitlab-sast": "gitlab"}
 
-// byName finds the parser a client named: a built-in first ("trivy" or "builtin:trivy"), then the tenant or cluster parser.
+// byName finds the parser a client named: the registry first ("trivy" or "builtin:trivy"), then the cluster's parser, then the tenant's.
 func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string) integrations.ParserContract {
 	hint = strings.ToLower(strings.TrimSpace(hint))
 	if hint == "" {
@@ -204,7 +202,7 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 		hint = alias
 	}
 
-	// 1. Built-in defaults own their names
+	// 1. The registry owns its names
 	if p, err := s.registry.GetParser("builtin:" + hint); err == nil {
 		return p
 	}
@@ -239,15 +237,15 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 			strings.HasPrefix(name, target)
 	}
 
-	// 2. Tenant parsers
-	for _, p := range tenantParsers {
+	// 2. Cluster parsers: a name the administrator installed is reserved (see parserSet)
+	for _, p := range clusterParsers {
 		if matchName(p, hint) {
 			return p
 		}
 	}
 
-	// 3. Cluster parsers
-	for _, p := range clusterParsers {
+	// 3. Tenant parsers
+	for _, p := range tenantParsers {
 		if matchName(p, hint) {
 			return p
 		}

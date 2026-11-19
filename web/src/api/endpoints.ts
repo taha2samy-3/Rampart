@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
+import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -255,6 +255,29 @@ export async function listParsers(signal?: AbortSignal): Promise<ParserDescripto
   const raw = await get<{ parsers?: ParserDescriptor[] | null }>('/api/v1/parsers', { signal });
   return raw.parsers ?? [];
 }
+
+// --- Analyzers: the services and the matcher that look for vulnerabilities in an SBOM (docs/16 D143) ---
+export async function listAnalyzers(signal?: AbortSignal): Promise<AnalyzerItem[]> {
+  const raw = await get<{ analyzers?: AnalyzerItem[] | null }>('/api/v1/analyzers', { signal });
+  return raw.analyzers ?? [];
+}
+
+/** What one analyzer did lately, newest first. */
+export async function listAnalyzerEvents(ref: AnalyzerRef, signal?: AbortSignal): Promise<AnalyzerEvent[]> {
+  const raw = await get<{ events?: AnalyzerEvent[] | null }>('/api/v1/analyzers/events', {
+    query: { kind: ref.kind, scope: ref.scope, namespace: ref.namespace, name: ref.name, limit: 20 },
+    signal,
+  });
+  return raw.events ?? [];
+}
+
+/** Asks one analyzer whether it works (administrator). The answer is also recorded as an event. */
+export const testAnalyzer = (ref: AnalyzerRef) =>
+  post<AnalyzerTestResult>('/api/v1/analyzers/test', { kind: ref.kind, scope: ref.scope, namespace: ref.namespace ?? '', name: ref.name });
+
+/** Asks one analyzer to analyse the newest SBOM of every application (administrator). The analyses run in the background. */
+export const analyzeWithAnalyzer = (ref: AnalyzerRef) =>
+  post<AnalyzeResponse>('/api/v1/analyzers/analyze', { kind: ref.kind, scope: ref.scope, namespace: ref.namespace ?? '', name: ref.name });
 
 /** Sends a renewal ticket that gave up back to the outbox (administrator). */
 export const retryAttestationTicket = (attestationId: string) => post<void>(`/api/v1/attestation-tickets/${encodeURIComponent(attestationId)}/retry`, {});

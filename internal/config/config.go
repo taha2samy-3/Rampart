@@ -21,6 +21,7 @@ type Config struct {
 	Database      DatabaseConfig      `json:"database" yaml:"database"`
 	ObjectStorage ObjectStorageConfig `json:"object_storage" yaml:"objectStorage"`
 	Ingest        IngestConfig        `json:"ingest" yaml:"ingest"`
+	Analysis      AnalysisConfig      `json:"analysis" yaml:"analysis"`
 	Telemetry     TelemetryConfig     `json:"telemetry" yaml:"telemetry"`
 	Operator      OperatorConfig      `json:"operator" yaml:"operator"`
 	Auth          AuthConfig          `json:"auth" yaml:"auth"`
@@ -177,6 +178,17 @@ type IngestConfig struct {
 	BatchRows      int   `json:"batch_rows" yaml:"batchRows"`
 }
 
+// AnalysisConfig sets how the analyzers run on SBOMs (docs/16 D143). The defaults are Dependency-Track's.
+type AnalysisConfig struct {
+	// Enabled starts an analysis when an SBOM is uploaded or asked for, and the sweep that repeats them. Off, an analyzer is listed and can
+	// be tested, and nothing runs it.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// MaxAge is how long an analysis stands before the sweep asks the analyzer again. An SBOMAnalyzer with a schedule follows it instead.
+	MaxAge time.Duration `json:"max_age" yaml:"maxAge"`
+	// MaxInFlight is how many analyses may be queued or running at once, in every tenant.
+	MaxInFlight int `json:"max_in_flight" yaml:"maxInFlight"`
+}
+
 type TelemetryConfig struct {
 	OTLPEndpoint string `json:"otlp_endpoint" yaml:"otlpEndpoint"`
 	LogLevel     string `json:"log_level" yaml:"logLevel"`
@@ -296,6 +308,7 @@ func DefaultConfig() *Config {
 			MaxReportBytes: 536870912, // 512 MiB per D6
 			BatchRows:      5000,      // 5 000 rows per transaction per D2
 		},
+		Analysis: AnalysisConfig{Enabled: true, MaxAge: 24 * time.Hour, MaxInFlight: 50},
 		Telemetry: TelemetryConfig{
 			LogLevel:  "info",
 			LogFormat: "json",
@@ -431,6 +444,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Ingest.MaxReportBytes <= 0 {
 		return fmt.Errorf("config: ingest.max_report_bytes must be greater than zero")
+	}
+	if c.Analysis.MaxAge < time.Minute {
+		return fmt.Errorf("config: analysis.max_age must be at least one minute")
+	}
+	if c.Analysis.MaxInFlight < 1 {
+		return fmt.Errorf("config: analysis.max_in_flight must be at least 1")
 	}
 	if c.Limits.IngestPerHour < 0 {
 		return fmt.Errorf("config: limits.ingest_per_hour cannot be negative")
@@ -653,6 +672,23 @@ func applyEnv(cfg *Config) {
 	if v := get("INGEST_BATCH_ROWS"); v != "" {
 		if val, err := strconv.Atoi(v); err == nil {
 			cfg.Ingest.BatchRows = val
+		}
+	}
+	if v := get("ANALYSIS_ENABLED"); v != "" {
+		cfg.Analysis.Enabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := get("ANALYSIS_MAX_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Analysis.MaxAge = d
+		} else {
+			cfg.Analysis.MaxAge = 0 // refused by Validate with the key's name, rather than silently kept at the default
+		}
+	}
+	if v := get("ANALYSIS_MAX_IN_FLIGHT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Analysis.MaxInFlight = n
+		} else {
+			cfg.Analysis.MaxInFlight = -1
 		}
 	}
 	// Support both RAMPART_LOG_LEVEL and RAMPART_TELEMETRY_LOG_LEVEL

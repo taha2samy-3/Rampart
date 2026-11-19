@@ -30,7 +30,11 @@ var (
 
 func init() {
 	integrations.WasmParserLoader = func(name string, raw []byte) (integrations.ParserContract, error) {
-		return NewWasmParserFromSpec(name, raw, nil)
+		p, err := NewWasmParserFromSpec(name, raw, nil)
+		if err != nil {
+			return nil, err // not a typed nil inside a non-nil interface
+		}
+		return p, nil
 	}
 }
 

@@ -55,6 +55,8 @@ type API struct {
 	scorer        *scoring.Scorer
 	gw            *ingest.Gateway
 	live          *LiveHub
+	analyzerProbe AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
+	analysis      AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -230,6 +232,11 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 
 	// Parsers catalogue & descriptors (docs/19 §2, docs/13 §9)
 	routes.HandleFunc("GET /api/v1/parsers", a.handleListParsers)
+	routes.HandleFunc("GET /api/v1/analyzers", a.handleListAnalyzers)
+	routes.HandleFunc("GET /api/v1/analyzers/events", a.handleAnalyzerEvents)
+	routes.HandleFunc("POST /api/v1/analyzers/test", a.handleTestAnalyzer)
+	routes.HandleFunc("POST /api/v1/analyzers/analyze", a.handleAnalyzeWithAnalyzer)
+	routes.HandleFunc("POST /api/v1/assets/{id}/analyze", a.handleAnalyzeAsset)
 
 	// Connectors are resources (D82): listed, described and validated here, never created.
 	routes.HandleFunc("GET /api/v1/connectors", a.handleListConnectors)

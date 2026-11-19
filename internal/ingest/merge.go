@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"rampart/internal/analyzer/matcher"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/store"
@@ -666,6 +667,13 @@ type MemoryStore struct {
 	feedMirror            *domain.FeedMirrorSpec
 	feedStates            map[string]domain.FeedState
 	clusterParsers        []domain.StoredParserObject
+	clusterAnalyzers      []domain.StoredAnalyzerObject
+	tenantAnalyzers       map[uuid.UUID][]domain.StoredAnalyzerObject
+	sbomAnalyses          map[string]*domain.SBOMAnalysis
+	advisoryRows          []matcher.Advisory
+	notifications         []*domain.Notification
+	analyzerEvents        []memoryAnalyzerEvent
+	advisories            domain.AdvisorySummary
 	tenantParsers         map[uuid.UUID][]domain.StoredParserObject
 }
 
@@ -710,7 +718,80 @@ func NewMemoryStore() *MemoryStore {
 		groupMembers:          make(map[uuid.UUID][]uuid.UUID),
 		feedStates:            make(map[string]domain.FeedState),
 		tenantParsers:         make(map[uuid.UUID][]domain.StoredParserObject),
+		tenantAnalyzers:       make(map[uuid.UUID][]domain.StoredAnalyzerObject),
 	}
+}
+
+type memoryAnalyzerEvent struct {
+	tenant uuid.UUID
+	ev     domain.AnalyzerEvent
+}
+
+// SaveClusterAnalyzer adds a cluster-scoped analyzer (kind domain.AnalyzerKindExternal or AnalyzerKindSBOM) to the in-memory store.
+func (m *MemoryStore) SaveClusterAnalyzer(kind, name string, spec []byte, refused string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clusterAnalyzers = append(m.clusterAnalyzers, domain.StoredAnalyzerObject{Kind: kind, Origin: "cluster", Name: name, Spec: spec, Error: refused})
+}
+
+// SaveTenantAnalyzer adds a tenant's analyzer to the in-memory store.
+func (m *MemoryStore) SaveTenantAnalyzer(tenantID uuid.UUID, kind, namespace, name string, spec []byte, refused string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tenantAnalyzers[tenantID] = append(m.tenantAnalyzers[tenantID], domain.StoredAnalyzerObject{Kind: kind, Origin: "tenant", Namespace: namespace, Name: name, Spec: spec, Error: refused})
+}
+
+// ListAnalyzers lists the cluster's analyzers and the tenant's own.
+func (m *MemoryStore) ListAnalyzers(_ context.Context, tenantID uuid.UUID) ([]domain.StoredAnalyzerObject, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := append([]domain.StoredAnalyzerObject{}, m.clusterAnalyzers...)
+	return append(out, m.tenantAnalyzers[tenantID]...), nil
+}
+
+// RecordAnalyzerEvent keeps an event for the tenant that caused it.
+func (m *MemoryStore) RecordAnalyzerEvent(_ context.Context, tenantID uuid.UUID, ev domain.AnalyzerEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ev.ID == uuid.Nil {
+		ev.ID = domain.NewID()
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now().UTC()
+	}
+	m.analyzerEvents = append(m.analyzerEvents, memoryAnalyzerEvent{tenant: tenantID, ev: ev})
+	return nil
+}
+
+// ListAnalyzerEvents lists the tenant's events of one analyzer, newest first.
+func (m *MemoryStore) ListAnalyzerEvents(_ context.Context, tenantID uuid.UUID, kind, scope, namespace, name string, limit int) ([]domain.AnalyzerEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []domain.AnalyzerEvent
+	for i := len(m.analyzerEvents) - 1; i >= 0 && len(out) < limit; i-- {
+		e := m.analyzerEvents[i]
+		if e.tenant == tenantID && e.ev.Kind == kind && e.ev.Scope == scope && e.ev.Namespace == namespace && e.ev.Name == name {
+			out = append(out, e.ev)
+		}
+	}
+	return out, nil
+}
+
+// SetAdvisorySummary sets what AdvisorySummary answers, for tests.
+func (m *MemoryStore) SetAdvisorySummary(s domain.AdvisorySummary) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.advisories = s
+}
+
+// AdvisorySummary answers what SetAdvisorySummary was given.
+func (m *MemoryStore) AdvisorySummary(context.Context) (domain.AdvisorySummary, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.advisories, nil
 }
 
 // SaveClusterParser adds a cluster-scoped parser to the in-memory store.
@@ -1740,12 +1821,22 @@ func (m *MemoryStore) ListTenantIDs(ctx context.Context) ([]uuid.UUID, error) {
 	defer m.mu.RUnlock()
 	seen := map[uuid.UUID]bool{}
 	var out []uuid.UUID
-	for _, f := range m.findings {
-		if !seen[f.TenantID] {
-			seen[f.TenantID] = true
-			out = append(out, f.TenantID)
+	add := func(id uuid.UUID) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
 		}
 	}
+	for _, f := range m.findings {
+		add(f.TenantID)
+	}
+	for _, b := range m.sboms {
+		add(b.TenantID)
+	}
+	for id := range m.tenantAnalyzers {
+		add(id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out, nil
 }
 

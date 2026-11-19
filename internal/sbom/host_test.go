@@ -181,7 +181,7 @@ func TestIsReader(t *testing.T) {
 
 // Syft is an SBOM reader like CycloneDX and SPDX: assets only, with the same direct-dependency rule.
 func TestShippedSyftReaderGivesAssetsOnly(t *testing.T) {
-	data, err := os.ReadFile("../../parsers/wasm/sbom-syft/testdata/report.syft.json")
+	data, err := os.ReadFile("../testdata/reports/sbom-syft/report.syft.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestShippedSyftReaderGivesAssetsOnly(t *testing.T) {
 }
 
 func TestSyftIsDetectedAndIsAReader(t *testing.T) {
-	raw, err := os.ReadFile("../config/sbomparsers/syft.yaml")
+	raw, err := os.ReadFile("../testdata/parsers/sbom/syft.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

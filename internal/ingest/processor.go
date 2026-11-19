@@ -57,6 +57,7 @@ type Processor struct {
 	objects      objectstore.Store
 	logger       *slog.Logger
 	router       IngestNotificationRouter
+	analysis     AnalysisTrigger
 	batchRows    int
 	maxReport    int64
 	maxSBOMBytes int64
@@ -74,6 +75,15 @@ func NewProcessor(store Store, registry *integrations.Registry, objects objectst
 	return &Processor{store: store, engine: NewEngine(store), registry: registry, parsers: newParserSet(registry, store), objects: objects, logger: logger,
 		batchRows: 5000, maxReport: 512 << 20, maxSBOMBytes: 256 << 20}
 }
+
+// AnalysisTrigger is told when an SBOM was stored, so that the analyzers can look at it (internal/analysis).
+type AnalysisTrigger interface {
+	SBOMStored(ctx context.Context, tenantID, sbomID uuid.UUID)
+}
+
+// SetAnalysisTrigger makes the processor start the analysis of every SBOM it stores. Without one, an SBOM is stored and nothing looks at it
+// until the scheduled sweep does, or a person asks.
+func (p *Processor) SetAnalysisTrigger(t AnalysisTrigger) { p.analysis = t }
 
 // SetScorer makes the processor store each finding's risk score, band and SLA (internal/scoring).
 func (p *Processor) SetScorer(s Scorer) { p.engine.SetScorer(s) }
@@ -528,6 +538,9 @@ func (p *Processor) storeSBOM(ctx context.Context, run *domain.IngestRun, parser
 	}
 	if err := p.store.SaveSBOM(ctx, sbomDoc, components); err != nil {
 		return 0, err
+	}
+	if p.analysis != nil {
+		p.analysis.SBOMStored(ctx, run.TenantID, sbomDoc.ID)
 	}
 	return len(components), nil
 }

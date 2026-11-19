@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"rampart/internal/domain"
@@ -31,6 +32,27 @@ func New(target string, _ time.Duration) (*Client, error) {
 		conn:   conn,
 		client: analyzerv1.NewAnalyzerServiceClient(conn),
 	}, nil
+}
+
+// MaxMessageBytes is the largest request or answer the client accepts. A whole SBOM goes in one call (as Dependency-Track sends it), and a
+// large one is more than gRPC's 4 MiB default.
+const MaxMessageBytes = 64 << 20
+
+// Dial connects to an analyzer. With secure the connection is TLS, checked against the system roots; otherwise it is plain, which
+// is the right choice only inside the cluster. It does not connect until the first call.
+func Dial(target string, secure bool) (*Client, error) {
+	creds := insecure.NewCredentials()
+	if secure {
+		creds = credentials.NewClientTLSFromCert(nil, "")
+	}
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(MaxMessageBytes), grpc.MaxCallRecvMsgSize(MaxMessageBytes)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial analyzer at %s: %w", target, err)
+	}
+	return NewFromConn(conn), nil
 }
 
 // NewFromConn wraps an existing client connection (useful for in-memory testing).

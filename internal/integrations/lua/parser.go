@@ -23,7 +23,11 @@ var (
 
 func init() {
 	integrations.LuaParserLoader = func(name string, raw []byte) (integrations.ParserContract, error) {
-		return NewLuaParserFromSpec(name, raw)
+		p, err := NewLuaParserFromSpec(name, raw)
+		if err != nil {
+			return nil, err // not a typed nil inside a non-nil interface
+		}
+		return p, nil
 	}
 }
 

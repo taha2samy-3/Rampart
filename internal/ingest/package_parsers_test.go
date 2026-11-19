@@ -152,13 +152,15 @@ spec:
 		if p == nil {
 			t.Fatalf("tenant %s failed to resolve cluster parser team-scanner", tid)
 		}
-		if p.Descriptor().ID != "lua:team-scanner" {
-			t.Errorf("expected lua:team-scanner, got %s", p.Descriptor().ID)
+		// Every parser installed for the cluster has the one id the runs, the gate and the compliance report read (D141): the
+		// server cannot tell a shipped parser from an administrator's own, so it does not name them differently.
+		if p.Descriptor().ID != "builtin:team-scanner" {
+			t.Errorf("expected builtin:team-scanner, got %s", p.Descriptor().ID)
 		}
 
 		// Detect by file name alone: 50 on the one scale every parser uses, above the 40 the ingest needs to auto-select
 		detected, score := set.detect(ctx, tid, []byte(`{}`), "team-report.json", "application/json")
-		if detected == nil || detected.Descriptor().ID != "lua:team-scanner" || score < 40 {
+		if detected == nil || detected.Descriptor().ID != "builtin:team-scanner" || score < 40 {
 			t.Errorf("detection failed: got %v with score %d", detected, score)
 		}
 	}

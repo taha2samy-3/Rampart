@@ -23,6 +23,29 @@ type Advisory struct {
 	RangeType   string // "SEMVER", "ECOSYSTEM"
 	Introduced  string
 	Fixed       string
+	// LastAffected ends a range at a version that is itself affected (OSV last_affected), where Fixed ends it before one.
+	LastAffected string
+	// Versions lists the exact versions of a VERSIONS range.
+	Versions []string
+}
+
+// Affects reports whether a component version falls in the advisory's range.
+func (a Advisory) Affects(version string) bool {
+	if version == "" {
+		return false
+	}
+	if a.RangeType == "VERSIONS" {
+		for _, v := range a.Versions {
+			if CompareVersions(version, v) == 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if a.Fixed == "" && a.LastAffected != "" {
+		return IsAffected(version, a.Introduced, "") && CompareVersions(version, a.LastAffected) <= 0
+	}
+	return IsAffected(version, a.Introduced, a.Fixed)
 }
 
 // AdvisoryStore defines the repository interface for querying vulnerability definitions by PURL base.
@@ -40,8 +63,28 @@ func New(store AdvisoryStore) *Matcher {
 	return &Matcher{store: store}
 }
 
+// Options narrow what the matcher looks at.
+type Options struct {
+	// DirectOnly leaves out the components that are not direct dependencies (rules.matchDirectOnly of the SBOMAnalyzer).
+	DirectOnly bool
+}
+
 // MatchComponents evaluates a list of SBOM components against candidate advisories.
 func (m *Matcher) MatchComponents(ctx context.Context, components []domain.SBOMComponent) ([]domain.RawFinding, error) {
+	return m.MatchComponentsWith(ctx, components, Options{})
+}
+
+// MatchComponentsWith is MatchComponents under the given options.
+func (m *Matcher) MatchComponentsWith(ctx context.Context, components []domain.SBOMComponent, opts Options) ([]domain.RawFinding, error) {
+	if opts.DirectOnly {
+		direct := make([]domain.SBOMComponent, 0, len(components))
+		for _, c := range components {
+			if c.Direct {
+				direct = append(direct, c)
+			}
+		}
+		components = direct
+	}
 	if len(components) == 0 {
 		return nil, nil
 	}
@@ -78,12 +121,13 @@ func (m *Matcher) MatchComponents(ctx context.Context, components []domain.SBOMC
 		}
 
 		for _, comp := range comps {
-			if !IsAffected(comp.Version, adv.Introduced, adv.Fixed) {
+			if !adv.Affects(comp.Version) {
 				continue
 			}
 
 			sev := domain.ParseSeverity(adv.Severity)
-			if sev == domain.SeverityInfo && adv.CVSSScore > 0 {
+			// An advisory that names no severity word is graded by its CVSS score. A word the parser does not know comes back as unknown.
+			if (sev == domain.SeverityInfo || sev == domain.SeverityUnknown) && adv.CVSSScore > 0 {
 				switch {
 				case adv.CVSSScore >= 9.0:
 					sev = domain.SeverityCritical

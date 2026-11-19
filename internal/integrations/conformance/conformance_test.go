@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"rampart/internal/config/parsers"
 	"rampart/internal/integrations/lua"
+	"rampart/internal/parsertest"
 )
 
 func TestConformance_Bandit(t *testing.T) {
@@ -28,9 +28,9 @@ func TestConformance_Bandit(t *testing.T) {
 		t.Fatalf("failed to write test fixture: %v", err)
 	}
 
-	banditYAML, err := parsers.GetDefaultParser("bandit")
+	banditYAML, err := os.ReadFile(filepath.Join(parsertest.Dir(), "report", "bandit.yaml"))
 	if err != nil {
-		t.Fatalf("failed to load default bandit manifest: %v", err)
+		t.Fatalf("failed to load the bandit manifest: %v", err)
 	}
 
 	p, err := lua.NewLuaParserFromSpec("bandit", banditYAML)

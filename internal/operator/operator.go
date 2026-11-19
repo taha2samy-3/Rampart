@@ -21,6 +21,11 @@ type Operator struct {
 	connectors     *ConnectorReconciler
 	packages       *IntegrationPackageReconciler
 	clusterParsers *PolicyReconciler
+	clusterSBOMs   *PolicyReconciler
+	extAnalyzers   *PolicyReconciler
+	clusterExtAn   *PolicyReconciler
+	sbomAnalyzers  *PolicyReconciler
+	clusterSBOMAn  *PolicyReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -44,6 +49,11 @@ func NewOperatorWithAllowlist(store apply.ConfigStore, secrets SecretProvider, s
 		connectors:     NewConnectorReconciler(store, secrets, secretStore, allowlist),
 		packages:       NewIntegrationPackageReconciler(store),
 		clusterParsers: NewClusterParserReconciler(store),
+		clusterSBOMs:   NewClusterSBOMParserReconciler(store),
+		extAnalyzers:   NewExternalAnalyzerReconciler(store),
+		clusterExtAn:   NewClusterExternalAnalyzerReconciler(store),
+		sbomAnalyzers:  NewSBOMAnalyzerReconciler(store),
+		clusterSBOMAn:  NewClusterSBOMAnalyzerReconciler(store),
 	}
 }
 
@@ -152,4 +162,34 @@ func (op *Operator) ReconcileParser(ctx context.Context, cr *PolicyCR) (*PolicyS
 func (op *Operator) ReconcileClusterParser(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
 	op.logger.Debug("reconciling cluster parser", "name", cr.Metadata.Name)
 	return op.clusterParsers.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterSBOMParser installs a ClusterSBOMParser CR.
+func (op *Operator) ReconcileClusterSBOMParser(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling cluster SBOM parser", "name", cr.Metadata.Name)
+	return op.clusterSBOMs.Reconcile(ctx, cr)
+}
+
+// ReconcileExternalAnalyzer installs an ExternalAnalyzer CR (one tenant's).
+func (op *Operator) ReconcileExternalAnalyzer(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling external analyzer", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.extAnalyzers.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterExternalAnalyzer installs a ClusterExternalAnalyzer CR.
+func (op *Operator) ReconcileClusterExternalAnalyzer(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling cluster external analyzer", "name", cr.Metadata.Name)
+	return op.clusterExtAn.Reconcile(ctx, cr)
+}
+
+// ReconcileSBOMAnalyzer installs an SBOMAnalyzer CR (one tenant's).
+func (op *Operator) ReconcileSBOMAnalyzer(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling SBOM analyzer", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.sbomAnalyzers.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterSBOMAnalyzer installs a ClusterSBOMAnalyzer CR.
+func (op *Operator) ReconcileClusterSBOMAnalyzer(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling cluster SBOM analyzer", "name", cr.Metadata.Name)
+	return op.clusterSBOMAn.Reconcile(ctx, cr)
 }

@@ -45,6 +45,7 @@ func NewRiverQueue(ctx context.Context, pool *pgxpool.Pool, directURL string, wo
 			river.QueueDefault: {MaxWorkers: 50},
 			"parse":            {MaxWorkers: 20},
 			NotifyQueue:        {MaxWorkers: 20},
+			AnalysisQueue:      {MaxWorkers: 10},
 		},
 		FetchPollInterval: 1 * time.Second,
 		// River cancels a job after one minute by default. A parse job streams a report of up to 512 MiB
@@ -211,6 +212,11 @@ func (w *ParseWorker) Work(ctx context.Context, job *river.Job[ParseJobArgs]) er
 // NewWorkers builds the worker set. A kind with no handler fails its jobs (ErrNoHandler) instead of
 // pretending to have done the work.
 func NewWorkers(parse ParseHandler, notify ...*NotifyDeliveryWorker) *river.Workers {
+	return NewWorkersWithAnalysis(parse, nil, notify...)
+}
+
+// NewWorkersWithAnalysis is NewWorkers with the worker that analyses SBOMs. Without one, analysis jobs fail with ErrNoHandler.
+func NewWorkersWithAnalysis(parse ParseHandler, analysis *AnalyzeSBOMWorker, notify ...*NotifyDeliveryWorker) *river.Workers {
 	w := river.NewWorkers()
 	river.AddWorker(w, &ParseWorker{Handle: parse})
 	nw := &NotifyDeliveryWorker{}
@@ -218,6 +224,10 @@ func NewWorkers(parse ParseHandler, notify ...*NotifyDeliveryWorker) *river.Work
 		nw = notify[0]
 	}
 	river.AddWorker(w, nw)
+	if analysis == nil {
+		analysis = &AnalyzeSBOMWorker{}
+	}
+	river.AddWorker(w, analysis)
 	return w
 }
 
