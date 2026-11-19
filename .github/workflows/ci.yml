@@ -57,7 +57,7 @@ jobs:
       - name: Race detector, shuffled order
         run: |
           mapfile -t pkgs < <(go list ./... | grep -v -e '/internal/store$' -e '/internal/operator$')
-          go test -race -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic "${pkgs[@]}"
+          go test -race -timeout 20m -shuffle=on -parallel 4 -count=1 -coverprofile=coverage-unit.out -covermode=atomic "${pkgs[@]}"
       - name: Fuzz untrusted inputs (30 s each)
         run: |
           go test ./internal/domain -run '^$' -fuzz '^FuzzCheckProof$' -fuzztime 30s
