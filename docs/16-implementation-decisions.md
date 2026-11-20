@@ -2635,3 +2635,14 @@ D143 records the design. These are the choices made while building it that D143 
 
 **Why this shape.** The module images are `scratch` (one file), so nothing in them can copy a file; the pulling needs a tool, and the smallest one that is pinned and has a shell is crane's debug image, pinned by digest (`parsers.delivery.fetcherImage`, overridable for a private mirror). `crane export` reads the image from the registry, not from the node, so it does not depend on the runtime. It runs as 65532, with no privileges and no capability. **Not done:** a pull secret for private module images (the images are public today), and signature verification of the module images (the cluster's admission policy owns it, as for `imageVolume`). **Checked:** the rendered chart in the three modes; the script run with the pinned image against the registry (16 modules, about 45 s); a wrong SHA-256 stops it. **Not checked:** the pod on a real cluster.
 
+## D146: Elimination of builtin parser prefix in favor of Kubernetes CRD coordinates (2026-11-21)
+
+**Context.** D127 and D141 established that no parser is compiled into the binary. Shipped parsers and SBOM readers reach the pod as external artifacts governed by Kubernetes Custom Resources (`ClusterParser`, `ClusterSBOMParser`, `Parser`). However, earlier code iterations retained `builtin:<name>` as an internal database identifier string and support level, causing confusion in the UI, CLI error messages, and documentation (docs/34 item 20).
+
+**Decision.**
+1. **Canonical Identifiers**: Platform-wide parsers are identified as `cluster:<name>` (report scanners) and `cluster:sbom-<format>` (SBOM readers). Tenant declarative parsers are identified as `mapping:<name>`.
+2. **Support Levels**: The obsolete `builtin` support tier is removed. The official tiers are now strictly `cluster` (`SupportCluster`), `certified`, and `community`.
+3. **UI Representation**: Tables and inspectors display explicit Kubernetes Custom Resource coordinates: `ClusterParser/<name>`, `ClusterSBOMParser/<format>`, and `Parser/<name>`, alongside clean CLI upload flags (`--parser <format>`).
+4. **Root-Level Elimination**: The keyword and fallbacks for `builtin:` and `builtin:sbom-` are purged from the engine, including `internal/sbom/wasm.go`, `internal/integrations/registry.go`, `internal/ingest/package_parsers.go`, `internal/query/gate.go`, and frontend UI filters.
+
+
