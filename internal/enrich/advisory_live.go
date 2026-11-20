@@ -316,6 +316,8 @@ func synthesizeRecordFromOSV(rec *OSVRecord) *VulnerabilityRecord {
 	} else {
 		out.ScoringStatus = "unscored"
 	}
+	now := time.Now().UTC()
+	out.UpdatedAt = &now
 	return out
 }
 
@@ -346,5 +348,7 @@ func synthesizeRecordFromNVD(entry *NVDEntry) *VulnerabilityRecord {
 		refsBytes, _ := json.Marshal(entry.References)
 		out.References = refsBytes
 	}
+	now := time.Now().UTC()
+	out.UpdatedAt = &now
 	return out
 }

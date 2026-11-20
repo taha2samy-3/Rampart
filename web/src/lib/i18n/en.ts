@@ -552,6 +552,7 @@ export const en = {
     groupRecord: 'The record',
     published: 'Published',
     modified: 'Last changed',
+    lastSynced: 'Last synced',
     maturity: 'Public exploit',
     maturity_poc: 'A proof of concept exists',
     maturity_weaponized: 'A working exploit is in circulation',

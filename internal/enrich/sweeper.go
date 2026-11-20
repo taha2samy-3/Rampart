@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,9 +27,11 @@ type AdvisoryEnqueuer interface {
 
 // AdvisorySweeper coordinates periodic re-checking and cache invalidation of threat advisories.
 type AdvisorySweeper struct {
-	pool     *pgxpool.Pool
-	enqueuer AdvisoryEnqueuer
-	logger   *slog.Logger
+	pool        *pgxpool.Pool
+	enqueuer    AdvisoryEnqueuer
+	logger      *slog.Logger
+	lastSweepAt time.Time
+	mu          sync.RWMutex
 }
 
 // NewAdvisorySweeper creates a new AdvisorySweeper.
@@ -43,11 +46,22 @@ func NewAdvisorySweeper(pool *pgxpool.Pool, enqueuer AdvisoryEnqueuer, logger *s
 	}
 }
 
+// LastSweepAt returns the timestamp of the most recent sweep run.
+func (s *AdvisorySweeper) LastSweepAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastSweepAt
+}
+
 // Sweep checks the vulnerability table for pending or stale entries and enqueues refresh jobs.
 func (s *AdvisorySweeper) Sweep(ctx context.Context) (int, error) {
 	if s.pool == nil || s.enqueuer == nil {
 		return 0, nil
 	}
+
+	s.mu.Lock()
+	s.lastSweepAt = time.Now().UTC()
+	s.mu.Unlock()
 
 	query := `
 		SELECT id, (cvss_best_score IS NULL OR cvss_best_score = 0) AS is_pending
