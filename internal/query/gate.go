@@ -167,7 +167,7 @@ func (a *API) evaluateGate(ctx context.Context, tenantID, source uuid.UUID, req 
 }
 
 // runMatches says whether a run is the one the pipeline declared: by scanner family in its report, by the family or
-// format it was uploaded as (with or without a `builtin:` prefix), or "sbom" for an SBOM format.
+// format it was uploaded as (with or without a `cluster:` or `builtin:` prefix), or "sbom" for an SBOM format.
 func (a *API) runMatches(ctx context.Context, tenantID uuid.UUID, r *domain.IngestRun, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
 	if want == "" {
@@ -175,6 +175,7 @@ func (a *API) runMatches(ctx context.Context, tenantID uuid.UUID, r *domain.Inge
 	}
 	fmtLower := strings.ToLower(strings.TrimSpace(r.Format))
 	if strings.EqualFold(r.ScannerFamily, want) || fmtLower == want ||
+		strings.TrimPrefix(fmtLower, "cluster:") == want || strings.TrimPrefix(fmtLower, "cluster:sbom-") == want ||
 		strings.TrimPrefix(fmtLower, "builtin:") == want || strings.TrimPrefix(fmtLower, "builtin:sbom-") == want ||
 		strings.TrimPrefix(fmtLower, "sbom-") == want {
 		return true

@@ -11,17 +11,17 @@ afterEach(() => {
 });
 
 const parser = (over: Partial<ParserDescriptor>): ParserDescriptor => ({
-  id: 'builtin:sarif', name: 'sarif Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'Streaming SARIF 2.1.0 parser',
+  id: 'cluster:sarif', name: 'sarif Parser', kind: 'parser', version: '2.1.0', support_level: 'cluster', description: 'Streaming SARIF 2.1.0 parser',
   category: 'sast', family: 'report', runtime: 'wasm', origin: 'cluster', module: 'sarif', status: 'ready', ...over,
 });
 
 const PARSERS: ParserDescriptor[] = [
   parser({ last_run: { id: 'run-1', status: 'completed', at: '2026-11-19T10:00:00Z' }, last_success: '2026-11-19T10:00:00Z' }),
-  parser({ id: 'builtin:semgrep', name: 'semgrep Parser', module: 'semgrep', status: 'module_missing', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' }),
-  parser({ id: 'builtin:bandit', name: 'bandit Parser', runtime: 'lua', module: undefined, last_run: { id: 'run-2', status: 'failed', error: 'parse_error', at: '2026-11-18T09:00:00Z' }, last_success: '2026-11-10T09:00:00Z' }),
-  parser({ id: 'builtin:broken', name: 'broken Parser', runtime: 'wasm', module: undefined, status: 'refused', error: 'spec.detect: no filename or content probe' }),
-  parser({ id: 'builtin:sbom-cyclonedx', name: 'cyclonedx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-cyclonedx', description: 'CycloneDX SBOM reader' }),
-  parser({ id: 'builtin:sbom-spdx', name: 'spdx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-spdx', status: 'module_missing', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' }),
+  parser({ id: 'cluster:semgrep', name: 'semgrep Parser', module: 'semgrep', status: 'module_missing', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' }),
+  parser({ id: 'cluster:bandit', name: 'bandit Parser', runtime: 'lua', module: undefined, last_run: { id: 'run-2', status: 'failed', error: 'parse_error', at: '2026-11-18T09:00:00Z' }, last_success: '2026-11-10T09:00:00Z' }),
+  parser({ id: 'cluster:broken', name: 'broken Parser', runtime: 'wasm', module: undefined, status: 'refused', error: 'spec.detect: no filename or content probe' }),
+  parser({ id: 'cluster:sbom-cyclonedx', name: 'cyclonedx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-cyclonedx', description: 'CycloneDX SBOM reader' }),
+  parser({ id: 'cluster:sbom-spdx', name: 'spdx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-spdx', status: 'module_missing', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' }),
 ];
 
 describe('the Parsers page', () => {
@@ -112,7 +112,7 @@ describe('the Parsers page', () => {
       loggedIn: true,
       parsers: [
         ...PARSERS,
-        parser({ id: 'builtin:gitleaks', name: 'gitleaks Parser', category: 'secrets' }),
+        parser({ id: 'cluster:gitleaks', name: 'gitleaks Parser', category: 'secrets' }),
       ],
     });
     renderApp('/parsers');

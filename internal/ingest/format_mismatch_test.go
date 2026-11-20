@@ -60,7 +60,7 @@ func TestDirectUpload_ReportOfAnotherFormatIsRefused(t *testing.T) {
 		t.Fatalf("baseline sarif upload: %d %s", rec.Code, rec.Body.String())
 	}
 
-	for _, format := range []string{"trivy", "builtin:trivy", "semgrep", "checkov", "grype", "gitleaks"} {
+	for _, format := range []string{"trivy", "cluster:trivy", "builtin:trivy", "semgrep", "checkov", "grype", "gitleaks"} {
 		rec := postReport(t, mux, token, map[string]string{"format": format, "track": "main"}, "r.sarif", sarifOf("x"))
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("format=%s on a SARIF file: want 400, got %d: %s", format, rec.Code, rec.Body.String())

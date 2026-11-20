@@ -13,9 +13,33 @@ type Family = 'report' | 'sbom';
 
 const healthOf = (p: ParserDescriptor): Health => (p.status === 'refused' || p.status === 'module_missing' ? 'problem' : 'ok');
 
-/** What an SBOM parser reads: its format, from its id (builtin:sbom-cyclonedx is CycloneDX's). A report parser says its category. */
+/** Resolves the CRD resource kind for a parser. */
+export function parserResourceKind(p: ParserDescriptor): 'ClusterParser' | 'ClusterSBOMParser' | 'Parser' {
+  if (p.resource_kind) return p.resource_kind;
+  if (p.family === 'sbom' || p.id.startsWith('cluster:sbom-') || p.id.startsWith('builtin:sbom-')) return 'ClusterSBOMParser';
+  if (p.origin === 'tenant' || p.id.startsWith('mapping:')) return 'Parser';
+  return 'ClusterParser';
+}
+
+/** Resolves the clean resource name / upload format of a parser. */
+export function parserResourceName(p: ParserDescriptor): string {
+  if (p.resource_name) return p.resource_name;
+  return p.id
+    .replace(/^(cluster|builtin):sbom-/, '')
+    .replace(/^(cluster|builtin):/, '')
+    .replace(/^mapping:/, '');
+}
+
+/** Returns the Kubernetes CRD reference, e.g. ClusterParser/bandit or ClusterSBOMParser/cyclonedx */
+export function parserResourceRef(p: ParserDescriptor): string {
+  const kind = parserResourceKind(p);
+  const name = parserResourceName(p);
+  return `${kind}/${name}`;
+}
+
+/** What an SBOM parser reads: its format, from its id or CRD resource name. A report parser says its category. */
 const readsOf = (p: ParserDescriptor, family: Family): string =>
-  family === 'sbom' ? p.id.replace(/^builtin:sbom-/, '') : p.category ?? '';
+  family === 'sbom' ? parserResourceName(p) : p.category ?? '';
 
 /** Resolves the category ID of a parser (e.g. sast, sca, secrets, iac, dast, compliance, vex). */
 export function parserCategory(p: ParserDescriptor): string {
@@ -53,7 +77,7 @@ export function ParserList({ family }: { family: Family }) {
 
   // A server that does not say the family (an older one) reads as report parsers, except the SBOM readers by their id.
   const all = useMemo(
-    () => (q.data ?? []).filter((p) => (p.family ?? (p.id.startsWith('builtin:sbom-') ? 'sbom' : 'report')) === family),
+    () => (q.data ?? []).filter((p) => (p.family ?? (p.id.startsWith('cluster:sbom-') || p.id.startsWith('builtin:sbom-') || p.resource_kind === 'ClusterSBOMParser' ? 'sbom' : 'report')) === family),
     [q.data, family],
   );
 
@@ -111,7 +135,7 @@ export function ParserList({ family }: { family: Family }) {
       const cat = family === 'sbom' ? readsOf(p, family) : parserCategory(p);
       if (category !== 'all' && cat !== category) return false;
       if (!needle) return true;
-      return [p.name, p.id, p.description, readsOf(p, family)].some((v) => (v ?? '').toLowerCase().includes(needle));
+      return [p.name, p.id, parserResourceRef(p), parserResourceName(p), p.description, readsOf(p, family)].some((v) => (v ?? '').toLowerCase().includes(needle));
     });
   }, [all, search, family, category]);
 
@@ -199,12 +223,13 @@ function ParserRow({ p, family, selected, onSelect }: { p: ParserDescriptor; fam
   const { t } = useTranslation();
   const bad = healthOf(p) === 'problem';
   const last = p.last_run;
+  const ref = parserResourceRef(p);
   return (
     <Tr selected={selected} className="h-12 align-middle">
       <Td className="whitespace-normal">
         <button type="button" onClick={onSelect} aria-pressed={selected} className="block max-w-full text-start hover:text-accent">
           <span className="block break-words font-medium md:truncate">{p.name}</span>
-          <span className="block break-all font-mono text-12 text-ink-2 md:truncate">{p.id}</span>
+          <span className="block break-all font-mono text-12 text-ink-2 md:truncate">{ref}</span>
         </button>
       </Td>
       <Td className="hidden whitespace-normal md:table-cell">{t(`parsers.runtime_${p.runtime || 'unknown'}`)}</Td>
@@ -246,11 +271,19 @@ function ParserInspector({ p }: { p: ParserDescriptor | null }) {
   if (!p) return <p className="p-4 text-13 text-ink-2">{t('parsers.inspectorEmpty')}</p>;
   const status = p.status ?? 'ready';
   const problem = status === 'refused' ? p.error : status === 'module_missing' ? p.unavailable : undefined;
+  const ref = parserResourceRef(p);
+  const cleanName = parserResourceName(p);
+  const kind = parserResourceKind(p);
   return (
     <div className="space-y-5 p-4 text-13">
       <header>
-        <h3 className="break-words text-14 font-semibold">{p.name}</h3>
-        <p className="mt-0.5 break-all font-mono text-12 text-ink-2">{p.id}</p>
+        <div className="flex items-center gap-2">
+          <h3 className="break-words text-14 font-semibold">{p.name}</h3>
+          <span className="rounded bg-chrome px-1.5 py-0.5 text-10 font-semibold uppercase tracking-wider text-ink-3">
+            {kind}
+          </span>
+        </div>
+        <p className="mt-0.5 break-all font-mono text-12 text-ink-2">{ref}</p>
         {p.description && <p className="mt-1 text-ink-2">{p.description}</p>}
       </header>
 
@@ -270,6 +303,8 @@ function ParserInspector({ p }: { p: ParserDescriptor | null }) {
       </section>
 
       <dl className="space-y-1">
+        <Row label={t('parsers.crdResource')}><span className="font-mono text-12 font-medium text-accent">{ref}</span></Row>
+        <Row label={t('parsers.uploadFormat')}><span className="font-mono text-12">--parser {cleanName}</span></Row>
         <Row label={t('parsers.colType')}>{t(`parsers.runtime_${p.runtime || 'unknown'}`)}</Row>
         {p.module && <Row label={t('parsers.module')}><span className="font-mono text-12">{p.module}</span></Row>}
         {p.version && <Row label={t('parsers.version')}>{p.version}</Row>}

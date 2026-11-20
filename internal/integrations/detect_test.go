@@ -12,19 +12,19 @@ import (
 func TestAutodetectPicksTheRightParser(t *testing.T) {
 	reg := integrations.DefaultRegistry()
 	cases := map[string]string{
-		"../testdata/reports/trivy/image-0.50.json":                        "builtin:trivy",
-		"../testdata/reports/grype/image-0.74.json":                        "builtin:grype",
-		"../testdata/reports/semgrep/scan-1.45.json":                       "builtin:semgrep",
-		"../testdata/reports/trufflehog/scan-3.63.jsonl":                   "builtin:trufflehog",
-		"../testdata/reports/gitleaks/repo-8.18.json":                      "builtin:gitleaks",
-		"../testdata/reports/sarif/semgrep.sarif":                          "builtin:sarif",
-		"../testdata/reports/gitlab/gl-sast-report-15.json":                "builtin:gitlab",
-		"../testdata/reports/gitlab/gl-secret-detection-report-15.json":    "builtin:gitlab",
-		"../testdata/reports/gitlab/gl-dependency-scanning-report-15.json": "builtin:gitlab",
-		"../testdata/reports/gitlab/gl-container-scanning-report-15.json":  "builtin:gitlab",
-		"../testdata/reports/gitlab/gl-dast-report-15.json":                "builtin:gitlab",
-		"../testdata/reports/genericjson/rampart-generic-v1.json":          "builtin:genericjson",
-		"../testdata/reports/genericjson/defectdojo-generic.json":          "builtin:genericjson",
+		"../testdata/reports/trivy/image-0.50.json":                        "cluster:trivy",
+		"../testdata/reports/grype/image-0.74.json":                        "cluster:grype",
+		"../testdata/reports/semgrep/scan-1.45.json":                       "cluster:semgrep",
+		"../testdata/reports/trufflehog/scan-3.63.jsonl":                   "cluster:trufflehog",
+		"../testdata/reports/gitleaks/repo-8.18.json":                      "cluster:gitleaks",
+		"../testdata/reports/sarif/semgrep.sarif":                          "cluster:sarif",
+		"../testdata/reports/gitlab/gl-sast-report-15.json":                "cluster:gitlab",
+		"../testdata/reports/gitlab/gl-secret-detection-report-15.json":    "cluster:gitlab",
+		"../testdata/reports/gitlab/gl-dependency-scanning-report-15.json": "cluster:gitlab",
+		"../testdata/reports/gitlab/gl-container-scanning-report-15.json":  "cluster:gitlab",
+		"../testdata/reports/gitlab/gl-dast-report-15.json":                "cluster:gitlab",
+		"../testdata/reports/genericjson/rampart-generic-v1.json":          "cluster:genericjson",
+		"../testdata/reports/genericjson/defectdojo-generic.json":          "cluster:genericjson",
 	}
 	for path, want := range cases {
 		b, err := os.ReadFile(path)

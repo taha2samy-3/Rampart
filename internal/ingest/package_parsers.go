@@ -106,10 +106,13 @@ func (s *parserSet) compileParser(name string, raw []byte, cluster bool) (integr
 		if engine == "" {
 			engine = name
 		}
-		if p, err := s.registry.GetParser("builtin:" + engine); err == nil {
+		if p, err := s.registry.GetParser("cluster:" + engine); err == nil {
 			return p, nil
 		}
 		if p, err := s.registry.GetParser(engine); err == nil {
+			return p, nil
+		}
+		if p, err := s.registry.GetParser("builtin:" + engine); err == nil {
 			return p, nil
 		}
 		return nil, fmt.Errorf("native parser engine %q not registered", engine)
@@ -192,7 +195,7 @@ func (s *parserSet) tenantAndCluster(ctx context.Context, tenantID uuid.UUID) (t
 // formatAliases are the names the documents use for a built-in parser whose id differs (docs/04 acceptedFormats).
 var formatAliases = map[string]string{"generic": "genericjson", "gitlab-sast": "gitlab"}
 
-// byName finds the parser a client named: the registry first ("trivy" or "builtin:trivy"), then the cluster's parser, then the tenant's.
+// byName finds the parser a client named: the registry first ("trivy", "cluster:trivy", or legacy "builtin:trivy"), then the cluster's parser, then the tenant's.
 func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string) integrations.ParserContract {
 	hint = strings.ToLower(strings.TrimSpace(hint))
 	if hint == "" {
@@ -202,17 +205,23 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 		hint = alias
 	}
 
-	// 1. The registry owns its names
-	if p, err := s.registry.GetParser("builtin:" + hint); err == nil {
+	// 1. The registry owns its names (resolves cluster:, bare name, and legacy builtin:)
+	if p, err := s.registry.GetParser("cluster:" + hint); err == nil {
 		return p
 	}
 	if p, err := s.registry.GetParser(hint); err == nil {
 		return p
 	}
-	if p, err := s.registry.GetParser("builtin:sbom-" + hint); err == nil {
+	if p, err := s.registry.GetParser("cluster:sbom-" + hint); err == nil {
 		return p
 	}
 	if p, err := s.registry.GetParser("sbom-" + hint); err == nil {
+		return p
+	}
+	if p, err := s.registry.GetParser("builtin:" + hint); err == nil {
+		return p
+	}
+	if p, err := s.registry.GetParser("builtin:sbom-" + hint); err == nil {
 		return p
 	}
 
@@ -222,12 +231,16 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 		id := strings.ToLower(p.Descriptor().ID)
 		name := strings.ToLower(p.Descriptor().Name)
 		return id == target ||
+			id == "cluster:"+target ||
+			id == "cluster:sbom-"+target ||
 			id == "mapping:"+target ||
 			id == "lua:"+target ||
 			id == "wasm:"+target ||
 			id == "builtin:"+target ||
 			id == "builtin:sbom-"+target ||
 			id == "sbom-"+target ||
+			strings.TrimPrefix(id, "cluster:") == target ||
+			strings.TrimPrefix(id, "cluster:sbom-") == target ||
 			strings.TrimPrefix(id, "mapping:") == target ||
 			strings.TrimPrefix(id, "lua:") == target ||
 			strings.TrimPrefix(id, "wasm:") == target ||
@@ -257,7 +270,7 @@ func (s *parserSet) byName(ctx context.Context, tenantID uuid.UUID, hint string)
 // parserName is the name a client sends in "parser" to select p: its id without the prefix that says where it came from.
 func parserName(p integrations.ParserContract) string {
 	id := strings.ToLower(p.Descriptor().ID)
-	for _, prefix := range []string{"builtin:", "mapping:", "lua:", "wasm:"} {
+	for _, prefix := range []string{"cluster:", "builtin:", "mapping:", "lua:", "wasm:"} {
 		id = strings.TrimPrefix(id, prefix)
 	}
 	return strings.TrimPrefix(id, "sbom-")
@@ -326,5 +339,5 @@ func (s *parserSet) formatMismatch(ctx context.Context, tenantID uuid.UUID, name
 // mismatchDetail is the message of a format mismatch: what the client said, what the file looks like.
 func mismatchDetail(named, actual integrations.ParserContract) string {
 	return fmt.Sprintf("the file is not a %s report: it looks like %s. Send it with format=%s, or leave format empty to detect it",
-		named.Descriptor().Name, actual.Descriptor().Name, strings.TrimPrefix(actual.Descriptor().ID, "builtin:"))
+		named.Descriptor().Name, actual.Descriptor().Name, parserName(actual))
 }

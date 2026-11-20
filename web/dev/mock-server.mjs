@@ -148,33 +148,42 @@ const ACCEPTANCES = [
 const PARSERS = (() => {
   const ago = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
   const missing = 'its WASM module is not installed on this server (parsers.delivery in the chart)';
-  const p = (id, name, family, runtime, extra = {}) => ({
-    id, name, kind: 'parser', version: '1', support_level: 'builtin', category: family === 'sbom' ? 'sca' : 'sast', description: `${name} reads its format into ${family === 'sbom' ? 'the inventory' : 'findings'}.`,
-    family, runtime, origin: 'cluster', module: runtime === 'wasm' ? id.replace('builtin:', '') : undefined, status: 'ready', ...extra,
-  });
+  const p = (id, name, family, runtime, extra = {}) => {
+    const isSbom = family === 'sbom';
+    const isTenant = extra.origin === 'tenant' || id.startsWith('mapping:');
+    const resourceKind = isSbom ? 'ClusterSBOMParser' : isTenant ? 'Parser' : 'ClusterParser';
+    const resourceName = id.replace(/^(cluster|builtin):sbom-/, '').replace(/^(cluster|builtin):/, '').replace(/^mapping:/, '');
+    return {
+      id, name, kind: 'parser', version: '1', support_level: isTenant ? 'community' : 'cluster',
+      category: isSbom ? 'sca' : 'sast', description: `${name} reads its format into ${isSbom ? 'the inventory' : 'findings'}.`,
+      family, runtime, origin: isTenant ? 'tenant' : 'cluster',
+      resource_kind: resourceKind, resource_name: resourceName,
+      module: runtime === 'wasm' ? resourceName : undefined, status: 'ready', ...extra,
+    };
+  };
   return [
-    p('builtin:bandit', 'bandit Parser', 'report', 'lua', { category: 'sast', last_run: { id: RUNS[3].id, status: 'completed_with_errors', at: ago(26) }, last_success: ago(26) }),
-    p('builtin:checkov', 'checkov Parser', 'report', 'wasm', { category: 'iac' }),
-    p('builtin:dependencycheck', 'dependencycheck Parser', 'report', 'wasm', { category: 'sca' }),
-    p('builtin:genericjson', 'genericjson Parser', 'report', 'lua', { category: 'sast' }),
-    p('builtin:gitlab', 'gitlab Parser', 'report', 'wasm', { category: 'sast' }),
-    p('builtin:gitleaks', 'gitleaks Parser', 'report', 'wasm', { category: 'secrets' }),
-    p('builtin:grype', 'grype Parser', 'report', 'wasm', { category: 'sca' }),
-    p('builtin:kubebench', 'kubebench Parser', 'report', 'wasm', { category: 'compliance' }),
-    p('builtin:nuclei', 'nuclei Parser', 'report', 'lua', { category: 'dast' }),
-    p('builtin:openvex', 'openvex Parser', 'report', 'wasm', { category: 'vex' }),
-    p('builtin:prowler', 'prowler Parser', 'report', 'wasm', { category: 'compliance' }),
-    p('builtin:sarif', 'sarif Parser', 'report', 'wasm', { category: 'sast', version: '2.1.0', last_run: { id: RUNS[1].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
-    p('builtin:semgrep', 'semgrep Parser', 'report', 'wasm', { category: 'sast', last_run: { id: RUNS[2].id, status: 'failed', error: 'parse_error', at: ago(5) }, last_success: ago(70) }),
-    p('builtin:snyk', 'snyk Parser', 'report', 'wasm', { category: 'sca' }),
-    p('builtin:trivy', 'trivy Parser', 'report', 'wasm', { category: 'sca' }),
-    p('builtin:trufflehog', 'trufflehog Parser', 'report', 'wasm', { category: 'secrets' }),
-    p('builtin:zap', 'zap Parser', 'report', 'lua', { category: 'dast' }),
-    p('builtin:broken', 'broken Parser', 'report', 'wasm', { category: 'sast', status: 'refused', error: 'spec.detect: no filename or content probe is given, so no upload could be matched to it' }),
+    p('cluster:bandit', 'bandit Parser', 'report', 'lua', { category: 'sast', last_run: { id: RUNS[3].id, status: 'completed_with_errors', at: ago(26) }, last_success: ago(26) }),
+    p('cluster:checkov', 'checkov Parser', 'report', 'wasm', { category: 'iac' }),
+    p('cluster:dependencycheck', 'dependencycheck Parser', 'report', 'wasm', { category: 'sca' }),
+    p('cluster:genericjson', 'genericjson Parser', 'report', 'lua', { category: 'sast' }),
+    p('cluster:gitlab', 'gitlab Parser', 'report', 'wasm', { category: 'sast' }),
+    p('cluster:gitleaks', 'gitleaks Parser', 'report', 'wasm', { category: 'secrets' }),
+    p('cluster:grype', 'grype Parser', 'report', 'wasm', { category: 'sca' }),
+    p('cluster:kubebench', 'kubebench Parser', 'report', 'wasm', { category: 'compliance' }),
+    p('cluster:nuclei', 'nuclei Parser', 'report', 'lua', { category: 'dast' }),
+    p('cluster:openvex', 'openvex Parser', 'report', 'wasm', { category: 'vex' }),
+    p('cluster:prowler', 'prowler Parser', 'report', 'wasm', { category: 'compliance' }),
+    p('cluster:sarif', 'sarif Parser', 'report', 'wasm', { category: 'sast', version: '2.1.0', last_run: { id: RUNS[1].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
+    p('cluster:semgrep', 'semgrep Parser', 'report', 'wasm', { category: 'sast', last_run: { id: RUNS[2].id, status: 'failed', error: 'parse_error', at: ago(5) }, last_success: ago(70) }),
+    p('cluster:snyk', 'snyk Parser', 'report', 'wasm', { category: 'sca' }),
+    p('cluster:trivy', 'trivy Parser', 'report', 'wasm', { category: 'sca' }),
+    p('cluster:trufflehog', 'trufflehog Parser', 'report', 'wasm', { category: 'secrets' }),
+    p('cluster:zap', 'zap Parser', 'report', 'lua', { category: 'dast' }),
+    p('cluster:broken', 'broken Parser', 'report', 'wasm', { category: 'sast', status: 'refused', error: 'spec.detect: no filename or content probe is given, so no upload could be matched to it' }),
     p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
-    p('builtin:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
-    p('builtin:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
-    p('builtin:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('cluster:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
+    p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('cluster:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
   ];
 })();
 

@@ -30,7 +30,7 @@ func TestProcessor_NotificationRouterWiring(t *testing.T) {
 	ctx := context.Background()
 	store := ingest.NewMemoryStore()
 	registry := integrations.DefaultRegistry()
-	parser, err := registry.GetParser("builtin:gitleaks")
+	parser, err := registry.GetParser("cluster:gitleaks")
 	if err != nil {
 		t.Fatalf("failed to get gitleaks parser: %v", err)
 	}

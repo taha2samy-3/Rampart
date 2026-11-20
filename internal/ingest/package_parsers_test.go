@@ -73,8 +73,8 @@ func TestParserPackage(t *testing.T) {
 	if p, score := set.detect(ctx, tenantB, []byte(pipAuditReport), "", ""); p != nil && score >= 40 && strings.HasPrefix(p.Descriptor().ID, "mapping:") {
 		t.Fatalf("tenant B detected tenant A's package: %s", p.Descriptor().ID)
 	}
-	if p := set.byName(ctx, tenantA, "trivy"); p == nil || p.Descriptor().ID != "builtin:trivy" {
-		t.Fatalf("a built-in owns its name; got %v", p)
+	if p := set.byName(ctx, tenantA, "trivy"); p == nil || p.Descriptor().ID != "cluster:trivy" {
+		t.Fatalf("a cluster parser owns its name; got %v", p)
 	}
 	if set.byName(ctx, tenantA, "broken") != nil {
 		t.Fatal("a package with an error is not used")
@@ -154,13 +154,13 @@ spec:
 		}
 		// Every parser installed for the cluster has the one id the runs, the gate and the compliance report read (D141): the
 		// server cannot tell a shipped parser from an administrator's own, so it does not name them differently.
-		if p.Descriptor().ID != "builtin:team-scanner" {
-			t.Errorf("expected builtin:team-scanner, got %s", p.Descriptor().ID)
+		if p.Descriptor().ID != "cluster:team-scanner" {
+			t.Errorf("expected cluster:team-scanner, got %s", p.Descriptor().ID)
 		}
 
 		// Detect by file name alone: 50 on the one scale every parser uses, above the 40 the ingest needs to auto-select
 		detected, score := set.detect(ctx, tid, []byte(`{}`), "team-report.json", "application/json")
-		if detected == nil || detected.Descriptor().ID != "builtin:team-scanner" || score < 40 {
+		if detected == nil || detected.Descriptor().ID != "cluster:team-scanner" || score < 40 {
 			t.Errorf("detection failed: got %v with score %d", detected, score)
 		}
 	}
@@ -208,10 +208,10 @@ func TestSBOMParsersAreDetected(t *testing.T) {
 		head           []byte
 		want           string
 	}{
-		{"CycloneDX JSON", "bom.cdx.json", []byte(`{"bomFormat": "CycloneDX", "specVersion": "1.5"}`), "builtin:sbom-cyclonedx"},
-		{"CycloneDX XML", "bom.cdx.xml", []byte(`<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.5"></bom>`), "builtin:sbom-cyclonedx"},
-		{"SPDX JSON", "bom.spdx.json", []byte(`{"spdxVersion": "SPDX-2.3"}`), "builtin:sbom-spdx"},
-		{"SPDX tag-value", "bom.spdx", []byte("SPDXVersion: SPDX-2.3\nPackageName: openssl"), "builtin:sbom-spdx"},
+		{"CycloneDX JSON", "bom.cdx.json", []byte(`{"bomFormat": "CycloneDX", "specVersion": "1.5"}`), "cluster:sbom-cyclonedx"},
+		{"CycloneDX XML", "bom.cdx.xml", []byte(`<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.5"></bom>`), "cluster:sbom-cyclonedx"},
+		{"SPDX JSON", "bom.spdx.json", []byte(`{"spdxVersion": "SPDX-2.3"}`), "cluster:sbom-spdx"},
+		{"SPDX tag-value", "bom.spdx", []byte("SPDXVersion: SPDX-2.3\nPackageName: openssl"), "cluster:sbom-spdx"},
 	}
 	for _, tc := range cases {
 		p, score := set.registry.DetectParser(tc.head, tc.filename, "")

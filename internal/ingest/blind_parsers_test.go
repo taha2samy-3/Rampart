@@ -40,9 +40,9 @@ func TestBlindServerFindsEveryInstalledParserByNameWithTheStableID(t *testing.T)
 			t.Errorf("%s is installed and %q finds nothing", m.Name, hint)
 			continue
 		}
-		want := "builtin:" + m.Name
+		want := "cluster:" + m.Name
 		if m.Kind == "ClusterSBOMParser" {
-			want = "builtin:" + m.Name // builtin:sbom-spdx
+			want = "cluster:" + m.Name // cluster:sbom-spdx
 		}
 		if got := p.Descriptor().ID; got != want {
 			t.Errorf("%s has id %q, the runs and the compliance report read %q", m.Name, got, want)
@@ -64,16 +64,16 @@ func TestBlindServerDetectsAndReadsRealReportsFromWhatTheStoreHolds(t *testing.T
 		file, want string
 		reads      bool // a report parser: read it and expect findings
 	}{
-		{"trivy/image-0.50.json", "builtin:trivy", true},
-		{"grype/image-0.74.json", "builtin:grype", true},
-		{"semgrep/scan-1.45.json", "builtin:semgrep", true},
-		{"gitleaks/repo-8.18.json", "builtin:gitleaks", true},
-		{"sarif/semgrep.sarif", "builtin:sarif", true},
-		{"gitlab/gl-sast-report-15.json", "builtin:gitlab", true},
-		{"genericjson/rampart-generic-v1.json", "builtin:genericjson", true}, // lua
-		{"sbom-cyclonedx/sample.cdx.xml", "builtin:sbom-cyclonedx", false},
-		{"sbom-spdx/sample.spdx", "builtin:sbom-spdx", false},
-		{"sbom-syft/report.syft.json", "builtin:sbom-syft", false},
+		{"trivy/image-0.50.json", "cluster:trivy", true},
+		{"grype/image-0.74.json", "cluster:grype", true},
+		{"semgrep/scan-1.45.json", "cluster:semgrep", true},
+		{"gitleaks/repo-8.18.json", "cluster:gitleaks", true},
+		{"sarif/semgrep.sarif", "cluster:sarif", true},
+		{"gitlab/gl-sast-report-15.json", "cluster:gitlab", true},
+		{"genericjson/rampart-generic-v1.json", "cluster:genericjson", true}, // lua
+		{"sbom-cyclonedx/sample.cdx.xml", "cluster:sbom-cyclonedx", false},
+		{"sbom-spdx/sample.spdx", "cluster:sbom-spdx", false},
+		{"sbom-syft/report.syft.json", "cluster:sbom-syft", false},
 	} {
 		path := filepath.Join("..", "testdata", "reports", c.file)
 		data, err := os.ReadFile(path)
@@ -122,7 +122,7 @@ func TestAClusterParserNameIsReservedAgainstATenantParser(t *testing.T) {
 	st.SaveTenantParser(tid, "trivy", []byte(mapping))
 	st.SaveTenantParser(tid, "only-mine", []byte(mapping))
 
-	if p := set.byName(ctx, tid, "trivy"); p == nil || p.Descriptor().ID != "builtin:trivy" {
+	if p := set.byName(ctx, tid, "trivy"); p == nil || p.Descriptor().ID != "cluster:trivy" {
 		t.Fatalf("the cluster's trivy must win over the tenant's parser of the same name, got %+v", p)
 	}
 	if p := set.byName(ctx, tid, "only-mine"); p == nil || !strings.Contains(p.Descriptor().ID, "only-mine") {

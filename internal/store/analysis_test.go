@@ -340,27 +340,27 @@ func TestLastRunByParser_OnPostgreSQL(t *testing.T) {
 		}
 		return r.ID
 	}
-	run(tn.ID, "builtin:sarif", domain.RunCompleted, 5*time.Hour, "")
-	lastBad := run(tn.ID, "builtin:sarif", domain.RunFailed, time.Hour, "parse_error")
-	run(tn.ID, "builtin:trivy", domain.RunFailed, 2*time.Hour, "sha256_mismatch") // never completed
+	run(tn.ID, "cluster:sarif", domain.RunCompleted, 5*time.Hour, "")
+	lastBad := run(tn.ID, "cluster:sarif", domain.RunFailed, time.Hour, "parse_error")
+	run(tn.ID, "cluster:trivy", domain.RunFailed, 2*time.Hour, "sha256_mismatch") // never completed
 	run(tn.ID, "sbom-analysis", domain.RunCompleted, time.Minute, "")             // an analyzer's merge
-	run(other.ID, "builtin:semgrep", domain.RunCompleted, time.Minute, "")
+	run(other.ID, "cluster:semgrep", domain.RunCompleted, time.Minute, "")
 
 	got, err := appStore.LastRunByParser(ctx, tn.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := got["builtin:sarif"]
+	s := got["cluster:sarif"]
 	if s.RunID != lastBad || s.Status != domain.RunFailed || s.Error != "parse_error" || s.LastSuccess == nil || s.LastSuccess.After(now.Add(-4*time.Hour)) {
 		t.Fatalf("sarif: the last run failed and an earlier one completed: %+v", s)
 	}
-	if tr := got["builtin:trivy"]; tr.Status != domain.RunFailed || tr.LastSuccess != nil {
+	if tr := got["cluster:trivy"]; tr.Status != domain.RunFailed || tr.LastSuccess != nil {
 		t.Fatalf("trivy never completed: %+v", tr)
 	}
 	if _, ok := got["sbom-analysis"]; ok {
 		t.Fatal("an analysis is not a parser's work")
 	}
-	if _, ok := got["builtin:semgrep"]; ok {
+	if _, ok := got["cluster:semgrep"]; ok {
 		t.Fatal("another tenant's run was read")
 	}
 }

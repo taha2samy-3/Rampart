@@ -126,8 +126,8 @@ describe('ingest runs', () => {
 
   it('does not offer, in the upload dialog, a parser that cannot run', async () => {
     const parsers = [
-      { id: 'builtin:sarif', name: 'sarif Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'SARIF', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' },
-      { id: 'builtin:bandit', name: 'bandit Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'Bandit (Lua)' },
+      { id: 'cluster:sarif', name: 'sarif Parser', kind: 'parser', version: '1', support_level: 'cluster' as const, description: 'SARIF', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' },
+      { id: 'cluster:bandit', name: 'bandit Parser', kind: 'parser', version: '1', support_level: 'cluster' as const, description: 'Bandit (Lua)' },
     ];
     mockFetch({ loggedIn: true, runs: [], parsers });
     renderApp('/ingestion');

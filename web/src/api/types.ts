@@ -628,7 +628,7 @@ export interface ParserDescriptor {
   name: string;
   kind: string;
   version: string;
-  support_level: 'builtin' | 'certified' | 'community';
+  support_level: 'cluster' | 'builtin' | 'certified' | 'community';
   description: string;
   category?: string;
   capabilities?: string[];
@@ -639,6 +639,10 @@ export interface ParserDescriptor {
   runtime?: 'wasm' | 'lua' | 'mapping' | '';
   /** Installed for every tenant (a cluster resource) or by this tenant. */
   origin?: 'cluster' | 'tenant';
+  /** The CRD resource kind: ClusterParser, ClusterSBOMParser, or Parser */
+  resource_kind?: 'ClusterParser' | 'ClusterSBOMParser' | 'Parser';
+  /** The Kubernetes CRD resource name: e.g. bandit, semgrep, cyclonedx */
+  resource_name?: string;
   /** The WASM module it runs, by name. */
   module?: string;
   /** Installed correctly (ready), its module missing, or its resource refused (with `error`). */

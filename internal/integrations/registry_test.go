@@ -32,11 +32,11 @@ func TestRegistry(t *testing.T) {
 
 	p1 := &mockParser{
 		desc: integrations.Descriptor{
-			ID:           "builtin:sarif",
+			ID:           "cluster:sarif",
 			Name:         "SARIF 2.1.0 Parser",
 			Kind:         integrations.KindParser,
 			Version:      "1.0.0",
-			SupportLevel: integrations.SupportBuiltin,
+			SupportLevel: integrations.SupportCluster,
 		},
 		score: 80,
 	}
@@ -50,10 +50,22 @@ func TestRegistry(t *testing.T) {
 		t.Error("expected error on duplicate parser registration")
 	}
 
-	// Get parser
-	got, err := reg.GetParser("builtin:sarif")
-	if err != nil || got.Descriptor().ID != "builtin:sarif" {
-		t.Errorf("failed to get parser: %v", err)
+	// Get parser by canonical cluster ID
+	got, err := reg.GetParser("cluster:sarif")
+	if err != nil || got.Descriptor().ID != "cluster:sarif" {
+		t.Errorf("failed to get parser by cluster id: %v", err)
+	}
+
+	// Get parser by clean name
+	gotClean, err := reg.GetParser("sarif")
+	if err != nil || gotClean.Descriptor().ID != "cluster:sarif" {
+		t.Errorf("failed to get parser by clean name: %v", err)
+	}
+
+	// Get parser by legacy builtin fallback
+	gotLegacy, err := reg.GetParser("builtin:sarif")
+	if err != nil || gotLegacy.Descriptor().ID != "cluster:sarif" {
+		t.Errorf("failed to get parser by legacy builtin id: %v", err)
 	}
 
 	// Detect parser
@@ -79,13 +91,13 @@ func TestDefaultRegistryDetect(t *testing.T) {
 			name:     "SARIF file",
 			head:     []byte(`{"$schema": "https://docs.oasis-open.org/sarif/sarif-schema-2.1.0.json"}`),
 			filename: "semgrep.sarif",
-			wantID:   "builtin:sarif",
+			wantID:   "cluster:sarif",
 		},
 		{
 			name:     "OpenVEX",
 			head:     []byte(`{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}`),
 			filename: "triage.vex.json",
-			wantID:   "builtin:openvex",
+			wantID:   "cluster:openvex",
 		},
 	}
 

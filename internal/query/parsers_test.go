@@ -59,7 +59,7 @@ func TestParsersAPI_List(t *testing.T) {
 	for _, p := range res.Parsers {
 		ids[p["id"].(string)] = true
 	}
-	for _, want := range []string{"builtin:trivy", "builtin:sarif", "builtin:genericjson", "builtin:sbom-spdx", "builtin:sbom-cyclonedx", "builtin:sbom-syft"} {
+	for _, want := range []string{"cluster:trivy", "cluster:sarif", "cluster:genericjson", "cluster:sbom-spdx", "cluster:sbom-cyclonedx", "cluster:sbom-syft"} {
 		if !ids[want] {
 			t.Errorf("%s is installed and must be listed with the id the runs and the compliance report use: %v", want, ids)
 		}
@@ -138,12 +138,12 @@ func TestParsersAPI_SaysWhichParsersCannotRun(t *testing.T) {
 	wasmstore.SetDefault(&wasmstore.Store{Dir: dir, Digests: map[string]string{"x": zero}})
 	t.Cleanup(func() { wasmstore.SetDefault(&wasmstore.Store{}) })
 	none := list()
-	for _, id := range []string{"builtin:sarif", "builtin:semgrep", "builtin:sbom-cyclonedx", "builtin:sbom-spdx"} {
+	for _, id := range []string{"cluster:sarif", "cluster:semgrep", "cluster:sbom-cyclonedx", "cluster:sbom-spdx"} {
 		if !strings.Contains(none[id], "WASM module is not installed") {
 			t.Errorf("%s has no module and must say so: %q", id, none[id])
 		}
 	}
-	for _, id := range []string{"builtin:bandit", "builtin:genericjson", "builtin:nuclei"} {
+	for _, id := range []string{"cluster:bandit", "cluster:genericjson", "cluster:nuclei"} {
 		if none[id] != "" {
 			t.Errorf("%s is a Lua parser and needs no module: %q", id, none[id])
 		}
@@ -160,10 +160,10 @@ func TestParsersAPI_SaysWhichParsersCannotRun(t *testing.T) {
 	}
 	wasmstore.SetDefault(&wasmstore.Store{Dir: dir, Digests: map[string]string{"sarif": zero, "sbom-cyclonedx": zero, "x": zero}})
 	some := list()
-	if some["builtin:sarif"] != "" || some["builtin:sbom-cyclonedx"] != "" {
-		t.Errorf("the two with a module must be available: sarif %q, cyclonedx %q", some["builtin:sarif"], some["builtin:sbom-cyclonedx"])
+	if some["cluster:sarif"] != "" || some["cluster:sbom-cyclonedx"] != "" {
+		t.Errorf("the two with a module must be available: sarif %q, cyclonedx %q", some["cluster:sarif"], some["cluster:sbom-cyclonedx"])
 	}
-	if some["builtin:semgrep"] == "" || some["builtin:sbom-spdx"] == "" {
+	if some["cluster:semgrep"] == "" || some["cluster:sbom-spdx"] == "" {
 		t.Errorf("the others still have no module: %v", some)
 	}
 }
@@ -231,20 +231,20 @@ func TestParsersAPI_FamilyRuntimeStatusAndLastRun(t *testing.T) {
 		}
 		return i
 	}
-	sarif := res.Parsers[get("builtin:sarif")]
+	sarif := res.Parsers[get("cluster:sarif")]
 	if sarif.Family != "report" || sarif.Runtime != "wasm" || sarif.Origin != "cluster" || sarif.Status != "module_missing" || sarif.Module != "sarif" {
 		t.Errorf("sarif: %+v", sarif)
 	}
 	if sarif.LastRun == nil || sarif.LastRun.Status != "failed" || sarif.LastRun.Error != "parse_error" || sarif.LastSuccess == nil {
 		t.Errorf("sarif's last run failed and an earlier one completed: %+v", sarif)
 	}
-	if cdx := res.Parsers[get("builtin:sbom-cyclonedx")]; cdx.Family != "sbom" || cdx.Runtime != "wasm" || cdx.Status != "module_missing" || cdx.LastRun != nil {
+	if cdx := res.Parsers[get("cluster:sbom-cyclonedx")]; cdx.Family != "sbom" || cdx.Runtime != "wasm" || cdx.Status != "module_missing" || cdx.LastRun != nil {
 		t.Errorf("an SBOM reader, never used: %+v", cdx)
 	}
-	if lua := res.Parsers[get("builtin:bandit")]; lua.Family != "report" || lua.Runtime != "lua" || lua.Status != "ready" {
+	if lua := res.Parsers[get("cluster:bandit")]; lua.Family != "report" || lua.Runtime != "lua" || lua.Status != "ready" {
 		t.Errorf("a Lua parser needs no module: %+v", lua)
 	}
-	if bad := res.Parsers[get("builtin:broken")]; bad.Status != "refused" || bad.Error == "" {
+	if bad := res.Parsers[get("cluster:broken")]; bad.Status != "refused" || bad.Error == "" {
 		t.Errorf("a resource that cannot be read is listed with a reason: %+v", bad)
 	}
 }

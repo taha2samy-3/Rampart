@@ -61,7 +61,7 @@ func TestInstalledParserIsTheSameFromAFileAndFromTheControlPlane(t *testing.T) {
 		if !reflect.DeepEqual(a, b) {
 			t.Errorf("%s: the descriptor depends on where the parser came from:\n file %+v\n spec %+v", name, a, b)
 		}
-		if a.ID != "builtin:"+name || a.Kind != integrations.KindParser || a.Category == "" {
+		if a.ID != "cluster:"+name || a.Kind != integrations.KindParser || a.Category == "" {
 			t.Errorf("%s: unexpected descriptor %+v", name, a)
 		}
 	}
@@ -87,7 +87,7 @@ func TestInstalledFromADirectoryEqualsInstalledFromTheControlPlane(t *testing.T)
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), ".yaml")
 		raw, _ := os.ReadFile(f)
-		want, err := embedded.GetParser("builtin:" + name)
+		want, err := embedded.GetParser("cluster:" + name)
 		if err != nil {
 			t.Fatalf("%s: not installed from the directory: %v", name, err)
 		}
@@ -180,7 +180,7 @@ func TestInstalledParserThatCannotRunSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := firstError(t, p)
-	if got == nil || !strings.Contains(got.Error(), "builtin:no-source") || !strings.Contains(got.Error(), "source.oci or source.file is required") {
+	if got == nil || !strings.Contains(got.Error(), "cluster:no-source") || !strings.Contains(got.Error(), "source.oci or source.file is required") {
 		t.Errorf("a refused spec: want the parser and the runtime's reason, got %v", got)
 	}
 }

@@ -26,11 +26,12 @@ type IntegrationKind string
 // written when a second real implementation needs one (D96, docs/26).
 const KindParser IntegrationKind = "parser"
 
-// SupportLevel indicates official tier (built-in, certified, community).
+// SupportLevel indicates official tier (cluster-wide CRD, certified, community, or legacy builtin).
 type SupportLevel string
 
 const (
-	SupportBuiltin   SupportLevel = "builtin"
+	SupportCluster   SupportLevel = "cluster"
+	SupportBuiltin   SupportLevel = "builtin" // legacy alias for cluster
 	SupportCertified SupportLevel = "certified"
 	SupportCommunity SupportLevel = "community"
 )
@@ -86,22 +87,42 @@ func (r *Registry) RegisterParser(p ParserContract) error {
 	return nil
 }
 
-// GetParser retrieves a parser by ID.
+// GetParser retrieves a parser by ID, normalizing cluster:, legacy builtin:, or bare format names.
 func (r *Registry) GetParser(id string) (ParserContract, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	p, exists := r.parsers[id]
-	if !exists && !strings.HasPrefix(id, "builtin:") {
-		p, exists = r.parsers["builtin:"+id]
+	// 1. Direct match
+	if p, exists := r.parsers[id]; exists {
+		return p, nil
 	}
-	if !exists && strings.HasPrefix(id, "builtin:") {
-		p, exists = r.parsers[strings.TrimPrefix(id, "builtin:")]
+
+	// 2. Strip any known prefix to find the clean root name
+	clean := strings.TrimPrefix(id, "cluster:")
+	clean = strings.TrimPrefix(clean, "builtin:")
+	isSBOM := strings.HasPrefix(clean, "sbom-")
+	cleanSBOM := strings.TrimPrefix(clean, "sbom-")
+
+	candidates := []string{
+		"cluster:" + clean,
+		clean,
+		"cluster:sbom-" + cleanSBOM,
+		"cluster:sbom-" + clean,
+		"builtin:" + clean,
+		"builtin:sbom-" + cleanSBOM,
+		"builtin:sbom-" + clean,
 	}
-	if !exists {
-		return nil, fmt.Errorf("%w: parser %q", ErrIntegrationNotFound, id)
+	if isSBOM {
+		candidates = append(candidates, "sbom-"+cleanSBOM)
 	}
-	return p, nil
+
+	for _, cand := range candidates {
+		if p, exists := r.parsers[cand]; exists {
+			return p, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: parser %q", ErrIntegrationNotFound, id)
 }
 
 // ListParsers returns all registered parsers.

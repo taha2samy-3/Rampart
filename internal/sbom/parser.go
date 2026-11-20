@@ -99,12 +99,12 @@ func NewWasmSBOMParserFromSpec(name string, raw []byte, wasmBinary []byte) (*Was
 	}
 
 	desc := integrations.Descriptor{
-		ID:           "builtin:sbom-" + spec.Format,
+		ID:           "cluster:sbom-" + spec.Format,
 		Name:         spec.Format + " SBOM Parser",
 		Kind:         integrations.KindParser,
 		Category:     "sca",
 		Version:      spec.Version,
-		SupportLevel: integrations.SupportBuiltin,
+		SupportLevel: integrations.SupportCluster,
 		Description:  spec.Description,
 	}
 

@@ -128,8 +128,8 @@ func wholeManifest(name string, raw []byte) ([]byte, error) {
 
 // NewInstalledParser builds the report parser a ClusterParser resource describes, from the resource or from its spec alone.
 // Every installed parser is built here, whether it came from the control plane or from a directory, so each one has the
-// same id (builtin:<name>: the id stored in runs and read by the compliance report and the gate), descriptor and detection.
-// "builtin" says it was installed for the whole cluster; it does not say it is compiled in: nothing is.
+// same id (cluster:<name>: the id stored in runs and read by the compliance report and the gate), descriptor and detection.
+// "cluster" indicates it is installed cluster-wide via a Kubernetes ClusterParser Custom Resource (CRD).
 func NewInstalledParser(name string, raw []byte) (ParserContract, error) {
 	raw, err := wholeManifest(name, raw)
 	if err != nil {
@@ -147,12 +147,12 @@ func NewInstalledParser(name string, raw []byte) (ParserContract, error) {
 		raw:     raw,
 		runtime: spec.Runtime,
 		desc: Descriptor{
-			ID:           "builtin:" + name,
+			ID:           "cluster:" + name,
 			Name:         name + " Parser",
 			Kind:         KindParser,
 			Category:     spec.Category,
 			Version:      spec.Version,
-			SupportLevel: SupportBuiltin,
+			SupportLevel: SupportCluster,
 			Description:  spec.Description,
 		},
 		detect: spec.Detect,
@@ -171,8 +171,8 @@ func InstalledDescriptor(name string, raw []byte) (Descriptor, error) {
 		if format == "" {
 			format = strings.TrimPrefix(name, domain.SBOMParserNamePrefix)
 		}
-		return Descriptor{ID: "builtin:sbom-" + format, Name: format + " SBOM Parser", Kind: KindParser, Category: "sca",
-			Version: spec.Version, SupportLevel: SupportBuiltin, Description: spec.Description}, nil
+		return Descriptor{ID: "cluster:sbom-" + format, Name: format + " SBOM Parser", Kind: KindParser, Category: "sca",
+			Version: spec.Version, SupportLevel: SupportCluster, Description: spec.Description}, nil
 	}
 	p, err := NewInstalledParser(name, raw)
 	if err != nil {
