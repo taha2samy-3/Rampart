@@ -42,6 +42,46 @@ spec:
             {{- include "rampart.dbEnv" (dict "root" . "role" "runtime") | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+        {{- if eq (default "none" .Values.parsers.delivery.mode) "initContainer" }}
+        {{- /* For a cluster whose runtime has no image volumes (containerd before 2.1): each module image is pulled by digest, its parser.wasm is
+        taken out of it and its SHA-256 is checked here, before the server starts (it checks it again against the digest table). */}}
+        - name: fetch-wasm-modules
+          image: {{ required "parsers.delivery.fetcherImage is required with parsers.delivery.mode=initContainer" .Values.parsers.delivery.fetcherImage | quote }}
+          imagePullPolicy: {{ default "IfNotPresent" .Values.parsers.delivery.pullPolicy }}
+          command: ["/busybox/sh", "-c"]
+          args:
+            - |
+              set -eu
+              fetch() {
+                name="$1"; image="$2"; want="$3"
+                mkdir -p "/wasm/$name"
+                crane export "$image" - | tar -xO parser.wasm > "/wasm/$name/parser.wasm.part"
+                got=$(sha256sum "/wasm/$name/parser.wasm.part" | cut -d' ' -f1)
+                if [ "$got" != "$want" ]; then
+                  echo "module $name: SHA-256 is $got, expected $want" >&2
+                  exit 1
+                fi
+                mv "/wasm/$name/parser.wasm.part" "/wasm/$name/parser.wasm"
+                echo "fetched $name"
+              }
+              {{- range $name, $m := .Values.parsers.modules }}
+              fetch {{ $name | quote }} {{ required (printf "parsers.modules.%s.image is required with parsers.delivery.mode=initContainer" $name) $m.image | quote }} {{ required (printf "parsers.modules.%s.sha256 is required with parsers.delivery.mode=initContainer" $name) $m.sha256 | quote }}
+              {{- end }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: wasm-modules
+              mountPath: /wasm
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -98,7 +138,7 @@ spec:
             - name: RAMPART_FEEDS_OSV_ECOSYSTEMS
               value: {{ join "," . | quote }}
             {{- end }}
-            {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+            {{- if or (eq (default "none" .Values.parsers.delivery.mode) "imageVolume") (eq (default "none" .Values.parsers.delivery.mode) "initContainer") }}
             # The shipped parser modules, checked against a digest table at start-up (docs/35 B1).
             - name: RAMPART_WASM_DIR
               value: {{ .Values.parsers.delivery.mountPath | quote }}
@@ -191,10 +231,17 @@ spec:
               mountPath: /etc/rampart/feed-secrets
               readOnly: true
             {{- end }}
-            {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+            {{- if or (eq (default "none" .Values.parsers.delivery.mode) "imageVolume") (eq (default "none" .Values.parsers.delivery.mode) "initContainer") }}
             - name: wasm-digests
               mountPath: /etc/rampart/wasm
               readOnly: true
+            {{- end }}
+            {{- if eq (default "none" .Values.parsers.delivery.mode) "initContainer" }}
+            - name: wasm-modules
+              mountPath: {{ .Values.parsers.delivery.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
             {{- range $name, $m := .Values.parsers.modules }}
             - name: {{ printf "wasm-%s" $name | trunc 63 | trimSuffix "-" }}
               mountPath: {{ printf "%s/%s" $.Values.parsers.delivery.mountPath $name }}
@@ -202,10 +249,16 @@ spec:
             {{- end }}
             {{- end }}
       volumes:
-        {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
+        {{- if or (eq (default "none" .Values.parsers.delivery.mode) "imageVolume") (eq (default "none" .Values.parsers.delivery.mode) "initContainer") }}
         - name: wasm-digests
           configMap:
             name: {{ include "rampart.fullname" . }}-wasm-digests
+        {{- end }}
+        {{- if eq (default "none" .Values.parsers.delivery.mode) "initContainer" }}
+        - name: wasm-modules
+          emptyDir: {}
+        {{- end }}
+        {{- if eq (default "none" .Values.parsers.delivery.mode) "imageVolume" }}
         {{- range $name, $m := .Values.parsers.modules }}
         - name: {{ printf "wasm-%s" $name | trunc 63 | trimSuffix "-" }}
           image:

@@ -293,9 +293,16 @@ parsers:
   #                feature; check your version), and the server REFUSES TO START unless each shipped module is present and
   #                its parser.wasm has the SHA-256 listed here. Signature verification belongs to the cluster: an
   #                admission policy (Kyverno or the sigstore policy-controller) for the images.
+  #   initContainer: for a cluster whose container runtime has no image volumes (containerd before 2.1, with no ImageVolume): an init
+  #                container pulls each module image by digest, takes parser.wasm out of it and checks its SHA-256 (it fails the pod if it
+  #                differs) into a volume the server reads. The same digest table, and the same refusal to start, as imageVolume.
+  #                It needs the registry to be reachable from the pod and the images to be public (no pull secret is passed to it).
   # `python3 hack/wasm-modules.py <path of the parsers repository>` prints the sha256 values.
   delivery:
     mode: none
+    # The image that does the pulling in initContainer mode: it needs `crane`, a shell, tar and sha256sum, so it is crane's debug image,
+    # pinned by digest (renovate: datasource=docker depName=gcr.io/go-containerregistry/crane).
+    fetcherImage: gcr.io/go-containerregistry/crane@sha256:e78770b31258a3846f878036d9c1f63fbe4c871f9f56990bf77fd95c013e3c1b
     mountPath: /opt/rampart/wasm
     pullPolicy: IfNotPresent
   # name -> image (pin by digest) and the SHA-256 (hex) of the parser.wasm file inside it.

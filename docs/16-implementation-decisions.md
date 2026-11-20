@@ -2627,3 +2627,11 @@ D143 records the design. These are the choices made while building it that D143 
 | `examples/external-analyzer` keeps the default 4 MiB receive limit. | It is a sample with two toy rules; the limit is noted (docs/38) rather than changed there. |
 | There is no "analyze again" button on an application's page yet. | The route exists; the application page has its own design work. |
 
+## D145: The WASM modules can reach the pod by an init container as well as by image volumes (2026-11-20)
+
+**Context.** `parsers.delivery.mode: imageVolume` (docs/35 B1) needs a container runtime that supports image volumes. The owner's dev cluster runs containerd without it, so no module reached the pod and every WASM parser, the SBOM readers included, was listed and could not run (docs/34 items 20 and 21).
+
+**Decision.** A second mode, `initContainer`, and both are kept. An init container, `fetch-wasm-modules`, pulls each module image by digest, takes `/parser.wasm` out of it, checks the SHA-256 listed for it and exits non-zero on a mismatch, into an `emptyDir` that the server mounts read-only at the same path and layout (`<mountPath>/<name>/parser.wasm`). The server still reads the digest table (`RAMPART_WASM_DIGESTS`) and still refuses to start when a module is missing or different, so the two modes give the same guarantee; the init container's own check only stops the pod earlier, with a message that names the module.
+
+**Why this shape.** The module images are `scratch` (one file), so nothing in them can copy a file; the pulling needs a tool, and the smallest one that is pinned and has a shell is crane's debug image, pinned by digest (`parsers.delivery.fetcherImage`, overridable for a private mirror). `crane export` reads the image from the registry, not from the node, so it does not depend on the runtime. It runs as 65532, with no privileges and no capability. **Not done:** a pull secret for private module images (the images are public today), and signature verification of the module images (the cluster's admission policy owns it, as for `imageVolume`). **Checked:** the rendered chart in the three modes; the script run with the pinned image against the registry (16 modules, about 45 s); a wrong SHA-256 stops it. **Not checked:** the pod on a real cluster.
+

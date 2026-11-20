@@ -1,5 +1,5 @@
 # The WASM parser modules, delivered to the pod as image volumes (docs/35 B1, docs/34 items 20 and 21 W1).
-# Use with:  helm upgrade ... -f deploy/helm/rampart/values-parsers-v1.yaml
+# Use with:  helm upgrade ... -f deploy/helm/rampart/values-parsers-v1.yaml   (image volumes; for a runtime without them use values-parsers-v1-init.yaml)
 #
 # Resolved from the public registry on 2026-11-19, tag v1: `crane digest <image>:v1` for the image, and the SHA-256 of /parser.wasm
 # read out of that image (`crane export <image>@<digest> - | tar -xO parser.wasm | sha256sum`). The server refuses to start unless each
