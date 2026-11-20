@@ -1,7 +1,7 @@
 import type { ComponentType, SVGProps } from 'react';
 import {
   IconAdmin, IconApplications, IconCompliance, IconFeeds, IconFindings, IconIngestion, IconIntegrations,
-  IconInventory, IconOverview, IconPolicies, IconVulnerabilities, IconWorkflow,
+  IconInventory, IconOverview, IconParsers, IconPolicies, IconVulnerabilities, IconWorkflow,
 } from '@/components/icons';
 
 export interface NavItem {
@@ -25,7 +25,8 @@ export const NAV_GROUPS: NavItem[][] = [
   [
     { id: 'workflow', path: '/workflow', icon: IconWorkflow, phase: 2, what: 'Triage, risk acceptance and your assigned work; tickets follow in Phase 3.' },
     { id: 'compliance', path: '/compliance', icon: IconCompliance, phase: 2, what: 'Framework views with per-control status.' },
-    { id: 'ingestion', path: '/ingestion', icon: IconIngestion, phase: 1, what: 'Ingest runs, scan sources and the parsers they use.' },
+    { id: 'ingestion', path: '/ingestion', icon: IconIngestion, phase: 1, what: 'Ingest runs and what each one changed.' },
+    { id: 'parsers', path: '/parsers', icon: IconParsers, phase: 1, what: 'The parsers that read reports and SBOMs, and the analyzers that look for vulnerabilities.' },
   ],
   [
     { id: 'policies', path: '/policies', icon: IconPolicies, phase: 2, what: 'Risk and SLA policies; automation rules and exceptions follow in Phase 5.' },

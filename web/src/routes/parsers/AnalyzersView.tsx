@@ -4,11 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { analyzeWithAnalyzer, listAnalyzers, qk, testAnalyzer, toProblem } from '@/api';
 import type { AnalyzerItem, AnalyzerTestResult } from '@/api/types';
 import { EmptyState, ProblemMessage, SearchField, Select, Spinner, Table, TBody, Td, Th, THead, Tr } from '@/components';
-import { IconWarning } from '@/components/icons';
 import { useAccess } from '@/app/useAccess';
 import { absoluteDateTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { AnalyzerInspector, eventPhrase } from './AnalyzerInspector';
+import { StatusMark } from './StatusMark';
 
 type Filter = 'all' | 'external' | 'sbom';
 
@@ -185,18 +185,21 @@ function AnalyzerRow({ a, selected, onSelect }: { a: AnalyzerItem; selected: boo
       <Td className="hidden whitespace-normal md:table-cell"><span className="block truncate font-mono text-12" title={whereOf(a)}>{whereOf(a)}</span></Td>
       <Td className="whitespace-normal">
         <span className={cn('inline-flex items-center gap-1.5', status === 'refused' && 'text-critical')}>
-          {status === 'refused' && <IconWarning className="size-3.5 shrink-0" />}
+          <StatusMark health={status === 'refused' ? 'problem' : status === 'ready' ? 'ok' : 'idle'} />
           {t(`analyzers.status_${status}`)}
         </span>
       </Td>
       <Td className="whitespace-normal">
         {a.last_event ? (
-          <>
-            <span className={cn('block', lastBad && 'text-critical')}>{eventPhrase(t, a.last_event)}</span>
-            <span className="block font-mono text-12 text-ink-2">{absoluteDateTime(a.last_event.created_at)}</span>
-          </>
+          <span className="inline-flex items-start gap-1.5">
+            <StatusMark health={lastBad ? 'problem' : 'ok'} className="mt-0.5" />
+            <span>
+              <span className={cn('block', lastBad && 'text-critical')}>{eventPhrase(t, a.last_event)}</span>
+              <span className="block font-mono text-12 text-ink-2">{absoluteDateTime(a.last_event.created_at)}</span>
+            </span>
+          </span>
         ) : (
-          <span className="text-ink-2">{t('analyzers.neverTested')}</span>
+          <span className="inline-flex items-center gap-1.5 text-ink-2"><StatusMark health="idle" />{t('analyzers.neverTested')}</span>
         )}
       </Td>
     </Tr>

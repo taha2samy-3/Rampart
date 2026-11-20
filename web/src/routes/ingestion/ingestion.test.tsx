@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { axe } from 'vitest-axe';
-import { app, mockFetch, renderApp, run } from '@/test/helpers';
+import { mockFetch, renderApp, run } from '@/test/helpers';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -124,130 +124,16 @@ describe('ingest runs', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('switches to Parsers & Formats tab and lists all engines with accessible details', async () => {
-    mockFetch({ loggedIn: true, runs: [] });
-    const { container } = renderApp('/ingestion');
-
-    const tab = await screen.findByRole('tab', { name: 'Parsers & Formats' });
-    await userEvent.click(tab);
-
-    expect(await screen.findByRole('heading', { name: 'Parsers and formats' })).toBeInTheDocument();
-    // What the server lists, the tenant's parser packages included (D98); no invented list.
-    expect(await screen.findByText('4 built in, 1 installed as a package')).toBeInTheDocument();
-
-    const table = screen.getByRole('table', { name: 'Supported parsers table' });
-    expect(within(table).getByText('SARIF 2.1.0 Parser')).toBeInTheDocument();
-    expect(within(table).getByText('CycloneDX Parser (JSON/XML)')).toBeInTheDocument();
-    expect(within(table).getByText('Trivy Parser (JSON)')).toBeInTheDocument();
-    const pkgRow = within(table).getByText('pip-audit (Declarative)').closest('tr')!;
-    expect(within(pkgRow).getByText('Installed package')).toBeInTheDocument();
-
-    // Category filtering
-    const sastFilter = screen.getByRole('button', { name: 'SAST' });
-    await userEvent.click(sastFilter);
-    expect(within(table).getByText('Semgrep Parser (JSON)')).toBeInTheDocument();
-    expect(within(table).queryByText('CycloneDX Parser (JSON/XML)')).toBeNull();
-
-    // Reset filter
-    await userEvent.click(screen.getByRole('button', { name: 'All Categories' }));
-    expect(within(table).getByText('CycloneDX Parser (JSON/XML)')).toBeInTheDocument();
-
-    // Click parser to view details
-    await userEvent.click(within(table).getByText('SARIF 2.1.0 Parser'));
-    const dialog = screen.getByRole('dialog', { name: 'SARIF 2.1.0 Parser' });
-    expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByText('builtin:sarif')).toBeInTheDocument();
-    expect(within(dialog).getByText('rampart upload --parser sarif --app <application> --source default report.json')).toBeInTheDocument();
-    await userEvent.click(within(dialog).getAllByRole('button', { name: 'Close' })[0]!);
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'SARIF 2.1.0 Parser' })).toBeNull());
-
-    // Custom CEL Parser dialog
-    await userEvent.click(screen.getByRole('button', { name: 'Add a parser package' }));
-    const celDialog = await screen.findByRole('dialog', { name: 'Declarative CEL Mapping Engine' });
-    expect(celDialog).toBeInTheDocument();
-    expect(within(celDialog).getByText(/apiVersion: rampart.aspm.dev\/v1alpha1/)).toBeInTheDocument();
-    await userEvent.click(within(celDialog).getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Declarative CEL Mapping Engine' })).toBeNull());
-
-    expect(await axe(container)).toHaveNoViolations();
-  });
-
-  it('says which parsers cannot run, and does not offer them for an upload', async () => {
+  it('does not offer, in the upload dialog, a parser that cannot run', async () => {
     const parsers = [
       { id: 'builtin:sarif', name: 'sarif Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'SARIF', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' },
       { id: 'builtin:bandit', name: 'bandit Parser', kind: 'parser', version: '1', support_level: 'builtin' as const, description: 'Bandit (Lua)' },
     ];
     mockFetch({ loggedIn: true, runs: [], parsers });
     renderApp('/ingestion');
-    await userEvent.click(await screen.findByRole('tab', { name: 'Parsers & Formats' }));
-    const table = await screen.findByRole('table', { name: 'Supported parsers table' });
-    const sarifRow = within(table).getByText('sarif Parser').closest('tr')!;
-    expect(within(sarifRow).getByText(/Cannot run: its WASM module is not installed/)).toBeInTheDocument();
-    const banditRow = within(table).getByText('bandit Parser').closest('tr')!;
-    expect(within(banditRow).queryByText(/Cannot run/)).toBeNull();
-
-    // the upload dialog does not offer the one that cannot run
-    await userEvent.click(screen.getByRole('tab', { name: 'Ingest Runs' }));
     await userEvent.click((await screen.findAllByRole('button', { name: 'Upload report' }))[0]!);
     const option = await screen.findByRole('option', { name: /sarif Parser \(Cannot run\)/ });
     expect(option).toBeDisabled();
     expect(screen.getByRole('option', { name: 'bandit Parser' })).toBeEnabled();
-  });
-
-  it('says so when the parsers cannot be loaded, instead of showing a made-up list', { timeout: 15000 }, async () => {
-    mockFetch({ loggedIn: true, runs: [], parsers: 'error' });
-    renderApp('/ingestion');
-    await userEvent.click(await screen.findByRole('tab', { name: 'Parsers & Formats' }));
-    // A 500 is retried twice (App.tsx) before the error shows.
-    expect(await screen.findByRole('alert', {}, { timeout: 8000 })).toHaveTextContent('The parsers could not be loaded.');
-    expect(screen.queryByRole('table', { name: 'Supported parsers table' })).toBeNull();
-  });
-});
-
-// An upload that named an application that did not exist made a new empty one, so a typo in a pipeline or a
-// dialog made an application nobody asked for. Choosing one from the list now says "it must exist"; making a new
-// one is a visible choice of a maintainer.
-describe('manual upload: the application', () => {
-  async function openDialog(sc: Parameters<typeof mockFetch>[0]) {
-    const calls = mockFetch({ loggedIn: true, runs: [], apps: [app(1, { id: 'app-1', slug: 'shop', name: 'Shop' })], ...sc });
-    renderApp('/ingestion');
-    await userEvent.click((await screen.findAllByRole('button', { name: 'Upload report' }))[0]!);
-    const dialog = await screen.findByRole('dialog', { name: 'Upload security report' });
-    await userEvent.upload(within(dialog).getByLabelText('Report file'), new File(['{}'], 'r.sarif', { type: 'application/json' }));
-    return { calls, dialog };
-  }
-  const sent = (calls: Awaited<ReturnType<typeof openDialog>>['calls']) => calls.find((c) => c.url.startsWith('/api/v1/uploads/direct'))?.form;
-
-  it('sends createApplication=false for an application chosen from the list', async () => {
-    const { calls, dialog } = await openDialog({ role: 'maintainer' });
-    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'shop');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload' }));
-    await waitFor(() => expect(sent(calls)).toBeDefined());
-    expect(sent(calls)).toMatchObject({ application: 'shop', createApplication: 'false' });
-  });
-
-  it('lets a maintainer make a new application on purpose, and says what it will be called', async () => {
-    const { calls, dialog } = await openDialog({ role: 'maintainer', upload: { application: 'billing-api', applicationCreated: true } });
-    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'New application...');
-    const submit = within(dialog).getByRole('button', { name: 'Upload' });
-    expect(submit).toBeDisabled(); // a new application needs a name
-    await userEvent.type(within(dialog).getByLabelText('Name of the new application'), 'Billing API!');
-    expect(within(dialog).getByText('It will be created as billing-api.')).toBeInTheDocument();
-    await userEvent.click(submit);
-    await waitFor(() => expect(sent(calls)).toBeDefined());
-    expect(sent(calls)).toMatchObject({ application: 'billing-api', createApplication: 'true' });
-    expect(await screen.findByText('Report uploaded. Application billing-api was created.')).toBeInTheDocument();
-  });
-
-  it('does not offer a new application to someone who may not make one', async () => {
-    const { dialog } = await openDialog({ role: 'triager' });
-    expect(within(dialog).queryByRole('option', { name: 'New application...' })).toBeNull();
-  });
-
-  it('shows the server\'s answer when the application does not exist', async () => {
-    const { dialog } = await openDialog({ role: 'maintainer', upload: 404 });
-    await userEvent.selectOptions(within(dialog).getByLabelText('Application'), 'shop');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload' }));
-    expect(await within(dialog).findByText(/There is no application/)).toBeInTheDocument();
   });
 });

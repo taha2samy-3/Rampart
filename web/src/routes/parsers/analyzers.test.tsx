@@ -10,8 +10,8 @@ afterEach(() => {
 });
 
 async function openTab() {
-  const view = renderApp('/ingestion');
-  await userEvent.click(await screen.findByRole('tab', { name: 'Analyzers' }));
+  const view = renderApp('/parsers?tab=analyzers');
+  await screen.findByRole('tab', { name: 'Analyzers', selected: true });
   return view;
 }
 

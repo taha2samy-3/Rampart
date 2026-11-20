@@ -592,9 +592,23 @@ export interface ParserDescriptor {
   version: string;
   support_level: 'builtin' | 'certified' | 'community';
   description: string;
+  category?: string;
   capabilities?: string[];
   /** Why the parser is listed and cannot run (its WASM module is not installed on the server). Absent: it can. */
   unavailable?: string;
+  /** A report parser, or an SBOM reader. */
+  family?: 'report' | 'sbom';
+  runtime?: 'wasm' | 'lua' | 'mapping' | '';
+  /** Installed for every tenant (a cluster resource) or by this tenant. */
+  origin?: 'cluster' | 'tenant';
+  /** The WASM module it runs, by name. */
+  module?: string;
+  /** Installed correctly (ready), its module missing, or its resource refused (with `error`). */
+  status?: 'ready' | 'module_missing' | 'refused';
+  error?: string;
+  /** The last run that used this parser, and the last time one completed. Absent when it has never been used. */
+  last_run?: { id: string; status: string; error?: string; at: string };
+  last_success?: string;
 }
 
 /**

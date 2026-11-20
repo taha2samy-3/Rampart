@@ -142,30 +142,27 @@ const ACCEPTANCES = [
   { id: 'ra-33', status: 'expired', justification: 'Temporary waiver for CVE-2023-44487 during maintenance window', owner: 'user:sara.ahmed@acme.example', requester: 'user:sara.ahmed@acme.example', approver: 'user:boss@acme.example', expires_at: new Date(Date.now() - 10 * 86400000).toISOString(), on_expiry: 'reactivate', created_at: new Date(Date.now() - 70 * 86400000).toISOString(), finding_ids: ['f0000000-0000-4000-8000-000000000004'] },
 ];
 
-const PARSERS = [
-  { id: 'builtin:sarif', name: 'SARIF 2.1.0 Parser', kind: 'parser', version: '2.1.0', support_level: 'builtin', description: 'OASIS SARIF 2.1.0 standard with enrichers for Semgrep, Trivy, Gitleaks, CodeQL' },
-  { id: 'builtin:cyclonedx', name: 'CycloneDX Parser (JSON/XML)', kind: 'parser', version: '1.6.0', support_level: 'builtin', description: 'CycloneDX 1.4-1.7 SBOM, VDR, and VEX parser for JSON and XML formats' },
-  { id: 'builtin:spdx', name: 'SPDX Parser (JSON/Tag-Value)', kind: 'parser', version: '2.3.0', support_level: 'builtin', description: 'SPDX 2.2 and 2.3 SBOM parser for JSON and Tag-Value formats' },
-  { id: 'builtin:openvex', name: 'OpenVEX Parser', kind: 'parser', version: '0.2.0', support_level: 'builtin', description: 'OpenVEX triage statements and exploitability assertions parser' },
-  { id: 'builtin:syft', name: 'Syft Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Anchore Syft SBOM parser with artifact catalog and dependency relationships' },
-  { id: 'builtin:trivy', name: 'Trivy Parser (JSON)', kind: 'parser', version: '2.0.0', support_level: 'builtin', description: 'Trivy JSON (schema 2): package vulnerabilities, secrets, misconfigurations, licenses' },
-  { id: 'builtin:grype', name: 'Grype Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Grype JSON: vulnerability matches with their related identifiers' },
-  { id: 'builtin:semgrep', name: 'Semgrep Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Semgrep JSON: code findings with CWE, location and code snippet hash' },
-  { id: 'builtin:trufflehog', name: 'TruffleHog Parser (JSON lines)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'TruffleHog JSON lines: secrets, verified against live endpoints' },
-  { id: 'builtin:gitleaks', name: 'Gitleaks Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Gitleaks JSON: secrets found in git repositories; secret is hashed' },
-  { id: 'builtin:dependencytrack', name: 'Dependency-Track Parser (FPF/JSON)', kind: 'parser', version: '1.4.0', support_level: 'builtin', description: 'Dependency-Track FPF export and direct API finding response parser with VEX' },
-  { id: 'builtin:checkov', name: 'Checkov Parser (JSON)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Checkov IaC scanning report for Terraform, CloudFormation, K8s, Dockerfile' },
-  { id: 'builtin:bandit', name: 'Bandit Parser (JSON)', kind: 'parser', version: '1.7.0', support_level: 'builtin', description: 'Bandit Python SAST vulnerability and security flaw report' },
-  { id: 'builtin:nuclei', name: 'Nuclei Parser (JSONL)', kind: 'parser', version: '3.0.0', support_level: 'builtin', description: 'Nuclei template-based vulnerability scan results' },
-  { id: 'builtin:zap', name: 'OWASP ZAP Parser (JSON)', kind: 'parser', version: '2.14.0', support_level: 'builtin', description: 'OWASP ZAP DAST web application security report' },
-  { id: 'builtin:dependencycheck', name: 'OWASP Dependency-Check Parser (JSON)', kind: 'parser', version: '8.4.0', support_level: 'builtin', description: 'OWASP Dependency-Check SCA vulnerability report' },
-  { id: 'builtin:snyk', name: 'Snyk Parser (JSON)', kind: 'parser', version: '1.0.0', support_level: 'builtin', description: 'Snyk open source and container vulnerability report' },
-  { id: 'builtin:kubebench', name: 'kube-bench Parser (JSON)', kind: 'parser', version: '0.6.0', support_level: 'builtin', description: 'Aqua Security kube-bench CIS Kubernetes benchmark report' },
-  { id: 'builtin:prowler', name: 'Prowler Parser (JSON)', kind: 'parser', version: '4.0.0', support_level: 'builtin', description: 'Prowler AWS/Azure/GCP cloud security and compliance report' },
-  { id: 'builtin:gitlab', name: 'GitLab Security Report Parser (JSON)', kind: 'parser', version: '15', support_level: 'builtin', description: 'GitLab SAST, secret detection, dependency scanning, container scanning and DAST reports (schema v14, v15)' },
-  { id: 'builtin:genericjson', name: 'Generic JSON Parser', kind: 'parser', version: '1', support_level: 'builtin', description: 'Rampart generic findings format, a superset of DefectDojo Generic Findings Import' },
-  { id: 'crd:custom-sast-mapper', name: 'Custom In-House SAST', kind: 'parser', version: '1.0.0', support_level: 'community', description: 'Declarative CEL mapping parser registered dynamically via IntegrationPackage CRD' },
-];
+const PARSERS = (() => {
+  const ago = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const missing = 'its WASM module is not installed on this server (parsers.delivery in the chart)';
+  const p = (id, name, family, runtime, extra = {}) => ({
+    id, name, kind: 'parser', version: '1', support_level: 'builtin', category: family === 'sbom' ? 'sca' : 'sast', description: `${name} reads its format into ${family === 'sbom' ? 'the inventory' : 'findings'}.`,
+    family, runtime, origin: 'cluster', module: runtime === 'wasm' ? id.replace('builtin:', '') : undefined, status: 'ready', ...extra,
+  });
+  return [
+    p('builtin:sarif', 'sarif Parser', 'report', 'wasm', { version: '2.1.0', last_run: { id: RUNS[1].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
+    p('builtin:semgrep', 'semgrep Parser', 'report', 'wasm', { last_run: { id: RUNS[2].id, status: 'failed', error: 'parse_error', at: ago(5) }, last_success: ago(70) }),
+    p('builtin:trivy', 'trivy Parser', 'report', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('builtin:gitleaks', 'gitleaks Parser', 'report', 'wasm', { category: 'secrets', status: 'module_missing', unavailable: missing }),
+    p('builtin:bandit', 'bandit Parser', 'report', 'lua', { last_run: { id: RUNS[3].id, status: 'completed_with_errors', at: ago(26) }, last_success: ago(26) }),
+    p('builtin:nuclei', 'nuclei Parser', 'report', 'lua', { category: 'dast' }),
+    p('builtin:broken', 'broken Parser', 'report', 'wasm', { status: 'refused', error: 'spec.detect: no filename or content probe is given, so no upload could be matched to it' }),
+    p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
+    p('builtin:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
+    p('builtin:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('builtin:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+  ];
+})();
 
 const CONNECTORS = [
   {

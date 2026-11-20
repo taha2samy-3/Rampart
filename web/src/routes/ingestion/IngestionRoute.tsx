@@ -16,15 +16,9 @@ import {
   Th,
   THead,
   Tr,
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
 } from '@/components';
 import { RunInspector } from '@/features/run-inspector/RunInspector';
 import { UploadDialog } from './UploadDialog';
-import { ParsersView } from './ParsersView';
-import { AnalyzersView } from './AnalyzersView';
 import { cn } from '@/lib/cn';
 import { absoluteDateTime, shortId } from '@/lib/format';
 
@@ -50,7 +44,6 @@ function foundText(r: RunRow): string {
 export function IngestionRoute({ search }: { search: IngestionSearch }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'runs' | 'parsers' | 'analyzers'>('runs');
   const [uploadOpen, setUploadOpen] = useState(false);
   useEffect(() => {
     document.title = `${t('ingestion.title')} - Rampart`;
@@ -187,25 +180,15 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
   }
 
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as 'runs' | 'parsers' | 'analyzers')} className="flex h-full min-h-0 flex-col">
-      {/* Header with View Tabs */}
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between border-b border-rule px-4 py-2">
-        <div className="flex items-center gap-4">
-          <h1 className="display text-16">{t('ingestion.title')}</h1>
-          <TabsList label="Ingestion Views">
-            <TabsTrigger value="runs">{t('ingestion.runsTab', { defaultValue: 'Ingest Runs' })}</TabsTrigger>
-            <TabsTrigger value="parsers">Parsers & Formats</TabsTrigger>
-            <TabsTrigger value="analyzers">{t('ingestion.analyzersTab')}</TabsTrigger>
-          </TabsList>
-        </div>
-        {tab === 'runs' && (
-          <Button variant="secondary" onClick={() => setUploadOpen(true)}>
-            {t('ingestion.uploadButton')}
-          </Button>
-        )}
+        <h1 className="display text-16">{t('ingestion.title')}</h1>
+        <Button variant="secondary" onClick={() => setUploadOpen(true)}>
+          {t('ingestion.uploadButton')}
+        </Button>
       </div>
 
-      <TabsContent value="runs" className="flex min-h-0 flex-1 flex-col tablet:flex-row data-[state=inactive]:hidden">
+      <div className="flex min-h-0 flex-1 flex-col tablet:flex-row">
         <section aria-label={t('ingestion.title')} className="@container/list flex min-h-0 min-w-0 flex-1 basis-3/5 flex-col tablet:basis-auto">
           {list}
         </section>
@@ -215,15 +198,7 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
           </aside>
         </div>
         <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
-      </TabsContent>
-
-      <TabsContent value="parsers" className="min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden">
-        <ParsersView onUploadClick={() => setUploadOpen(true)} />
-      </TabsContent>
-
-      <TabsContent value="analyzers" className="min-h-0 flex-1 overflow-auto data-[state=inactive]:hidden">
-        <AnalyzersView />
-      </TabsContent>
-    </Tabs>
+      </div>
+    </div>
   );
 }

@@ -241,3 +241,39 @@ func (s *PostgresStore) FindCandidatesByPurlBase(ctx context.Context, purlBases 
 	}
 	return out, rows.Err()
 }
+
+var _ domain.ParserRunStore = (*PostgresStore)(nil)
+
+// LastRunByParser returns, for each parser that has read something for the tenant, its last run and the last time it completed. The analyses an
+// analyzer merges are not a parser's work and are left out.
+func (s *PostgresStore) LastRunByParser(ctx context.Context, tenantID uuid.UUID) (map[string]domain.ParserLastRun, error) {
+	out := map[string]domain.ParserLastRun{}
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT format,
+			       (array_agg(id ORDER BY created_at DESC))[1],
+			       (array_agg(status ORDER BY created_at DESC))[1],
+			       (array_agg(coalesce(error, '') ORDER BY created_at DESC))[1],
+			       max(created_at),
+			       max(created_at) FILTER (WHERE status IN ('completed', 'completed_with_errors'))
+			  FROM ingest_run WHERE tenant_id = $1 AND format <> 'sbom-analysis' GROUP BY format`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				format, status, errText string
+				id                      uuid.UUID
+				at                      time.Time
+				ok                      *time.Time
+			)
+			if err := rows.Scan(&format, &id, &status, &errText, &at, &ok); err != nil {
+				return err
+			}
+			out[format] = domain.ParserLastRun{RunID: id, Status: domain.IngestRunStatus(status), Error: errText, At: at, LastSuccess: ok}
+		}
+		return rows.Err()
+	})
+	return out, err
+}

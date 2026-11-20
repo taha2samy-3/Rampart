@@ -13,6 +13,7 @@ import type { WorkflowSearch } from '@/routes/workflow/WorkflowRoute';
 import type { AcceptanceStatus } from '@/api/types';
 import { NotBuilt } from '@/routes/NotBuilt';
 import { PoliciesRoute } from '@/routes/policies/PoliciesRoute';
+import { ParsersRoute, type ParsersSearch } from '@/routes/parsers/ParsersRoute';
 import { Bootstrap } from './Bootstrap';
 import { ErrorView } from './ErrorBoundary';
 import { NAV_ITEMS } from './nav';
@@ -135,6 +136,15 @@ const ingestionRoute = createRoute({
   },
 });
 
+const parsersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/parsers',
+  validateSearch: (s: Record<string, unknown>): ParsersSearch => ({ tab: s.tab === 'sbom' || s.tab === 'analyzers' ? s.tab : undefined }),
+  component: function Parsers() {
+    return <ParsersRoute search={parsersRoute.useSearch()} />;
+  },
+});
+
 const workflowRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/workflow',
@@ -186,7 +196,7 @@ const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inv
 
 const vulnerabilitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/vulnerabilities', component: VulnerabilitiesRoute });
 
-const BUILT = new Set(['policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
+const BUILT = new Set(['parsers', 'policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -204,6 +214,7 @@ const routeTree = rootRoute.addChildren([
     findingsRoute,
     deepFindingRoute,
     ingestionRoute,
+    parsersRoute,
     workflowRoute,
     overviewRoute,
     applicationsRoute,

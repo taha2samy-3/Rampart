@@ -306,3 +306,61 @@ func TestFindCandidatesByPurlBase_OnPostgreSQL(t *testing.T) {
 		}
 	}
 }
+
+// The Parsers page says when each parser last worked: the last run that used it, how it ended, and the last time one completed. An analyzer's
+// merge is not a parser's work, and another tenant's runs are not read.
+func TestLastRunByParser_OnPostgreSQL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	appStore, sys := setupStores(t, ctx)
+	mk := func() *domain.Tenant {
+		tn := &domain.Tenant{ID: uuid.New(), Slug: "lr-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
+		if err := sys.CreateTenant(ctx, tn); err != nil {
+			t.Fatal(err)
+		}
+		return tn
+	}
+	tn, other := mk(), mk()
+	seedFindings(t, ctx, appStore, tn.ID, 0)
+	seedFindings(t, ctx, appStore, other.ID, 0)
+	now := time.Now().UTC()
+	run := func(tenant uuid.UUID, format string, status domain.IngestRunStatus, ago time.Duration, errText string) uuid.UUID {
+		app, _ := appStore.LookupApplication(ctx, tenant, "shop")
+		asset, _ := appStore.LookupAsset(ctx, tenant, domain.AssetRepository, "github.com/acme/shop")
+		r := &domain.IngestRun{ID: uuid.New(), TenantID: tenant, ApplicationID: app.ID, AssetID: asset.ID, Track: "main", ScannerFamily: format, Format: format,
+			Status: status, Error: errText, CreatedAt: now.Add(-ago)}
+		if err := appStore.CreateIngestRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		if errText != "" { // the reason is written when a run ends, as Processor.Finish does
+			r.Error = errText
+			if err := appStore.UpdateIngestRun(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return r.ID
+	}
+	run(tn.ID, "builtin:sarif", domain.RunCompleted, 5*time.Hour, "")
+	lastBad := run(tn.ID, "builtin:sarif", domain.RunFailed, time.Hour, "parse_error")
+	run(tn.ID, "builtin:trivy", domain.RunFailed, 2*time.Hour, "sha256_mismatch") // never completed
+	run(tn.ID, "sbom-analysis", domain.RunCompleted, time.Minute, "")             // an analyzer's merge
+	run(other.ID, "builtin:semgrep", domain.RunCompleted, time.Minute, "")
+
+	got, err := appStore.LastRunByParser(ctx, tn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := got["builtin:sarif"]
+	if s.RunID != lastBad || s.Status != domain.RunFailed || s.Error != "parse_error" || s.LastSuccess == nil || s.LastSuccess.After(now.Add(-4*time.Hour)) {
+		t.Fatalf("sarif: the last run failed and an earlier one completed: %+v", s)
+	}
+	if tr := got["builtin:trivy"]; tr.Status != domain.RunFailed || tr.LastSuccess != nil {
+		t.Fatalf("trivy never completed: %+v", tr)
+	}
+	if _, ok := got["sbom-analysis"]; ok {
+		t.Fatal("an analysis is not a parser's work")
+	}
+	if _, ok := got["builtin:semgrep"]; ok {
+		t.Fatal("another tenant's run was read")
+	}
+}

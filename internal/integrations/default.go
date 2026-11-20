@@ -293,3 +293,16 @@ func (a *defaultParserAdapter) RequiredModules() []string {
 	}
 	return nil
 }
+
+// InstalledInfo says what kind of parser an installed resource is: family "report" or "sbom" (a ClusterSBOMParser is an SBOM reader) and the runtime
+// it runs on ("wasm" or "lua"). It reads no module. ok is false when the resource cannot be read at all.
+func InstalledInfo(raw []byte) (family, runtime string, ok bool) {
+	kind, spec, err := parseInstalled(raw)
+	if err != nil {
+		return "", "", false
+	}
+	if kind == "ClusterSBOMParser" {
+		return "sbom", "wasm", true
+	}
+	return "report", spec.Runtime, true
+}

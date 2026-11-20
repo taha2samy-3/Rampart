@@ -83,6 +83,9 @@ export const IconIngestion = (p: P) => (
 export const IconPolicies = (p: P) => (
   <svg {...base(p)}><path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6" /><circle cx="10" cy="5" r="1.5" /><circle cx="6" cy="11" r="1.5" /></svg>
 );
+export const IconParsers = (p: P) => (
+  <svg {...base(p)}><path d="M5.5 2.5c-1.5 0-1.5 1-1.5 2.5v1c0 1-.5 2-1.5 2 1 0 1.5 1 1.5 2v1c0 1.5 0 2.5 1.5 2.5M10.5 2.5c1.5 0 1.5 1 1.5 2.5v1c0 1 .5 2 1.5 2-1 0-1.5 1-1.5 2v1c0 1.5 0 2.5-1.5 2.5" /></svg>
+);
 export const IconFeeds = (p: P) => (
   <svg {...base(p)}><path d="M3 4.5C3 3.4 5.2 2.5 8 2.5s5 .9 5 2-2.2 2-5 2-5-.9-5-2ZM3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" /></svg>
 );

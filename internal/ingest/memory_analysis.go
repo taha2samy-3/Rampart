@@ -201,3 +201,30 @@ func (m *MemoryStore) NotificationCount(tenantID uuid.UUID, kind string) int {
 	}
 	return n
 }
+
+var _ domain.ParserRunStore = (*MemoryStore)(nil)
+
+// LastRunByParser summarises the runs of a tenant by their format.
+func (m *MemoryStore) LastRunByParser(_ context.Context, tenantID uuid.UUID) (map[string]domain.ParserLastRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]domain.ParserLastRun{}
+	for _, r := range m.ingestRuns {
+		if r.TenantID != tenantID || r.Format == "" || r.Format == "sbom-analysis" {
+			continue
+		}
+		cur, seen := out[r.Format]
+		if !seen || r.CreatedAt.After(cur.At) {
+			ok := cur.LastSuccess
+			cur = domain.ParserLastRun{RunID: r.ID, Status: r.Status, Error: r.Error, At: r.CreatedAt, LastSuccess: ok}
+		}
+		if r.Status == domain.RunCompleted || r.Status == domain.RunCompletedWithErrors {
+			if cur.LastSuccess == nil || r.CreatedAt.After(*cur.LastSuccess) {
+				t := r.CreatedAt
+				cur.LastSuccess = &t
+			}
+		}
+		out[r.Format] = cur
+	}
+	return out, nil
+}

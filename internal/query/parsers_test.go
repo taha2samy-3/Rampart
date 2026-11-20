@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
+	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/ingest"
 	"rampart/internal/parsertest"
@@ -162,5 +165,86 @@ func TestParsersAPI_SaysWhichParsersCannotRun(t *testing.T) {
 	}
 	if some["builtin:semgrep"] == "" || some["builtin:sbom-spdx"] == "" {
 		t.Errorf("the others still have no module: %v", some)
+	}
+}
+
+// The Parsers page shows what each parser is (report parser or SBOM reader, the runtime), whether it is installed correctly (ready, its module
+// missing, or its resource refused with the reason) and when it last worked.
+func TestParsersAPI_FamilyRuntimeStatusAndLastRun(t *testing.T) {
+	tenantID := uuid.New()
+	st := ingest.NewMemoryStore()
+	for _, m := range parsertest.Manifests(t) {
+		st.SaveClusterParser(m.Name, m.Stored)
+	}
+	st.SaveClusterParser("broken", []byte(`:::not yaml`)) // refused
+	// a refused resource is stored with its reason by the control plane; the memory store keeps it as given
+	authn := auth.NewAuthenticatorWithStore(st)
+	token := authn.DefaultAdminToken(tenantID)
+	api := query.NewAPIWithAuth(st, enrich.NewFeedStore(), authn)
+	mux := http.NewServeMux()
+	api.RegisterRoutes(mux)
+
+	zero := strings.Repeat("0", 64)
+	wasmstore.SetDefault(&wasmstore.Store{Dir: t.TempDir(), Digests: map[string]string{"x": zero}})
+	t.Cleanup(func() { wasmstore.SetDefault(&wasmstore.Store{}) })
+
+	// two runs of the SARIF parser, the later one failed; the earlier one completed
+	now := time.Now().UTC()
+	mk := func(format string, status domain.IngestRunStatus, ago time.Duration, errText string) {
+		_ = st.CreateIngestRun(context.Background(), &domain.IngestRun{ID: uuid.New(), TenantID: tenantID, Format: format, Status: status, Error: errText, CreatedAt: now.Add(-ago)})
+	}
+	mk("builtin:sarif", domain.RunCompleted, 3*time.Hour, "")
+	mk("builtin:sarif", domain.RunFailed, time.Hour, "parse_error")
+	mk("sbom-analysis", domain.RunCompleted, time.Minute, "") // an analyzer's merge is not a parser's work
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/parsers", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var res struct {
+		Parsers []struct {
+			ID          string     `json:"id"`
+			Family      string     `json:"family"`
+			Runtime     string     `json:"runtime"`
+			Origin      string     `json:"origin"`
+			Status      string     `json:"status"`
+			Module      string     `json:"module"`
+			Error       string     `json:"error"`
+			LastSuccess *time.Time `json:"last_success"`
+			LastRun     *struct {
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"last_run"`
+		} `json:"parsers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]int{}
+	for i, p := range res.Parsers {
+		by[p.ID] = i
+	}
+	get := func(id string) int {
+		i, ok := by[id]
+		if !ok {
+			t.Fatalf("%s is not listed: %v", id, by)
+		}
+		return i
+	}
+	sarif := res.Parsers[get("builtin:sarif")]
+	if sarif.Family != "report" || sarif.Runtime != "wasm" || sarif.Origin != "cluster" || sarif.Status != "module_missing" || sarif.Module != "sarif" {
+		t.Errorf("sarif: %+v", sarif)
+	}
+	if sarif.LastRun == nil || sarif.LastRun.Status != "failed" || sarif.LastRun.Error != "parse_error" || sarif.LastSuccess == nil {
+		t.Errorf("sarif's last run failed and an earlier one completed: %+v", sarif)
+	}
+	if cdx := res.Parsers[get("builtin:sbom-cyclonedx")]; cdx.Family != "sbom" || cdx.Runtime != "wasm" || cdx.Status != "module_missing" || cdx.LastRun != nil {
+		t.Errorf("an SBOM reader, never used: %+v", cdx)
+	}
+	if lua := res.Parsers[get("builtin:bandit")]; lua.Family != "report" || lua.Runtime != "lua" || lua.Status != "ready" {
+		t.Errorf("a Lua parser needs no module: %+v", lua)
+	}
+	if bad := res.Parsers[get("builtin:broken")]; bad.Status != "refused" || bad.Error == "" {
+		t.Errorf("a resource that cannot be read is listed with a reason: %+v", bad)
 	}
 }
