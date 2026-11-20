@@ -323,7 +323,7 @@ func (s *FeedSyncer) syncEUVD(ctx context.Context, cfg FeedConfig, src optionalS
 	var aliases [][2]string
 	for page := 0; page < euvdMaxPages; page++ {
 		q := url.Values{"exploited": {"true"}, "size": {strconv.Itoa(euvdPageSize)}, "page": {strconv.Itoa(page)}}
-		body, err := cfg.getWith(ctx, strings.TrimRight(src.url, "/")+"/api/vulnerabilities?"+q.Encode(), src.token, 32<<20)
+		body, err := cfg.getWith(ctx, strings.TrimRight(src.url, "/")+"/api/search?"+q.Encode(), src.token, 32<<20)
 		if err != nil {
 			return 0, err
 		}
