@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,23 @@ import (
 
 	"github.com/google/uuid"
 )
+
+type refreshMockDispatcher struct {
+	hasSBOM bool
+	n       int
+	err     error
+}
+
+func (d *refreshMockDispatcher) DispatchAnalyzer(_ context.Context, _ uuid.UUID, _ domain.AnalyzerRef, _ domain.AnalysisTrigger) (int, error) {
+	return 0, nil
+}
+
+func (d *refreshMockDispatcher) DispatchAsset(_ context.Context, _, _ uuid.UUID, _ domain.AnalysisTrigger) (int, error) {
+	if !d.hasSBOM {
+		return 0, nil
+	}
+	return d.n, d.err
+}
 
 // "Scan this application" triggers native vulnerability matching.
 func TestRefreshVulnerabilities(t *testing.T) {
@@ -37,30 +55,59 @@ func TestRefreshVulnerabilities(t *testing.T) {
 	viewer, vrec, _ := auth.GenerateToken(tenantID, auth.RoleViewer, "plain", []string{"*"}, time.Hour)
 	_ = st.SaveToken(ctx, vrec)
 
-	post := func(token, path, body string) int {
+	post := func(token, path, body string) (int, query.RefreshResponse) {
 		r := httptest.NewRequest("POST", path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
-		return w.Code
+		var resp query.RefreshResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w.Code, resp
 	}
-	if c := post(viewer, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusForbidden {
+
+	if c, _ := post(viewer, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusForbidden {
 		t.Fatalf("a viewer: %d", c)
 	}
-	if c := post(tri, "/api/v1/applications/"+appB.String()+"/refresh-vulnerabilities", ""); c != http.StatusForbidden {
+	if c, _ := post(tri, "/api/v1/applications/"+appB.String()+"/refresh-vulnerabilities", ""); c != http.StatusForbidden {
 		t.Fatalf("a triager on payments cannot refresh search: %d", c)
 	}
-	if c := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted {
-		t.Fatalf("expected accepted: %d", c)
+	// With analysis dispatcher nil: answers 202 with analysis disabled message
+	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "idle" {
+		t.Fatalf("expected accepted idle when analysis nil: %d %v", c, resp)
 	}
-	if c := post(authn.DefaultAdminToken(tenantID), "/api/v1/applications/"+uuid.New().String()+"/refresh-vulnerabilities", ""); c != http.StatusNotFound {
+	if c, _ := post(authn.DefaultAdminToken(tenantID), "/api/v1/applications/"+uuid.New().String()+"/refresh-vulnerabilities", ""); c != http.StatusNotFound {
 		t.Fatalf("an application that does not exist: %d", c)
 	}
-	if c := post(authn.DefaultAdminToken(tenantID), "/api/v1/applications/not-an-id/refresh-vulnerabilities", ""); c != http.StatusBadRequest {
+	if c, _ := post(authn.DefaultAdminToken(tenantID), "/api/v1/applications/not-an-id/refresh-vulnerabilities", ""); c != http.StatusBadRequest {
 		t.Fatalf("a bad id: %d", c)
 	}
+
+	// Now with dispatcher and an SBOM
+	disp := &refreshMockDispatcher{hasSBOM: false, n: 2}
+	api.SetAnalysisDispatcher(disp)
+
+	// App with no SBOM
+	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "idle" || resp.Message != "Nothing to check: no SBOM" {
+		t.Fatalf("expected idle no sbom: %d %v", c, resp)
+	}
+
+	// Store an SBOM for appA
+	disp.hasSBOM = true
+	_ = st.SaveSBOM(ctx, &domain.SBOM{ID: uuid.New(), TenantID: tenantID, AssetID: appA, Format: "cyclonedx"}, nil)
+
+	// Dispatcher queues 2 analyses
+	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "started" || resp.Queued != 2 {
+		t.Fatalf("expected started with 2 queued: %d %v", c, resp)
+	}
+
+	// Dispatcher queues 0 (already running)
+	disp.n = 0
+	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "in_progress" || resp.Queued != 0 {
+		t.Fatalf("expected in_progress when already running: %d %v", c, resp)
+	}
+
 	// the per-package button needs triage rights too
-	if c := post(viewer, "/api/v1/inventory/components/scan", `{"purl":"pkg:npm/lodash@4"}`); c != http.StatusForbidden {
+	if c, _ := post(viewer, "/api/v1/inventory/components/scan", `{"purl":"pkg:npm/lodash@4"}`); c != http.StatusForbidden {
 		t.Fatalf("a viewer cannot re-score the tenant: %d", c)
 	}
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { locationOf } from '@/lib/location';
+import { classifyLicenseRisk } from '@/lib/license';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -12,6 +13,7 @@ import {
   EmptyState,
   IconChevronDown,
   IconRefresh,
+  IconWarning,
   Input,
   Menu,
   MenuContent,
@@ -99,6 +101,7 @@ export function ApplicationSBOMSection({
   });
 
   const packages = query.data ?? [];
+  const manyAssets = new Set(packages.map((p) => p.asset_id ?? p.asset_name ?? '')).size > 1;
   const lowerSearch = search.trim().toLowerCase();
   const filtered = packages.filter(
     (p) =>
@@ -140,15 +143,19 @@ export function ApplicationSBOMSection({
     }
   };
 
-  // The application's vulnerabilities come from Dependency-Track, per project: sync it now.
+  // Re-check this application against active vulnerability analyzers.
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const res = await post<{ message: string; projects: number }>(`/api/v1/applications/${encodeURIComponent(app.id)}/refresh-vulnerabilities`, {});
-      setScanStatus({ purl: '', message: `${res.message} (${res.projects} ${res.projects === 1 ? 'project' : 'projects'}). The list updates when the sync ends.`, ok: true });
+      const res = await post<{ message: string; queued?: number; already_running?: number; status?: string }>(
+        `/api/v1/applications/${encodeURIComponent(app.id)}/refresh-vulnerabilities`,
+        {}
+      );
+      const msg = res.message || (res.queued ? `Queued ${res.queued} ${res.queued === 1 ? 'analysis' : 'analyses'}.` : 'Analysis check completed.');
+      setScanStatus({ purl: '', message: msg, ok: true });
       window.setTimeout(() => void query.refetch(), 4000);
     } catch (err) {
-      setScanStatus({ purl: '', message: toProblem(err).detail || 'The refresh could not be started.', ok: false });
+      setScanStatus({ purl: '', message: toProblem(err).detail || 'The analysis check could not be started.', ok: false });
     } finally {
       setRefreshing(false);
     }
@@ -175,10 +182,10 @@ export function ApplicationSBOMSection({
               disabled={refreshing}
               onClick={() => void handleRefresh()}
               className="h-8 gap-1.5 px-3 text-12 font-medium"
-              title="Pull the vulnerabilities of this application's Dependency-Track projects now"
+              title="Re-check this application against active vulnerability analyzers"
             >
               <IconRefresh className="size-3" />
-              <span>Refresh from Dependency-Track</span>
+              <span>Check again</span>
             </Button>
           )}
           <Menu>
@@ -303,38 +310,41 @@ export function ApplicationSBOMSection({
               : 'No SBOM packages have been ingested for this application yet. Ingest CycloneDX or SPDX reports to populate the dependency list.'}
           </EmptyState>
         ) : (
-          <Table aria-label="Application packages table">
-            <THead>
-              <tr>
-                <Th>Package</Th>
-                <Th>Version</Th>
-                <Th>Ecosystem</Th>
-                <Th>Asset / Target</Th>
-                <Th>License</Th>
-                <Th align="end">CVEs / Status</Th>
-                <Th align="end">Actions</Th>
-              </tr>
-            </THead>
-            <TBody>
-              {filtered.map((pkg) => {
-                const pkgKey = `${pkg.asset_id ?? ''}|${pkg.track ?? ''}|${pkg.purl}`;
-                const isExpanded = expandedPurls.has(pkgKey);
-                return (
-                  <PackageRowGroup
-                    key={pkgKey}
-                    pkgKey={pkgKey}
-                    pkg={pkg}
-                    app={app}
-                    isExpanded={isExpanded}
-                    onToggleExpand={() => toggleExpand(pkgKey)}
-                    onSelectFinding={handleSelectFinding}
-                    scanningPurl={scanningPurl}
-                    onScan={handleScan}
-                  />
-                );
-              })}
-            </TBody>
-          </Table>
+          <div className="overflow-x-auto">
+            <Table aria-label="Application packages table">
+              <THead>
+                <tr>
+                  <Th>Package</Th>
+                  <Th>Version</Th>
+                  <Th>Ecosystem</Th>
+                  {manyAssets && <Th>Asset / Target</Th>}
+                  <Th>License</Th>
+                  <Th align="end">CVEs / Status</Th>
+                  <Th align="end">Actions</Th>
+                </tr>
+              </THead>
+              <TBody>
+                {filtered.map((pkg) => {
+                  const pkgKey = `${pkg.asset_id ?? ''}|${pkg.track ?? ''}|${pkg.purl}`;
+                  const isExpanded = expandedPurls.has(pkgKey);
+                  return (
+                    <PackageRowGroup
+                      key={pkgKey}
+                      pkgKey={pkgKey}
+                      pkg={pkg}
+                      app={app}
+                      manyAssets={manyAssets}
+                      isExpanded={isExpanded}
+                      onToggleExpand={() => toggleExpand(pkgKey)}
+                      onSelectFinding={handleSelectFinding}
+                      scanningPurl={scanningPurl}
+                      onScan={handleScan}
+                    />
+                  );
+                })}
+              </TBody>
+            </Table>
+          </div>
         )}
       </div>
 
@@ -349,6 +359,7 @@ function PackageRowGroup({
   pkgKey,
   pkg,
   app,
+  manyAssets,
   isExpanded,
   onToggleExpand,
   onSelectFinding,
@@ -358,6 +369,7 @@ function PackageRowGroup({
   pkgKey: string;
   pkg: AppPackage;
   app: ApplicationPage;
+  manyAssets: boolean;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onSelectFinding: (f: FindingDetailTarget) => void;
@@ -378,24 +390,20 @@ function PackageRowGroup({
         </Td>
         <Td className="font-mono text-12 text-ink-2">{pkg.version}</Td>
         <Td className="text-12 uppercase text-ink-2">{pkg.type}</Td>
-        <Td className="text-12 text-ink-2">
-          <span className="block max-w-[10rem] truncate" title={pkg.asset_name}>
-            {pkg.asset_name || '—'}
-          </span>
-        </Td>
+        {manyAssets && (
+          <Td className="text-12 text-ink-2">
+            <span className="block max-w-[10rem] truncate" title={pkg.asset_name}>
+              {pkg.asset_name || '—'}
+            </span>
+          </Td>
+        )}
         <Td className="text-12 text-ink-2">
           {pkg.license && pkg.license.trim() !== '' ? (
-            <span
-              className={`inline-flex items-center rounded px-2 py-0.5 text-12 font-medium ${
-                pkg.license.toLowerCase().includes('gpl') ||
-                pkg.license.toLowerCase().includes('agpl') ||
-                pkg.license.toLowerCase().includes('lgpl') ||
-                pkg.license.toLowerCase().includes('mpl')
-                  ? 'bg-high text-high border border-high'
-                  : 'bg-resolved text-resolved border border-resolved'
-              }`}
-            >
-              {pkg.license}
+            <span className="inline-flex items-center gap-1.5">
+              <span className="font-mono text-12 text-ink">{pkg.license}</span>
+              {classifyLicenseRisk(pkg.license) === 'copyleft' && (
+                <IconWarning className="size-3.5 shrink-0 text-high" role="img" aria-label="Copyleft licence" />
+              )}
             </span>
           ) : (
             <span className="text-12 text-ink-3">Unknown</span>
@@ -448,7 +456,7 @@ function PackageRowGroup({
 
       {isExpanded && (
         <Tr id={`pkg-cves-${pkgKey}`} className="border-b border-rule bg-chrome/40">
-          <Td colSpan={7} className="px-4 py-3">
+          <Td colSpan={manyAssets ? 7 : 6} className="px-4 py-3">
             <PackageCVEsDrawer app={app} pkg={pkg} onSelectFinding={onSelectFinding} />
           </Td>
         </Tr>

@@ -318,7 +318,7 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('refreshes from Dependency-Track for someone who may triage, and says what it did', async () => {
+  it('re-checks with analyzers for someone who may triage, and says what it did', async () => {
     mockFetch({ loggedIn: true, role: 'triager', appPages: { [ID]: appSummary }, inventory: { components: [appComponent] } });
     const inner = globalThis.fetch;
     const calls: string[] = [];
@@ -326,14 +326,14 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
       if (path.endsWith('/refresh-vulnerabilities') && init?.method === 'POST') {
         calls.push(path);
-        return Promise.resolve(new Response(JSON.stringify({ status: 'started', projects: 2, message: 'Pulling the vulnerabilities of its Dependency-Track projects' }), { status: 202, headers: { 'content-type': 'application/json' } }));
+        return Promise.resolve(new Response(JSON.stringify({ status: 'started', queued: 2, message: 'Queued 2 analyses for application' }), { status: 202, headers: { 'content-type': 'application/json' } }));
       }
       return inner(input, init);
     });
     renderApp(`/applications/${ID}`);
     const section = await screen.findByRole('region', { name: /Software Bill of Materials/i });
-    await userEvent.click(await within(section).findByRole('button', { name: /Refresh from Dependency-Track/i }));
-    expect(await within(section).findByRole('status')).toHaveTextContent('(2 projects)');
+    await userEvent.click(await within(section).findByRole('button', { name: /Check again/i }));
+    expect(await within(section).findByRole('status')).toHaveTextContent('Queued 2 analyses for application');
     expect(calls).toEqual([`/api/v1/applications/${ID}/refresh-vulnerabilities`]);
   });
 
@@ -342,6 +342,6 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     renderApp(`/applications/${ID}`);
     const section = await screen.findByRole('region', { name: /Software Bill of Materials/i });
     await within(section).findByRole('table', { name: 'Application packages table' });
-    expect(within(section).queryByRole('button', { name: /Refresh from Dependency-Track/i })).toBeNull();
+    expect(within(section).queryByRole('button', { name: /Check again/i })).toBeNull();
   });
 });

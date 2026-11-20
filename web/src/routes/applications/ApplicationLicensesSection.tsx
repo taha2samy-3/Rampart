@@ -17,39 +17,21 @@ import {
   THead,
   Tr,
 } from '@/components';
+import { IconWarning } from '@/components/icons';
+import { classifyLicenseRisk, type LicenseRisk } from '@/lib/license';
 
-export type LicenseRisk = 'permissive' | 'copyleft' | 'unknown';
+export { classifyLicenseRisk, type LicenseRisk };
 
-export function classifyLicenseRisk(licenseName?: string): LicenseRisk {
-  if (!licenseName || licenseName.trim() === '' || licenseName.toLowerCase() === 'unknown') {
-    return 'unknown';
+export function LicenseRiskMark({ risk }: { risk: LicenseRisk }) {
+  if (risk === 'copyleft') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-13 font-medium text-ink">
+        <IconWarning className="size-3.5 shrink-0 text-high" role="img" aria-label="Copyleft licence" />
+        Copyleft
+      </span>
+    );
   }
-  const lic = licenseName.toLowerCase();
-  if (
-    lic.includes('gpl') ||
-    lic.includes('agpl') ||
-    lic.includes('lgpl') ||
-    lic.includes('mpl') ||
-    lic.includes('cddl') ||
-    lic.includes('sspl') ||
-    lic.includes('osl') ||
-    lic.includes('epl')
-  ) {
-    return 'copyleft';
-  }
-  if (
-    lic.includes('mit') ||
-    lic.includes('apache') ||
-    lic.includes('bsd') ||
-    lic.includes('isc') ||
-    lic.includes('unlicense') ||
-    lic.includes('cc0') ||
-    lic.includes('artistic') ||
-    lic.includes('zlib')
-  ) {
-    return 'permissive';
-  }
-  return 'unknown';
+  return <span className="text-13 text-ink-2">{risk === 'permissive' ? 'Permissive' : 'Unknown'}</span>;
 }
 
 interface LicenseGroup {
@@ -193,13 +175,13 @@ export function ApplicationLicensesSection({ app }: { app: ApplicationPage }) {
         </div>
         <div className="rounded-ctl border border-rule bg-surface p-3.5">
           <span className="text-12 font-medium text-ink-2">Permissive</span>
-          <p className="mt-1 text-20 font-semibold text-resolved">
+          <p className="mt-1 text-20 font-semibold text-ink">
             {stats.permissive} <span className="text-12 font-normal text-ink-2">pkgs</span>
           </p>
         </div>
         <div className="rounded-ctl border border-rule bg-surface p-3.5">
           <span className="text-12 font-medium text-ink-2">Copyleft / Restricted</span>
-          <p className="mt-1 text-20 font-semibold text-high">
+          <p className="mt-1 text-20 font-semibold text-ink">
             {stats.copyleft} <span className="text-12 font-normal text-ink-2">pkgs</span>
           </p>
         </div>
@@ -263,21 +245,7 @@ export function ApplicationLicensesSection({ app }: { app: ApplicationPage }) {
                           {group.name}
                         </Td>
                         <Td>
-                          <span
-                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-12 font-medium ${
-                              group.risk === 'permissive'
-                                ? 'bg-resolved text-resolved border border-resolved'
-                                : group.risk === 'copyleft'
-                                ? 'bg-high text-high border border-high'
-                                : 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
-                            }`}
-                          >
-                            {group.risk === 'permissive'
-                              ? 'Permissive'
-                              : group.risk === 'copyleft'
-                              ? 'Copyleft'
-                              : 'Unknown'}
-                          </span>
+                          <LicenseRiskMark risk={group.risk} />
                         </Td>
                         <Td align="end" className="text-13 text-ink">
                           {group.packages.length}
