@@ -65,6 +65,7 @@ const F = {
   COMPENSATING_CONTROL: [-80, 'A compensating control is in place'],
 };
 const SAMPLES = [
+  ['high', 'CVE-2026-2359 multer: Multer vulnerable to Denial of Service', 'sca', 'trivy', 'pkg:npm/multer@1.4.4', ['EPSS_HIGH', 'FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['critical', 'AWS access key committed in config/prod.env', 'secrets', 'gitleaks', 'config/prod.env:12', ['SECRET_VERIFIED', 'INTERNET_FACING', 'PRODUCTION_ENV']],
   ['critical', 'CVE-2024-3094 xz-utils backdoor in liblzma', 'sca', 'trivy', 'pkg:deb/debian/xz-utils@5.6.0', ['KEV', 'EPSS_HIGH', 'INTERNET_FACING']],
   ['critical', 'SQL injection in order search handler', 'sast', 'semgrep', 'internal/orders/search.go:88', ['INTERNET_FACING', 'SENSITIVE_DATA']],
@@ -662,7 +663,26 @@ const server = http.createServer((req, res) => {
         const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
         const reported_by = [{ scanner: sca ? 'trivy' : row.finding.rule_scanner_family, name: sca ? 'trivy' : row.finding.rule_scanner_family, version: '0.58.1', first_seen: d(12), last_seen: d(1), reports: 9, present: true, tool_severity: row.finding.severity, latest_run_id: 'r1', locations: 1 }];
         const also_reported_by = sca ? [{ id: ALL.find((r) => r.finding.id !== row.finding.id)?.finding.id ?? row.finding.id, scanner: 'grype', rule_id: row.finding.rule_id, state: 'open' }] : [];
-        return json(res, { ...row, reported_by, also_reported_by });
+        let occurrences = [];
+        if (row.finding.location?.purl) {
+          const purl = row.finding.location.purl;
+          const match = purl.match(/^pkg:([^/]+)\/([^@]+)@(.+)$/);
+          const pkgName = match ? match[2] : purl;
+          const pkgVer = match ? match[3] : '1.0.0';
+          occurrences = [
+            {
+              location: {
+                package: {
+                  component_name: pkgName,
+                  installed_version: pkgVer,
+                  fixed_version: '2.1.0',
+                  purl,
+                },
+              },
+            },
+          ];
+        }
+        return json(res, { ...row, reported_by, also_reported_by, occurrences });
       }
       if (!fm[2] && req.method === 'PATCH') {
         let body = '';
