@@ -1407,6 +1407,22 @@ func (m *MemoryStore) CreateAsset(ctx context.Context, asset *domain.Asset) erro
 	return nil
 }
 
+// ListApplicationAssets lists the assets attached to an application.
+func (m *MemoryStore) ListApplicationAssets(_ context.Context, tenantID, appID uuid.UUID) ([]store.AppAsset, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []store.AppAsset
+	for _, a := range m.assets {
+		if a.TenantID == tenantID && a.ApplicationID != nil && *a.ApplicationID == appID {
+			out = append(out, store.AppAsset{
+				ID:   a.ID,
+				Name: a.DisplayName,
+			})
+		}
+	}
+	return out, nil
+}
+
 // LookupApplication queries an application by slug.
 func (m *MemoryStore) LookupApplication(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error) {
 	m.mu.RLock()

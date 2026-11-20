@@ -248,6 +248,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("POST /api/v1/feeds/sync", a.handleSyncFeeds)
 	routes.HandleFunc("POST /api/v1/attestation-tickets/{id}/retry", a.handleRetryAttestationTicket)
 	routes.HandleFunc("POST /api/v1/applications/{id}/refresh-vulnerabilities", a.handleRefreshVulnerabilities)
+	routes.HandleFunc("GET /api/v1/applications/{id}/freshness", a.handleApplicationFreshness)
 	routes.HandleFunc("POST /api/v1/feeds/{name}", a.handleFeedPush)
 	routes.HandleFunc("POST /api/v1/connectors/validate", a.handleValidateConnector)
 

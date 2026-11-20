@@ -120,6 +120,20 @@ func (m *MemoryStore) GetSBOMAnalysis(_ context.Context, tenantID, sbomID uuid.U
 	return nil, store.ErrNotFound
 }
 
+// ListSBOMAnalyses returns the records of all analyses for an SBOM.
+func (m *MemoryStore) ListSBOMAnalyses(_ context.Context, tenantID, sbomID uuid.UUID) ([]domain.SBOMAnalysis, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.SBOMAnalysis
+	for _, a := range m.sbomAnalyses {
+		if a.TenantID == tenantID && a.SBOMID == sbomID {
+			out = append(out, *a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Analyzer.Name < out[j].Analyzer.Name })
+	return out, nil
+}
+
 // ListDueSBOMs follows the same rule as PostgreSQL: never analysed first, then the oldest analysis, among the newest SBOMs.
 func (m *MemoryStore) ListDueSBOMs(_ context.Context, tenantID uuid.UUID, ref domain.AnalyzerRef, completedBefore, failedBefore time.Time, limit int) ([]uuid.UUID, error) {
 	m.mu.RLock()

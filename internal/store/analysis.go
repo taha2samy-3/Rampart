@@ -155,6 +155,40 @@ func (s *PostgresStore) GetSBOMAnalysis(ctx context.Context, tenantID, sbomID uu
 	return &a, nil
 }
 
+// ListSBOMAnalyses returns the records of all analyses for one SBOM.
+func (s *PostgresStore) ListSBOMAnalyses(ctx context.Context, tenantID, sbomID uuid.UUID) ([]domain.SBOMAnalysis, error) {
+	var out []domain.SBOMAnalysis
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT analyzer_kind, analyzer_scope, analyzer_namespace, analyzer_name,
+			       state, trigger, attempts, error, components, findings, created, closed,
+			       started_at, finished_at, created_at, updated_at
+			  FROM sbom_analysis
+			 WHERE tenant_id = $1 AND sbom_id = $2
+			 ORDER BY analyzer_name ASC`, tenantID, sbomID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				a              domain.SBOMAnalysis
+				state, trigger string
+			)
+			a.TenantID, a.SBOMID = tenantID, sbomID
+			if err := rows.Scan(&a.Analyzer.Kind, &a.Analyzer.Scope, &a.Analyzer.Namespace, &a.Analyzer.Name,
+				&state, &trigger, &a.Attempts, &a.Error, &a.Components, &a.Findings, &a.Created, &a.Closed,
+				&a.StartedAt, &a.FinishedAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+				return err
+			}
+			a.State, a.Trigger = domain.AnalysisState(state), domain.AnalysisTrigger(trigger)
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // ListDueSBOMs returns the newest SBOMs this analyzer has not analysed since the cutoffs, those it never analysed first, then the
 // oldest analysis. An analysis in flight is not due.
 func (s *PostgresStore) ListDueSBOMs(ctx context.Context, tenantID uuid.UUID, ref domain.AnalyzerRef, completedBefore, failedBefore time.Time, limit int) ([]uuid.UUID, error) {

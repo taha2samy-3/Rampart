@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
+import type { AppSummary, ApplicationPage, ApplicationFreshness, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -249,6 +249,8 @@ export const getApplicationChanges = (id: string, range: { from: string; to: str
 export const getApplicationCompliance = (id: string, signal?: AbortSignal) => get<AppCompliance>(`/api/v1/applications/${encodeURIComponent(id)}/compliance`, { signal });
 export const getApplicationTrend = (id: string, days: number, signal?: AbortSignal) =>
   get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
+export const getApplicationFreshness = (id: string, signal?: AbortSignal) =>
+  get<ApplicationFreshness>(`/api/v1/applications/${encodeURIComponent(id)}/freshness`, { signal });
 
 // --- Parsers Catalogue (docs/19 §2, docs/13 §9) ---
 export async function listParsers(signal?: AbortSignal): Promise<ParserDescriptor[]> {

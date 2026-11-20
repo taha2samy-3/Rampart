@@ -99,6 +99,8 @@ type AnalysisStore interface {
 	// SaveSBOMAnalysis writes the state of an analysis that was claimed.
 	SaveSBOMAnalysis(ctx context.Context, a SBOMAnalysis) error
 	GetSBOMAnalysis(ctx context.Context, tenantID, sbomID uuid.UUID, ref AnalyzerRef) (*SBOMAnalysis, error)
+	// ListSBOMAnalyses returns the records of all analyses for an SBOM.
+	ListSBOMAnalyses(ctx context.Context, tenantID, sbomID uuid.UUID) ([]SBOMAnalysis, error)
 	// ListDueSBOMs returns the newest SBOMs that this analyzer has not analysed since the cutoff, oldest analysis first: those
 	// never analysed, those completed before completedBefore, and those that failed before failedBefore.
 	ListDueSBOMs(ctx context.Context, tenantID uuid.UUID, ref AnalyzerRef, completedBefore, failedBefore time.Time, limit int) ([]uuid.UUID, error)

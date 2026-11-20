@@ -86,6 +86,7 @@ Start with 00 and 02, then use 16 for anything precise. Document 16 is normative
 | [38 Analyzers](docs/38-analyzers.md) | How an SBOM is analysed (on upload, on request, on a schedule), the two kinds of analyzer, the Analyzers tab, what was checked and what was not |
 | [39 Application freshness](docs/39-application-freshness.md) | A plan: when an application was last checked against the feeds and the analyzers, a real "check again" button, and many people at once; the old (Dependency-Track) and new systems side by side |
 | [40 UI fixes: licences and packages](docs/40-ui-fixes-licenses-and-packages.md) | The invisible licence words (text and background in one colour), the cut-off packages table, the colours, with the code to change and a test that guards them |
+| [41 "The framework could not be evaluated"](docs/41-compliance-framework-could-not-be-evaluated.md) | Why the Compliance page says it (a scope refusal worded as a failure), reproduced on the dev cluster, and the fixes |
 | [ADRs](docs/adr/) | Six architecture decision records |
 | [Research](docs/research/) | DefectDojo, the ASPM market, standards, Kubernetes-native patterns |
 

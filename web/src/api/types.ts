@@ -351,6 +351,39 @@ export interface ScoringResponse {
   application_types: string[];
 }
 
+export interface FreshnessFeed {
+  name: string;
+  display_name: string;
+  last_sync?: string;
+  status: 'success' | 'syncing' | 'queued' | 'idle' | 'error' | 'disabled';
+  error?: string;
+}
+
+export interface FreshnessAnalyzer {
+  name: string;
+  kind: 'external' | 'sbom';
+  scope?: string;
+  state: 'completed' | 'failed' | 'pending' | 'running' | 'timed_out' | 'cancelled' | 'not_applicable' | 'not_analysed';
+  last_analysed_at?: string;
+  findings: number;
+  created: number;
+  closed: number;
+  error?: string;
+  in_progress_since?: string;
+}
+
+export interface FreshnessSBOM {
+  at: string;
+  components: number;
+}
+
+export interface ApplicationFreshness {
+  feeds: FreshnessFeed[];
+  analyzers: FreshnessAnalyzer[];
+  sbom?: FreshnessSBOM;
+  rescored_at?: string;
+}
+
 export interface ApplicationPage extends AppSummary {
   context?: ApplicationContext;
   sla: SlaStanding;

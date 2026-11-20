@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { locationOf } from '@/lib/location';
 import { classifyLicenseRisk } from '@/lib/license';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { get, listFindings, post, toProblem, ProblemError } from '@/api';
+import { get, listFindings, post, toProblem, ProblemError, qk } from '@/api';
 import { useAccess } from '@/app/useAccess';
 import type { ApplicationPage, FindingRow } from '@/api/types';
+import { ApplicationFreshnessSection } from './ApplicationFreshnessSection';
 import {
   BandShape,
   Button,
@@ -58,6 +59,7 @@ export function ApplicationSBOMSection({
   const [search, setSearch] = useState('');
   const [scanningPurl, setScanningPurl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
   const { can } = useAccess();
   const mayTriage = can(app.id, 'triager'); // both buttons need the triage right the API checks
   const [scanStatus, setScanStatus] = useState<{ purl: string; message: string; ok: boolean } | null>(null);
@@ -153,7 +155,11 @@ export function ApplicationSBOMSection({
       );
       const msg = res.message || (res.queued ? `Queued ${res.queued} ${res.queued === 1 ? 'analysis' : 'analyses'}.` : 'Analysis check completed.');
       setScanStatus({ purl: '', message: msg, ok: true });
-      window.setTimeout(() => void query.refetch(), 4000);
+      void queryClient.invalidateQueries({ queryKey: qk.applications.freshness(app.id) });
+      window.setTimeout(() => {
+        void query.refetch();
+        void queryClient.invalidateQueries({ queryKey: qk.applications.freshness(app.id) });
+      }, 4000);
     } catch (err) {
       setScanStatus({ purl: '', message: toProblem(err).detail || 'The analysis check could not be started.', ok: false });
     } finally {
@@ -264,6 +270,10 @@ export function ApplicationSBOMSection({
           </button>
         </div>
       )}
+
+      <div className="mt-4">
+        <ApplicationFreshnessSection appId={app.id} />
+      </div>
 
       {vulnPackages.length > 0 && (
         <div className="mt-3 flex items-center justify-between border-b border-rule pb-2 text-13">

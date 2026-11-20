@@ -324,6 +324,14 @@ export function mockFetch(sc: Scenario): Calls {
       const points = Array.from({ length: 14 }, (_, i) => ({ day: `2026-11-${String(i + 1).padStart(2, '0')}`, critical: i % 3, high: 4 + (i % 2), medium: 6, low: 2, new: i % 4, fixed: 1 + (i % 3) }));
       return json({ days: 14, points, aging: { under_30: 5, d30_90: 3, d90_180: 1, over_180: 1 } });
     }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/freshness')) {
+      return json({
+        feeds: [
+          { name: 'cisa_kev', display_name: 'CISA KEV', status: 'success', last_sync: '2026-11-20T05:00:00Z' },
+        ],
+        analyzers: [],
+      });
+    }
     if (path.startsWith('/api/v1/applications/') && path.endsWith('/summary')) {
       const page = sc.appPages?.[path.split('/')[4] ?? ''];
       return page ? json(page) : json({ type: 'https://rampart.aspm.dev/problems/not-found', title: 'Application not found', status: 404 }, 404);
