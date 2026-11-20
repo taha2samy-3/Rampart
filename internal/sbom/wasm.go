@@ -26,7 +26,6 @@ func ParseSBOMStream(ctx context.Context, format string, r io.Reader) (*domain.S
 
 func normalizeFormat(format string) string {
 	format = strings.TrimPrefix(strings.ToLower(format), "cluster:")
-	format = strings.TrimPrefix(format, "builtin:")
 	return strings.TrimPrefix(format, "sbom-")
 }
 

@@ -159,7 +159,7 @@ var FamilyCategories = map[string][]string{
 }
 
 // parserFamily is the family a parser id stands for. A run that found nothing is recorded under its parser's id
-// ("cluster:semgrep" or legacy "builtin:semgrep"), not the tool's name: without this, a clean scan would never count as evidence.
+// ("cluster:semgrep"), not the tool's name: without this, a clean scan would never count as evidence.
 var parserFamily = map[string]string{"dependencycheck": "dependency-check", "kubebench": "kube-bench"}
 
 // CategoriesOf returns what a scanner family evidences: the built-in map, then the parser id it may be written as,
@@ -172,8 +172,6 @@ func CategoriesOf(family string, extra map[string][]string) []string {
 	}
 	rest := f
 	if r, ok := strings.CutPrefix(rest, "cluster:"); ok {
-		rest = r
-	} else if r, ok := strings.CutPrefix(rest, "builtin:"); ok {
 		rest = r
 	}
 	if rest != f {

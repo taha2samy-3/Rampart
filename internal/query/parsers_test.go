@@ -193,8 +193,8 @@ func TestParsersAPI_FamilyRuntimeStatusAndLastRun(t *testing.T) {
 	mk := func(format string, status domain.IngestRunStatus, ago time.Duration, errText string) {
 		_ = st.CreateIngestRun(context.Background(), &domain.IngestRun{ID: uuid.New(), TenantID: tenantID, Format: format, Status: status, Error: errText, CreatedAt: now.Add(-ago)})
 	}
-	mk("builtin:sarif", domain.RunCompleted, 3*time.Hour, "")
-	mk("builtin:sarif", domain.RunFailed, time.Hour, "parse_error")
+	mk("cluster:sarif", domain.RunCompleted, 3*time.Hour, "")
+	mk("cluster:sarif", domain.RunFailed, time.Hour, "parse_error")
 	mk("sbom-analysis", domain.RunCompleted, time.Minute, "") // an analyzer's merge is not a parser's work
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/parsers", nil)

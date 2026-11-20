@@ -152,7 +152,7 @@ const PARSERS = (() => {
     const isSbom = family === 'sbom';
     const isTenant = extra.origin === 'tenant' || id.startsWith('mapping:');
     const resourceKind = isSbom ? 'ClusterSBOMParser' : isTenant ? 'Parser' : 'ClusterParser';
-    const resourceName = id.replace(/^(cluster|builtin):sbom-/, '').replace(/^(cluster|builtin):/, '').replace(/^mapping:/, '');
+    const resourceName = id.replace(/^cluster:sbom-/, '').replace(/^cluster:/, '').replace(/^mapping:/, '');
     return {
       id, name, kind: 'parser', version: '1', support_level: isTenant ? 'community' : 'cluster',
       category: isSbom ? 'sca' : 'sast', description: `${name} reads its format into ${isSbom ? 'the inventory' : 'findings'}.`,

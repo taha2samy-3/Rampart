@@ -16,7 +16,7 @@ const healthOf = (p: ParserDescriptor): Health => (p.status === 'refused' || p.s
 /** Resolves the CRD resource kind for a parser. */
 export function parserResourceKind(p: ParserDescriptor): 'ClusterParser' | 'ClusterSBOMParser' | 'Parser' {
   if (p.resource_kind) return p.resource_kind;
-  if (p.family === 'sbom' || p.id.startsWith('cluster:sbom-') || p.id.startsWith('builtin:sbom-')) return 'ClusterSBOMParser';
+  if (p.family === 'sbom' || p.id.startsWith('cluster:sbom-') || p.resource_kind === 'ClusterSBOMParser') return 'ClusterSBOMParser';
   if (p.origin === 'tenant' || p.id.startsWith('mapping:')) return 'Parser';
   return 'ClusterParser';
 }
@@ -25,8 +25,8 @@ export function parserResourceKind(p: ParserDescriptor): 'ClusterParser' | 'Clus
 export function parserResourceName(p: ParserDescriptor): string {
   if (p.resource_name) return p.resource_name;
   return p.id
-    .replace(/^(cluster|builtin):sbom-/, '')
-    .replace(/^(cluster|builtin):/, '')
+    .replace(/^cluster:sbom-/, '')
+    .replace(/^cluster:/, '')
     .replace(/^mapping:/, '');
 }
 
@@ -77,7 +77,7 @@ export function ParserList({ family }: { family: Family }) {
 
   // A server that does not say the family (an older one) reads as report parsers, except the SBOM readers by their id.
   const all = useMemo(
-    () => (q.data ?? []).filter((p) => (p.family ?? (p.id.startsWith('cluster:sbom-') || p.id.startsWith('builtin:sbom-') || p.resource_kind === 'ClusterSBOMParser' ? 'sbom' : 'report')) === family),
+    () => (q.data ?? []).filter((p) => (p.family ?? (p.id.startsWith('cluster:sbom-') || p.resource_kind === 'ClusterSBOMParser' ? 'sbom' : 'report')) === family),
     [q.data, family],
   );
 

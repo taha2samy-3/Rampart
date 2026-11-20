@@ -158,7 +158,7 @@ function UploadForm({ onDone }: { onDone: () => void }) {
         >
           <option value="">{t('ingestion.uploadFormatAuto')}</option>
           {parsers.map((p) => {
-            const cleanId = p.id.replace(/^(cluster|builtin):(sbom-)?/, '');
+            const cleanId = p.id.replace(/^cluster:(sbom-)?/, '');
             const isCustom = p.origin === 'tenant' || p.support_level === 'community';
             return (
               <option key={p.id} value={cleanId} disabled={!!p.unavailable} title={p.unavailable}>

@@ -60,7 +60,7 @@ H = {"X-CSRF-Token": get("/auth/session").json()["csrfToken"]}
 # 1. A parser the client names must match the file (a SARIF file sent as trivy closed real findings).
 check("baseline sarif upload", upload(sarif(), "sarif").status_code == 201)
 n0 = get("/api/v1/findings", params={"q": f"app:{APP}", "limit": 1}).json()["total"]
-for fmt in ("trivy", "builtin:trivy", "semgrep", "checkov", "grype"):
+for fmt in ("trivy", "cluster:trivy", "semgrep", "checkov", "grype"):
     r = upload(sarif(), fmt)
     check(f"format={fmt} on a SARIF file is refused", r.status_code == 400 and "format-mismatch" in r.text, f"{r.status_code} {r.text[:120]}")
 check("a refused upload changes nothing", get("/api/v1/findings", params={"q": f"app:{APP}", "limit": 1}).json()["total"] == n0)

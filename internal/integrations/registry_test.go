@@ -62,10 +62,30 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("failed to get parser by clean name: %v", err)
 	}
 
-	// Get parser by legacy builtin fallback
-	gotLegacy, err := reg.GetParser("builtin:sarif")
-	if err != nil || gotLegacy.Descriptor().ID != "cluster:sarif" {
-		t.Errorf("failed to get parser by legacy builtin id: %v", err)
+	p2 := &mockParser{
+		desc: integrations.Descriptor{
+			ID:           "cluster:sbom-cyclonedx",
+			Name:         "CycloneDX SBOM Parser",
+			Kind:         integrations.KindParser,
+			Version:      "1.6",
+			SupportLevel: integrations.SupportCluster,
+		},
+		score: 0,
+	}
+	if err := reg.RegisterParser(p2); err != nil {
+		t.Fatalf("failed to register sbom parser: %v", err)
+	}
+
+	// Get parser by cluster SBOM ID
+	gotSBOM, err := reg.GetParser("cluster:sbom-cyclonedx")
+	if err != nil || gotSBOM.Descriptor().ID != "cluster:sbom-cyclonedx" {
+		t.Errorf("failed to get parser by cluster sbom id: %v", err)
+	}
+
+	// Get parser by format name
+	gotFormat, err := reg.GetParser("cyclonedx")
+	if err != nil || gotFormat.Descriptor().ID != "cluster:sbom-cyclonedx" {
+		t.Errorf("failed to get parser by clean sbom format name: %v", err)
 	}
 
 	// Detect parser

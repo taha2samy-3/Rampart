@@ -26,12 +26,11 @@ type IntegrationKind string
 // written when a second real implementation needs one (D96, docs/26).
 const KindParser IntegrationKind = "parser"
 
-// SupportLevel indicates official tier (cluster-wide CRD, certified, community, or legacy builtin).
+// SupportLevel indicates official tier (cluster-wide CRD, certified, or community).
 type SupportLevel string
 
 const (
 	SupportCluster   SupportLevel = "cluster"
-	SupportBuiltin   SupportLevel = "builtin" // legacy alias for cluster
 	SupportCertified SupportLevel = "certified"
 	SupportCommunity SupportLevel = "community"
 )
@@ -87,7 +86,7 @@ func (r *Registry) RegisterParser(p ParserContract) error {
 	return nil
 }
 
-// GetParser retrieves a parser by ID, normalizing cluster:, legacy builtin:, or bare format names.
+// GetParser retrieves a parser by ID, normalizing cluster: or bare format names.
 func (r *Registry) GetParser(id string) (ParserContract, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -99,7 +98,6 @@ func (r *Registry) GetParser(id string) (ParserContract, error) {
 
 	// 2. Strip any known prefix to find the clean root name
 	clean := strings.TrimPrefix(id, "cluster:")
-	clean = strings.TrimPrefix(clean, "builtin:")
 	isSBOM := strings.HasPrefix(clean, "sbom-")
 	cleanSBOM := strings.TrimPrefix(clean, "sbom-")
 
@@ -108,9 +106,6 @@ func (r *Registry) GetParser(id string) (ParserContract, error) {
 		clean,
 		"cluster:sbom-" + cleanSBOM,
 		"cluster:sbom-" + clean,
-		"builtin:" + clean,
-		"builtin:sbom-" + cleanSBOM,
-		"builtin:sbom-" + clean,
 	}
 	if isSBOM {
 		candidates = append(candidates, "sbom-"+cleanSBOM)

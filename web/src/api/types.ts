@@ -628,7 +628,7 @@ export interface ParserDescriptor {
   name: string;
   kind: string;
   version: string;
-  support_level: 'cluster' | 'builtin' | 'certified' | 'community';
+  support_level: 'cluster' | 'certified' | 'community';
   description: string;
   category?: string;
   capabilities?: string[];

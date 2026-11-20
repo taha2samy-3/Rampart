@@ -60,13 +60,10 @@ func (a *API) handleListParsers(w http.ResponseWriter, r *http.Request) {
 		if last, err := rs.LastRunByParser(r.Context(), tenantID); err == nil {
 			for i := range parsers {
 				id := parsers[i].ID
-				clean := strings.TrimPrefix(strings.TrimPrefix(id, "cluster:"), "builtin:")
+				clean := strings.TrimPrefix(id, "cluster:")
 				lr, found := last[id]
 				if !found {
 					lr, found = last["cluster:"+clean]
-				}
-				if !found {
-					lr, found = last["builtin:"+clean]
 				}
 				if !found {
 					lr, found = last[clean]

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestRegistry_AllBuiltinContracts(t *testing.T) {
+func TestRegistry_AllClusterContracts(t *testing.T) {
 	reg := DefaultRegistry()
 
 	// 1. Parsers

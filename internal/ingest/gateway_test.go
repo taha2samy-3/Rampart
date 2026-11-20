@@ -320,7 +320,7 @@ func TestGatewayUnknownParserListsTheAvailableOnes(t *testing.T) {
 			t.Errorf("the refusal does not mention %q: %s", name, body)
 		}
 	}
-	if strings.Contains(body, "cluster:") || strings.Contains(body, "builtin:") || strings.Contains(body, "sbom-") {
+	if strings.Contains(body, "cluster:") || strings.Contains(body, "sbom-") {
 		t.Errorf("the names must be the ones a client sends, without internal prefixes: %s", body)
 	}
 }
