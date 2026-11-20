@@ -41,19 +41,19 @@ const (
 
 // API provides HTTP handlers for the read path /api/v1 (docs/11, docs/16 D14, D16).
 type API struct {
-	ssrfAllowlist *domain.PlatformSSRFAllowlist
-	store         store.Store
-	feeds         *enrich.FeedStore
-	feedSync      FeedSyncer
-	pushTokenDir  string       // where a feed plugin's token file may be; empty is domain.FeedPushTokensDir (tests set a temp directory)
-	probeClient   *http.Client // the connection test of the feeds page; nil is the guarded feed client (enrich.NewFeedHTTPClient)
-	authn         *auth.Authenticator
-	hmacKey       []byte
-	objects       objectstore.Store
-	intel         IntelSource
-	logos         logoCache
-	scorer        *scoring.Scorer
-	gw            *ingest.Gateway
+	ssrfAllowlist  *domain.PlatformSSRFAllowlist
+	store          store.Store
+	feeds          *enrich.FeedStore
+	feedSync       FeedSyncer
+	pushTokenDir   string       // where a feed plugin's token file may be; empty is domain.FeedPushTokensDir (tests set a temp directory)
+	probeClient    *http.Client // the connection test of the feeds page; nil is the guarded feed client (enrich.NewFeedHTTPClient)
+	authn          *auth.Authenticator
+	hmacKey        []byte
+	objects        objectstore.Store
+	intel          IntelSource
+	logos          logoCache
+	scorer         *scoring.Scorer
+	gw             *ingest.Gateway
 	live           *LiveHub
 	analyzerProbe  AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
 	analysis       AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off

@@ -23,7 +23,7 @@ type FreshnessFeed struct {
 // FreshnessAnalyzer represents the newest analysis state of an analyzer for the application's SBOM.
 type FreshnessAnalyzer struct {
 	Name            string     `json:"name"`
-	Kind            string     `json:"kind"`  // external | sbom
+	Kind            string     `json:"kind"` // external | sbom
 	Scope           string     `json:"scope,omitempty"`
 	State           string     `json:"state"` // completed | failed | pending | running | timed_out | cancelled | not_applicable | not_analysed
 	LastAnalysedAt  *time.Time `json:"last_analysed_at,omitempty"`
