@@ -26,6 +26,8 @@ type VulnerabilityRecord struct {
 	CVSSVector      string          `json:"cvss_vector,omitempty"`
 	ScoringStatus   string          `json:"scoring_status,omitempty"` // "scored", "awaiting_analysis", "under_analysis", "unscored"
 	NVDStatus       string          `json:"nvd_status,omitempty"`
+	SyncStatus      string          `json:"sync_status,omitempty"` // "success", "failed", "pending"
+	SyncError       string          `json:"sync_error,omitempty"`  // Informative details if last sync encountered issues
 	EPSSScore       *float64        `json:"epss_score,omitempty"`
 	EPSSPercentile  *float64        `json:"epss_percentile,omitempty"`
 	KEV             bool            `json:"kev"`

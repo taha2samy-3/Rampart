@@ -206,36 +206,52 @@ func (s *FeedSyncer) getAdvisoryClient() *AdvisoryClient {
 func (s *FeedSyncer) FetchAndPersistLiveAdvisory(ctx context.Context, id string) (*VulnerabilityRecord, error) {
 	client := s.getAdvisoryClient()
 	if client == nil {
-		return nil, nil
+		return nil, fmt.Errorf("advisory sync client unavailable")
 	}
+
+	var upstreamErrs []string
 
 	// 1. Try OSV.dev first (Google & GitHub Security Advisories)
 	osvRec, err := client.FetchOSVLive(ctx, id)
-	if err == nil && osvRec != nil && osvRec.ID != "" {
+	if err != nil {
+		upstreamErrs = append(upstreamErrs, fmt.Sprintf("OSV: %v", err))
+	} else if osvRec != nil && osvRec.ID != "" {
 		// Persist to database if connected
 		if s.pool != nil {
 			w := osvWrite{source: "osv-live", full: true}
 			_ = s.writeOSVChunk(ctx, []OSVRecord{*osvRec}, w)
 			// Re-read canonical record from DB
 			if dbRec, readErr := s.readRecordFromDB(ctx, id); readErr == nil && dbRec != nil {
+				dbRec.SyncStatus = "success"
 				return dbRec, nil
 			}
 		}
-		return synthesizeRecordFromOSV(osvRec), nil
+		rec := synthesizeRecordFromOSV(osvRec)
+		rec.SyncStatus = "success"
+		return rec, nil
 	}
 
 	// 2. If OSV did not have it and it's a CVE, query NIST NVD v2.0
 	if strings.HasPrefix(strings.ToUpper(id), "CVE-") {
 		nvdRec, nvdErr := client.FetchNVDLive(ctx, id, "")
-		if nvdErr == nil && nvdRec != nil {
+		if nvdErr != nil {
+			upstreamErrs = append(upstreamErrs, fmt.Sprintf("NIST NVD: %v", nvdErr))
+		} else if nvdRec != nil {
 			if s.pool != nil {
 				_ = s.persistNVDLive(ctx, nvdRec)
 				if dbRec, readErr := s.readRecordFromDB(ctx, id); readErr == nil && dbRec != nil {
+					dbRec.SyncStatus = "success"
 					return dbRec, nil
 				}
 			}
-			return synthesizeRecordFromNVD(nvdRec), nil
+			rec := synthesizeRecordFromNVD(nvdRec)
+			rec.SyncStatus = "success"
+			return rec, nil
 		}
+	}
+
+	if len(upstreamErrs) > 0 {
+		return nil, fmt.Errorf("upstream sync encountered error(s): %s", strings.Join(upstreamErrs, "; "))
 	}
 
 	return nil, nil

@@ -78,7 +78,7 @@ func (a *API) handleRefreshVulnerability(w http.ResponseWriter, r *http.Request)
 	if ref, ok := a.intel.(VulnerabilityRefresher); ok {
 		rec, err := ref.FetchAndPersistLiveAdvisory(r.Context(), id)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "internal", "Failed to refresh vulnerability record: "+err.Error())
+			problem(w, http.StatusBadGateway, "upstream_sync_failed", "Failed to sync with upstream advisory sources: "+err.Error())
 			return
 		}
 		if rec != nil {

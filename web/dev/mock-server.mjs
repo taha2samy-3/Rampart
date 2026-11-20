@@ -65,6 +65,7 @@ const F = {
   COMPENSATING_CONTROL: [-80, 'A compensating control is in place'],
 };
 const SAMPLES = [
+  ['medium', 'CVE-2026-FAIL-SYNC-9042 express-fileupload: Temporary upstream sync throttle', 'sca', 'trivy', 'pkg:npm/express-fileupload@1.4.0', ['FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['medium', 'CVE-2026-UNSCORED-9041 express-fileupload: Resource Exhaustion during multipart upload', 'sca', 'trivy', 'pkg:npm/express-fileupload@1.4.0', ['FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['high', 'CVE-2026-2359 multer: Multer vulnerable to Denial of Service', 'sca', 'trivy', 'pkg:npm/multer@1.4.4', ['EPSS_HIGH', 'FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['critical', 'AWS access key committed in config/prod.env', 'secrets', 'gitleaks', 'config/prod.env:12', ['SECRET_VERIFIED', 'INTERNET_FACING', 'PRODUCTION_ENV']],
@@ -1073,6 +1074,9 @@ const server = http.createServer((req, res) => {
       const vid = decodeURIComponent(vm[1]);
       const action = vm[3];
       if (action === 'refresh') {
+        if (vid.includes('FAIL') || url.searchParams.get('fail') === 'true') {
+          return problem(res, 502, 'Upstream sync failed', 'National Vulnerability Database (NIST NVD) returned HTTP 429 Too Many Requests (rate limit exceeded). Background sweeper will retry with backoff.');
+        }
         return json(res, {
           id: vid,
           refreshed: true,
@@ -1107,15 +1111,17 @@ const server = http.createServer((req, res) => {
           summary: `Advisory Report for ${vid}`,
           description: `### Impact\n\nA vulnerability in Multer versions < 2.1.0 allows an attacker to trigger a Denial of Service (DoS) by dropping connection during file upload, potentially causing resource exhaustion.\n\n### Patches\n\nUsers should upgrade to \`2.1.0\` immediately.\n\n### Workarounds\n\nNone identified. Apply rate limiting at the reverse proxy layer.\n\n### References\n\n- https://github.com/expressjs/multer/security/advisories/GHSA-v52c-386h-88mc\n- https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`,
           epss_score: 0.952,
-          cvss_score: vid.includes('UNSCORED') ? undefined : 7.5,
-          cvss_vector: vid.includes('UNSCORED') ? undefined : 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
-          scoring_status: vid.includes('UNSCORED') ? 'awaiting_analysis' : 'scored',
-          nvd_status: vid.includes('UNSCORED') ? 'Awaiting Analysis' : 'Analyzed',
+          cvss_score: vid.includes('UNSCORED') || vid.includes('FAIL') ? undefined : 7.5,
+          cvss_vector: vid.includes('UNSCORED') || vid.includes('FAIL') ? undefined : 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+          scoring_status: vid.includes('UNSCORED') || vid.includes('FAIL') ? 'awaiting_analysis' : 'scored',
+          nvd_status: vid.includes('UNSCORED') || vid.includes('FAIL') ? 'Awaiting Analysis' : 'Analyzed',
+          sync_status: vid.includes('FAIL') ? 'failed' : 'success',
+          sync_error: vid.includes('FAIL') ? 'National Vulnerability Database (NIST NVD) returned HTTP 429 Too Many Requests (rate limit exceeded)' : undefined,
           cwes: [401, 772],
           aliases: ['GHSA-v52c-386h-88mc'],
           published: '2026-02-27T00:00:00Z',
           modified: '2026-07-15T00:00:00Z',
-          updated_at: new Date().toISOString(),
+          updated_at: new Date(Date.now() - 15 * 60000).toISOString(),
           links: [
             `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`,
             'https://github.com/expressjs/multer/security/advisories/GHSA-v52c-386h-88mc',

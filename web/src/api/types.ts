@@ -477,6 +477,8 @@ export interface VulnerabilityRecord {
   cvss_vector?: string;
   scoring_status?: 'scored' | 'awaiting_analysis' | 'under_analysis' | 'unscored';
   nvd_status?: string;
+  sync_status?: 'success' | 'failed' | 'pending';
+  sync_error?: string;
   updated_at?: string;
   epss_score?: number;
   epss_percentile?: number;
