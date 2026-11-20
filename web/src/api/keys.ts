@@ -19,6 +19,7 @@ export const qk = {
   taxonomyHistory: (id: string) => ['taxonomies', 'history', id] as const,
   notifications: () => ['notifications'] as const,
   applications: {
+    all: () => ['applications'] as const,
     list: () => ['applications', 'list'] as const,
     one: (id: string) => ['applications', 'one', id] as const,
     trend: (id: string, days: number) => ['applications', 'trend', id, days] as const,

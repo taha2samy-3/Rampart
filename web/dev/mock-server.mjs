@@ -901,6 +901,66 @@ const server = http.createServer((req, res) => {
         scanned_at: new Date().toISOString(),
       }, 202);
     }
+    const appFreshMatch = /^\/api\/v1\/applications\/([^/]+)\/freshness$/.exec(p);
+    if (appFreshMatch) {
+      return json(res, {
+        sbom: {
+          at: new Date(Date.now() - 2.5 * 86_400_000).toISOString(),
+          components: 48,
+        },
+        rescored_at: new Date(Date.now() - 3_600_000 * 3).toISOString(),
+        analyzers: [
+          {
+            name: 'osv',
+            kind: 'sbom',
+            scope: 'ecosystems: npm, pypi, go',
+            state: 'completed',
+            last_analysed_at: new Date(Date.now() - 3_600_000 * 4).toISOString(),
+            findings: 5,
+            created: 2,
+            closed: 1,
+          },
+          {
+            name: 'sonatype-oss-index',
+            kind: 'external',
+            scope: 'ecosystems: maven, npm',
+            state: 'completed',
+            last_analysed_at: new Date(Date.now() - 3_600_000 * 5).toISOString(),
+            findings: 3,
+            created: 1,
+            closed: 0,
+          },
+        ],
+        feeds: [
+          {
+            name: 'nvd',
+            display_name: 'National Vulnerability Database (NVD)',
+            status: 'success',
+            last_sync: new Date(Date.now() - 3_600_000 * 2).toISOString(),
+          },
+          {
+            name: 'epss',
+            display_name: 'Exploit Prediction Scoring System (EPSS)',
+            status: 'success',
+            last_sync: new Date(Date.now() - 3_600_000 * 6).toISOString(),
+          },
+          {
+            name: 'cisa-kev',
+            display_name: 'CISA Known Exploited Vulnerabilities (KEV)',
+            status: 'success',
+            last_sync: new Date(Date.now() - 3_600_000 * 12).toISOString(),
+          },
+        ],
+      });
+    }
+    const appRefreshMatch = /^\/api\/v1\/applications\/([^/]+)\/refresh-vulnerabilities$/.exec(p);
+    if (appRefreshMatch && req.method === 'POST') {
+      return json(res, {
+        analyzed: 1,
+        started_at: new Date(Date.now() - 1000).toISOString(),
+        completed_at: new Date().toISOString(),
+      });
+    }
     const appCompMatch = /^\/api\/v1\/applications\/([^/]+)\/components$/.exec(p);
     if (appCompMatch) {
       return json(res, {
@@ -944,8 +1004,34 @@ const server = http.createServer((req, res) => {
             application_name: 'Rampart Demo App',
             vulnerabilities: 0,
           },
+          {
+            name: 'readline',
+            version: '8.1',
+            purl: 'pkg:deb/debian/readline@8.1',
+            type: 'deb',
+            track: 'main',
+            license: 'GPL-3.0-or-later',
+            direct: false,
+            asset_id: 'asset-1',
+            asset_name: 'default-repository',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 0,
+          },
+          {
+            name: 'curl',
+            version: '7.88.1',
+            purl: 'pkg:deb/debian/curl@7.88.1',
+            type: 'deb',
+            track: 'main',
+            license: 'curl',
+            direct: true,
+            asset_id: 'asset-1',
+            asset_name: 'default-repository',
+            application_name: 'Rampart Demo App',
+            vulnerabilities: 0,
+          },
         ],
-        total: 3,
+        total: 5,
       });
     }
     const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/impact)?$/.exec(p);

@@ -274,7 +274,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("initializing river job queue: %w", err)
 		}
 		if r.cfg.Analysis.Enabled {
-			acfg := analysis.Config{MaxAge: r.cfg.Analysis.MaxAge, MaxInFlight: r.cfg.Analysis.MaxInFlight}
+			acfg := analysis.Config{MaxAge: r.cfg.Analysis.MaxAge, MaxInFlight: r.cfg.Analysis.MaxInFlight, ManualCooldown: r.cfg.Analysis.ManualCooldown}
 			analysisSvc = analysis.New(pgStore, processor, riverQ, pgStore, acfg, r.logger)
 			analysisWorker.Handle = analysisSvc.Run
 			processor.SetAnalysisTrigger(analysisSvc)
@@ -320,6 +320,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	queryAPI.SetSSRFAllowlist(allowlist) // the connector dry-run validation applies the same scoped allowlist (D77, D82)
 	queryAPI.SetGateway(gw)
 	queryAPI.SetScorer(scorer)
+	queryAPI.SetAnalysisLimits(r.cfg.Analysis.MaxInFlight, r.cfg.Analysis.ManualCooldown)
 	if analysisSvc != nil {
 		queryAPI.SetAnalysisDispatcher(analysisSvc)
 	}

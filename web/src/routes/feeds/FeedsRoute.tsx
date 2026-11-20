@@ -38,8 +38,8 @@ export function FeedsRoute() {
   const q = useQuery({
     queryKey: qk.feeds.list(),
     queryFn: ({ signal }) => get<FeedsResponse>('/api/v1/feeds', { signal }),
-    // The server marks a feed "syncing" before it answers the sync request; follow it until it ends.
-    refetchInterval: (query) => (query.state.data?.items.some((i) => i.status === 'syncing' || i.status === 'queued') ? 2000 : false),
+    // Rely on live stream events (docs/39 Slice C, D91) when EventSource is available; no polling in real browsers.
+    refetchInterval: (query) => (typeof EventSource === 'undefined' && query.state.data?.items.some((i) => i.status === 'syncing' || i.status === 'queued') ? 2000 : false),
   });
   const items = useMemo(() => q.data?.items ?? [], [q.data?.items]);
   const mirror = q.data?.mirror;

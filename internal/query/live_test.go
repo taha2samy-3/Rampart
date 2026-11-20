@@ -140,6 +140,19 @@ func TestLiveStream(t *testing.T) {
 		t.Fatalf("then operations, and nothing of tenant B or of ingests: %q %q", ev, id)
 	}
 
+	// analysis topic (docs/39 Slice C)
+	resAnalysis, rdAnalysis := open("?topics=analysis", "")
+	defer func() { _ = resAnalysis.Body.Close() }()
+	if resAnalysis.StatusCode != http.StatusOK {
+		t.Fatalf("stream analysis topic: %d", resAnalysis.StatusCode)
+	}
+	src.add(domain.LiveEvent{ID: 6, TenantID: tenantA, Topic: "analysis", ApplicationID: &app})
+	hub.Poll(context.Background(), time.Now())
+	ev, id, data = rdAnalysis.next(t)
+	if ev != "analysis" || !strings.HasPrefix(id, "6.") || !strings.Contains(data, app.String()) {
+		t.Fatalf("analysis message: %q %q %q", ev, id, data)
+	}
+
 	// Resuming: from an id within the retention the missed rows replay (the in-memory store has none, so no
 	// message); an id older than the retention gets a reset, so the client refetches instead of trusting a gap.
 	res2, rd2 := open("", "3.1")

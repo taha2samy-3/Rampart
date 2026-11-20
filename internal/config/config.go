@@ -187,6 +187,8 @@ type AnalysisConfig struct {
 	MaxAge time.Duration `json:"max_age" yaml:"maxAge"`
 	// MaxInFlight is how many analyses may be queued or running at once, in every tenant.
 	MaxInFlight int `json:"max_in_flight" yaml:"maxInFlight"`
+	// ManualCooldown is the minimum time between manual analyses of the same application.
+	ManualCooldown time.Duration `json:"manual_cooldown" yaml:"manualCooldown"`
 }
 
 type TelemetryConfig struct {
@@ -308,7 +310,7 @@ func DefaultConfig() *Config {
 			MaxReportBytes: 536870912, // 512 MiB per D6
 			BatchRows:      5000,      // 5 000 rows per transaction per D2
 		},
-		Analysis: AnalysisConfig{Enabled: true, MaxAge: 24 * time.Hour, MaxInFlight: 50},
+		Analysis: AnalysisConfig{Enabled: true, MaxAge: 24 * time.Hour, MaxInFlight: 50, ManualCooldown: 5 * time.Minute},
 		Telemetry: TelemetryConfig{
 			LogLevel:  "info",
 			LogFormat: "json",
@@ -450,6 +452,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Analysis.MaxInFlight < 1 {
 		return fmt.Errorf("config: analysis.max_in_flight must be at least 1")
+	}
+	if c.Analysis.ManualCooldown < 0 {
+		return fmt.Errorf("config: analysis.manual_cooldown cannot be negative")
 	}
 	if c.Limits.IngestPerHour < 0 {
 		return fmt.Errorf("config: limits.ingest_per_hour cannot be negative")

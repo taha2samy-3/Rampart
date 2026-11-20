@@ -40,6 +40,8 @@ type Config struct {
 	MaxInFlight int
 	// StaleAfter frees an analysis that has been pending or running longer than this: a worker that died leaves one behind.
 	StaleAfter time.Duration
+	// ManualCooldown is the minimum cooldown between manual analyses of the same application.
+	ManualCooldown time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -54,6 +56,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.StaleAfter <= 0 {
 		c.StaleAfter = time.Hour
+	}
+	if c.ManualCooldown <= 0 {
+		c.ManualCooldown = 5 * time.Minute
 	}
 	return c
 }

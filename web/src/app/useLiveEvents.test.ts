@@ -4,7 +4,7 @@ import { invalidateTopic, STREAM_URL } from './useLiveEvents';
 
 describe('live updates (D91)', () => {
   it('uses the one stream path with every topic', () => {
-    expect(STREAM_URL).toBe('/api/v1/stream?topics=ingests,findings,operations');
+    expect(STREAM_URL).toBe('/api/v1/stream?topics=ingests,findings,operations,analysis');
   });
 
   it('invalidates what each topic changes, and everything on reset', () => {
@@ -17,6 +17,11 @@ describe('live updates (D91)', () => {
     spy.mockClear();
     invalidateTopic(qc, 'operations');
     expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(JSON.stringify(['notifications']));
+    expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(JSON.stringify(['feeds']));
+    spy.mockClear();
+    invalidateTopic(qc, 'analysis');
+    expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(JSON.stringify(['feeds']));
+    expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(JSON.stringify(['applications']));
     spy.mockClear();
     invalidateTopic(qc, 'reset');
     expect(spy).toHaveBeenCalledWith();

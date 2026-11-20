@@ -54,9 +54,11 @@ type API struct {
 	logos         logoCache
 	scorer        *scoring.Scorer
 	gw            *ingest.Gateway
-	live          *LiveHub
-	analyzerProbe AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
-	analysis      AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
+	live           *LiveHub
+	analyzerProbe  AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
+	analysis       AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
+	maxInFlight    int                // max in-flight analyses across all tenants (docs/39 Slice D)
+	manualCooldown time.Duration      // minimum cooldown between manual analyses of an application (docs/39 Slice D)
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -131,10 +133,12 @@ func NewAPIWithAuth(s store.Store, feeds *enrich.FeedStore, authn *auth.Authenti
 		authn = auth.NewAuthenticatorWithStore(s)
 	}
 	return &API{
-		store:   s,
-		feeds:   feeds,
-		authn:   authn,
-		hmacKey: randomKey(),
+		store:          s,
+		feeds:          feeds,
+		authn:          authn,
+		hmacKey:        randomKey(),
+		maxInFlight:    50,
+		manualCooldown: 5 * time.Minute,
 	}
 }
 

@@ -35,6 +35,16 @@ type AnalysisDispatcher interface {
 // SetAnalysisDispatcher lets a person ask for an analysis. Without one (analysis switched off) the two endpoints answer 409.
 func (a *API) SetAnalysisDispatcher(d AnalysisDispatcher) { a.analysis = d }
 
+// SetAnalysisLimits sets the limits on manual analyses: max in-flight analyses across the platform and per-application cooldown.
+func (a *API) SetAnalysisLimits(maxInFlight int, manualCooldown time.Duration) {
+	if maxInFlight > 0 {
+		a.maxInFlight = maxInFlight
+	}
+	if manualCooldown > 0 {
+		a.manualCooldown = manualCooldown
+	}
+}
+
 // SetAnalyzerProbe replaces the call that tests an external analyzer (the default dials it over gRPC).
 func (a *API) SetAnalyzerProbe(p AnalyzerProbe) { a.analyzerProbe = p }
 

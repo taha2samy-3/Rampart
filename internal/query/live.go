@@ -38,7 +38,7 @@ const (
 	liveSubBuffer        = 64
 )
 
-var liveTopics = map[string]bool{"ingests": true, "findings": true, "operations": true}
+var liveTopics = map[string]bool{"ingests": true, "findings": true, "operations": true, "analysis": true}
 
 // ErrTooManyStreams is returned when a caller already holds the most streams one replica allows.
 var ErrTooManyStreams = errors.New("too many live streams for this caller")

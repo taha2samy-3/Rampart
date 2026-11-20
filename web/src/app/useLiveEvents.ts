@@ -2,8 +2,8 @@ import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { qk } from '@/api/keys';
 
-/** The one live stream (docs/11 `GET /stream`, docs/13 §3, docs/16 D91). */
-export const STREAM_URL = '/api/v1/stream?topics=ingests,findings,operations';
+/** The one live stream (docs/11 `GET /stream`, docs/13 §3, docs/16 D91, docs/39 Slice C). */
+export const STREAM_URL = '/api/v1/stream?topics=ingests,findings,operations,analysis';
 /** While the stream is down the UI polls at this interval (docs/13 §3). */
 export const POLL_MS = 30_000;
 
@@ -29,6 +29,12 @@ export function invalidateTopic(qc: QueryClient, topic: string) {
       inv(qk.heldCloses.all());
       inv(qk.notifications());
       inv(qk.groups.all());
+      inv(qk.feeds.all());
+      inv(qk.applications.all());
+      break;
+    case 'analysis':
+      inv(qk.feeds.all());
+      inv(qk.applications.all());
       break;
     default: // reset: the stream could not say what changed
       void qc.invalidateQueries();
@@ -70,7 +76,7 @@ export function useLiveEvents(enabled = true) {
         backoff = 5_000;
         stopPolling();
       };
-      for (const topic of ['findings', 'ingests', 'operations', 'reset']) {
+      for (const topic of ['findings', 'ingests', 'operations', 'analysis', 'reset']) {
         es.addEventListener(topic, (ev) => {
           const id = (ev as MessageEvent).lastEventId;
           if (id) lastId = id;

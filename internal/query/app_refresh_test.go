@@ -106,6 +106,49 @@ func TestRefreshVulnerabilities(t *testing.T) {
 		t.Fatalf("expected in_progress when already running: %d %v", c, resp)
 	}
 
+	// Test Cooldown (docs/39 Slice D.2)
+	now := time.Now()
+	twoMinAgo := now.Add(-2 * time.Minute)
+	sbomA := uuid.New()
+	_ = st.SaveSBOM(ctx, &domain.SBOM{ID: sbomA, TenantID: tenantID, AssetID: appA, Format: "cyclonedx"}, nil)
+	_ = st.SaveSBOMAnalysis(ctx, domain.SBOMAnalysis{
+		TenantID:   tenantID,
+		SBOMID:     sbomA,
+		Analyzer:   domain.AnalyzerRef{Kind: "sbom", Name: "osv"},
+		State:      domain.AnalysisCompleted,
+		Trigger:    domain.TriggerManual,
+		FinishedAt: &twoMinAgo,
+	})
+
+	api.SetAnalysisLimits(50, 5*time.Minute)
+	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "cooldown" || resp.CooldownUntil == "" {
+		t.Fatalf("expected cooldown response: code=%d resp=%v", c, resp)
+	}
+
+	// Test In-Flight Limit (docs/39 Slice D.3): cap manual work across the platform with 429 Retry-After
+	api.SetAnalysisLimits(1, time.Nanosecond) // cooldown immediately elapsed, but in-flight limit = 1
+	// Claim one analysis in flight
+	_, _ = st.ClaimSBOMAnalysis(ctx, domain.SBOMAnalysis{
+		TenantID: tenantID,
+		SBOMID:   sbomA,
+		Analyzer: domain.AnalyzerRef{Kind: "external", Name: "sonatype-oss-index"},
+		Trigger:  domain.TriggerUpload,
+	}, time.Hour)
+
+	r := httptest.NewRequest("POST", "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", nil)
+	r.Header.Set("Authorization", "Bearer "+tri)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 when maxInFlight reached, got %d: %s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Retry-After") != "30" {
+		t.Fatalf("expected Retry-After 30, got %q", w.Header().Get("Retry-After"))
+	}
+
+	// Reset limits
+	api.SetAnalysisLimits(50, time.Nanosecond)
+
 	// the per-package button needs triage rights too
 	if c, _ := post(viewer, "/api/v1/inventory/components/scan", `{"purl":"pkg:npm/lodash@4"}`); c != http.StatusForbidden {
 		t.Fatalf("a viewer cannot re-score the tenant: %d", c)
