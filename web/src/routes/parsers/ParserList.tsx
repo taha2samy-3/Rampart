@@ -17,6 +17,29 @@ const healthOf = (p: ParserDescriptor): Health => (p.status === 'refused' || p.s
 const readsOf = (p: ParserDescriptor, family: Family): string =>
   family === 'sbom' ? p.id.replace(/^builtin:sbom-/, '') : p.category ?? '';
 
+/** Resolves the category ID of a parser (e.g. sast, sca, secrets, iac, dast, compliance, vex). */
+export function parserCategory(p: ParserDescriptor): string {
+  const raw = (p.category ?? '').toLowerCase().trim();
+  if (raw === 'sast') return 'sast';
+  if (raw === 'sca') return 'sca';
+  if (raw === 'secrets' || raw === 'secret') return 'secrets';
+  if (raw === 'iac' || raw === 'cloud') return 'iac';
+  if (raw === 'dast') return 'dast';
+  if (raw === 'compliance' || raw === 'cspm') return 'compliance';
+  if (raw === 'vex') return 'vex';
+
+  const lower = (p.id + ' ' + (p.name || '') + ' ' + (p.description || '')).toLowerCase();
+  if (lower.includes('sarif') || lower.includes('semgrep') || lower.includes('bandit') || lower.includes('sast')) return 'sast';
+  if (lower.includes('gitleaks') || lower.includes('trufflehog') || lower.includes('secret')) return 'secrets';
+  if (lower.includes('checkov') || lower.includes('iac')) return 'iac';
+  if (lower.includes('kubebench') || lower.includes('prowler') || lower.includes('compliance')) return 'compliance';
+  if (lower.includes('openvex') || lower.includes('vex')) return 'vex';
+  if (lower.includes('zap') || lower.includes('nuclei') || lower.includes('dast')) return 'dast';
+  if (lower.includes('trivy') || lower.includes('grype') || lower.includes('snyk') || lower.includes('dependency') || lower.includes('sca')) return 'sca';
+
+  return raw || 'other';
+}
+
 /**
  * The parsers installed on the server, of one family (report parsers or SBOM parsers): what each is, whether it is installed correctly (ready, its
  * module missing, or its resource refused), and how it last worked. What is shown is what the server holds; nothing is listed that is not installed.
@@ -24,6 +47,7 @@ const readsOf = (p: ParserDescriptor, family: Family): string =>
 export function ParserList({ family }: { family: Family }) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<string>('all');
   const [selected, setSelected] = useState<string | null>(null);
   const q = useQuery({ queryKey: qk.parsers.list(), queryFn: ({ signal }) => listParsers(signal) });
 
@@ -32,10 +56,65 @@ export function ParserList({ family }: { family: Family }) {
     () => (q.data ?? []).filter((p) => (p.family ?? (p.id.startsWith('builtin:sbom-') ? 'sbom' : 'report')) === family),
     [q.data, family],
   );
+
+  // Compute categories and counts for sub-tabs
+  const categories = useMemo(() => {
+    if (all.length === 0) return [];
+    const counts = new Map<string, number>();
+    counts.set('all', all.length);
+
+    for (const p of all) {
+      const cat = family === 'sbom' ? readsOf(p, family) : parserCategory(p);
+      counts.set(cat, (counts.get(cat) ?? 0) + 1);
+    }
+
+    const order = family === 'sbom'
+      ? ['all', 'cyclonedx', 'spdx', 'syft']
+      : ['all', 'sast', 'sca', 'secrets', 'iac', 'dast', 'compliance', 'vex', 'other'];
+
+    const result: Array<{ id: string; label: string; count: number }> = [];
+    for (const id of order) {
+      const count = counts.get(id);
+      if (count && count > 0) {
+        let label = id;
+        if (family === 'sbom') {
+          if (id === 'all') label = t('parsers.cat_all', { defaultValue: 'All' });
+          else if (id === 'cyclonedx') label = 'CycloneDX';
+          else if (id === 'spdx') label = 'SPDX';
+          else if (id === 'syft') label = 'Syft';
+        } else {
+          label = t(`parsers.cat_${id}`, {
+            defaultValue: id === 'all' ? 'All' :
+              id === 'sast' ? 'SAST' :
+              id === 'sca' ? 'SCA' :
+              id === 'secrets' ? 'Secrets' :
+              id === 'iac' ? 'IaC & Cloud' :
+              id === 'dast' ? 'DAST' :
+              id === 'compliance' ? 'Compliance' :
+              id === 'vex' ? 'VEX' : 'Other',
+          });
+        }
+        result.push({ id, label, count });
+      }
+    }
+    for (const [id, count] of counts.entries()) {
+      if (!order.includes(id) && count > 0) {
+        result.push({ id, label: id, count });
+      }
+    }
+    return result;
+  }, [all, family, t]);
+
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return all.filter((p) => !needle || [p.name, p.id, p.description, readsOf(p, family)].some((v) => (v ?? '').toLowerCase().includes(needle)));
-  }, [all, search, family]);
+    return all.filter((p) => {
+      const cat = family === 'sbom' ? readsOf(p, family) : parserCategory(p);
+      if (category !== 'all' && cat !== category) return false;
+      if (!needle) return true;
+      return [p.name, p.id, p.description, readsOf(p, family)].some((v) => (v ?? '').toLowerCase().includes(needle));
+    });
+  }, [all, search, family, category]);
+
   const picked = all.find((p) => p.id === selected) ?? null;
   const problems = all.filter((p) => healthOf(p) === 'problem').length;
   const label = t(family === 'sbom' ? 'parsers.tableSbom' : 'parsers.tableReport');
@@ -49,8 +128,38 @@ export function ParserList({ family }: { family: Family }) {
       <p className="mt-1 max-w-[80ch] text-13 text-ink-2">{t('parsers.addHelp')}</p>
       {all.length > 0 && <p className="mt-3 text-13 text-ink-2">{t('parsers.summary', { count: all.length, ready: all.length - problems, problems })}</p>}
 
-      <div className="mt-3 flex flex-wrap items-center gap-3 border-y border-rule py-2">
-        <SearchField className="w-64" aria-label={t('parsers.searchLabel')} placeholder={t('parsers.searchPlaceholder')} value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-y border-rule py-2">
+        {categories.length > 1 && (
+          <nav aria-label={t('parsers.categoryTabsLabel')} className="flex flex-wrap items-center gap-1.5">
+            {categories.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setCategory(c.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-ctl px-2.5 py-1 text-12 font-medium transition-colors',
+                  category === c.id
+                    ? 'border border-rule bg-surface font-semibold text-ink shadow-xs'
+                    : 'text-ink-2 hover:bg-chrome hover:text-ink',
+                )}
+              >
+                <span>{c.label}</span>
+                <span className={cn('text-11', category === c.id ? 'font-semibold text-accent' : 'text-ink-3')}>
+                  ({c.count})
+                </span>
+              </button>
+            ))}
+          </nav>
+        )}
+        <div className="ms-auto">
+          <SearchField
+            className="w-64"
+            aria-label={t('parsers.searchLabel')}
+            placeholder={t('parsers.searchPlaceholder')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       </div>
 
       <div className="grid shrink-0 grid-cols-1 border-b border-rule lg:grid-cols-[minmax(0,1fr)_22rem]">

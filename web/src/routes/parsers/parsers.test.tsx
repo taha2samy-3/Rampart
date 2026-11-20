@@ -107,6 +107,31 @@ describe('the Parsers page', () => {
     expect(await screen.findByText('No parser matches')).toBeInTheDocument();
   });
 
+  it('filters report parsers by category sub-tabs', async () => {
+    mockFetch({
+      loggedIn: true,
+      parsers: [
+        ...PARSERS,
+        parser({ id: 'builtin:gitleaks', name: 'gitleaks Parser', category: 'secrets' }),
+      ],
+    });
+    renderApp('/parsers');
+    const table = await screen.findByRole('table', { name: 'Parsers' });
+    expect(within(table).getByText('sarif Parser')).toBeInTheDocument();
+    expect(within(table).getByText('gitleaks Parser')).toBeInTheDocument();
+
+    const secretsBtn = screen.getByRole('button', { name: /Secrets/ });
+    await userEvent.click(secretsBtn);
+
+    expect(within(table).getByText('gitleaks Parser')).toBeInTheDocument();
+    expect(within(table).queryByText('sarif Parser')).toBeNull();
+
+    const allBtn = screen.getByRole('button', { name: /All/ });
+    await userEvent.click(allBtn);
+    expect(within(table).getByText('sarif Parser')).toBeInTheDocument();
+    expect(within(table).getByText('gitleaks Parser')).toBeInTheDocument();
+  });
+
   it('is empty with a way forward when nothing is installed, and says so when the list cannot be loaded', async () => {
     mockFetch({ loggedIn: true, parsers: [] });
     renderApp('/parsers');
