@@ -31,6 +31,7 @@ const IntegrationsRoute = lazy(() => import('@/routes/integrations/IntegrationsR
 const InventoryRoute = lazy(() => import('@/routes/inventory/InventoryRoute').then((m) => ({ default: m.InventoryRoute })));
 const OverviewRoute = lazy(() => import('@/routes/overview/OverviewRoute').then((m) => ({ default: m.OverviewRoute })));
 const VulnerabilitiesRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute').then((m) => ({ default: m.VulnerabilitiesRoute })));
+const VulnerabilityDetailRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilityDetailRoute').then((m) => ({ default: m.VulnerabilityDetailRoute })));
 const WorkflowRoute = lazy(() => import('@/routes/workflow/WorkflowRoute').then((m) => ({ default: m.WorkflowRoute })));
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -195,6 +196,13 @@ const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/
 const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inventory', component: InventoryRoute });
 
 const vulnerabilitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/vulnerabilities', component: VulnerabilitiesRoute });
+const vulnerabilityRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/vulnerabilities/$id',
+  component: function VulnerabilityDetail() {
+    return <VulnerabilityDetailRoute id={vulnerabilityRoute.useParams().id} />;
+  },
+});
 
 const BUILT = new Set(['parsers', 'policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'integrations', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
@@ -227,6 +235,7 @@ const routeTree = rootRoute.addChildren([
     integrationsRoute,
     inventoryRoute,
     vulnerabilitiesRoute,
+    vulnerabilityRoute,
     ...placeholderRoutes,
   ]),
 ]);

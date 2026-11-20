@@ -6,6 +6,7 @@ export * from './FrameworkMark';
 export * from './Input';
 export * from './Kbd';
 export * from './Logo';
+export * from './MarkdownView';
 export * from './Menu';
 export * from './Problem';
 export * from './ScoreBar';

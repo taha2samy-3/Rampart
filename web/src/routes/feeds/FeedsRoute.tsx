@@ -5,12 +5,14 @@ import { get, post, qk, toProblem } from '@/api';
 import type { FeedItem, FeedsResponse, FeedSyncResponse, FeedTestConnectionResponse, FeedTestResult } from '@/api/types';
 import {
   Button, Dialog, DialogContent, EmptyState, ProblemMessage, SearchField, Select, Spinner, Table, TBody, Td, Th, THead, Tr,
+  Tabs, TabsContent, TabsList, TabsTrigger,
 } from '@/components';
 import { IconCopy, IconWarning } from '@/components/icons';
 import { useAccess } from '@/app/useAccess';
 import { absoluteDateTime, shortAge } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { FeedInspector } from './FeedInspector';
+import { AdvisorySourcesView } from './AdvisorySourcesView';
 import { buildManifest } from './manifest';
 
 type Filter = 'all' | 'success' | 'error' | 'disabled';
@@ -33,6 +35,7 @@ export function FeedsRoute() {
   const [error, setError] = useState<string | null>(null);
   const [manifestOpen, setManifestOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<'feeds' | 'advisories'>('feeds');
   useEffect(() => { document.title = `${t('nav.feeds')} · Rampart`; }, [t]);
 
   const q = useQuery({
@@ -104,10 +107,19 @@ export function FeedsRoute() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto px-6 py-5">
-      <header className="max-w-[80ch]">
-        <h1 className="display text-20 font-semibold">{t('feeds.title')}</h1>
-        <p className="mt-1 text-13 text-ink-2">{t('feeds.subtitle')}</p>
-      </header>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'feeds' | 'advisories')} className="flex min-h-0 flex-1 flex-col">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-4 border-b border-rule pb-3">
+          <div>
+            <h1 className="display text-20 font-semibold">{t('feeds.title')}</h1>
+            <p className="mt-1 text-13 text-ink-2">{t('feeds.subtitle')}</p>
+          </div>
+          <TabsList label={t('feeds.tabsLabel', { defaultValue: 'Feeds and Advisories' })}>
+            <TabsTrigger value="feeds">{t('feeds.tabThreatFeeds', { defaultValue: 'Threat Feeds' })}</TabsTrigger>
+            <TabsTrigger value="advisories">{t('feeds.tabAdvisories', { defaultValue: 'Advisory Sources' })}</TabsTrigger>
+          </TabsList>
+        </header>
+
+        <TabsContent value="feeds" className="data-[state=inactive]:hidden flex min-h-0 flex-1 flex-col">
 
       {q.isError ? (
         <ProblemMessage problem={toProblem(q.error)} title={t('feeds.loadFailed')} onRetry={() => void q.refetch()} className="mt-4" />
@@ -204,6 +216,12 @@ export function FeedsRoute() {
           </div>
         </>
       )}
+        </TabsContent>
+
+        <TabsContent value="advisories" className="data-[state=inactive]:hidden flex min-h-0 flex-1 flex-col">
+          <AdvisorySourcesView />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={manifestOpen} onOpenChange={setManifestOpen}>
         <DialogContent className="w-[720px] max-w-[95vw]" title={t('feeds.manifestTitle')} description={t('feeds.manifestBody')} closeLabel={t('common.close')}>

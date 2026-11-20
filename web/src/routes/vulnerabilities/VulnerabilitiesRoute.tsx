@@ -175,8 +175,8 @@ export function VulnerabilitiesRoute() {
                 <Td className="font-medium text-ink max-w-md">
                   <div className="flex flex-col">
                     <Link
-                      to="/findings"
-                      search={{ q: `cve:${v.cve_id}` }}
+                      to="/vulnerabilities/$id"
+                      params={{ id: v.cve_id }}
                       className="font-mono text-13 text-accent hover:underline font-semibold"
                     >
                       {v.cve_id}

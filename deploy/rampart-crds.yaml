@@ -335,6 +335,143 @@ spec:
       subresources:
         status: {}
 ---
+# deploy/crds/clusteradvisorysource.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusteradvisorysources.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterAdvisorySource
+    listKind: ClusterAdvisorySourceList
+    plural: clusteradvisorysources
+    singular: clusteradvisorysource
+    shortNames:
+      - cas
+      - advisorysource
+      - advisories
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: >-
+                Vulnerability advisory and report sources configuration (docs/42, D141).
+                Configures upstream vulnerability report feeds, patch advisories, and API tokens
+                for OSV, NVD, Sonatype OSS Index, Snyk, and VulnCheck.
+              properties:
+                enabled:
+                  type: boolean
+                  default: true
+                  description: "Master switch: true enables advisory report synchronization, false disables it."
+                refreshInterval:
+                  type: string
+                  pattern: '^[0-9]+(m|h|d)$'
+                  description: "Advisory synchronization cadence (e.g. 6h, 12h, 24h)."
+                sources:
+                  type: object
+                  description: "Upstream advisory intelligence providers."
+                  properties:
+                    osv:
+                      type: object
+                      description: "Google OSV.dev and GitHub Security Advisories open database."
+                      properties:
+                        enabled: {type: boolean, default: true}
+                        url: {type: string, pattern: '^https?://'}
+                        ecosystems:
+                          type: array
+                          items: {type: string}
+                          description: "Package ecosystems to sync (e.g. npm, PyPI, Maven, Go, crates.io)."
+                    nvd:
+                      type: object
+                      description: "NIST National Vulnerability Database API v2.0."
+                      properties:
+                        enabled: {type: boolean, default: true}
+                        url: {type: string, pattern: '^https?://'}
+                        tokenFile:
+                          type: string
+                          pattern: '^/etc/rampart/feed-secrets/'
+                          description: "API key path mounted under /etc/rampart/feed-secrets/."
+                    sonatype:
+                      type: object
+                      description: "Sonatype OSS Index component reports and vulnerabilities."
+                      properties:
+                        enabled: {type: boolean, default: false}
+                        url: {type: string, pattern: '^https?://'}
+                        username: {type: string}
+                        tokenFile:
+                          type: string
+                          pattern: '^/etc/rampart/feed-secrets/'
+                    snyk:
+                      type: object
+                      description: "Snyk Enterprise Vulnerability Intelligence API."
+                      properties:
+                        enabled: {type: boolean, default: false}
+                        url: {type: string, pattern: '^https?://'}
+                        orgId: {type: string}
+                        tokenFile:
+                          type: string
+                          pattern: '^/etc/rampart/feed-secrets/'
+                    vulncheck:
+                      type: object
+                      description: "VulnCheck Advisory & KEV Intelligence API."
+                      properties:
+                        enabled: {type: boolean, default: false}
+                        url: {type: string, pattern: '^https?://'}
+                        tokenFile:
+                          type: string
+                          pattern: '^/etc/rampart/feed-secrets/'
+                    depsdev:
+                      type: object
+                      description: "Google Open Source Insights (deps.dev) Advisory API."
+                      properties:
+                        enabled: {type: boolean, default: true}
+                        url: {type: string, pattern: '^https?://'}
+                    custom:
+                      type: array
+                      description: "Custom internal or enterprise advisory repositories."
+                      items:
+                        type: object
+                        required: [name, format, url]
+                        properties:
+                          name: {type: string, pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'}
+                          enabled: {type: boolean, default: true}
+                          format:
+                            type: string
+                            enum: [osv-json, nvd-json, cve-5.0, generic-markdown]
+                          url: {type: string, pattern: '^https?://'}
+                          tokenFile:
+                            type: string
+                            pattern: '^/etc/rampart/feed-secrets/'
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      lastTransitionTime: {type: string}
+                      message: {type: string}
+                sourcesStatus:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
 # deploy/crds/clustercomplianceframework.yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition

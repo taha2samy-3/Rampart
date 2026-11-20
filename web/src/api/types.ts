@@ -814,6 +814,48 @@ export interface FeedsResponse {
   items: FeedItem[];
 }
 
+export interface AdvisorySourceItem {
+  name: string;
+  display_name: string;
+  provider: string;
+  category: 'open' | 'api' | 'commercial' | 'custom';
+  description: string;
+  url: string;
+  enabled: boolean;
+  token_required: boolean;
+  token_present: boolean;
+  token_file?: string;
+  records_count?: number;
+  last_sync?: string | null;
+  status: 'ready' | 'syncing' | 'error' | 'disabled';
+  error?: string | null;
+}
+
+export interface ClusterAdvisorySourceSpec {
+  enabled?: boolean;
+  refreshInterval?: string;
+  sources?: {
+    osv?: { enabled?: boolean; url?: string; ecosystems?: string[] };
+    nvd?: { enabled?: boolean; url?: string; tokenFile?: string };
+    sonatype?: { enabled?: boolean; url?: string; username?: string; tokenFile?: string };
+    snyk?: { enabled?: boolean; url?: string; orgId?: string; tokenFile?: string };
+    vulncheck?: { enabled?: boolean; url?: string; tokenFile?: string };
+    depsdev?: { enabled?: boolean; url?: string };
+    custom?: Array<{
+      name: string;
+      enabled?: boolean;
+      format: string;
+      url: string;
+      tokenFile?: string;
+    }>;
+  };
+}
+
+export interface AdvisorySourcesResponse {
+  spec?: ClusterAdvisorySourceSpec | null;
+  items: AdvisorySourceItem[];
+}
+
 /** Inventory asset summary (docs/13, docs/21) */
 export interface InventoryAsset {
   id: string;
