@@ -368,6 +368,8 @@ function filter(q) {
         if (field === 'state') return vals.includes(r.finding.state);
         if (field === 'scanner') return vals.includes(r.finding.rule_scanner_family);
         if (field === 'category') return vals.includes(r.finding.category);
+        if (field === 'cve') return r.finding.vulnerability_id && vals.some((v) => r.finding.vulnerability_id.toLowerCase().includes(v.toLowerCase()));
+        if (field === 'purl') return r.finding.location?.purl && vals.some((v) => r.finding.location.purl.toLowerCase().includes(v.toLowerCase()));
         return true;
       };
     } else test = (r) => r.finding.title.toLowerCase().includes(t.toLowerCase());
