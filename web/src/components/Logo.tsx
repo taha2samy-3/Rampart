@@ -19,12 +19,12 @@ export function LogoMark({ size = 24, className }: { size?: number; className?: 
   );
 }
 
-/** Mark plus the lower-case wordmark in Red Hat Display ExtraBold (live text, self-hosted font). */
+/** Mark plus the wordmark in Red Hat Display ExtraBold (live text, self-hosted font). */
 export function Logo({ size = 24, showWord = true }: { size?: number; showWord?: boolean }) {
   return (
     <span className="inline-flex items-center gap-2">
       <LogoMark size={size} />
-      {showWord && <span className="display text-16 leading-none text-ink">rampart</span>}
+      {showWord && <span className="display text-16 leading-none text-ink">Rampart</span>}
     </span>
   );
 }

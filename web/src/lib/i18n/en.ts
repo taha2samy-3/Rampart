@@ -71,7 +71,7 @@ export const en = {
     },
   },
   shell: {
-    product: 'rampart',
+    product: 'Rampart',
     navLabel: 'Main',
     collapse: 'Collapse navigation',
     expand: 'Expand navigation',
