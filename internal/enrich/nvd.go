@@ -14,6 +14,7 @@ type NVDEntry struct {
 	CVSSv3Vector string   `json:"cvss_v3_vector"`
 	CWEIDs       []string `json:"cwe_ids"`
 	References   []string `json:"references"`
+	VulnStatus   string   `json:"vuln_status,omitempty"`
 }
 
 // SetNVD stores an NVD entry in the feed store.
@@ -41,6 +42,7 @@ type nvdAPIResponse struct {
 	Vulnerabilities []struct {
 		CVE struct {
 			ID           string `json:"id"`
+			VulnStatus   string `json:"vulnStatus"`
 			Descriptions []struct {
 				Lang  string `json:"lang"`
 				Value string `json:"value"`
@@ -52,6 +54,18 @@ type nvdAPIResponse struct {
 						VectorString string  `json:"vectorString"`
 					} `json:"cvssData"`
 				} `json:"cvssMetricV31"`
+				CvssMetricV30 []struct {
+					CvssData struct {
+						BaseScore    float64 `json:"baseScore"`
+						VectorString string  `json:"vectorString"`
+					} `json:"cvssData"`
+				} `json:"cvssMetricV30"`
+				CvssMetricV40 []struct {
+					CvssData struct {
+						BaseScore    float64 `json:"baseScore"`
+						VectorString string  `json:"vectorString"`
+					} `json:"cvssData"`
+				} `json:"cvssMetricV40"`
 			} `json:"metrics"`
 			Weaknesses []struct {
 				Description []struct {

@@ -475,6 +475,9 @@ export interface VulnerabilityRecord {
   cwes: number[];
   cvss_score?: number;
   cvss_vector?: string;
+  scoring_status?: 'scored' | 'awaiting_analysis' | 'under_analysis' | 'unscored';
+  nvd_status?: string;
+  updated_at?: string;
   epss_score?: number;
   epss_percentile?: number;
   kev: boolean;

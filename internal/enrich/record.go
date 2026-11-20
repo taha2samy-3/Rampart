@@ -24,6 +24,8 @@ type VulnerabilityRecord struct {
 	CWEs            []int           `json:"cwes"`
 	CVSSScore       *float64        `json:"cvss_score,omitempty"`
 	CVSSVector      string          `json:"cvss_vector,omitempty"`
+	ScoringStatus   string          `json:"scoring_status,omitempty"` // "scored", "awaiting_analysis", "under_analysis", "unscored"
+	NVDStatus       string          `json:"nvd_status,omitempty"`
 	EPSSScore       *float64        `json:"epss_score,omitempty"`
 	EPSSPercentile  *float64        `json:"epss_percentile,omitempty"`
 	KEV             bool            `json:"kev"`
@@ -37,6 +39,7 @@ type VulnerabilityRecord struct {
 	Links           []string        `json:"links"`
 	ExploitSources  []string        `json:"exploited_by,omitempty"`
 	ExploitMaturity string          `json:"exploit_maturity,omitempty"`
+	UpdatedAt       *time.Time      `json:"updated_at,omitempty"`
 }
 
 // VulnerabilityLinks are the public pages of an id, for the analyst to read more: a CVE has NVD, the MITRE
@@ -76,16 +79,18 @@ func (s *FeedSyncer) readRecordFromDB(ctx context.Context, id string) (*Vulnerab
 		published, modified       *time.Time
 		refs, fixed               []byte
 		maturity                  *string
+		updatedAt                 *time.Time
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT v.id, v.aliases, v.summary, v.description, v.cwes, v.cvss_best_score::float8, v.cvss_best_vector,
 		       v.epss_score::float8, v.epss_percentile::float8, v.kev_date_added::timestamptz, v.kev_due_date::timestamptz,
-		       v.kev_ransomware, v.published, v.modified, v."references", v.fixed_versions, v.exploit_maturity
+		       v.kev_ransomware, v.published, v.modified, v."references", v.fixed_versions, v.exploit_maturity,
+		       v.updated_at
 		FROM vulnerability v
 		WHERE v.id = $1 OR v.id = $2 OR v.id = (SELECT vulnerability_id FROM vulnerability_alias WHERE alias IN ($1, $2) LIMIT 1)
 		ORDER BY (v.id = $2) DESC, (v.id = $1) DESC LIMIT 1`, id, up).
 		Scan(&r.ID, &r.Aliases, &summary, &description, &r.CWEs, &cvss, &vec, &epss, &pct, &kevAdded, &kevDue,
-			&kevRansom, &published, &modified, &refs, &fixed, &maturity)
+			&kevRansom, &published, &modified, &refs, &fixed, &maturity, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -95,7 +100,16 @@ func (s *FeedSyncer) readRecordFromDB(ctx context.Context, id string) (*Vulnerab
 	r.Summary, r.Description, r.CVSSVector = deref(summary), deref(description), deref(vec)
 	r.CVSSScore, r.EPSSScore, r.EPSSPercentile = cvss, epss, pct
 	r.KEV, r.KEVDateAdded, r.KEVDueDate, r.KEVRansomware = kevAdded != nil, kevAdded, kevDue, kevRansom != nil && *kevRansom
-	r.Published, r.Modified = published, modified
+	r.Published, r.Modified, r.UpdatedAt = published, modified, updatedAt
+	if r.CVSSScore != nil && *r.CVSSScore > 0 {
+		r.ScoringStatus = "scored"
+	} else if strings.EqualFold(r.NVDStatus, "Under Analysis") {
+		r.ScoringStatus = "under_analysis"
+	} else if strings.HasPrefix(strings.ToUpper(r.ID), "CVE-") {
+		r.ScoringStatus = "awaiting_analysis"
+	} else {
+		r.ScoringStatus = "unscored"
+	}
 	if len(refs) > 0 && string(refs) != "null" {
 		r.References = refs
 	}
@@ -144,9 +158,20 @@ func (s *FeedSyncer) Record(ctx context.Context, id string) (*VulnerabilityRecor
 		if err != nil {
 			return nil, err
 		}
-		// If found and has a narrative description or summary, return immediately
+		// If found and has a narrative description or summary, check freshness
 		if r != nil && (strings.TrimSpace(r.Description) != "" || strings.TrimSpace(r.Summary) != "") {
-			return r, nil
+			isStale := false
+			if r.UpdatedAt != nil {
+				age := time.Since(*r.UpdatedAt)
+				if (r.CVSSScore == nil || *r.CVSSScore == 0) && age > 1*time.Hour {
+					isStale = true
+				} else if age > 24*time.Hour {
+					isStale = true
+				}
+			}
+			if !isStale {
+				return r, nil
+			}
 		}
 	}
 

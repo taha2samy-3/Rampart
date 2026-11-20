@@ -124,7 +124,7 @@ func (c *AdvisoryClient) FetchNVDLive(ctx context.Context, cveID string, tokenFi
 	}
 
 	cve := nvdResp.Vulnerabilities[0].CVE
-	entry := NVDEntry{CVEID: cve.ID}
+	entry := NVDEntry{CVEID: cve.ID, VulnStatus: cve.VulnStatus}
 	for _, d := range cve.Descriptions {
 		if d.Lang == "en" {
 			entry.Description = d.Value
@@ -139,6 +139,14 @@ func (c *AdvisoryClient) FetchNVDLive(ctx context.Context, cveID string, tokenFi
 		entry.CVSSv3Score = m.CvssData.BaseScore
 		entry.CVSSv3Vector = m.CvssData.VectorString
 		break
+	}
+	if entry.CVSSv3Score == 0 && len(cve.Metrics.CvssMetricV30) > 0 {
+		entry.CVSSv3Score = cve.Metrics.CvssMetricV30[0].CvssData.BaseScore
+		entry.CVSSv3Vector = cve.Metrics.CvssMetricV30[0].CvssData.VectorString
+	}
+	if entry.CVSSv3Score == 0 && len(cve.Metrics.CvssMetricV40) > 0 {
+		entry.CVSSv3Score = cve.Metrics.CvssMetricV40[0].CvssData.BaseScore
+		entry.CVSSv3Vector = cve.Metrics.CvssMetricV40[0].CvssData.VectorString
 	}
 
 	for _, w := range cve.Weaknesses {
@@ -301,6 +309,13 @@ func synthesizeRecordFromOSV(rec *OSVRecord) *VulnerabilityRecord {
 	if len(rec.References) > 0 {
 		out.References = rec.References
 	}
+	if out.CVSSVector != "" {
+		out.ScoringStatus = "scored"
+	} else if strings.HasPrefix(strings.ToUpper(rec.ID), "CVE-") {
+		out.ScoringStatus = "awaiting_analysis"
+	} else {
+		out.ScoringStatus = "unscored"
+	}
 	return out
 }
 
@@ -311,9 +326,15 @@ func synthesizeRecordFromNVD(entry *NVDEntry) *VulnerabilityRecord {
 		Description: entry.Description,
 		Links:       VulnerabilityLinks(entry.CVEID, false),
 		CWEs:        []int{},
+		NVDStatus:   entry.VulnStatus,
 	}
 	if entry.CVSSv3Score > 0 {
 		out.CVSSScore = &entry.CVSSv3Score
+		out.ScoringStatus = "scored"
+	} else if strings.EqualFold(entry.VulnStatus, "Under Analysis") {
+		out.ScoringStatus = "under_analysis"
+	} else {
+		out.ScoringStatus = "awaiting_analysis"
 	}
 	out.CVSSVector = entry.CVSSv3Vector
 	for _, c := range entry.CWEIDs {

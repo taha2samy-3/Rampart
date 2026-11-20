@@ -65,6 +65,7 @@ const F = {
   COMPENSATING_CONTROL: [-80, 'A compensating control is in place'],
 };
 const SAMPLES = [
+  ['medium', 'CVE-2026-UNSCORED-9041 express-fileupload: Resource Exhaustion during multipart upload', 'sca', 'trivy', 'pkg:npm/express-fileupload@1.4.0', ['FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['high', 'CVE-2026-2359 multer: Multer vulnerable to Denial of Service', 'sca', 'trivy', 'pkg:npm/multer@1.4.4', ['EPSS_HIGH', 'FIX_AVAILABLE', 'PRODUCTION_ENV']],
   ['critical', 'AWS access key committed in config/prod.env', 'secrets', 'gitleaks', 'config/prod.env:12', ['SECRET_VERIFIED', 'INTERNET_FACING', 'PRODUCTION_ENV']],
   ['critical', 'CVE-2024-3094 xz-utils backdoor in liblzma', 'sca', 'trivy', 'pkg:deb/debian/xz-utils@5.6.0', ['KEV', 'EPSS_HIGH', 'INTERNET_FACING']],
@@ -1067,10 +1068,19 @@ const server = http.createServer((req, res) => {
         total: 5,
       });
     }
-    const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/impact)?$/.exec(p);
+    const vm = /^\/api\/v1\/vulnerabilities\/([^/]+)(\/(impact|refresh))?$/.exec(p);
     if (vm) {
       const vid = decodeURIComponent(vm[1]);
-      if (vm[2]) {
+      const action = vm[3];
+      if (action === 'refresh') {
+        return json(res, {
+          id: vid,
+          refreshed: true,
+          scoring_status: vid.includes('UNSCORED') ? 'awaiting_analysis' : 'scored',
+          updated_at: new Date().toISOString(),
+        });
+      }
+      if (action === 'impact') {
         return json(res, {
           id: vid,
           findings: 1,
@@ -1097,12 +1107,15 @@ const server = http.createServer((req, res) => {
           summary: `Advisory Report for ${vid}`,
           description: `### Impact\n\nA vulnerability in Multer versions < 2.1.0 allows an attacker to trigger a Denial of Service (DoS) by dropping connection during file upload, potentially causing resource exhaustion.\n\n### Patches\n\nUsers should upgrade to \`2.1.0\` immediately.\n\n### Workarounds\n\nNone identified. Apply rate limiting at the reverse proxy layer.\n\n### References\n\n- https://github.com/expressjs/multer/security/advisories/GHSA-v52c-386h-88mc\n- https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`,
           epss_score: 0.952,
-          cvss_score: 7.5,
-          cvss_vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+          cvss_score: vid.includes('UNSCORED') ? undefined : 7.5,
+          cvss_vector: vid.includes('UNSCORED') ? undefined : 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+          scoring_status: vid.includes('UNSCORED') ? 'awaiting_analysis' : 'scored',
+          nvd_status: vid.includes('UNSCORED') ? 'Awaiting Analysis' : 'Analyzed',
           cwes: [401, 772],
           aliases: ['GHSA-v52c-386h-88mc'],
-          published_at: '2026-02-27T00:00:00Z',
-          modified_at: '2026-07-15T00:00:00Z',
+          published: '2026-02-27T00:00:00Z',
+          modified: '2026-07-15T00:00:00Z',
+          updated_at: new Date().toISOString(),
           links: [
             `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`,
             'https://github.com/expressjs/multer/security/advisories/GHSA-v52c-386h-88mc',

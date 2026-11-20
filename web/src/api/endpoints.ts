@@ -116,6 +116,7 @@ export async function getFindingPackage(id: string, signal?: AbortSignal): Promi
   return (raw.occurrences ?? []).find((o) => o.location?.package)?.location?.package ?? null;
 }
 export const getVulnerability = (id: string, signal?: AbortSignal) => get<VulnerabilityDetail>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}`, { signal });
+export const refreshVulnerability = (id: string, signal?: AbortSignal) => post<VulnerabilityDetail>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}/refresh`, {}, { signal });
 export const getVulnerabilityImpact = (id: string, signal?: AbortSignal) => get<VulnerabilityImpact>(`/api/v1/vulnerabilities/${encodeURIComponent(id)}/impact`, { signal });
 /** The compliance controls an open finding counts against, with its deadline. */
 export async function getFindingControls(id: string, signal?: AbortSignal): Promise<FindingControl[]> {

@@ -183,6 +183,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("GET /api/v1/inventory/components", a.handleInventoryComponents)
 	routes.HandleFunc("POST /api/v1/inventory/components/scan", a.handleScanComponent)
 	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}", a.handleGetVulnerability)
+	routes.HandleFunc("POST /api/v1/vulnerabilities/{id}/refresh", a.handleRefreshVulnerability)
 	routes.HandleFunc("GET /api/v1/vulnerabilities/{id}/impact", a.handleVulnerabilityImpact)
 	routes.HandleFunc("GET /api/v1/taxonomies", a.handleListTaxonomies)
 	routes.HandleFunc("GET /api/v1/taxonomies/{id}/status", a.handleTaxonomyStatus)

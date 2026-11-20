@@ -20,6 +20,11 @@ type VulnerabilitySource interface {
 	Record(ctx context.Context, id string) (*enrich.VulnerabilityRecord, error)
 }
 
+// VulnerabilityRefresher supports triggering a live refresh of a vulnerability's record.
+type VulnerabilityRefresher interface {
+	FetchAndPersistLiveAdvisory(ctx context.Context, id string) (*enrich.VulnerabilityRecord, error)
+}
+
 // vulnIDPattern is what an identifier may hold (CVE-2021-44228, GHSA-xxxx-xxxx-xxxx, PYSEC-2020-1, OSV ids).
 // It is checked before the id goes into a filter, so the path cannot carry a query of its own.
 var vulnIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -51,6 +56,36 @@ func (a *API) handleGetVulnerability(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusInternalServerError, "internal", "Failed to read the vulnerability record")
 			return
 		}
+		if rec != nil {
+			out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleRefreshVulnerability forces an immediate on-demand refresh of a vulnerability from upstream advisory APIs.
+func (a *API) handleRefreshVulnerability(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.resolveTenant(r); err != nil {
+		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if !vulnIDPattern.MatchString(id) {
+		problem(w, http.StatusBadRequest, "validation", "Not a vulnerability identifier")
+		return
+	}
+	out := VulnerabilityResponse{ID: strings.ToUpper(id), Links: enrich.VulnerabilityLinks(strings.ToUpper(id), false)}
+	if ref, ok := a.intel.(VulnerabilityRefresher); ok {
+		rec, err := ref.FetchAndPersistLiveAdvisory(r.Context(), id)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "internal", "Failed to refresh vulnerability record: "+err.Error())
+			return
+		}
+		if rec != nil {
+			out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
+		}
+	} else if src, ok := a.intel.(VulnerabilitySource); ok {
+		rec, _ := src.Record(r.Context(), id)
 		if rec != nil {
 			out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
 		}
