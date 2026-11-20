@@ -768,21 +768,22 @@ export interface FeedItem {
 export interface FeedMirrorSpec {
   egress?: 'allow' | 'deny';
   storageMode?: 'lightweight' | 'full' | 'standalone';
-  kev?: { url: string };
-  epss?: { url: string };
-  nvd?: { url: string };
-  osv?: { url: string };
-  vulnrichment?: { url?: string; tokenFile?: string };
-  exploitdb?: { url?: string; tokenFile?: string };
-  metasploit?: { url?: string; tokenFile?: string };
-  euvd?: { url?: string; tokenFile?: string };
-  vulncheckKev?: { url?: string; tokenFile?: string };
+  kev?: { url?: string; enabled?: boolean };
+  epss?: { url?: string; enabled?: boolean };
+  nvd?: { url?: string; tokenFile?: string; enabled?: boolean };
+  osv?: { url?: string; ecosystems?: string[]; enabled?: boolean };
+  vulnrichment?: { url?: string; tokenFile?: string; enabled?: boolean };
+  exploitdb?: { url?: string; tokenFile?: string; enabled?: boolean };
+  metasploit?: { url?: string; tokenFile?: string; enabled?: boolean };
+  euvd?: { url?: string; tokenFile?: string; enabled?: boolean };
+  vulncheckKev?: { url?: string; tokenFile?: string; enabled?: boolean };
   custom?: Array<{
     name: string;
     url?: string;
     format: string;
     tokenFile?: string;
     pushTokenFile?: string;
+    enabled?: boolean;
   }>;
 }
 

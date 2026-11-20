@@ -34,12 +34,16 @@ metadata:
 spec:
   egress: allow
   kev:
+    enabled: true
     url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
   epss:
+    enabled: true
     url: "https://epss.cyentia.com/epss_scores-current.csv.gz"
   nvd:
+    enabled: true
     url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
   osv:
+    enabled: true
     url: "https://osv-vulnerabilities.storage.googleapis.com"
 
 

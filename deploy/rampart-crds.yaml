@@ -662,14 +662,12 @@ spec:
                     schedule: {type: string, description: "Not built; refused."}
                 epss:
                   type: object
-                  required: [url]
                   properties:
                     enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}
                     schedule: {type: string, description: "Not built; refused."}
                 kev:
                   type: object
-                  required: [url]
                   properties:
                     enabled: {type: boolean, default: true, description: "Switch the feed off with false; absent is on."}
                     url: {type: string, pattern: '^https?://'}

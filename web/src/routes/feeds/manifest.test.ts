@@ -25,4 +25,16 @@ describe('buildManifest', () => {
     expect(yaml).toContain('    - name: internal\n      format: cve5\n      url: "https://feeds.local/x"');
     expect(yaml).toContain('      pushTokenFile: "/var/run/rampart/feeds/x"');
   });
+
+  it('prints enabled flag when explicitly configured in the feed resource', () => {
+    const yaml = buildManifest({
+      egress: 'allow',
+      kev: { enabled: false },
+      nvd: { enabled: true, url: 'https://mirror.local/nvd' },
+      custom: [{ name: 'internal', format: 'intel-jsonl', enabled: false }],
+    });
+    expect(yaml).toContain('  kev:\n    enabled: false');
+    expect(yaml).toContain('  nvd:\n    enabled: true\n    url: "https://mirror.local/nvd"');
+    expect(yaml).toContain('    - name: internal\n      format: intel-jsonl\n      enabled: false');
+  });
 });

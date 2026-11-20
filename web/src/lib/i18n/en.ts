@@ -219,6 +219,8 @@ export const en = {
     status_idle: 'Not synced yet',
     status_error: 'Sync failed',
     status_disabled: 'Switched off',
+    enabled: 'Enabled',
+    disabled: 'Disabled',
     syncingBanner: 'Syncing {{names}}. The table shows the result when it ends, and everyone gets a notification.',
     syncStartFailed: 'The sync could not start.',
     testFailed: 'The connection test could not run.',

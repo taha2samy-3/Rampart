@@ -150,7 +150,7 @@ func TestFeedMirrorRedactedHidesTokenPaths(t *testing.T) {
 // Every feed has a switch. A source switched off needs nothing it would need to run: VulnCheck without a token is fine
 // while it is off.
 func TestParseFeedMirrorSpec_EnabledSwitch(t *testing.T) {
-	s, err := ParseFeedMirrorSpec([]byte(`{"kev":{"enabled":false,"url":"https://m/kev.json"},"epss":{"enabled":true,"url":"https://m/e.gz"},
+	s, err := ParseFeedMirrorSpec([]byte(`{"kev":{"enabled":false},"epss":{"enabled":true,"url":"https://m/e.gz"},
 		"nvd":{"enabled":false},"osv":{"enabled":false,"ecosystems":["Go"]},
 		"euvd":{"enabled":false},"vulncheckKev":{"enabled":false},
 		"custom":[{"name":"x","url":"https://m/x","format":"osv-zip","enabled":false}]}`))

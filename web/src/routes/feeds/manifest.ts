@@ -1,6 +1,6 @@
 import type { FeedMirrorSpec } from '@/api/types';
 
-type Sourced = { url?: string; tokenFile?: string };
+type Sourced = { url?: string; tokenFile?: string; enabled?: boolean };
 
 /** The sources a ClusterFeed switches on by naming them, with the url or token file each carries. */
 const SOURCES = ['kev', 'epss', 'nvd', 'osv', 'vulnrichment', 'exploitdb', 'metasploit', 'euvd', 'vulncheckKev'] as const;
@@ -28,15 +28,17 @@ export function buildManifest(mirror: FeedMirrorSpec | null | undefined): string
     const v = m[key] as Sourced | undefined;
     if (!v) continue;
     lines.push(`  ${key}:`);
+    if (v.enabled !== undefined) lines.push(`    enabled: ${v.enabled}`);
     if (v.url) lines.push(`    url: "${v.url}"`);
     if (v.tokenFile) lines.push(`    tokenFile: "${v.tokenFile}"`);
-    if (!v.url && !v.tokenFile) lines.push('    {}');
+    if (!v.url && !v.tokenFile && v.enabled === undefined) lines.push('    {}');
   }
   const custom = (m.custom as Array<Sourced & { name: string; format: string; pushTokenFile?: string }> | undefined) ?? [];
   if (custom.length) {
     lines.push('  custom:');
     for (const c of custom) {
       lines.push(`    - name: ${c.name}`, `      format: ${c.format}`);
+      if (c.enabled !== undefined) lines.push(`      enabled: ${c.enabled}`);
       if (c.url) lines.push(`      url: "${c.url}"`);
       if (c.tokenFile) lines.push(`      tokenFile: "${c.tokenFile}"`);
       if (c.pushTokenFile) lines.push(`      pushTokenFile: "${c.pushTokenFile}"`);

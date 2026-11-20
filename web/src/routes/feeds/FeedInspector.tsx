@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import type { FeedItem, FeedTestResult } from '@/api/types';
 import { Button, Spinner } from '@/components';
 import { absoluteDateTime } from '@/lib/format';
+import { cn } from '@/lib/cn';
 
 /** What is known about the selected feed, and what can be done with it. */
 export function FeedInspector({
@@ -23,7 +24,15 @@ export function FeedInspector({
   return (
     <div className="space-y-5 p-4 text-13">
       <header>
-        <h3 className="text-14 font-semibold">{feed.display_name}</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-14 font-semibold">{feed.display_name}</h3>
+          <span className={cn(
+            'inline-flex items-center rounded-full px-2 py-0.5 text-11 font-medium',
+            feed.enabled ? 'bg-success/15 text-success' : 'bg-surface-3 text-ink-2',
+          )}>
+            {feed.enabled ? t('feeds.enabled') : t('feeds.disabled')}
+          </span>
+        </div>
         <p className="mt-0.5 text-ink-2">{feed.description}</p>
       </header>
 

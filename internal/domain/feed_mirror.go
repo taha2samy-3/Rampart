@@ -273,7 +273,10 @@ func ParseFeedMirrorSpec(raw []byte) (*FeedMirrorSpec, error) {
 		if src.Schedule != "" {
 			return nil, fmt.Errorf("clusterfeedmirror: %s.schedule is not built; every feed runs every feeds.interval", name)
 		}
-		if !httpURL(src.URL) {
+		if src.URL == "" && src.Enabled == nil {
+			return nil, fmt.Errorf("clusterfeedmirror: %s.url must be an http(s) URL, got %q", name, src.URL)
+		}
+		if src.URL != "" && !httpURL(src.URL) {
 			return nil, fmt.Errorf("clusterfeedmirror: %s.url must be an http(s) URL, got %q", name, src.URL)
 		}
 	}
