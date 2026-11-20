@@ -52,11 +52,18 @@ type FeedSyncer struct {
 	results []FeedResult         // what each feed did in the round under way (SyncAll)
 	starts  map[string]time.Time // when each feed's step began in this round (begin)
 	began   int                  // how many feeds this round began (begin)
+
+	advisoryMode   domain.AdvisoryMode
+	advisoryClient *AdvisoryClient
 }
 
 // NewFeedSyncer creates a new FeedSyncer backed by a system-privileged connection pool.
 func NewFeedSyncer(pool *pgxpool.Pool) *FeedSyncer {
-	return &FeedSyncer{pool: pool}
+	return &FeedSyncer{
+		pool:           pool,
+		advisoryMode:   domain.AdvisoryModeHybrid,
+		advisoryClient: NewAdvisoryClient(),
+	}
 }
 
 // SyncKEV ingests the official CISA KEV JSON catalog into global vulnerability table (D19).

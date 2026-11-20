@@ -833,6 +833,9 @@ export interface AdvisorySourceItem {
 
 export interface ClusterAdvisorySourceSpec {
   enabled?: boolean;
+  mode?: 'hybrid' | 'live' | 'stored';
+  liveFetch?: boolean;
+  persistReports?: boolean;
   refreshInterval?: string;
   sources?: {
     osv?: { enabled?: boolean; url?: string; ecosystems?: string[] };

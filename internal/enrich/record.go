@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"rampart/internal/domain"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -55,9 +57,11 @@ func VulnerabilityLinks(id string, kev bool) []string {
 	return out
 }
 
-// Record reads the record of a vulnerability by its id or by one of its aliases (a GHSA id finds its CVE). It
-// returns nil, nil when no feed has it.
-func (s *FeedSyncer) Record(ctx context.Context, id string) (*VulnerabilityRecord, error) {
+// readRecordFromDB reads the stored vulnerability record from PostgreSQL.
+func (s *FeedSyncer) readRecordFromDB(ctx context.Context, id string) (*VulnerabilityRecord, error) {
+	if s.pool == nil {
+		return nil, nil
+	}
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, nil
@@ -117,6 +121,47 @@ func (s *FeedSyncer) Record(ctx context.Context, id string) (*VulnerabilityRecor
 	}
 	r.Links = VulnerabilityLinks(r.ID, r.KEV)
 	return &r, nil
+}
+
+// Record reads the record of a vulnerability by its id or by one of its aliases (a GHSA id finds its CVE).
+// Depending on AdvisoryMode (hybrid, live, stored), it serves cached data from the database and/or queries
+// upstream advisory APIs live and stores the resulting report into the database (like a feed).
+func (s *FeedSyncer) Record(ctx context.Context, id string) (*VulnerabilityRecord, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+
+	mode := s.AdvisoryMode()
+	var (
+		r   *VulnerabilityRecord
+		err error
+	)
+
+	// In Hybrid or Stored mode, check the database first
+	if mode != domain.AdvisoryModeLive && s.pool != nil {
+		r, err = s.readRecordFromDB(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		// If found and has a narrative description or summary, return immediately
+		if r != nil && (strings.TrimSpace(r.Description) != "" || strings.TrimSpace(r.Summary) != "") {
+			return r, nil
+		}
+	}
+
+	// In Stored mode, do not perform live on-demand fetching
+	if mode == domain.AdvisoryModeStored {
+		return r, nil
+	}
+
+	// In Hybrid (when missing/empty) or Live mode: fetch live from upstream APIs and persist to database!
+	liveRec, liveErr := s.FetchAndPersistLiveAdvisory(ctx, id)
+	if liveErr == nil && liveRec != nil {
+		return liveRec, nil
+	}
+
+	return r, nil
 }
 
 func deref(s *string) string {

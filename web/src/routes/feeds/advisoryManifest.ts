@@ -7,14 +7,18 @@ export function buildAdvisoryManifest(spec?: ClusterAdvisorySourceSpec | null): 
   const s = spec ?? {};
   const sources = s.sources ?? {};
   const lines = [
-    '# ClusterAdvisorySource (docs/42, D141). Manages vulnerability advisory feeds,',
-    '# patch notes, and upstream API tokens across global threat intelligence providers.',
+    '# ClusterAdvisorySource (docs/42, docs/43, D141). Manages vulnerability advisory feeds,',
+    '# patch notes, upstream API tokens, and live fetch vs database persistence modes.',
     'apiVersion: rampart.aspm.dev/v1alpha1',
     'kind: ClusterAdvisorySource',
     'metadata:',
     '  name: default',
     'spec:',
     `  enabled: ${s.enabled ?? true}`,
+    `  # Operational mode: hybrid (check DB then live fetch & store), live (always fetch & update), stored (offline/DB only)`,
+    `  mode: ${s.mode ?? 'hybrid'}`,
+    `  liveFetch: ${s.liveFetch ?? true}`,
+    `  persistReports: ${s.persistReports ?? true}`,
     `  refreshInterval: ${s.refreshInterval ?? '6h'}`,
     '  sources:',
     '    osv:',

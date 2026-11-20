@@ -31,14 +31,31 @@ spec:
             spec:
               type: object
               description: >-
-                Vulnerability advisory and report sources configuration (docs/42, D141).
-                Configures upstream vulnerability report feeds, patch advisories, and API tokens
-                for OSV, NVD, Sonatype OSS Index, Snyk, and VulnCheck.
+                Vulnerability advisory and report sources configuration (docs/42, docs/43, D141).
+                Configures upstream vulnerability report feeds, patch advisories, live on-demand fetching,
+                local persistence modes, and API tokens for OSV, NVD, Sonatype, Snyk, and VulnCheck.
               properties:
                 enabled:
                   type: boolean
                   default: true
                   description: "Master switch: true enables advisory report synchronization, false disables it."
+                mode:
+                  type: string
+                  enum: [hybrid, live, stored]
+                  default: hybrid
+                  description: >-
+                    Advisory report retrieval mode:
+                    "hybrid" checks local database first, and if missing or empty, fetches live from upstream APIs (OSV, NVD) and persists locally like a feed;
+                    "live" always queries upstream APIs on demand and updates local storage;
+                    "stored" only serves locally synced feed records (for air-gapped or offline clusters).
+                liveFetch:
+                  type: boolean
+                  default: true
+                  description: "When true, allows on-demand live querying of upstream advisory APIs when reports are requested."
+                persistReports:
+                  type: boolean
+                  default: true
+                  description: "When true, caches and persists live-fetched advisory reports into the local PostgreSQL database like a feed."
                 refreshInterval:
                   type: string
                   pattern: '^[0-9]+(m|h|d)$'
