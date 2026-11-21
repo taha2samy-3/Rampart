@@ -2675,7 +2675,7 @@ D143 records the design. These are the choices made while building it that D143 
    - Added an authentic VEX Exploitability Card in `FindingDetailRoute` and `Inspector` displaying supplier author attribution, standard justification, impact statement, and remediation advice.
 5. **Declarative GitOps Feeds**: Defined the `ClusterVEXSource` CRD specification to automate periodic synchronization and cryptographic verification of upstream vendor VEX feeds (e.g. Red Hat CSAF, Chainguard OpenVEX) via River background jobs.
 
-Comprehensive architecture, standards mappings, and implementation roadmap recorded in `docs/47-vex-lifecycle-architecture-and-ui-integration.md`.
+Comprehensive architecture, standards mappings, implementation roadmap, and exhaustive 32 edge cases testing matrix recorded in `docs/47-vex-lifecycle-architecture-and-ui-integration.md`.
 
 
 

@@ -332,3 +332,109 @@ spec:
 - **Target**: `deploy/crds/vexsource.yaml`, `deploy/helm/rampart/crds/`, and `internal/controller/`.
 - **Scope**: Register `ClusterVEXSource` CRD, Helm chart values, and River background synchronization job.
 - **Verification**: `python3 hack/crds-bundle.py --check` and `helm lint`.
+
+---
+
+## 8. Comprehensive Test Plan & Edge Cases Matrix
+
+To achieve enterprise-grade reliability and zero-mock parity with OWASP Dependency-Track, the VEX implementation is backed by an exhaustive testing battery spanning unit fuzzing, relational database integration, dual-payload ingestion, and browser-driven end-to-end verification.
+
+### 8.1. Test Suites Structure & Responsibilities
+
+```
++──────────────────────────────────────────────────────────────────────────────────────────+
+|                                    VEX Test Hierarchy                                    |
++──────────────────────────────────────────────────────────────────────────────────────────+
+  ├── [Suite 1: Parser & Schema Fuzzing] (`internal/vex/`)
+  │     ├── OpenVEX 0.1 & 0.2 structural variants (bare strings vs object products)
+  │     ├── CycloneDX 1.4, 1.5, 1.6 standalone VEX & embedded SBOM VDR
+  │     └── CSAF 2.0 OASIS VEX Profile product trees & relationship branches
+  │
+  ├── [Suite 2: Matching & Scope Isolation] (`internal/store/vex_test.go`)
+  │     ├── PURL matching: exact versioned, unversioned base, and subcomponents
+  │     ├── Vulnerability alias resolution (CVE <-> GHSA <-> OSV)
+  │     └── Tenant & Application strict isolation boundaries
+  │
+  ├── [Suite 3: Chronological Precedence & State Machine] (`internal/store/vex_test.go`)
+  │     ├── Intra-document timestamp sorting (latest statement prevails)
+  │     ├── Human manual triage protection (older VEX statements marked `stale`)
+  │     └── Authoritative newer vendor statements overriding previous state
+  │
+  ├── [Suite 4: Dual-Payload Ingestion Pipeline] (`internal/ingest/` & `internal/sbom/`)
+  │     ├── CycloneDX SBOM containing both components and embedded VDR analysis
+  │     ├── Gateway smart routing: direct VEX upload without ErrCodeVEXDocument
+  │     └── Ephemeral runs (PRs/branches) inheriting baseline VEX suppressions
+  │
+  ├── [Suite 5: CI/CD Quality Gate & Governance] (`internal/query/gate_test.go`)
+  │     ├── Build-breaking policy suppression for `not_affected` findings
+  │     └── Gate instant failure when VEX marks a suppressed flaw as `affected`
+  │
+  └── [Suite 6: Interactive Web UI Verification] (Vitest & Playwright E2E)
+        ├── `VEXUploadModal`: Dry-run simulation diff preview and live apply
+        ├── `FindingsTable`: Exploitability badges and VEX filter dropdown
+        ├── `FindingDetailRoute`: Dedicated VEX Exploitability Card
+        └── RBAC enforcement: Viewer disabled, Triager/Maintainer enabled
+```
+
+---
+
+### 8.2. The Exhaustive 32 Edge Cases Matrix
+
+| Edge Case ID | Dimension | Scenario / Input Condition | Expected System Behavior | Verification Level |
+|---|---|---|---|---|
+| **EC-01** | Parser Boundaries | Empty payload or 0-byte file uploaded to `/api/v1/vex`. | Returns `400 Bad Request` with `code: "validation"` ("The body is empty"). No worker spawned. | Unit (`vex_test.go`) |
+| **EC-02** | Parser Boundaries | Document exceeding 16 MiB (`vex.MaxDocument`). | Returns `413 Payload Too Large` via `io.LimitReader`. Engine does not exhaust memory. | Integration (`query/vex_test.go`) |
+| **EC-03** | Parser Boundaries | Malformed JSON syntax (unclosed brackets, truncated text). | Returns `400 Bad Request` citing exact JSON syntax error. No partial DB state created. | Unit (`vex_test.go`) |
+| **EC-04** | Parser Boundaries | Valid JSON but unrecognized schema (e.g. SARIF report sent to `/api/v1/vex`). | Returns `400 Bad Request` with `ErrUnknownFormat` ("not OpenVEX or CycloneDX VEX"). | Unit (`vex_test.go`) |
+| **EC-05** | Document Semantics | Statement with empty/missing vulnerability ID. | Statement flagged as `rejected` ("the statement names no vulnerability"). Rest of document continues. | Unit (`vex_test.go`) |
+| **EC-06** | Vulnerability Aliases | Statement names `GHSA-m95q-7m34-fcv2`, but finding was ingested as `CVE-2023-4911`. | Bidirectional alias lookup via `vulnerability_alias` matches and decides the finding. | DB Integration (`store/vex_test.go`) |
+| **EC-07** | Document Semantics | Statement contains invalid status (e.g. `"status": "maybe"` or `"wontfix"`). | Statement marked `rejected` ("status is not an OpenVEX status"). Valid statements proceed. | Unit (`vex_test.go`) |
+| **EC-08** | CISA Compliance | Statement claims `not_affected` without providing a justification. | Statement rejected per CISA minimum requirements; finding is NOT suppressed without rationale. | DB Integration (`store/vex_test.go`) |
+| **EC-09** | Vocabulary Mapping | CycloneDX document uses `code_not_reachable`; exported to OpenVEX and back. | OpenVEX maps to `vulnerable_code_not_in_execute_path`; roundtrip preserves original in `rampart:justification`. | Unit Roundtrip (`export_test.go`) |
+| **EC-10** | Timestamp Formats | Mixed timestamp formats: RFC3339Nano, RFC3339, date-only (`2026-11-21`), and missing timestamps. | Normalized to UTC. Statements without timestamp inherit document metadata timestamp. | Unit (`vex_test.go`) |
+| **EC-11** | PURL Matching | Statement has exact versioned PURL `pkg:npm/lodash@4.17.20`. Finding has identical PURL. | Exact match: finding transitioned to VEX state. | DB Integration (`store/vex_test.go`) |
+| **EC-12** | PURL Isolation | Statement has `pkg:npm/lodash@4.17.20`. Application finding is `pkg:npm/lodash@4.17.21`. | **MUST NOT match**. Reported in `unmatched`. Prevents unsafe cross-version suppressions. | DB Integration (`store/vex_test.go`) |
+| **EC-13** | Base PURL Scoping | Statement targets unversioned base PURL `pkg:npm/lodash`. | Applies to all occurrences of `lodash` within that application. | DB Integration (`store/vex_test.go`) |
+| **EC-14** | Product-Only PURL | Statement specifies top-level product only (e.g. `pkg:oci/my-app@sha256:...`) with no packages. | Rejected with reason: *"a decision for a whole product without packages is not applied"*. | DB Integration (`store/vex_test.go`) |
+| **EC-15** | Subcomponents | OpenVEX 0.2 object product with container PURL and nested `subcomponents` package PURLs. | Subcomponents narrow the statement scope strictly to the nested package PURLs. | Unit (`vex_test.go`) |
+| **EC-16** | Tenant Isolation | Tenant 1 and Tenant 2 both have identical CVEs and PURLs. Tenant 1 imports VEX. | Tenant 1 findings updated; Tenant 2 findings remain untouched (RLS and tenant query isolation). | DB Integration (`store/vex_test.go`) |
+| **EC-17** | Application Scope | App A and App B belong to same tenant with identical package. VEX uploaded with `application=App_A`. | App A findings updated; App B findings remain untouched. | DB Integration (`store/vex_test.go`) |
+| **EC-18** | Precedence: Order | Same document contains Statement 1 (10:00:00, `affected`) and Statement 2 (10:05:00, `fixed`). | Statements sorted chronologically; latest statement (`fixed`) applied last and wins. | DB Integration (`store/vex_test.go`) |
+| **EC-19** | Precedence: Human | Analyst manually triaged finding at 12:00:00 UTC. Vendor VEX statement has timestamp 11:00:00 UTC. | Statement marked `stale` (human decision protected); finding state remains unchanged. | DB Integration (`store/vex_test.go`) |
+| **EC-20** | Precedence: Vendor | Analyst triaged finding at 10:00:00 UTC. Authoritative vendor VEX arrives at 14:00:00 UTC marking `affected`. | Newer vendor statement overrides previous state; timeline logs `actor: "vex:<author>"`. | DB Integration (`store/vex_test.go`) |
+| **EC-21** | State Reversibility | Finding is `StateNotAffected` via VEX. Vendor later issues updated VEX marking `StateAffected`. | Finding reopened to `StateAffected`; SLA timeline recalculated; notifications dispatched. | DB Integration (`store/vex_test.go`) |
+| **EC-22** | Idempotency | The exact same VEX document is imported twice consecutively. | First run: `applied: N`. Second run: `applied: 0, unchanged: N, rejected: 0`. No redundant events. | DB Integration (`store/vex_test.go`) |
+| **EC-23** | Ingest: Embedded VDR | CycloneDX SBOM uploaded to `POST /api/v1/uploads` has components AND `vulnerabilities.analysis`. | Packages ingested into inventory AND embedded VEX statements applied to findings in one run. | Ingestion E2E (`processor_test.go`) |
+| **EC-24** | Ingest: Smart Gateway | Pure OpenVEX file uploaded to `POST /api/v1/uploads` with `application_id`. | Gateway detects VEX, routes to VEX matcher, returns HTTP 200 with report (no `ErrCodeVEXDocument`). | Ingestion E2E (`gateway_test.go`) |
+| **EC-25** | Ephemeral Runs | PR feature branch scanned in ephemeral mode. Baseline has active VEX `not_affected` decision. | Ephemeral run inherits baseline VEX suppression; does not report false-positive blocker. | Ingestion E2E (`ephemeral_test.go`) |
+| **EC-26** | CI Gate Suppression | CI gate configured with `fail_on: HIGH`. Finding is High severity, but marked `not_affected` by VEX. | CI gate evaluates to `passed: true` (`suppressed_count: 1`); pipeline succeeds. | Gate Integration (`gate_test.go`) |
+| **EC-27** | CI Gate Reopening | VEX statement updates previously suppressed High finding back to `affected`. | CI gate immediately evaluates to `passed: false`; pipeline blocked. | Gate Integration (`gate_test.go`) |
+| **EC-28** | UI: Dry-Run Diff | User uploads VEX in `VEXUploadModal` with `dryRun=true`. | Displays exact preview (transitions, unchanged, unmatched) without writing to PostgreSQL. | Vitest (`VEXUploadModal.test.tsx`) |
+| **EC-29** | UI: High Volume | VEX document containing 1,000+ statements uploaded in browser. | Dry-run table renders with virtualization/pagination; browser main thread does not freeze. | Vitest (`VEXUploadModal.test.tsx`) |
+| **EC-30** | UI: RBAC Locks | User with `viewer` role accesses Application VEX section. | Export buttons enabled; "Apply VEX Document" button disabled with tooltip citing required role. | Vitest (`ApplicationVEXSection.test.tsx`) |
+| **EC-31** | UI: Live SSE Sync | VEX applied via modal. Background tabs and other users have finding table open. | SSE event `finding_updated` updates table badges and counters in real time without page reload. | Playwright E2E (`vex-live-sync.spec.ts`) |
+| **EC-32** | Detail View Card | Finding opened in `/findings/$id`. Finding was decided by VEX statement. | Renders VEX Exploitability Card with Author, Justification, Impact, and Action statements. | Playwright E2E (`finding-detail-page.spec.ts`) |
+
+---
+
+### 8.3. Verification Execution Guidelines
+
+To satisfy Rampart's mandatory verification guidelines (`AGENTS.md`), any implementation touching the VEX subsystem must pass the following battery:
+
+1. **Go Test Battery**:
+   ```bash
+   RAMPART_WASM_DIR=$PWD/.cache/wasm go test -race -v ./internal/vex ./internal/store -run "TestVEX.*"
+   RAMPART_WASM_DIR=$PWD/.cache/wasm go test -race -v ./internal/ingest -run "TestIngest.*VEX.*"
+   RAMPART_WASM_DIR=$PWD/.cache/wasm go test -race -v ./internal/query -run "TestGate.*VEX.*"
+   ```
+2. **Frontend Test Battery**:
+   ```bash
+   bun run typecheck
+   bun run lint
+   bun run test -- src/features/vex src/routes/applications src/routes/findings
+   ```
+3. **End-to-End Visual Verification**:
+   ```bash
+   bun run test:e2e -- e2e/vex-upload-and-badges.spec.ts
+   ```
+
