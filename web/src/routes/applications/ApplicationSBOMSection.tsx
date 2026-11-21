@@ -257,6 +257,16 @@ export function ApplicationSBOMSection({
                   <span className="font-mono text-12 text-ink-2">JSON</span>
                 </a>
               </MenuItem>
+              <MenuItem asChild>
+                <a
+                  href={`/api/v1/applications/${encodeURIComponent(app.id)}/vex?format=csaf`}
+                  download={`${app.slug || 'application'}-csaf.json`}
+                  className="flex items-center justify-between text-12 text-ink no-underline hover:text-accent"
+                >
+                  <span>CSAF 2.0</span>
+                  <span className="font-mono text-12 text-ink-2">JSON</span>
+                </a>
+              </MenuItem>
             </MenuContent>
           </Menu>
         </div>

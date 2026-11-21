@@ -144,7 +144,7 @@ export function VEXUploadModal({
                 />
                 <div className="text-28 opacity-60">📄</div>
                 <p className="mt-2 text-13 font-medium text-ink">Choose a VEX document or drop it here</p>
-                <p className="m-0 text-12 text-ink-2">Supports OpenVEX (.json) and CycloneDX VEX / VDR (up to 16 MiB)</p>
+                <p className="m-0 text-12 text-ink-2">Supports OpenVEX, CycloneDX VEX / VDR, and CSAF 2.0 (up to 16 MiB)</p>
                 <Button variant="secondary" className="mt-3 h-8 text-12">
                   Browse file
                 </Button>

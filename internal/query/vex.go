@@ -31,12 +31,8 @@ func (a *API) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "openvex"
 	}
-	if format != "openvex" && format != "cyclonedx" {
-		msg := "format is openvex or cyclonedx"
-		if format == "csaf" {
-			msg = "CSAF export is not built; use openvex or cyclonedx"
-		}
-		problem(w, http.StatusBadRequest, "validation", msg)
+	if format != "openvex" && format != "cyclonedx" && format != "csaf" {
+		problem(w, http.StatusBadRequest, "validation", "format is openvex, cyclonedx, or csaf")
 		return
 	}
 	findings, err := a.store.ListFindings(r.Context(), tenantID)
@@ -60,7 +56,10 @@ func (a *API) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := vex.Meta{ID: fmt.Sprintf("https://rampart.aspm.dev/vex/%s/%s", tenantID, id), Author: "Rampart (" + actorOf(user) + ")", At: time.Now().UTC()}
 	var doc map[string]any
-	if format == "cyclonedx" {
+	if format == "csaf" {
+		doc = vex.CSAF(meta, items)
+		w.Header().Set("Content-Type", "application/json")
+	} else if format == "cyclonedx" {
 		doc = vex.CycloneDX(meta, items)
 		w.Header().Set("Content-Type", "application/vnd.cyclonedx+json")
 	} else {

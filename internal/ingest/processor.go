@@ -669,6 +669,9 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 	if err != nil {
 		return err
 	}
+	if isVEXParser(parser) {
+		return p.processVEXRun(ctx, run, u, open)
+	}
 	run.Status = domain.RunMerging
 	_ = p.store.UpdateIngestRun(ctx, run)
 
@@ -686,9 +689,107 @@ func (p *Processor) processUploadedRun(ctx context.Context, run *domain.IngestRu
 	return nil
 }
 
+func isVEXParser(parser integrations.ParserContract) bool {
+	if parser == nil {
+		return false
+	}
+	desc := parser.Descriptor()
+	return strings.Contains(strings.ToLower(desc.ID), "openvex") ||
+		strings.Contains(strings.ToLower(desc.ID), "csaf") ||
+		strings.EqualFold(desc.Category, "vex")
+}
+
+type vexParserStub struct {
+	id string
+}
+
+func (v vexParserStub) Descriptor() integrations.Descriptor {
+	return integrations.Descriptor{
+		ID:       v.id,
+		Name:     "VEX Decider",
+		Category: "vex",
+	}
+}
+
+func (v vexParserStub) Detect(_ []byte, _ string, _ string) int {
+	return 100
+}
+
+func (v vexParserStub) Parse(_ context.Context, _ io.Reader, _ domain.ParseContext) iter.Seq2[domain.RawFinding, error] {
+	return func(_ func(domain.RawFinding, error) bool) {}
+}
+
+func (p *Processor) processVEXRun(ctx context.Context, run *domain.IngestRun, u *domain.Upload, open StreamSource) error {
+	run.Status = domain.RunMerging
+	_ = p.store.UpdateIngestRun(ctx, run)
+
+	rc, err := open(ctx)
+	if err != nil {
+		return p.openError(err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(rc, p.maxReport+1))
+	if err != nil {
+		return &jobs.PermanentError{Code: ErrCodeParse, Err: fmt.Errorf("read vex document: %w", err)}
+	}
+	if int64(len(data)) > p.maxReport {
+		return &jobs.PermanentError{Code: ErrCodeReportTooLarge, Err: fmt.Errorf("the VEX document is larger than %d bytes", p.maxReport)}
+	}
+
+	doc, err := vex.Parse(data)
+	if err != nil {
+		return &jobs.PermanentError{Code: ErrCodeParse, Err: fmt.Errorf("parse vex document: %w", err)}
+	}
+
+	matcher, ok := p.store.(vex.MatcherStore)
+	if !ok {
+		return &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: errors.New("VEX processing requires a supporting store")}
+	}
+
+	var appID *uuid.UUID
+	if run.ApplicationID != domain.NilID {
+		appID = &run.ApplicationID
+	}
+	author := strings.TrimSpace(doc.Author)
+	if author == "" {
+		author = "ci-ingest"
+	}
+	actor := "vex:" + author
+
+	rep, err := vex.Apply(ctx, matcher, doc, run.TenantID, vex.ApplyOptions{
+		AppID:    appID,
+		Actor:    actor,
+		Author:   author,
+		Importer: "ingest-pipeline",
+	})
+	if err != nil {
+		return err
+	}
+
+	run.Stats = domain.IngestStats{
+		Parsed:       rep.Statements,
+		Updated:      rep.Applied,
+		Untouched:    rep.Unchanged + rep.Stale,
+		RecordErrors: len(rep.Failed) + len(rep.Rejected),
+	}
+
+	status := domain.RunCompleted
+	reason := ""
+	if len(rep.Failed) > 0 {
+		status = domain.RunCompletedWithErrors
+		reason = fmt.Sprintf("%d VEX statements failed to apply", len(rep.Failed))
+	}
+	p.Finish(ctx, run, status, reason)
+	return nil
+}
+
 // selectParser picks the parser from the declared format, or detects it from the first 64 KiB, over the built-in
 // parsers and the tenant's parser packages (D98).
 func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint string, open StreamSource) (integrations.ParserContract, bool, error) {
+	if strings.EqualFold(hint, "openvex") || strings.EqualFold(hint, "vex") || strings.EqualFold(hint, "csaf") {
+		return vexParserStub{id: "cluster:" + strings.ToLower(hint)}, false, nil
+	}
 	parser := p.parsers.byName(ctx, tenantID, hint)
 	if parser != nil {
 		if rc, err := open(ctx); err == nil {
@@ -708,15 +809,17 @@ func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint s
 		head := make([]byte, 64<<10)
 		n, _ := io.ReadFull(rc, head)
 		_ = rc.Close()
+
+		// Probe whether this is a native VEX document (OpenVEX, CycloneDX VEX, or CSAF 2.0).
+		if _, err := vex.Parse(head[:n]); err == nil {
+			return vexParserStub{id: "cluster:openvex"}, false, nil
+		}
+
 		var score int
 		parser, score = p.parsers.detect(ctx, tenantID, head[:n], "", "")
 		if parser == nil || score < 40 {
 			return nil, false, &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: errors.New("the report format is not recognised")}
 		}
-	}
-	desc := parser.Descriptor()
-	if strings.Contains(strings.ToLower(desc.ID), "openvex") {
-		return nil, false, &jobs.PermanentError{Code: ErrCodeVEXDocument, Err: errors.New("an OpenVEX document is a set of decisions, not a scan report: send it to POST /api/v1/vex")}
 	}
 	return parser, sbom.IsReader(parser), nil
 }

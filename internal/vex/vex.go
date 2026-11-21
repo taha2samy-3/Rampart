@@ -38,18 +38,22 @@ type Document struct {
 	Statements []Statement
 }
 
-// ErrUnknownFormat is returned for JSON that is neither OpenVEX nor CycloneDX.
-var ErrUnknownFormat = errors.New("the document is not OpenVEX or CycloneDX VEX")
+// ErrUnknownFormat is returned for JSON that is neither OpenVEX, CycloneDX, nor CSAF 2.0.
+var ErrUnknownFormat = errors.New("the document is not OpenVEX, CycloneDX VEX, or CSAF 2.0")
 
 // MaxDocument is the largest document accepted.
 const MaxDocument = 16 << 20
 
-// Parse reads a VEX document of either format.
+// Parse reads a VEX document of supported formats: OpenVEX, CycloneDX VEX/VDR, or CSAF 2.0.
 func Parse(data []byte) (*Document, error) {
 	var probe struct {
-		Context   string          `json:"@context"`
-		BOMFormat string          `json:"bomFormat"`
-		Vulns     json.RawMessage `json:"vulnerabilities"`
+		Context   string `json:"@context"`
+		BOMFormat string `json:"bomFormat"`
+		Document  *struct {
+			Category    string `json:"category"`
+			CSAFVersion string `json:"csaf_version"`
+		} `json:"document"`
+		Vulns json.RawMessage `json:"vulnerabilities"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("the document is not valid JSON: %w", err)
@@ -59,6 +63,8 @@ func Parse(data []byte) (*Document, error) {
 		return parseOpenVEX(data)
 	case strings.EqualFold(probe.BOMFormat, "CycloneDX"):
 		return parseCycloneDX(data)
+	case probe.Document != nil && (strings.Contains(strings.ToLower(probe.Document.Category), "vex") || probe.Document.CSAFVersion != "" || probe.Vulns != nil):
+		return parseCSAF(data)
 	}
 	return nil, ErrUnknownFormat
 }

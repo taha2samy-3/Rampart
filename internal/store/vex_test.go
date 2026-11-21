@@ -162,8 +162,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 		t.Fatalf("cyclonedx: %d %+v %s", code, r, h.finding(f3.ID).State)
 	}
 
-	// Export what is now decided, in both formats, and read it back: the same decisions, nothing to change.
-	for _, format := range []string{"openvex", "cyclonedx"} {
+	// Export what is now decided, in all three formats (OpenVEX, CycloneDX, CSAF 2.0), and read it back: the same decisions, nothing to change.
+	for _, format := range []string{"openvex", "cyclonedx", "csaf"} {
 		code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format="+format, "")
 		if code != http.StatusOK || !strings.Contains(string(out), cveA) {
 			t.Fatalf("export %s: %d %s", format, code, out)
@@ -172,8 +172,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 			t.Fatalf("round trip %s: %d %+v", format, code, back)
 		}
 	}
-	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=csaf", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "not built") {
-		t.Fatalf("csaf: %d %s", code, out)
+	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=unknown", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "format is openvex, cyclonedx, or csaf") {
+		t.Fatalf("unknown format: %d %s", code, out)
 	}
 	// An asset exports the same findings; another tenant's id exports nothing.
 	if code, out := do(boss, "GET", "/api/v1/assets/"+asset.ID.String()+"/vex", ""); code != http.StatusOK || !strings.Contains(string(out), cveB) {
@@ -189,11 +189,14 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 		t.Fatalf("audit: %s", ab)
 	}
 
-	// A VEX document uploaded as a scan report is refused with the way to send it.
+	// A VEX document uploaded as a scan report is automatically routed to the VEX engine (Phase 2).
 	h.formatHint = ""
 	run := h.waitRun(h.uploadAndComplete([]byte(doc), domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main", Commit: "c1"}))
-	if run.Status != domain.RunFailed || run.Error != "vex_document" {
+	if run.Status != domain.RunCompletedWithErrors || !strings.Contains(run.Error, "failed to apply") {
 		t.Fatalf("a VEX document as a report: %s %q", run.Status, run.Error)
+	}
+	if run.Stats.Parsed != 6 || run.Stats.Untouched != 2 || run.Stats.RecordErrors != 3 {
+		t.Fatalf("a VEX document run stats: %+v", run.Stats)
 	}
 }
 

@@ -2,6 +2,8 @@ package ingest_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -273,5 +275,193 @@ func TestProcessSBOM_EmbeddedVEXAppliesDecisions(t *testing.T) {
 	}
 	if got.Justification != "vulnerable_code_not_in_execute_path" {
 		t.Fatalf("finding justification = %s, want vulnerable_code_not_in_execute_path", got.Justification)
+	}
+}
+
+func TestProcessRun_StandaloneOpenVEXUpload(t *testing.T) {
+	ctx := context.Background()
+	st := ingest.NewMemoryStore()
+	objs := objectstore.NewMemory()
+	proc := ingest.NewProcessor(st, nil, objs, nil)
+
+	run := sbomRun()
+	cve := "CVE-2024-1234"
+	purl := "pkg:golang/github.com/gin-gonic/gin@v1.9.0"
+	base := "pkg:golang/github.com/gin-gonic/gin"
+	f := &domain.Finding{
+		ID: domain.NewID(), TenantID: run.TenantID, ApplicationID: run.ApplicationID, AssetID: run.AssetID,
+		FindingKey: "k-gin", RuleScannerFamily: "trivy", RuleID: cve, VulnerabilityID: &cve,
+		Location: domain.Location{Package: &domain.PackageLocation{Purl: purl, PurlBase: base}},
+		State: domain.StateOpen, Version: 1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	vexContent := `{
+		"@context": "https://openvex.dev/ns/v0.2.0",
+		"@id": "https://rampart.aspm.dev/vex/test-ci",
+		"author": "CI Pipeline",
+		"timestamp": "2026-11-21T09:00:00Z",
+		"version": 1,
+		"statements": [
+			{
+				"vulnerability": {"name": "CVE-2024-1234"},
+				"products": [{"@id": "pkg:golang/github.com/gin-gonic/gin@v1.9.0"}],
+				"status": "not_affected",
+				"justification": "component_not_present",
+				"impact_statement": "Gin package is not included in binary"
+			}
+		]
+	}`
+
+	h := sha256.Sum256([]byte(vexContent))
+	sha := hex.EncodeToString(h[:])
+	objKey := "uploads/test-openvex.json"
+	if err := objs.Write(ctx, objKey, []byte(vexContent), "application/json"); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadID := domain.NewID()
+	upload := &domain.Upload{
+		ID:           uploadID,
+		TenantID:     run.TenantID,
+		ScanSourceID: run.ScanSourceID,
+		ObjectRef:    objKey,
+		SizeBytes:    int64(len(vexContent)),
+		SHA256:       sha,
+		FormatHint:   "openvex",
+	}
+	if err := st.CreateUpload(ctx, upload); err != nil {
+		t.Fatal(err)
+	}
+
+	run.UploadID = &uploadID
+	run.Status = domain.RunQueued
+	if err := st.CreateIngestRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := proc.HandleParse(ctx, jobs.ParseJobArgs{TenantID: run.TenantID, IngestRunID: run.ID}, 1); err != nil {
+		t.Fatalf("HandleParse failed: %v", err)
+	}
+
+	updatedRun, err := st.GetIngestRun(ctx, run.TenantID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRun.Status != domain.RunCompleted {
+		t.Fatalf("expected RunCompleted, got %s (error: %s)", updatedRun.Status, updatedRun.Error)
+	}
+	if updatedRun.Stats.Parsed != 1 || updatedRun.Stats.Updated != 1 {
+		t.Errorf("expected stats parsed=1, updated=1, got %+v", updatedRun.Stats)
+	}
+
+	// Verify finding updated in store
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"k-gin"})
+	if err != nil || findings["k-gin"] == nil {
+		t.Fatalf("finding lookup failed: %v", err)
+	}
+	updatedFinding := findings["k-gin"]
+	if updatedFinding.State != domain.StateNotAffected {
+		t.Errorf("expected state not_affected, got %s", updatedFinding.State)
+	}
+	if updatedFinding.Justification != "component_not_present" {
+		t.Errorf("expected justification component_not_present, got %s", updatedFinding.Justification)
+	}
+}
+
+func TestProcessRun_StandaloneCSAFUpload(t *testing.T) {
+	ctx := context.Background()
+	st := ingest.NewMemoryStore()
+	objs := objectstore.NewMemory()
+	proc := ingest.NewProcessor(st, nil, objs, nil)
+
+	run := sbomRun()
+	cve := "CVE-2024-8888"
+	purl := "pkg:npm/express@4.18.2"
+	base := "pkg:npm/express"
+	f := &domain.Finding{
+		ID: domain.NewID(), TenantID: run.TenantID, ApplicationID: run.ApplicationID, AssetID: run.AssetID,
+		FindingKey: "k-exp", RuleScannerFamily: "trivy", RuleID: cve, VulnerabilityID: &cve,
+		Location: domain.Location{Package: &domain.PackageLocation{Purl: purl, PurlBase: base}},
+		State: domain.StateOpen, Version: 1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	csafContent := `{
+		"document": {
+			"category": "csaf_vex",
+			"csaf_version": "2.0",
+			"title": "Advisory for Express",
+			"publisher": {"category": "vendor", "name": "Security Team"},
+			"tracking": {"id": "CSAF-TEST-1", "current_release_date": "2026-11-21T09:00:00Z"}
+		},
+		"product_tree": {
+			"full_product_names": [
+				{"product_id": "P-1", "name": "express", "product_identification_helper": {"purl": "pkg:npm/express@4.18.2"}}
+			]
+		},
+		"vulnerabilities": [
+			{
+				"cve": "CVE-2024-8888",
+				"product_status": {"known_not_affected": ["P-1"]},
+				"flags": [{"label": "vulnerable_code_not_in_execute_path", "product_ids": ["P-1"]}]
+			}
+		]
+	}`
+
+	h := sha256.Sum256([]byte(csafContent))
+	sha := hex.EncodeToString(h[:])
+	objKey := "uploads/test-csaf.json"
+	if err := objs.Write(ctx, objKey, []byte(csafContent), "application/json"); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadID := domain.NewID()
+	upload := &domain.Upload{
+		ID:           uploadID,
+		TenantID:     run.TenantID,
+		ScanSourceID: run.ScanSourceID,
+		ObjectRef:    objKey,
+		SizeBytes:    int64(len(csafContent)),
+		SHA256:       sha,
+		FormatHint:   "csaf",
+	}
+	if err := st.CreateUpload(ctx, upload); err != nil {
+		t.Fatal(err)
+	}
+
+	run.UploadID = &uploadID
+	run.Status = domain.RunQueued
+	if err := st.CreateIngestRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := proc.HandleParse(ctx, jobs.ParseJobArgs{TenantID: run.TenantID, IngestRunID: run.ID}, 1); err != nil {
+		t.Fatalf("HandleParse failed: %v", err)
+	}
+
+	updatedRun, err := st.GetIngestRun(ctx, run.TenantID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRun.Status != domain.RunCompleted {
+		t.Fatalf("expected RunCompleted, got %s (error: %s)", updatedRun.Status, updatedRun.Error)
+	}
+
+	// Verify finding updated in store
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"k-exp"})
+	if err != nil || findings["k-exp"] == nil {
+		t.Fatalf("finding lookup failed: %v", err)
+	}
+	updatedFinding := findings["k-exp"]
+	if updatedFinding.State != domain.StateNotAffected {
+		t.Errorf("expected state not_affected, got %s", updatedFinding.State)
+	}
+	if updatedFinding.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Errorf("expected justification vulnerable_code_not_in_execute_path, got %s", updatedFinding.Justification)
 	}
 }
