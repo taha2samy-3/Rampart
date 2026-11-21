@@ -53,7 +53,7 @@ func (c *AdvisoryClient) FetchOSVLive(ctx context.Context, id string) (*OSVRecor
 	if err != nil {
 		return nil, fmt.Errorf("advisory: osv query failed for %s: %w", id, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -106,7 +106,7 @@ func (c *AdvisoryClient) FetchNVDLive(ctx context.Context, cveID string, tokenFi
 	if err != nil {
 		return nil, fmt.Errorf("advisory: nvd query failed for %s: %w", cveID, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
