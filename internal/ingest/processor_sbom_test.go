@@ -213,3 +213,65 @@ func TestProcessSBOMStatementOfAnUnknownComponentIsARecordError(t *testing.T) {
 		t.Errorf("result = %+v, want completed with errors and no finding", res)
 	}
 }
+
+// Embedded VEX inside a CycloneDX SBOM document applies exploitability decisions to existing findings.
+func TestProcessSBOM_EmbeddedVEXAppliesDecisions(t *testing.T) {
+	ctx := context.Background()
+	proc, st, parser := sbomProcessor(t)
+	run := sbomRun()
+
+	vulnID := "CVE-2021-23337"
+	purl := "pkg:npm/lodash@4.17.20"
+	base := "pkg:npm/lodash"
+	f := &domain.Finding{
+		ID: domain.NewID(), TenantID: run.TenantID, FindingKey: "k-1",
+		ApplicationID: run.ApplicationID, AssetID: run.AssetID, Track: "main",
+		RuleScannerFamily: "trivy", RuleID: vulnID, VulnerabilityID: &vulnID,
+		Location: domain.Location{Package: &domain.PackageLocation{Purl: purl, PurlBase: base}},
+		State: domain.StateOpen, Version: 1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := `{
+	  "bomFormat": "CycloneDX", "specVersion": "1.5",
+	  "components": [
+	    {"bom-ref": "pkg:npm/lodash@4.17.20", "name": "lodash", "version": "4.17.20", "purl": "pkg:npm/lodash@4.17.20"}
+	  ],
+	  "vulnerabilities": [
+	    {
+	      "id": "CVE-2021-23337",
+	      "affects": [{"ref": "pkg:npm/lodash@4.17.20"}],
+	      "analysis": {
+	        "state": "not_affected",
+	        "justification": "code_not_reachable",
+	        "detail": "Function is never called"
+	      }
+	    }
+	  ]
+	}`
+
+	res, err := proc.Process(ctx, ingest.ProcessParams{
+		Run: run, Parser: parser, IsSBOM: true, ScanFinished: time.Now().UTC(),
+		Open: openString(doc),
+	})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if res.Components != 1 {
+		t.Fatalf("res.Components = %d, want 1", res.Components)
+	}
+
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"k-1"})
+	if err != nil || findings["k-1"] == nil {
+		t.Fatalf("lookup finding: %v", err)
+	}
+	got := findings["k-1"]
+	if got.State != domain.StateNotAffected {
+		t.Fatalf("finding state = %s, want not_affected", got.State)
+	}
+	if got.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Fatalf("finding justification = %s, want vulnerable_code_not_in_execute_path", got.Justification)
+	}
+}

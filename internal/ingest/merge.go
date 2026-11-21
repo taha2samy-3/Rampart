@@ -14,6 +14,7 @@ import (
 	"rampart/internal/analyzer/matcher"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/normalize"
 	"rampart/internal/store"
 )
 
@@ -1667,6 +1668,57 @@ func (m *MemoryStore) UpdateFindingTriage(ctx context.Context, tenantID uuid.UUI
 		return nil
 	}
 	return store.ErrNotFound
+}
+
+// FindFindingsForVEX finds findings matching vulnerability IDs, purl bases, and optional appID.
+func (m *MemoryStore) FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	vulnSet := make(map[string]bool, len(vulnIDs))
+	for _, v := range vulnIDs {
+		vulnSet[strings.ToLower(v)] = true
+	}
+	baseSet := make(map[string]bool, len(purlBases))
+	for _, b := range purlBases {
+		baseSet[strings.ToLower(b)] = true
+	}
+
+	var out []*domain.Finding
+	for _, f := range m.findings {
+		if f.TenantID != tenantID {
+			continue
+		}
+		if appID != nil && f.ApplicationID != *appID {
+			continue
+		}
+		vulnMatch := false
+		if f.VulnerabilityID != nil && vulnSet[strings.ToLower(*f.VulnerabilityID)] {
+			vulnMatch = true
+		}
+		if !vulnMatch && vulnSet[strings.ToLower(f.RuleID)] {
+			vulnMatch = true
+		}
+		if !vulnMatch {
+			continue
+		}
+		baseMatch := false
+		if f.Location.Package != nil {
+			if baseSet[strings.ToLower(f.Location.Package.PurlBase)] {
+				baseMatch = true
+			} else {
+				_, b, _ := normalize.CanonicalPURL(f.Location.Package.Purl)
+				if baseSet[strings.ToLower(b)] {
+					baseMatch = true
+				}
+			}
+		}
+		if baseMatch {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
 }
 
 // ListIngestRuns returns runs newest first, after the given position.

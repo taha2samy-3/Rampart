@@ -33,6 +33,7 @@ import {
 } from '@/components';
 import { toBand } from '@/lib/band';
 import { FindingDetailModal, type FindingDetailTarget } from './ChangesSection';
+import { VEXUploadModal } from '@/features/vex/VEXUploadModal';
 
 export interface AppPackage {
   asset_id?: string;
@@ -65,6 +66,7 @@ export function ApplicationSBOMSection({
   const [scanStatus, setScanStatus] = useState<{ purl: string; message: string; ok: boolean } | null>(null);
   const [expandedPurls, setExpandedPurls] = useState<Set<string>>(new Set());
   const [localSelectedFinding, setLocalSelectedFinding] = useState<FindingDetailTarget | null>(null);
+  const [isVEXModalOpen, setIsVEXModalOpen] = useState(false);
 
   const handleSelectFinding = onSelectFinding ?? setLocalSelectedFinding;
 
@@ -192,6 +194,16 @@ export function ApplicationSBOMSection({
             >
               <IconRefresh className="size-3" />
               <span>Check again</span>
+            </Button>
+          )}
+          {mayTriage && (
+            <Button
+              variant="secondary"
+              onClick={() => setIsVEXModalOpen(true)}
+              className="h-8 gap-1.5 px-3 text-12 font-medium"
+              title="Upload and apply an authoritative VEX document to this application"
+            >
+              <span>Apply VEX</span>
             </Button>
           )}
           <Menu>
@@ -361,6 +373,13 @@ export function ApplicationSBOMSection({
       {localSelectedFinding && (
         <FindingDetailModal change={localSelectedFinding} onClose={() => setLocalSelectedFinding(null)} />
       )}
+
+      <VEXUploadModal
+        open={isVEXModalOpen}
+        onOpenChange={setIsVEXModalOpen}
+        applicationId={app.id}
+        applicationName={app.name}
+      />
     </section>
   );
 }

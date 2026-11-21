@@ -84,12 +84,14 @@ func (s *PostgresStore) ListAudit(ctx context.Context, tenantID uuid.UUID, f Aud
 	return out, err
 }
 
-// VEXMatcher finds the findings a VEX statement is about. Only the PostgreSQL store implements it.
+// VEXMatcher finds the findings a VEX statement is about and applies decisions. Only the PostgreSQL store implements it.
 type VEXMatcher interface {
 	// FindFindingsForVEX returns the findings of a tenant whose vulnerability is one of vulnIDs or an alias of
 	// one (in either direction, docs/16 D19) and whose package has one of the purl bases. appID narrows to one
 	// application when it is not nil.
 	FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error)
+	GetFindingEvents(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.FindingEvent, error)
+	UpdateFindingTriage(ctx context.Context, tenantID uuid.UUID, f *domain.Finding, expectedVersion int, events []*domain.FindingEvent) error
 }
 
 // FindFindingsForVEX implements VEXMatcher.

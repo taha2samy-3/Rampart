@@ -2,18 +2,15 @@ package query
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
-	"rampart/internal/normalize"
 	"rampart/internal/store"
 	"rampart/internal/vex"
 )
@@ -75,55 +72,10 @@ func (a *API) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 }
 
 // VEXImportReport says what an import did, statement by statement.
-type VEXImportReport struct {
-	Format     string         `json:"format"`
-	DryRun     bool           `json:"dry_run"`
-	Statements int            `json:"statements"`
-	Matched    int            `json:"matched"`   // findings a statement was about
-	Applied    int            `json:"applied"`   // findings decided
-	Unchanged  int            `json:"unchanged"` // already in the state the statement says
-	Stale      int            `json:"stale"`     // a person decided after the statement's time: the person wins
-	Rejected   []VEXRejection `json:"rejected"`
-	Unmatched  []VEXRejection `json:"unmatched"`
-	Failed     []BulkFailure  `json:"failed"`
-}
+type VEXImportReport = vex.Report
 
 // VEXRejection names a statement and why it was not used.
-type VEXRejection struct {
-	Vulnerability string   `json:"vulnerability"`
-	Packages      []string `json:"packages,omitempty"`
-	Reason        string   `json:"reason"`
-}
-
-// purlVersion is the version of a package URL, or "".
-func purlVersion(p string) string {
-	if i := strings.IndexAny(p, "?#"); i >= 0 {
-		p = p[:i]
-	}
-	if i := strings.LastIndex(p, "@"); i >= 0 {
-		return p[i+1:]
-	}
-	return ""
-}
-
-// humanDecisionAfter says whether a person decided about the finding after t: such a decision outranks a
-// statement older than it (docs/05 section 7: later overrides earlier, and a person is later than a document
-// written before them).
-func (a *API) humanDecisionAfter(r *http.Request, tenantID, id uuid.UUID, t time.Time) bool {
-	if t.IsZero() {
-		return false
-	}
-	evs, err := a.store.GetFindingEvents(r.Context(), tenantID, id)
-	if err != nil {
-		return false
-	}
-	for _, e := range evs {
-		if strings.HasPrefix(e.Actor, "user:") && e.At.After(t) && (e.Type == "state_changed") {
-			return true
-		}
-	}
-	return false
-}
+type VEXRejection = vex.Rejection
 
 // handleImportVEX is POST /api/v1/vex?application=&dryRun=: OpenVEX or CycloneDX VEX decides findings. A
 // statement that matches nothing creates nothing; it is reported.
@@ -161,118 +113,34 @@ func (a *API) handleImportVEX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dry := r.URL.Query().Get("dryRun") == "true"
-	rep := VEXImportReport{Format: doc.Format, DryRun: dry, Statements: len(doc.Statements), Rejected: []VEXRejection{}, Unmatched: []VEXRejection{}, Failed: []BulkFailure{}}
 	author := strings.TrimSpace(doc.Author)
 	if author == "" {
 		author = "import"
 	}
 	actor := "vex:" + author
 
-	// Oldest first, so that where two statements are about the same finding the later one is applied last.
-	stmts := append([]vex.Statement(nil), doc.Statements...)
-	sort.SliceStable(stmts, func(i, j int) bool { return stmts[i].At.Before(stmts[j].At) })
+	var sc vex.Scorer
+	if a.scorer != nil {
+		sc = a.scorer
+	}
 
-	for _, st := range stmts {
-		rej := VEXRejection{Vulnerability: strings.Join(st.Vulns, ", "), Packages: st.Purls}
-		switch {
-		case st.Problem != "":
-			rej.Reason = st.Problem
-		case len(st.Vulns) == 0:
-			rej.Reason = "the statement names no vulnerability"
-		case len(st.Purls) == 0:
-			rej.Reason = "the statement names no package, and a decision for a whole product is not applied"
-		}
-		if rej.Reason != "" {
-			rep.Rejected = append(rep.Rejected, rej)
-			continue
-		}
-		var bases []string
-		for _, p := range st.Purls {
-			if _, base, perr := normalize.CanonicalPURL(p); perr == nil && base != "" {
-				bases = append(bases, base)
-			}
-		}
-		cands, err := m.FindFindingsForVEX(r.Context(), tenantID, st.Vulns, bases, appID)
-		if err != nil {
-			problem(w, http.StatusInternalServerError, "internal", "Failed to look up findings")
-			return
-		}
-		matched := 0
-		for _, f := range cands {
-			if !statementCovers(st, f) {
-				continue
-			}
-			matched++
-			rep.Matched++
-			if f.State == st.State && (st.State != domain.StateNotAffected || f.Justification == st.Justification) {
-				rep.Unchanged++
-				continue
-			}
-			if a.humanDecisionAfter(r, tenantID, f.ID, st.At) {
-				rep.Stale++
-				continue
-			}
-			note := fmt.Sprintf("VEX (%s) from %s, imported by %s", doc.Format, author, actorOf(user))
-			if st.Action != "" {
-				note += ". Action: " + st.Action
-			}
-			patch := PatchFindingRequest{State: string(st.State), Justification: st.Justification, ImpactStatement: st.Impact, Note: note}
-			if !scope.allows(f.ApplicationID, auth.RoleTriager) {
-				rep.Failed = append(rep.Failed, BulkFailure{ID: f.ID.String(), Error: errForbiddenApp.Error()})
-				continue
-			}
-			if dry { // the same rules, on a copy
-				req, _ := patch.toTriage()
-				cp := *f
-				if _, terr := domain.ApplyTriage(&cp, req, actor, time.Now().UTC()); terr != nil {
-					rep.Failed = append(rep.Failed, BulkFailure{ID: f.ID.String(), Error: terr.Error()})
-					continue
-				}
-				rep.Applied++
-				continue
-			}
-			_, _, terr := a.triageOne(r.Context(), tenantID, f.ID, patch, nil, actor, scope.allowFor(auth.RoleTriager))
-			var te *domain.TriageError
-			switch {
-			case terr == nil:
-				rep.Applied++
-			case errors.As(terr, &te), errors.Is(terr, store.ErrVersionConflict), errors.Is(terr, errForbiddenApp):
-				rep.Failed = append(rep.Failed, BulkFailure{ID: f.ID.String(), Error: terr.Error()})
-			default:
-				problem(w, http.StatusInternalServerError, "internal", "Failed to save a decision")
-				return
-			}
-		}
-		if matched == 0 {
-			rej.Reason = "no finding matches this vulnerability and package"
-			rep.Unmatched = append(rep.Unmatched, rej)
-		}
+	rep, err := vex.Apply(r.Context(), m, doc, tenantID, vex.ApplyOptions{
+		DryRun:   dry,
+		Actor:    actor,
+		Author:   author,
+		Importer: actorOf(user),
+		AppID:    appID,
+		Scorer:   sc,
+		AllowApp: func(id uuid.UUID) bool { return scope.allows(id, auth.RoleTriager) },
+	})
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "internal", "Failed to apply VEX document")
+		return
 	}
 	writeJSON(w, http.StatusOK, rep)
 }
 
-// statementCovers says whether a statement is about this finding's package: the same package, and the same
-// version when the statement names one.
+// statementCovers wraps vex.StatementCovers.
 func statementCovers(st vex.Statement, f *domain.Finding) bool {
-	if f.Location.Package == nil {
-		return false
-	}
-	fv := purlVersion(f.Location.Package.Purl)
-	if fv == "" {
-		fv = f.Location.Package.InstalledVersion
-	}
-	fb := f.Location.Package.PurlBase
-	if fb == "" {
-		_, fb, _ = normalize.CanonicalPURL(f.Location.Package.Purl)
-	}
-	for _, p := range st.Purls {
-		_, base, _ := normalize.CanonicalPURL(p)
-		if base == "" || base != fb {
-			continue
-		}
-		if v := purlVersion(p); v == "" || fv == "" || v == fv {
-			return true
-		}
-	}
-	return false
+	return vex.StatementCovers(st, f)
 }

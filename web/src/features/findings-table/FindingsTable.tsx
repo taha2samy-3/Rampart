@@ -203,7 +203,14 @@ export function FindingsTable({
                   </span>
                 </Td>
                 <Td className="py-0">
-                  <span className="block truncate font-medium">{f.title}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-medium">{f.title}</span>
+                    {f.justification && (
+                      <span className="shrink-0 rounded bg-ink-2/15 px-1 py-0.5 text-[10px] font-mono text-ink-2" title={`VEX Justification: ${f.justification}`}>
+                        VEX
+                      </span>
+                    )}
+                  </div>
                   {density === 'comfortable' && (
                     <span className="block truncate font-mono text-[11.5px] leading-4 text-ink-2">{locationText(r)}</span>
                   )}
@@ -211,7 +218,14 @@ export function FindingsTable({
                 <Td className={cn('text-12 text-ink-2', HIDE_NARROW, !appName.has(f.application_id ?? '') && 'font-mono')} title={appName.get(f.application_id ?? '') ?? f.application_id}>
                   <span className="block max-w-[11rem] truncate">{appName.get(f.application_id ?? '') ?? shortId(f.application_id)}</span>
                 </Td>
-                <Td className={HIDE_NARROWER}>{t(`state.${f.state}`, { defaultValue: f.state })}</Td>
+                <Td className={HIDE_NARROWER}>
+                  <span className="inline-flex items-center gap-1">
+                    <span>{t(`state.${f.state}`, { defaultValue: f.state })}</span>
+                    {f.state === 'not_affected' && (
+                      <span className="rounded bg-resolved/15 text-resolved text-[10px] px-1 font-medium">suppressed</span>
+                    )}
+                  </span>
+                </Td>
                 <Td align="end" className={cn(due.late && 'font-semibold text-critical')} title={r.sla_due_date ? absoluteDate(r.sla_due_date) : undefined}>
                   {due.text}
                 </Td>

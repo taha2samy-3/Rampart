@@ -159,6 +159,11 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
               <span className={cn('rounded border px-2 py-0.5 text-11 font-medium capitalize', STATE_STYLES[state] || STATE_STYLES.open)}>
                 {t(`state.${state}`, { defaultValue: state.replace(/_/g, ' ') })}
               </span>
+              {f.justification && (
+                <span className="rounded border border-resolved/30 bg-resolved/10 px-2 py-0.5 text-11 font-medium text-resolved" title={`VEX Justification: ${f.justification}`}>
+                  VEX: {f.justification.replace(/_/g, ' ')}
+                </span>
+              )}
               {risk && (
                 <span className="rounded bg-accent/10 px-2 py-0.5 text-11 font-semibold text-accent">
                   Risk Score: {risk.total_score} / 1000
@@ -221,6 +226,40 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
             </div>
           </div>
         </div>
+
+        {/* VEX Exploitability Assertion Card */}
+        {f.justification && (
+          <div className="mt-4 rounded-ctl border border-rule bg-canvas-subtle p-3.5 text-12">
+            <div className="flex items-center justify-between border-b border-rule pb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-14">🛡️</span>
+                <span className="font-semibold text-ink">VEX Exploitability Assertion</span>
+                <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-11 text-accent">
+                  {f.state.replace(/_/g, ' ').toUpperCase()}
+                </span>
+              </div>
+              {f.last_seen && (
+                <span className="text-11 text-ink-3">Seen {sinceShort(f.last_seen)}</span>
+              )}
+            </div>
+            <div className="mt-2.5 grid grid-cols-1 gap-2 md:grid-cols-2">
+              <div>
+                <span className="font-medium text-ink-3">Standard Justification:</span>
+                <div className="mt-0.5 font-mono text-12 font-medium text-ink">
+                  {f.justification}
+                </div>
+              </div>
+              {f.impact_statement && (
+                <div>
+                  <span className="font-medium text-ink-3">Impact Analysis:</span>
+                  <div className="mt-0.5 text-ink leading-relaxed">
+                    {f.impact_statement}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs Layout */}

@@ -22,6 +22,7 @@ import (
 	"rampart/internal/objectstore"
 	"rampart/internal/sbom"
 	"rampart/internal/telemetry"
+	"rampart/internal/vex"
 )
 
 // Typed failure codes of an ingest run (ingest_run.error, D17).
@@ -480,6 +481,9 @@ func (p *Processor) processSBOMWithFindings(ctx context.Context, pp ProcessParam
 	pp.Open = func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("")), nil }
 	res, err := p.Process(ctx, pp)
 	res.Components = stored
+	if err == nil {
+		p.applyEmbeddedVEX(ctx, pp.Run, data)
+	}
 	return res, err
 }
 
@@ -518,7 +522,37 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 	if err != nil {
 		return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
 	}
-	return p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+	n, err := p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+	if err == nil {
+		p.applyEmbeddedVEX(ctx, run, data)
+	}
+	return n, err
+}
+
+// applyEmbeddedVEX extracts and applies embedded VEX statements from an SBOM document (CycloneDX VDR/VEX).
+func (p *Processor) applyEmbeddedVEX(ctx context.Context, run *domain.IngestRun, data []byte) {
+	if run == nil || run.ApplicationID == domain.NilID || len(data) == 0 {
+		return
+	}
+	matcher, ok := p.store.(vex.MatcherStore)
+	if !ok {
+		return
+	}
+	vexDoc, err := vex.Parse(data)
+	if err != nil || vexDoc == nil || len(vexDoc.Statements) == 0 {
+		return
+	}
+	appID := run.ApplicationID
+	author := vexDoc.Author
+	if author == "" {
+		author = "embedded"
+	}
+	_, _ = vex.Apply(ctx, matcher, vexDoc, run.TenantID, vex.ApplyOptions{
+		AppID:    &appID,
+		Actor:    "vex:" + author,
+		Author:   author,
+		Importer: "sbom-ingest",
+	})
 }
 
 // storeSBOM stamps the document and its components with the run and stores them.
