@@ -38,7 +38,17 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
 
   return (
     <article aria-label={t('findings.inspector')} className="px-4 py-3">
-      <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">{f.title}</h2>
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="display text-16 leading-snug [overflow-wrap:anywhere]">{f.title}</h2>
+        <Link
+          to="/findings/$id"
+          params={{ id: f.id }}
+          className="shrink-0 rounded border border-rule px-2 py-0.5 text-11 font-medium text-accent hover:bg-chrome inline-flex items-center gap-1"
+          title="Open full finding details page"
+        >
+          Full page ↗
+        </Link>
+      </div>
       <p className="mt-1 text-13 text-ink-2">{status}</p>
       {onTriage && (
         <div className="mt-3 flex flex-wrap items-center gap-2">

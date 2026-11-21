@@ -743,7 +743,11 @@ const server = http.createServer((req, res) => {
             }
           }
         ];
-        return json(res, { ...row, reported_by, also_reported_by, occurrences });
+        const controls = [
+          { framework_id: 'soc2', framework: 'SOC 2 Type II', version: '2022', control_id: 'CC6.1', control: 'Logical Access and Boundary Protection', due: d(-15), overdue: false },
+          { framework_id: 'cis-k8s', framework: 'CIS Kubernetes', version: '1.8.0', control_id: '5.1.3', control: 'Minimize wildcard RBAC permissions', due: d(2), overdue: true }
+        ];
+        return json(res, { ...row, reported_by, also_reported_by, occurrences, controls });
       }
       if (!fm[2] && req.method === 'PATCH') {
         let body = '';

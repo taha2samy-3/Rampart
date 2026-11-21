@@ -41,6 +41,7 @@ export const qk = {
   },
   findings: {
     all: () => ['findings'] as const,
+    one: (id: string) => ['findings', 'one', id] as const,
     events: (id: string) => ['findings', 'events', id] as const,
     sources: (id: string) => ['findings', 'sources', id] as const,
     occurrences: (id: string) => ['findings', 'occurrences', id] as const,

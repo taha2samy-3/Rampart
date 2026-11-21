@@ -32,6 +32,7 @@ const InventoryRoute = lazy(() => import('@/routes/inventory/InventoryRoute').th
 const OverviewRoute = lazy(() => import('@/routes/overview/OverviewRoute').then((m) => ({ default: m.OverviewRoute })));
 const VulnerabilitiesRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute').then((m) => ({ default: m.VulnerabilitiesRoute })));
 const VulnerabilityDetailRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilityDetailRoute').then((m) => ({ default: m.VulnerabilityDetailRoute })));
+const FindingDetailRoute = lazy(() => import('@/routes/findings/FindingDetailRoute').then((m) => ({ default: m.FindingDetailRoute })));
 const WorkflowRoute = lazy(() => import('@/routes/workflow/WorkflowRoute').then((m) => ({ default: m.WorkflowRoute })));
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -116,6 +117,13 @@ const findingsRoute = createRoute({
   validateSearch: validateFindings,
   component: function Findings() {
     return <FindingsRoute search={findingsRoute.useSearch()} />;
+  },
+});
+const findingDetailRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/findings/$id',
+  component: function FindingDetail() {
+    return <FindingDetailRoute id={findingDetailRoute.useParams().id} />;
   },
 });
 /** Deep link used in tickets and chat: /t/<tenant>/findings/<id>. */
@@ -220,6 +228,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     indexRoute,
     findingsRoute,
+    findingDetailRoute,
     deepFindingRoute,
     ingestionRoute,
     parsersRoute,

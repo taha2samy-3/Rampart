@@ -143,6 +143,12 @@ export interface FindingRow {
   sla_due_date?: string | null;
 }
 
+export interface FindingDetail extends FindingRow {
+  reported_by?: Reporter[];
+  also_reported_by?: CorrelatedRef[];
+  occurrences?: Occurrence[];
+}
+
 export interface Occurrence {
   id: string;
   tenant_id: string;
