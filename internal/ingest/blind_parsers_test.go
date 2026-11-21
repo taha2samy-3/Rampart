@@ -50,7 +50,7 @@ func TestBlindServerFindsEveryInstalledParserByNameWithTheStableID(t *testing.T)
 		n++
 	}
 	if n != 20 {
-		t.Errorf("checked %d parsers, want 17 report parsers and 3 SBOM readers", n)
+		t.Errorf("checked %d parsers, want 16 report parsers and 4 SBOM readers", n)
 	}
 	if got := set.byName(ctx, tid, "nonexistent"); got != nil {
 		t.Errorf("a name nobody installed finds %v", got.Descriptor())

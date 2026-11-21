@@ -113,12 +113,6 @@ func TestDefaultRegistryDetect(t *testing.T) {
 			filename: "semgrep.sarif",
 			wantID:   "cluster:sarif",
 		},
-		{
-			name:     "OpenVEX",
-			head:     []byte(`{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}`),
-			filename: "triage.vex.json",
-			wantID:   "cluster:openvex",
-		},
 	}
 
 	for _, tt := range tests {

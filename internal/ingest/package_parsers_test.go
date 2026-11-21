@@ -212,6 +212,7 @@ func TestSBOMParsersAreDetected(t *testing.T) {
 		{"CycloneDX XML", "bom.cdx.xml", []byte(`<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.5"></bom>`), "cluster:sbom-cyclonedx"},
 		{"SPDX JSON", "bom.spdx.json", []byte(`{"spdxVersion": "SPDX-2.3"}`), "cluster:sbom-spdx"},
 		{"SPDX tag-value", "bom.spdx", []byte("SPDXVersion: SPDX-2.3\nPackageName: openssl"), "cluster:sbom-spdx"},
+		{"OpenVEX JSON", "triage.vex.json", []byte(`{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}`), "cluster:sbom-openvex"},
 	}
 	for _, tc := range cases {
 		p, score := set.registry.DetectParser(tc.head, tc.filename, "")

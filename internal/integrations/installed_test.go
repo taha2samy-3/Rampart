@@ -40,8 +40,8 @@ func specOnly(t *testing.T, manifest []byte) []byte {
 // control plane), and it has the id the compliance report and the gate read.
 func TestInstalledParserIsTheSameFromAFileAndFromTheControlPlane(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(reportManifests, "*.yaml"))
-	if len(files) < 17 {
-		t.Fatalf("expected the 17 report manifests, found %d", len(files))
+	if len(files) < 16 {
+		t.Fatalf("expected the 16 report manifests, found %d", len(files))
 	}
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), ".yaml")

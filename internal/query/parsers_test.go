@@ -53,13 +53,13 @@ func TestParsersAPI_List(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if res.Total != 20 {
-		t.Errorf("expected the 17 report parsers and 3 SBOM readers that were installed, got %d", res.Total)
+		t.Errorf("expected the 16 report parsers and 4 SBOM readers that were installed, got %d", res.Total)
 	}
 	ids := map[string]bool{}
 	for _, p := range res.Parsers {
 		ids[p["id"].(string)] = true
 	}
-	for _, want := range []string{"cluster:trivy", "cluster:sarif", "cluster:genericjson", "cluster:sbom-spdx", "cluster:sbom-cyclonedx", "cluster:sbom-syft"} {
+	for _, want := range []string{"cluster:trivy", "cluster:sarif", "cluster:genericjson", "cluster:sbom-spdx", "cluster:sbom-cyclonedx", "cluster:sbom-syft", "cluster:sbom-openvex"} {
 		if !ids[want] {
 			t.Errorf("%s is installed and must be listed with the id the runs and the compliance report use: %v", want, ids)
 		}
