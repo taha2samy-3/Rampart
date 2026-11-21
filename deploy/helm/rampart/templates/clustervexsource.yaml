@@ -1,0 +1,20 @@
+{{- range $name, $src := .Values.vexSources }}
+{{- if and $src $src.enabled }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterVEXSource
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rampart.labels" $ | nindent 4 }}
+spec:
+  format: {{ $src.format | default "openvex" | quote }}
+  schedule: {{ $src.schedule | default "0 */6 * * *" | quote }}
+  source:
+    {{- toYaml $src.source | nindent 4 }}
+  {{- if $src.matching }}
+  matching:
+    {{- toYaml $src.matching | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

@@ -404,6 +404,14 @@ func NewClusterFeedMirrorReconciler(store apply.ConfigStore) *PolicyReconciler {
 	return NewClusterFeedReconciler(store)
 }
 
+// NewClusterVEXSourceReconciler reconciles ClusterVEXSource resources (docs/47, Phase 5).
+func NewClusterVEXSourceReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: "vexsource", cluster: true, label: "ClusterVEXSource", parse: func(b []byte) error {
+		var s domain.ClusterVEXSourceSpec
+		return json.Unmarshal(b, &s)
+	}}
+}
+
 func parseRisk(b []byte) error {
 	_, err := risk.ParseRiskPolicySpec(b)
 	return err

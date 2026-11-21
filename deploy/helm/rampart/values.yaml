@@ -402,3 +402,7 @@ sbomAnalyzer:
 # Their risk policy reads app.environment, so they need this server (schema version 51): the chart and the server move together.
 policies:
   enabled: true
+
+# Declarative upstream VEX advisory sources (docs/47, Phase 5).
+# Cluster-wide VEX feeds automatically synchronized and applied to matching applications.
+vexSources: {}

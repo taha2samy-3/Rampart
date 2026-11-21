@@ -1588,6 +1588,144 @@ spec:
       subresources:
         status: {}
 ---
+# deploy/crds/clustervexsource.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clustervexsources.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterVEXSource
+    listKind: ClusterVEXSourceList
+    plural: clustervexsources
+    singular: clustervexsource
+    shortNames:
+      - cvs
+      - vexsource
+      - vexsources
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Format
+          type: string
+          jsonPath: .spec.format
+        - name: Schedule
+          type: string
+          jsonPath: .spec.schedule
+        - name: AutoApply
+          type: boolean
+          jsonPath: .spec.matching.autoApply
+        - name: Ready
+          type: string
+          jsonPath: ".status.conditions[?(@.type=='Ready')].status"
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: ClusterVEXSource configures an automated, upstream supplier VEX advisory feed.
+              required:
+                - format
+                - source
+              properties:
+                format:
+                  type: string
+                  enum: [openvex, cyclonedx, csaf]
+                  description: "VEX document format: openvex, cyclonedx, or csaf."
+                schedule:
+                  type: string
+                  default: "0 */6 * * *"
+                  description: "Standard 5-field cron expression for synchronization."
+                source:
+                  type: object
+                  description: "Upstream VEX feed endpoint configuration."
+                  required:
+                    - http
+                  properties:
+                    http:
+                      type: object
+                      required:
+                        - url
+                      properties:
+                        url:
+                          type: string
+                          description: "HTTP/HTTPS URL of the authoritative VEX document or feed."
+                        headersSecretRef:
+                          type: object
+                          description: "Kubernetes Secret reference holding custom headers (e.g. Authorization)."
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                matching:
+                  type: object
+                  description: "Decision application and scoping rules."
+                  properties:
+                    autoApply:
+                      type: boolean
+                      default: true
+                      description: "When true, automatically applies valid statements to matching application findings."
+                    trustLevel:
+                      type: string
+                      enum: [authoritative_vendor, advisory, community]
+                      default: authoritative_vendor
+                      description: "Trust level determining assertion weight and triage precedence."
+                    scope:
+                      type: object
+                      description: "Applies decisions only to applications matching the selector."
+                      properties:
+                        applicationSelector:
+                          type: object
+                          properties:
+                            matchLabels:
+                              type: object
+                              additionalProperties:
+                                type: string
+                            matchNames:
+                              type: array
+                              items:
+                                type: string
+            status:
+              type: object
+              properties:
+                lastSyncTime:
+                  type: string
+                  format: date-time
+                lastSyncStatus:
+                  type: string
+                statementsCount:
+                  type: integer
+                appliedCount:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+---
 # deploy/crds/complianceframework.yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition

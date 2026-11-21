@@ -52,6 +52,8 @@ rules:
       - complianceframeworks/status
       - clustercomplianceframeworks
       - clustercomplianceframeworks/status
+      - clustervexsources
+      - clustervexsources/status
       - tenants/finalizers
       - applications/finalizers
       - scansources/finalizers
@@ -72,6 +74,7 @@ rules:
       - clusterexternalanalyzers/finalizers
       - complianceframeworks/finalizers
       - clustercomplianceframeworks/finalizers
+      - clustervexsources/finalizers
     verbs:
       - get
       - list
