@@ -247,12 +247,12 @@ func TestProcessSBOM_OpenVEX_AppliesVEXStatements(t *testing.T) {
 	vulnID := "CVE-2023-44487"
 	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
 	initialFinding := &domain.Finding{
-		ID:            domain.NewID(),
-		TenantID:      run.TenantID,
-		ApplicationID: run.ApplicationID,
-		AssetID:       run.AssetID,
-		FindingKey:    "finding-grpc-cve",
-		RuleID:        vulnID,
+		ID:              domain.NewID(),
+		TenantID:        run.TenantID,
+		ApplicationID:   run.ApplicationID,
+		AssetID:         run.AssetID,
+		FindingKey:      "finding-grpc-cve",
+		RuleID:          vulnID,
 		VulnerabilityID: &vulnID,
 		Location: domain.Location{
 			Package: &domain.PackageLocation{
@@ -316,12 +316,12 @@ func TestProcessSBOM_VEXOptionDisabled_DoesNotApplyVEX(t *testing.T) {
 	vulnID := "CVE-2023-44487"
 	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
 	initialFinding := &domain.Finding{
-		ID:            domain.NewID(),
-		TenantID:      run.TenantID,
-		ApplicationID: run.ApplicationID,
-		AssetID:       run.AssetID,
-		FindingKey:    "finding-grpc-cve-2",
-		RuleID:        vulnID,
+		ID:              domain.NewID(),
+		TenantID:        run.TenantID,
+		ApplicationID:   run.ApplicationID,
+		AssetID:         run.AssetID,
+		FindingKey:      "finding-grpc-cve-2",
+		RuleID:          vulnID,
 		VulnerabilityID: &vulnID,
 		Location: domain.Location{
 			Package: &domain.PackageLocation{
