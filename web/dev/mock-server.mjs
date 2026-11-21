@@ -676,25 +676,73 @@ const server = http.createServer((req, res) => {
         const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
         const reported_by = [{ scanner: sca ? 'trivy' : row.finding.rule_scanner_family, name: sca ? 'trivy' : row.finding.rule_scanner_family, version: '0.58.1', first_seen: d(12), last_seen: d(1), reports: 9, present: true, tool_severity: row.finding.severity, latest_run_id: 'r1', locations: 1 }];
         const also_reported_by = sca ? [{ id: ALL.find((r) => r.finding.id !== row.finding.id)?.finding.id ?? row.finding.id, scanner: 'grype', rule_id: row.finding.rule_id, state: 'open' }] : [];
-        let occurrences = [];
-        if (row.finding.location?.purl) {
-          const purl = row.finding.location.purl;
-          const match = purl.match(/^pkg:([^/]+)\/([^@]+)@(.+)$/);
-          const pkgName = match ? match[2] : purl;
-          const pkgVer = match ? match[3] : '1.0.0';
-          occurrences = [
-            {
-              location: {
-                package: {
-                  component_name: pkgName,
-                  installed_version: pkgVer,
-                  fixed_version: '2.1.0',
-                  purl,
-                },
-              },
+        const family = row.finding.rule_scanner_family || 'gitleaks';
+        const fid = row.finding.id;
+        const occurrences = [
+          {
+            id: `occ-${fid}-1`,
+            scanner_name: family,
+            scanner_version: '8.18.2',
+            tool_severity: row.finding.tool_severity || row.finding.severity || 'high',
+            tool_record_id: `rule-${family}:rec-4f918e`,
+            first_seen: d(7),
+            last_seen: d(1),
+            normalized: family === 'gitleaks' || row.finding.category === 'secret' ? {
+              commit: '4f918e38a2b5c719e8a931405b63201460e1d892',
+              author: 'Sara Ahmed',
+              email: 'sara.ahmed@acme.example',
+              date: '2026-11-18T14:22:10Z',
+              entropy: 4.821,
+              fingerprint: 'gl-secret-fingerprint-a8f192b0',
+              message: 'feat: add internal payment signing client configuration',
+              rule_id: row.finding.rule_id || 'generic-api-key',
+              tags: ['key', 'secret', 'confidential']
+            } : {
+              package_name: 'express-fileupload',
+              installed_version: '1.4.0',
+              fixed_version: '1.4.1',
+              purl: row.finding.location?.purl || 'pkg:npm/express-fileupload@1.4.0',
+              primary_url: 'https://nvd.nist.gov/vuln/detail/CVE-2023-44487',
+              ecosystem: 'npm'
             },
-          ];
-        }
+            raw: {
+              RuleID: row.finding.rule_id || 'generic-api-key',
+              Description: row.finding.title,
+              Commit: '4f918e38a2b5c719e8a931405b63201460e1d892',
+              Author: 'Sara Ahmed',
+              Email: 'sara.ahmed@acme.example',
+              Date: '2026-11-18T14:22:10Z',
+              Secret: '[redacted]',
+              Entropy: 4.821
+            }
+          },
+          {
+            id: `occ-${fid}-2`,
+            scanner_name: 'trivy',
+            scanner_version: '0.58.0',
+            tool_severity: 'critical',
+            tool_record_id: 'trivy:vuln:CVE-2023-44487',
+            first_seen: d(5),
+            last_seen: d(1),
+            normalized: {
+              target: 'package-lock.json',
+              class: 'lang-pkgs',
+              type: 'npm',
+              installed_version: '1.4.0',
+              fixed_version: '1.4.1',
+              primary_url: 'https://avd.aquasec.com/nvd/cve-2023-44487',
+              cwe_ids: ['CWE-400', 'CWE-770']
+            },
+            raw: {
+              VulnerabilityID: 'CVE-2023-44487',
+              PkgName: 'express-fileupload',
+              InstalledVersion: '1.4.0',
+              FixedVersion: '1.4.1',
+              Severity: 'CRITICAL',
+              PrimaryURL: 'https://avd.aquasec.com/nvd/cve-2023-44487'
+            }
+          }
+        ];
         return json(res, { ...row, reported_by, also_reported_by, occurrences });
       }
       if (!fm[2] && req.method === 'PATCH') {
@@ -1139,6 +1187,82 @@ const server = http.createServer((req, res) => {
         },
         links: [`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vid)}`],
       });
+    }
+    const occMatch = p.match(/^\/api\/v1\/findings\/([^/]+)\/occurrences$/);
+    if (occMatch) {
+      const fid = occMatch[1];
+      const row = ALL.find((r) => r.finding.id === fid) ?? ALL[0];
+      const family = row?.finding?.rule_scanner_family || 'gitleaks';
+
+      const occs = [
+        {
+          id: `occ-${fid}-1`,
+          scanner_name: family,
+          scanner_version: '8.18.2',
+          tool_severity: row?.finding?.tool_severity || 'high',
+          tool_record_id: `rule-${family}:rec-4f918e`,
+          first_seen: new Date(Date.now() - 7 * 86400000).toISOString(),
+          last_seen: new Date(Date.now() - 3600000).toISOString(),
+          normalized: family === 'gitleaks' ? {
+            commit: '4f918e38a2b5c719e8a931405b63201460e1d892',
+            author: 'Sara Ahmed',
+            email: 'sara.ahmed@acme.example',
+            date: '2026-11-18T14:22:10Z',
+            entropy: 4.821,
+            fingerprint: 'gl-secret-fingerprint-a8f192b0',
+            message: 'feat: add internal payment signing client configuration',
+            rule_id: 'generic-api-key',
+            tags: ['key', 'secret', 'confidential']
+          } : {
+            package_name: 'express-fileupload',
+            installed_version: '1.4.0',
+            fixed_version: '1.4.1',
+            purl: 'pkg:npm/express-fileupload@1.4.0',
+            primary_url: 'https://nvd.nist.gov/vuln/detail/CVE-2023-44487',
+            ecosystem: 'npm'
+          },
+          raw: {
+            Description: 'Generic API Key credential leak in repository',
+            RuleID: 'generic-api-key',
+            File: 'services/auth/client.go',
+            StartLine: 42,
+            EndLine: 42,
+            Commit: '4f918e38a2b5c719e8a931405b63201460e1d892',
+            Author: 'Sara Ahmed',
+            Email: 'sara.ahmed@acme.example',
+            Date: '2026-11-18T14:22:10Z',
+            Secret: '[redacted]',
+            Entropy: 4.821
+          }
+        },
+        {
+          id: `occ-${fid}-2`,
+          scanner_name: 'trivy',
+          scanner_version: '0.58.0',
+          tool_severity: 'critical',
+          tool_record_id: 'trivy:vuln:CVE-2023-44487',
+          first_seen: new Date(Date.now() - 5 * 86400000).toISOString(),
+          last_seen: new Date(Date.now() - 7200000).toISOString(),
+          normalized: {
+            target: 'package-lock.json',
+            class: 'lang-pkgs',
+            type: 'npm',
+            installed_version: '1.4.0',
+            fixed_version: '1.4.1',
+            primary_url: 'https://avd.aquasec.com/nvd/cve-2023-44487',
+            cwe_ids: ['CWE-400', 'CWE-770']
+          },
+          raw: {
+            VulnerabilityID: 'CVE-2023-44487',
+            PkgName: 'express-fileupload',
+            InstalledVersion: '1.4.0',
+            FixedVersion: '1.4.1',
+            Severity: 'CRITICAL',
+            PrimaryURL: 'https://avd.aquasec.com/nvd/cve-2023-44487'
+          }
+        }
+      ];
+      return json(res, occs);
     }
     if (p === '/api/v1/findings') {
       if (scenario === 'error') return problem(res, 500, 'Failed to list findings', 'The database did not answer within 5 s.');
