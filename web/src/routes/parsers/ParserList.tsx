@@ -81,43 +81,35 @@ export function ParserList({ family }: { family: Family }) {
     [q.data, family],
   );
 
-  // Compute categories and counts for sub-tabs
+  // Compute categories and counts for sub-tabs.
+  // SBOM parsers all belong to the single SBOM inventory domain and have no sub-categories in their CRD (spec.format).
+  // Category sub-tabs only apply to report parsers (SAST, SCA, Secrets, IaC, DAST, etc.) which have spec.category.
   const categories = useMemo(() => {
-    if (all.length === 0) return [];
+    if (family === 'sbom' || all.length === 0) return [];
     const counts = new Map<string, number>();
     counts.set('all', all.length);
 
     for (const p of all) {
-      const cat = family === 'sbom' ? readsOf(p, family) : parserCategory(p);
+      const cat = parserCategory(p);
       counts.set(cat, (counts.get(cat) ?? 0) + 1);
     }
 
-    const order = family === 'sbom'
-      ? ['all', 'cyclonedx', 'spdx', 'syft']
-      : ['all', 'sast', 'sca', 'secrets', 'iac', 'dast', 'compliance', 'vex', 'other'];
+    const order = ['all', 'sast', 'sca', 'secrets', 'iac', 'dast', 'compliance', 'vex', 'other'];
 
     const result: Array<{ id: string; label: string; count: number }> = [];
     for (const id of order) {
       const count = counts.get(id);
       if (count && count > 0) {
-        let label = id;
-        if (family === 'sbom') {
-          if (id === 'all') label = t('parsers.cat_all', { defaultValue: 'All' });
-          else if (id === 'cyclonedx') label = 'CycloneDX';
-          else if (id === 'spdx') label = 'SPDX';
-          else if (id === 'syft') label = 'Syft';
-        } else {
-          label = t(`parsers.cat_${id}`, {
-            defaultValue: id === 'all' ? 'All' :
-              id === 'sast' ? 'SAST' :
-              id === 'sca' ? 'SCA' :
-              id === 'secrets' ? 'Secrets' :
-              id === 'iac' ? 'IaC & Cloud' :
-              id === 'dast' ? 'DAST' :
-              id === 'compliance' ? 'Compliance' :
-              id === 'vex' ? 'VEX' : 'Other',
-          });
-        }
+        const label = t(`parsers.cat_${id}`, {
+          defaultValue: id === 'all' ? 'All' :
+            id === 'sast' ? 'SAST' :
+            id === 'sca' ? 'SCA' :
+            id === 'secrets' ? 'Secrets' :
+            id === 'iac' ? 'IaC & Cloud' :
+            id === 'dast' ? 'DAST' :
+            id === 'compliance' ? 'Compliance' :
+            id === 'vex' ? 'VEX' : 'Other',
+        });
         result.push({ id, label, count });
       }
     }
@@ -132,8 +124,10 @@ export function ParserList({ family }: { family: Family }) {
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return all.filter((p) => {
-      const cat = family === 'sbom' ? readsOf(p, family) : parserCategory(p);
-      if (category !== 'all' && cat !== category) return false;
+      if (family !== 'sbom' && category !== 'all') {
+        const cat = parserCategory(p);
+        if (cat !== category) return false;
+      }
       if (!needle) return true;
       return [p.name, p.id, parserResourceRef(p), parserResourceName(p), p.description, readsOf(p, family)].some((v) => (v ?? '').toLowerCase().includes(needle));
     });
