@@ -25,3 +25,5 @@ spec:
     buildDependencyGraph: true
     # Findings from the vulnerabilities the document itself states (a VDR). Off: an SBOM is assets (D131).
     extractVulnerabilities: false
+    # Exploitability assertions (VEX statements: status, justification, impact, action)
+    extractVEX: true

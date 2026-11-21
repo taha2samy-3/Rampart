@@ -37,7 +37,7 @@ spec:
               properties:
                 format:
                   type: string
-                  description: Canonical format identifier (cyclonedx, spdx, syft, custom).
+                  description: Canonical format identifier (cyclonedx, spdx, syft, openvex, csaf, custom).
                 description:
                   type: string
                 runtime:
@@ -72,6 +72,13 @@ spec:
                         Turn the vulnerabilities a document states (a CycloneDX VDR) into findings, besides filling
                         the inventory. Off by default: an SBOM is assets, and what is found in it is the matcher's work.
                         A format that states none (SPDX, Syft) is unaffected.
+                    extractVEX:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Extract exploitability assertions (VEX statements: status, justification, impact, action)
+                        from the document (CycloneDX VEX/VDR, OpenVEX, or CSAF) and emit them in canonical format
+                        for the Rampart matcher to suppress non-exploitable findings.
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

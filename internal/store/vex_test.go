@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/query"
+
+	"github.com/google/uuid"
 )
 
 func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
@@ -162,8 +163,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 		t.Fatalf("cyclonedx: %d %+v %s", code, r, h.finding(f3.ID).State)
 	}
 
-	// Export what is now decided, in both formats, and read it back: the same decisions, nothing to change.
-	for _, format := range []string{"openvex", "cyclonedx"} {
+	// Export what is now decided, in all three formats (OpenVEX, CycloneDX, CSAF 2.0), and read it back: the same decisions, nothing to change.
+	for _, format := range []string{"openvex", "cyclonedx", "csaf"} {
 		code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format="+format, "")
 		if code != http.StatusOK || !strings.Contains(string(out), cveA) {
 			t.Fatalf("export %s: %d %s", format, code, out)
@@ -172,8 +173,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 			t.Fatalf("round trip %s: %d %+v", format, code, back)
 		}
 	}
-	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=csaf", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "not built") {
-		t.Fatalf("csaf: %d %s", code, out)
+	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=unknown", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "format is openvex, cyclonedx, or csaf") {
+		t.Fatalf("unknown format: %d %s", code, out)
 	}
 	// An asset exports the same findings; another tenant's id exports nothing.
 	if code, out := do(boss, "GET", "/api/v1/assets/"+asset.ID.String()+"/vex", ""); code != http.StatusOK || !strings.Contains(string(out), cveB) {
@@ -189,11 +190,11 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 		t.Fatalf("audit: %s", ab)
 	}
 
-	// A VEX document uploaded as a scan report is refused with the way to send it.
+	// An OpenVEX document uploaded via ingest is processed by ClusterSBOMParser/sbom-openvex and applies decisions.
 	h.formatHint = ""
 	run := h.waitRun(h.uploadAndComplete([]byte(doc), domain.UploadContext{Repository: "github.com/acme/shop", Branch: "main", Commit: "c1"}))
-	if run.Status != domain.RunFailed || run.Error != "vex_document" {
-		t.Fatalf("a VEX document as a report: %s %q", run.Status, run.Error)
+	if run.Status != domain.RunCompleted {
+		t.Fatalf("an OpenVEX document as an SBOM run: %s %q", run.Status, run.Error)
 	}
 }
 

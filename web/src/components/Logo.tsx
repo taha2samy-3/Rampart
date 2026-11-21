@@ -20,11 +20,28 @@ export function LogoMark({ size = 24, className }: { size?: number; className?: 
 }
 
 /** Mark plus the wordmark in Red Hat Display ExtraBold (live text, self-hosted font). */
-export function Logo({ size = 24, showWord = true }: { size?: number; showWord?: boolean }) {
+export function Logo({
+  size = 24,
+  showWord = true,
+  badge = 'no-builtin',
+}: {
+  size?: number;
+  showWord?: boolean;
+  badge?: string | boolean;
+}) {
+  const badgeText = typeof badge === 'string' ? badge : badge ? 'no-builtin' : null;
   return (
     <span className="inline-flex items-center gap-2">
       <LogoMark size={size} />
       {showWord && <span className="display text-16 leading-none text-ink">Rampart</span>}
+      {badgeText && (
+        <span
+          className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-10 font-semibold uppercase tracking-wider text-accent"
+          title="No hardcoded built-ins: all parsers, readers, and policies are dynamic Kubernetes CRDs"
+        >
+          {badgeText}
+        </span>
+      )}
     </span>
   );
 }

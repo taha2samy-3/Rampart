@@ -22,6 +22,7 @@ const PARSERS: ParserDescriptor[] = [
   parser({ id: 'cluster:broken', name: 'broken Parser', runtime: 'wasm', module: undefined, status: 'refused', error: 'spec.detect: no filename or content probe' }),
   parser({ id: 'cluster:sbom-cyclonedx', name: 'cyclonedx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-cyclonedx', description: 'CycloneDX SBOM reader' }),
   parser({ id: 'cluster:sbom-spdx', name: 'spdx SBOM Parser', family: 'sbom', category: 'sca', module: 'sbom-spdx', status: 'module_missing', unavailable: 'its WASM module is not installed on this server (parsers.delivery in the chart)' }),
+  parser({ id: 'cluster:sbom-openvex', name: 'openvex SBOM Parser', family: 'sbom', category: 'vex', module: 'sbom-openvex', description: 'OpenVEX 0.2 exploitability assertions reader' }),
 ];
 
 describe('the Parsers page', () => {
@@ -72,7 +73,8 @@ describe('the Parsers page', () => {
     const spdx = within(table).getByText('spdx SBOM Parser').closest('tr')!;
     expect(within(spdx).getByText('spdx')).toBeInTheDocument();
     expect(within(spdx).getByText('Module missing')).toBeInTheDocument();
-    expect(screen.getByText('2 installed: 1 ready, 1 with a problem.')).toBeInTheDocument();
+    expect(within(table).getByText('openvex SBOM Parser')).toBeInTheDocument();
+    expect(screen.getByText('3 installed: 2 ready, 1 with a problem.')).toBeInTheDocument();
   });
 
   it('the inspector says what is wrong, and when it last worked, with a link to the run', async () => {

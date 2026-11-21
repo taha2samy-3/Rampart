@@ -16,6 +16,7 @@ import (
 
 	"rampart/internal/domain"
 	"rampart/internal/graph"
+	"rampart/internal/normalize"
 )
 
 // An SBOM reader turns one SBOM document into assets: the components, the dependency edges and the document
@@ -57,6 +58,8 @@ type Limits struct {
 	Timeout     time.Duration
 	// ExtractVulnerabilities asks the module for the vulnerabilities the document states (the spec option of the same name).
 	ExtractVulnerabilities bool
+	// ExtractVEX asks the module for the VEX exploitability statements the document states (the spec option of the same name).
+	ExtractVEX bool
 }
 
 func (l Limits) withDefaults() Limits {
@@ -79,6 +82,22 @@ type Result struct {
 	Edges      []domain.DependencyEdge
 	// Vulnerabilities are the ones the document states, only when the run asked for them.
 	Vulnerabilities []Vulnerability
+	// VEXStatements are the exploitability statements the document states, only when the run asked for them.
+	VEXStatements []VEXStatement
+}
+
+// VEXStatement is one vulnerability exploitability assertion a document states.
+type VEXStatement struct {
+	VulnerabilityID string
+	Aliases         []string
+	Purl            string
+	PurlBase        string
+	AffectedRef     string
+	Status          domain.FindingState // not_affected, affected, fixed, under_investigation
+	Justification   string
+	Impact          string
+	Action          string
+	Timestamp       time.Time
 }
 
 // Vulnerability is one vulnerability a document states about one component (a CycloneDX VDR entry).
@@ -132,6 +151,9 @@ func run(ctx context.Context, code []byte, r io.Reader, name string, lim Limits)
 	if lim.ExtractVulnerabilities {
 		modConfig = modConfig.WithEnv("EXTRACT_VULNERABILITIES", "true")
 	}
+	if lim.ExtractVEX {
+		modConfig = modConfig.WithEnv("EXTRACT_VEX", "true")
+	}
 
 	execErr := make(chan error, 1)
 	go func() {
@@ -140,7 +162,7 @@ func run(ctx context.Context, code []byte, r io.Reader, name string, lim Limits)
 		execErr <- err
 	}()
 
-	res, readErr := readEvents(outReader, lim.ExtractVulnerabilities)
+	res, readErr := readEvents(outReader, lim)
 	// Stop the module if the host gave up first, so its goroutine does not block on a full pipe.
 	_ = outReader.CloseWithError(io.ErrClosedPipe)
 	modErr := <-execErr
@@ -171,7 +193,7 @@ func exitedZero(err error) bool {
 }
 
 // readEvents reads the event lines of a module and builds the result.
-func readEvents(r io.Reader, extractVulnerabilities bool) (*Result, error) {
+func readEvents(r io.Reader, lim Limits) (*Result, error) {
 	res := &Result{SBOM: &domain.SBOM{ID: domain.NewID(), CreatedAt: time.Now().UTC()}}
 	sawMetadata := false
 
@@ -217,7 +239,7 @@ func readEvents(r io.Reader, extractVulnerabilities bool) (*Result, error) {
 			}
 			res.Edges = append(res.Edges, domain.DependencyEdge{FromRef: ev.From, ToRef: ev.To})
 		case "vulnerability":
-			if !extractVulnerabilities {
+			if !lim.ExtractVulnerabilities {
 				continue // not asked for: ignored, like any line of a type the host does not use
 			}
 			if ev.ID == "" || ev.AffectedRef == "" {
@@ -227,26 +249,59 @@ func readEvents(r io.Reader, extractVulnerabilities bool) (*Result, error) {
 				ID: ev.ID, Source: ev.Source, Severity: ev.Severity, Score: ev.Score, Vector: ev.Vector, CWEs: ev.CWEs,
 				AffectedRef: ev.AffectedRef, Description: ev.Description, Detail: ev.Detail, Aliases: nonEmpty(ev.Aliases),
 			})
+		case "vex_statement":
+			if !lim.ExtractVEX {
+				continue // not asked for: ignored
+			}
+			vuln := ev.Vulnerability
+			if vuln == "" {
+				vuln = ev.ID
+			}
+			if vuln == "" {
+				return nil, fmt.Errorf("line %d: a vex_statement needs a vulnerability identifier", line)
+			}
+			purl := ev.Purl
+			purlBase := ev.PurlBase
+			if purl != "" && purlBase == "" {
+				if _, base, err := normalize.CanonicalPURL(purl); err == nil {
+					purlBase = base
+				}
+			}
+			var t time.Time
+			if ev.Timestamp != "" {
+				t, _ = time.Parse(time.RFC3339, ev.Timestamp)
+			}
+			res.VEXStatements = append(res.VEXStatements, VEXStatement{
+				VulnerabilityID: vuln,
+				Aliases:         nonEmpty(ev.Aliases),
+				Purl:            purl,
+				PurlBase:        purlBase,
+				AffectedRef:     ev.AffectedRef,
+				Status:          domain.FindingState(ev.Status),
+				Justification:   ev.Justification,
+				Impact:          ev.ImpactStatement,
+				Action:          ev.ActionStatement,
+				Timestamp:       t,
+			})
 		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		return nil, fmt.Errorf("reading the module output: %v", err)
 	}
 
-	if !sawMetadata && len(res.Components) == 0 {
+	if !sawMetadata && len(res.Components) == 0 && len(res.VEXStatements) == 0 {
 		// A module that recognises its format always says so; silence means it found nothing it knows in the document.
 		return nil, errors.New("the module found nothing it recognises in the document: it is not in this format")
 	}
-	// Direct is what the root depends on itself, worked out once from the edges, in the one place the graph is built, so
-	// the flag stored with a component, the graph of the web UI and the CLI always agree. A module's own idea of "direct"
-	// is not used: it cannot know the root of a document that lists no dependencies for it.
-	view := graph.BuildView(res.Components, res.Edges, res.SBOM.RootComponent, nil)
-	direct := make(map[string]bool, len(view.Nodes))
-	for _, n := range view.Nodes {
-		direct[n.ID] = n.Direct
-	}
-	for i := range res.Components {
-		res.Components[i].Direct = direct[graph.ComponentID(res.Components[i])]
+	if len(res.Components) > 0 {
+		view := graph.BuildView(res.Components, res.Edges, res.SBOM.RootComponent, nil)
+		direct := make(map[string]bool, len(view.Nodes))
+		for _, n := range view.Nodes {
+			direct[n.ID] = n.Direct
+		}
+		for i := range res.Components {
+			res.Components[i].Direct = direct[graph.ComponentID(res.Components[i])]
+		}
 	}
 	res.SBOM.ComponentCount = len(res.Components)
 	res.SBOM.Dependencies = res.Edges
@@ -284,6 +339,14 @@ type event struct {
 	Description string   `json:"description"`
 	Detail      string   `json:"detail"`
 	Aliases     []string `json:"aliases"`
+
+	// vex_statement
+	Vulnerability   string `json:"vulnerability"`
+	Status          string `json:"status"`
+	Justification   string `json:"justification"`
+	ImpactStatement string `json:"impact_statement"`
+	ActionStatement string `json:"action_statement"`
+	Timestamp       string `json:"timestamp"`
 }
 
 func nonEmpty(in []string) []string {

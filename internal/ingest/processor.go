@@ -472,6 +472,11 @@ func (p *Processor) processSBOMWithFindings(ctx context.Context, pp ProcessParam
 			return Result{}, err
 		}
 	}
+	if len(doc.VEXStatements()) > 0 {
+		if err := p.applyVEXStatements(ctx, pp.Run, pp.Parser.Descriptor().ID, doc.VEXStatements()); err != nil {
+			p.logger.Warn("applying VEX statements from SBOM with findings run", "run", pp.Run.ID, "err", err)
+		}
+	}
 	// The findings go through the ordinary path, which reads them from the parser, not from the stream.
 	pp.IsSBOM = false
 	// One family for what the document states, also when it states nothing now, so a rescan closes what it stated before.
@@ -514,11 +519,110 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 	if int64(len(data)) > p.maxSBOMBytes {
 		return 0, &jobs.PermanentError{Code: ErrCodeSBOMTooLarge, Err: fmt.Errorf("the SBOM is larger than %d bytes", p.maxSBOMBytes)}
 	}
-	sbomDoc, components, _, err := reader.ParseSBOM(ctx, bytes.NewReader(data))
-	if err != nil {
-		return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+	var sbomDoc *domain.SBOM
+	var components []domain.SBOMComponent
+	var vexStmts []sbom.VEXStatement
+
+	if rr, ok := reader.(interface {
+		ParseSBOMResult(ctx context.Context, r io.Reader) (*sbom.Result, error)
+	}); ok {
+		res, err := rr.ParseSBOMResult(ctx, bytes.NewReader(data))
+		if err != nil {
+			return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+		}
+		sbomDoc, components = res.SBOM, res.Components
+		vexStmts = res.VEXStatements
+	} else {
+		var err error
+		sbomDoc, components, _, err = reader.ParseSBOM(ctx, bytes.NewReader(data))
+		if err != nil {
+			return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+		}
 	}
-	return p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+	count, err := p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+	if err != nil {
+		return 0, err
+	}
+	if len(vexStmts) > 0 {
+		if err := p.applyVEXStatements(ctx, run, parserID, vexStmts); err != nil {
+			p.logger.Warn("applying VEX statements from SBOM run", "run", run.ID, "err", err)
+		}
+	}
+	return count, nil
+}
+
+func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRun, parserID string, stmts []sbom.VEXStatement) error {
+	m, ok := p.store.(interface {
+		FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error)
+	})
+	if !ok {
+		return nil
+	}
+	cleanParser := strings.TrimPrefix(parserID, "cluster:sbom-")
+	cleanParser = strings.TrimPrefix(cleanParser, "cluster:")
+	actor := "vex:" + cleanParser
+
+	for _, st := range stmts {
+		if st.VulnerabilityID == "" || st.Status == "" {
+			continue
+		}
+		vulnIDs := []string{st.VulnerabilityID}
+		vulnIDs = append(vulnIDs, st.Aliases...)
+		var bases []string
+		if st.PurlBase != "" {
+			bases = append(bases, st.PurlBase)
+		}
+		if st.Purl != "" {
+			if _, base, err := normalize.CanonicalPURL(st.Purl); err == nil && base != "" {
+				bases = append(bases, base)
+			}
+		}
+		var appID *uuid.UUID
+		if run.ApplicationID != domain.NilID {
+			appID = &run.ApplicationID
+		}
+		cands, err := m.FindFindingsForVEX(ctx, run.TenantID, vulnIDs, bases, appID)
+		if err != nil {
+			return err
+		}
+		for _, f := range cands {
+			if st.Purl != "" && f.Location.Package != nil {
+				targetVer := purlVersion(st.Purl)
+				findingVer := purlVersion(f.Location.Package.Purl)
+				if findingVer == "" {
+					findingVer = f.Location.Package.InstalledVersion
+				}
+				if targetVer != "" && findingVer != "" && targetVer != findingVer {
+					continue
+				}
+			}
+			if f.State == st.Status && (st.Status != domain.StateNotAffected || f.Justification == st.Justification) {
+				continue
+			}
+			patch := domain.TriageRequest{
+				State:           st.Status,
+				Justification:   st.Justification,
+				ImpactStatement: st.Impact,
+				Note:            fmt.Sprintf("VEX (%s statement) applied from SBOM run %s", st.Status, run.ID),
+			}
+			evs, terr := domain.ApplyTriage(f, patch, actor, time.Now().UTC())
+			if terr != nil {
+				continue
+			}
+			_ = p.store.UpdateFindingTriage(ctx, run.TenantID, f, f.Version, evs)
+		}
+	}
+	return nil
+}
+
+func purlVersion(p string) string {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	if i := strings.LastIndex(p, "@"); i >= 0 {
+		return p[i+1:]
+	}
+	return ""
 }
 
 // storeSBOM stamps the document and its components with the run and stores them.
@@ -679,10 +783,6 @@ func (p *Processor) selectParser(ctx context.Context, tenantID uuid.UUID, hint s
 		if parser == nil || score < 40 {
 			return nil, false, &jobs.PermanentError{Code: ErrCodeUnsupportedFormat, Err: errors.New("the report format is not recognised")}
 		}
-	}
-	desc := parser.Descriptor()
-	if strings.Contains(strings.ToLower(desc.ID), "openvex") {
-		return nil, false, &jobs.PermanentError{Code: ErrCodeVEXDocument, Err: errors.New("an OpenVEX document is a set of decisions, not a scan report: send it to POST /api/v1/vex")}
 	}
 	return parser, sbom.IsReader(parser), nil
 }

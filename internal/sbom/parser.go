@@ -1,6 +1,7 @@
 package sbom
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,11 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
+	"rampart/internal/normalize"
+	"rampart/internal/vex"
 	"rampart/internal/wasmstore"
 )
 
@@ -135,25 +139,98 @@ func (p *WasmSBOMParser) Parse(ctx context.Context, r io.Reader, pc domain.Parse
 // ParseSBOM executes the sandboxed WASM module to extract the document metadata, the components and the
 // dependency edges. It returns an error when the module fails or writes output it should not (host.go).
 func (p *WasmSBOMParser) ParseSBOM(ctx context.Context, r io.Reader) (*domain.SBOM, []domain.SBOMComponent, []domain.DependencyEdge, error) {
-	res, err := run(ctx, p.wasmCode, r, p.name, p.limits(false))
+	res, err := p.ParseSBOMResult(ctx, r)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return res.SBOM, res.Components, res.Edges, nil
 }
 
-func (p *WasmSBOMParser) limits(extract bool) Limits {
-	return Limits{MaxMemoryMB: p.spec.Limits.MaxMemoryMB, ExtractVulnerabilities: extract}
+func (p *WasmSBOMParser) limits(extractVulns bool) Limits {
+	return Limits{
+		MaxMemoryMB:            p.spec.Limits.MaxMemoryMB,
+		ExtractVulnerabilities: extractVulns,
+		ExtractVEX:             p.spec.Options.ExtractVEX,
+	}
 }
 
 // ExtractsVulnerabilities reports whether the spec turns the vulnerabilities a document states into findings.
 func (p *WasmSBOMParser) ExtractsVulnerabilities() bool { return p.spec.Options.ExtractVulnerabilities }
 
+// ExtractsVEX reports whether the spec turns VEX statements into decisions.
+func (p *WasmSBOMParser) ExtractsVEX() bool { return p.spec.Options.ExtractVEX }
+
+// ParseSBOMResult executes the sandboxed WASM module and returns the full Result including VEX statements.
+func (p *WasmSBOMParser) ParseSBOMResult(ctx context.Context, r io.Reader) (*Result, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	res, runErr := run(ctx, p.wasmCode, bytes.NewReader(data), p.name, p.limits(p.spec.Options.ExtractVulnerabilities))
+	if runErr == nil && len(res.VEXStatements) > 0 {
+		return res, nil
+	}
+	// Fallback for OpenVEX documents
+	if p.spec.Format == "openvex" || bytes.Contains(data, []byte("openvex.dev")) {
+		if doc, parseErr := vex.Parse(data); parseErr == nil && doc != nil {
+			vexRes := &Result{
+				SBOM: &domain.SBOM{
+					ID:        domain.NewID(),
+					Format:    "openvex",
+					CreatedAt: time.Now().UTC(),
+				},
+			}
+			if p.spec.Options.ExtractVEX {
+				for _, st := range doc.Statements {
+					if st.Problem != "" || len(st.Vulns) == 0 {
+						continue
+					}
+					vulnID := st.Vulns[0]
+					var aliases []string
+					if len(st.Vulns) > 1 {
+						aliases = st.Vulns[1:]
+					}
+					for _, p := range st.Purls {
+						_, base, _ := normalize.CanonicalPURL(p)
+						vexRes.VEXStatements = append(vexRes.VEXStatements, VEXStatement{
+							VulnerabilityID: vulnID,
+							Aliases:         aliases,
+							Purl:            p,
+							PurlBase:        base,
+							Status:          st.State,
+							Justification:   st.Justification,
+							Impact:          st.Impact,
+							Action:          st.Action,
+							Timestamp:       st.At,
+						})
+					}
+					if len(st.Purls) == 0 {
+						vexRes.VEXStatements = append(vexRes.VEXStatements, VEXStatement{
+							VulnerabilityID: vulnID,
+							Aliases:         aliases,
+							Status:          st.State,
+							Justification:   st.Justification,
+							Impact:          st.Impact,
+							Action:          st.Action,
+							Timestamp:       st.At,
+						})
+					}
+				}
+			}
+			return vexRes, nil
+		}
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	return res, nil
+}
+
 // ParseDocument reads the document once, with the module asked for the vulnerabilities the document states, and returns
 // everything the run needs: the assets, and (through Findings) the findings. It is for a reader whose option
 // extractVulnerabilities is on.
 func (p *WasmSBOMParser) ParseDocument(ctx context.Context, r io.Reader) (*Document, error) {
-	res, err := run(ctx, p.wasmCode, r, p.name, p.limits(true))
+	res, err := p.ParseSBOMResult(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +256,14 @@ func (d *Document) Family() string { return FamilyPrefix + normalizeFormat(d.for
 // never attached to a guess: the run then ends completed-with-errors and closes nothing (D13).
 func (d *Document) Findings(pc domain.ParseContext) []domain.RawFinding {
 	return findingsOf(d.res, d.format, pc)
+}
+
+// VEXStatements returns the exploitability statements emitted during document parsing.
+func (d *Document) VEXStatements() []VEXStatement {
+	if d == nil || d.res == nil {
+		return nil
+	}
+	return d.res.VEXStatements
 }
 
 // IsReader reports whether a parser reads an SBOM into assets instead of producing findings. It is the one rule

@@ -1,0 +1,30 @@
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterSBOMParser
+metadata:
+  name: sbom-openvex
+spec:
+  format: openvex
+  runtime: wasm
+  source:
+    oci: ghcr.io/rampart-aspm/sbom-parsers/sbom-openvex:v1
+  description: OpenVEX 0.2 exploitability assertions & statements WASM reader
+  detect:
+    filenames:
+    - '*openvex*'
+    - '*.vex.json'
+    - '*.vex'
+    contentTypes:
+    - '*openvex*'
+    - 'application/vnd.openvex+json'
+    probes:
+    - jsonHasKeys:
+      - '@context'
+      - statements
+    - contains:
+      - 'https://openvex.dev/ns/v0.2.0'
+      - '"@context": "https://openvex.dev/ns"'
+      - 'openvex.dev'
+  options:
+    buildDependencyGraph: false
+    extractVulnerabilities: false
+    extractVEX: true

@@ -2,8 +2,8 @@ apiVersion: v2
 name: rampart
 description: Rampart Cloud-Native Application Security Posture Management (ASPM) Platform
 type: application
-version: 0.3.22
-appVersion: "0.3.22"
+version: 0.3.23
+appVersion: "0.3.23"
 home: https://rampart.aspm.dev
 icon: https://raw.githubusercontent.com/taha2samy-3/Rampart/main/web/public/favicon.svg
 sources:
@@ -35,7 +35,7 @@ dependencies:
     condition: parsers.defaultParsers.enabled
   - name: rampart-sbom-parsers
     alias: sbomParsers
-    version: 0.1.0
+    version: 0.2.0
     repository: oci://ghcr.io/rampart-aspm/charts
     condition: sbomParsers.defaultSBOMParsers.enabled
 maintainers:

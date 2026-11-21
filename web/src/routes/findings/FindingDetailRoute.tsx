@@ -39,6 +39,8 @@ const SEVERITY_STYLES: Record<string, string> = {
 const STATE_STYLES: Record<string, string> = {
   open: 'bg-danger/10 text-danger border-danger/20',
   under_investigation: 'bg-warning/10 text-warning border-warning/20',
+  affected: 'bg-danger/10 text-danger border-danger/20',
+  not_affected: 'bg-success/10 text-success border-success/20',
   fixed: 'bg-success/10 text-success border-success/20',
   risk_accepted: 'bg-accent/10 text-accent border-accent/20',
   out_of_scope: 'bg-ink-2/10 text-ink-2 border-ink-2/20',
@@ -221,6 +223,40 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
             </div>
           </div>
         </div>
+
+        {/* VEX Exploitability Statement */}
+        {f.state === 'not_affected' && (
+          <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex size-2.5 rounded-full bg-success" />
+              <h3 className="m-0 text-14 font-semibold text-success">
+                VEX Exploitability Statement: Not Affected
+              </h3>
+            </div>
+            <div className="mt-2.5 grid grid-cols-[140px_1fr] gap-x-4 gap-y-1.5 text-13">
+              {f.justification && (
+                <>
+                  <span className="font-medium text-ink-2">Justification:</span>
+                  <span className="font-semibold text-ink">
+                    {t(`triage.justifications.${f.justification}`, { defaultValue: f.justification.replace(/_/g, ' ') })}
+                  </span>
+                </>
+              )}
+              {f.impact_statement && (
+                <>
+                  <span className="font-medium text-ink-2">Impact Statement:</span>
+                  <span className="text-ink">{f.impact_statement}</span>
+                </>
+              )}
+              {f.state_reason && (
+                <>
+                  <span className="font-medium text-ink-2">Reason:</span>
+                  <span className="text-ink">{f.state_reason}</span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs Layout */}

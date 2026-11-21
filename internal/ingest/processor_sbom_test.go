@@ -213,3 +213,161 @@ func TestProcessSBOMStatementOfAnUnknownComponentIsARecordError(t *testing.T) {
 		t.Errorf("result = %+v, want completed with errors and no finding", res)
 	}
 }
+
+const sampleOpenVEX = `{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://openvex.dev/docs/public/vex-2023-001",
+  "author": "Security Team",
+  "timestamp": "2023-10-15T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2023-44487",
+        "aliases": ["GHSA-m425-mq94-257g"]
+      },
+      "products": [
+        {
+          "@id": "pkg:golang/google.golang.org/grpc@v1.58.2",
+          "subcomponents": []
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "HTTP/2 rapid reset attack mitigated by fronting Envoy proxy."
+    }
+  ]
+}`
+
+func TestProcessSBOM_OpenVEX_AppliesVEXStatements(t *testing.T) {
+	ctx := context.Background()
+	proc, st, _ := sbomProcessor(t)
+	run := sbomRun()
+
+	vulnID := "CVE-2023-44487"
+	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
+	initialFinding := &domain.Finding{
+		ID:            domain.NewID(),
+		TenantID:      run.TenantID,
+		ApplicationID: run.ApplicationID,
+		AssetID:       run.AssetID,
+		FindingKey:    "finding-grpc-cve",
+		RuleID:        vulnID,
+		VulnerabilityID: &vulnID,
+		Location: domain.Location{
+			Package: &domain.PackageLocation{
+				Purl:             purl,
+				PurlBase:         "pkg:golang/google.golang.org/grpc",
+				InstalledVersion: "v1.58.2",
+			},
+		},
+		Severity: domain.SeverityCritical,
+		State:    domain.StateOpen,
+		Version:  1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{initialFinding}); err != nil {
+		t.Fatal(err)
+	}
+
+	parser, err := sbom.NewWasmSBOMParserFromSpec("openvex", []byte("spec:\n  format: openvex\n  options:\n    extractVEX: true\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := proc.Process(ctx, ingest.ProcessParams{
+		Run:          run,
+		Parser:       parser,
+		IsSBOM:       true,
+		ScanFinished: time.Now().UTC(),
+		Open:         openString(sampleOpenVEX),
+	})
+	if err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+	if res.Status != domain.RunCompleted {
+		t.Fatalf("run status = %s, want %s", res.Status, domain.RunCompleted)
+	}
+
+	// Verify finding transitioned to not_affected and triage fields were populated
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-grpc-cve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := findings["finding-grpc-cve"]
+	if f == nil {
+		t.Fatal("finding missing in store")
+	}
+	if f.State != domain.StateNotAffected {
+		t.Errorf("expected state not_affected, got %s", f.State)
+	}
+	if f.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Errorf("expected justification vulnerable_code_not_in_execute_path, got %s", f.Justification)
+	}
+	if f.ImpactStatement != "HTTP/2 rapid reset attack mitigated by fronting Envoy proxy." {
+		t.Errorf("expected impact statement, got %s", f.ImpactStatement)
+	}
+}
+
+func TestProcessSBOM_VEXOptionDisabled_DoesNotApplyVEX(t *testing.T) {
+	ctx := context.Background()
+	proc, st, _ := sbomProcessor(t)
+	run := sbomRun()
+
+	vulnID := "CVE-2023-44487"
+	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
+	initialFinding := &domain.Finding{
+		ID:            domain.NewID(),
+		TenantID:      run.TenantID,
+		ApplicationID: run.ApplicationID,
+		AssetID:       run.AssetID,
+		FindingKey:    "finding-grpc-cve-2",
+		RuleID:        vulnID,
+		VulnerabilityID: &vulnID,
+		Location: domain.Location{
+			Package: &domain.PackageLocation{
+				Purl:             purl,
+				PurlBase:         "pkg:golang/google.golang.org/grpc",
+				InstalledVersion: "v1.58.2",
+			},
+		},
+		Severity: domain.SeverityCritical,
+		State:    domain.StateOpen,
+		Version:  1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{initialFinding}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Parser with extractVEX: false
+	parser, err := sbom.NewWasmSBOMParserFromSpec("openvex", []byte("spec:\n  format: openvex\n  options:\n    extractVEX: false\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := proc.Process(ctx, ingest.ProcessParams{
+		Run:          run,
+		Parser:       parser,
+		IsSBOM:       true,
+		ScanFinished: time.Now().UTC(),
+		Open:         openString(sampleOpenVEX),
+	})
+	if err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+	if res.Status != domain.RunCompleted {
+		t.Fatalf("run status = %s, want %s", res.Status, domain.RunCompleted)
+	}
+
+	// Verify finding remains open
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-grpc-cve-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := findings["finding-grpc-cve-2"]
+	if f == nil {
+		t.Fatal("finding missing in store")
+	}
+	if f.State != domain.StateOpen {
+		t.Errorf("expected state open, got %s", f.State)
+	}
+}

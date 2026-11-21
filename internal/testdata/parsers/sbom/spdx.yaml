@@ -24,3 +24,5 @@ spec:
       - '@graph'
   options:
     buildDependencyGraph: true
+    extractVulnerabilities: false
+    extractVEX: false

@@ -22,6 +22,7 @@ parsers:
     gitlab: {image: "ghcr.io/rampart-aspm/parsers/gitlab:v0.2.0", sha256: "0c33658da64b4b447ba780b205356360480153b81cf3f97051b5fbd0164d487b"}
     dependencycheck: {image: "ghcr.io/rampart-aspm/parsers/dependencycheck:v0.2.0", sha256: "86172754611e001f6368f4ac289046450401d4ae12ee731474c62fb8edc09855"}
     openvex: {image: "ghcr.io/rampart-aspm/parsers/openvex:v0.2.0", sha256: "39e00d59341a3ad9a09dddf6ba693b242db8cd3745e9fd6193cba5219f1abb48"}
+    sbom-openvex: {image: "ghcr.io/rampart-aspm/parsers/openvex:v0.2.0", sha256: "39e00d59341a3ad9a09dddf6ba693b242db8cd3745e9fd6193cba5219f1abb48"}
     sbom-cyclonedx: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-cyclonedx@sha256:a25a69380918f842a28a88601eac28dca30bc2d4307fc44bd923a514413fc9dc", sha256: "f139832ee9d647c8fac247bc18dd250d4b1c709f1bf137d5673d641623da3f09"}
     sbom-spdx: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-spdx@sha256:0f4bb8709a4e4ded8c2634cee91f4416d5dbb05a4ee6e87960932767e89fbcde", sha256: "f2ff3ce096ab132ff154b359312cb90a07ac3fcdef9a38fadab17fc35d308d6d"}
     sbom-syft: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-syft@sha256:71fa5d52023cfdf50c72e17ffe7267b57fe01aa8ff1a43f23addd04d640fed58", sha256: "9fe3b94aa74a08079b62bb058cb6af7d0aa5122b85af253d2b03026186afd823"}

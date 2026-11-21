@@ -211,7 +211,22 @@ export function FindingsTable({
                 <Td className={cn('text-12 text-ink-2', HIDE_NARROW, !appName.has(f.application_id ?? '') && 'font-mono')} title={appName.get(f.application_id ?? '') ?? f.application_id}>
                   <span className="block max-w-[11rem] truncate">{appName.get(f.application_id ?? '') ?? shortId(f.application_id)}</span>
                 </Td>
-                <Td className={HIDE_NARROWER}>{t(`state.${f.state}`, { defaultValue: f.state })}</Td>
+                <Td className={HIDE_NARROWER}>
+                  <span
+                    className={cn(
+                      'inline-flex items-center rounded px-1.5 py-0.5 text-11 font-medium capitalize',
+                      f.state === 'not_affected' && 'border border-success/30 bg-success/15 text-success',
+                      f.state === 'fixed' && 'bg-success/10 text-success',
+                      f.state === 'under_investigation' && 'bg-warning/10 text-warning',
+                      f.state === 'risk_accepted' && 'bg-accent/10 text-accent',
+                      f.state === 'affected' && 'bg-danger/10 text-danger',
+                      f.state === 'open' && 'text-ink',
+                      (f.state === 'out_of_scope' || f.state === 'duplicate') && 'text-ink-2',
+                    )}
+                  >
+                    {t(`state.${f.state}`, { defaultValue: f.state.replace(/_/g, ' ') })}
+                  </span>
+                </Td>
                 <Td align="end" className={cn(due.late && 'font-semibold text-critical')} title={r.sla_due_date ? absoluteDate(r.sla_due_date) : undefined}>
                   {due.text}
                 </Td>

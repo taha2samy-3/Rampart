@@ -30,7 +30,7 @@ func TestInstalledDescriptorMatchesTheSBOMReader(t *testing.T) {
 		}
 		n++
 	}
-	if n != 3 {
-		t.Fatalf("checked %d SBOM readers, want 3", n)
+	if n != 4 {
+		t.Fatalf("checked %d SBOM readers, want 4", n)
 	}
 }

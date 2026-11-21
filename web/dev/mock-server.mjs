@@ -94,7 +94,7 @@ const SAMPLES = [
   ['info', 'Package has no declared licence', 'sca', 'trivy', 'pkg:npm/left-pad@1.3.0', []],
   ['info', 'Commented-out credentials in test fixture', 'secrets', 'gitleaks', 'test/fixtures/db.yml:3', []],
 ];
-const STATES = ['open', 'open', 'open', 'under_investigation', 'open', 'risk_accepted', 'open', 'fixed'];
+const STATES = ['open', 'open', 'not_affected', 'under_investigation', 'open', 'risk_accepted', 'open', 'fixed'];
 const APPS = ['b7e1c9a2-4f10-4c1e-9d11-0a0000000001', 'c8f2dab3-5a21-4d2f-8e22-0a0000000002', 'd903ebc4-6b32-4e30-9f33-0a0000000003'];
 
 function makeFindings() {
@@ -119,6 +119,8 @@ function makeFindings() {
         severity: band,
         risk_score: total,
         state: STATES[i % STATES.length],
+        justification: STATES[i % STATES.length] === 'not_affected' ? 'vulnerable_code_not_in_execute_path' : undefined,
+        impact_statement: STATES[i % STATES.length] === 'not_affected' ? 'Component included as test dependency only; dead code in production bundle.' : undefined,
         detection: 'present',
         first_seen: new Date(now - (i * 3 + 1) * 86_400_000).toISOString(),
         last_seen: new Date(now - 3_600_000).toISOString(),
@@ -171,7 +173,6 @@ const PARSERS = (() => {
     p('cluster:grype', 'grype Parser', 'report', 'wasm', { category: 'sca' }),
     p('cluster:kubebench', 'kubebench Parser', 'report', 'wasm', { category: 'compliance' }),
     p('cluster:nuclei', 'nuclei Parser', 'report', 'lua', { category: 'dast' }),
-    p('cluster:openvex', 'openvex Parser', 'report', 'wasm', { category: 'vex' }),
     p('cluster:prowler', 'prowler Parser', 'report', 'wasm', { category: 'compliance' }),
     p('cluster:sarif', 'sarif Parser', 'report', 'wasm', { category: 'sast', version: '2.1.0', last_run: { id: RUNS[1].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
     p('cluster:semgrep', 'semgrep Parser', 'report', 'wasm', { category: 'sast', last_run: { id: RUNS[2].id, status: 'failed', error: 'parse_error', at: ago(5) }, last_success: ago(70) }),
@@ -183,7 +184,7 @@ const PARSERS = (() => {
     p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
     p('cluster:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
     p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
-    p('cluster:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('cluster:sbom-openvex', 'openvex SBOM Parser', 'sbom', 'wasm', { version: '0.2', status: 'installed' }),
   ];
 })();
 

@@ -20,7 +20,7 @@ func TestReadEvents(t *testing.T) {
 		`{"type":"edge","from":"app","to":"lodash","direct":true}`,
 		`{"type":"somethingnew","x":1}`,
 	}, "\n")
-	res, err := readEvents(strings.NewReader(good), false)
+	res, err := readEvents(strings.NewReader(good), Limits{})
 	if err != nil {
 		t.Fatalf("a well-formed stream failed: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestReadEvents(t *testing.T) {
 func TestReadEventsIgnoresVulnerabilityEventsUnlessAsked(t *testing.T) {
 	in := `{"type":"metadata","format":"CycloneDX"}` + "\n" +
 		`{"type":"vulnerability","id":"CVE-2024-0001","severity":"high","affected_ref":"pkg:npm/x@1"}` + "\n"
-	res, err := readEvents(strings.NewReader(in), false)
+	res, err := readEvents(strings.NewReader(in), Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestReadEventsReadsVulnerabilitiesWhenAsked(t *testing.T) {
 		`{"type":"component","ref":"pkg:npm/x@1","name":"x","version":"1","purl":"pkg:npm/x@1"}`,
 		`{"type":"vulnerability","id":"CVE-2024-0001","severity":"high","score":7.5,"vector":"CVSS:3.1/AV:N","cwes":[79],"affected_ref":"pkg:npm/x@1","aliases":["GHSA-aaaa-bbbb-cccc",""]}`,
 	}, "\n")
-	res, err := readEvents(strings.NewReader(in), true)
+	res, err := readEvents(strings.NewReader(in), Limits{ExtractVulnerabilities: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +72,38 @@ func TestReadEventsReadsVulnerabilitiesWhenAsked(t *testing.T) {
 		"no id":        `{"type":"vulnerability","affected_ref":"x"}`,
 		"no component": `{"type":"vulnerability","id":"CVE-1"}`,
 	} {
-		if _, err := readEvents(strings.NewReader(`{"type":"metadata"}`+"\n"+bad), true); err == nil {
+		if _, err := readEvents(strings.NewReader(`{"type":"metadata"}`+"\n"+bad), Limits{ExtractVulnerabilities: true}); err == nil {
 			t.Errorf("%s: a vulnerability that names no id or no component must fail the run", name)
 		}
+	}
+}
+
+func TestReadEventsReadsVEXStatementsWhenAsked(t *testing.T) {
+	in := strings.Join([]string{
+		`{"type":"metadata","format":"OpenVEX","spec_version":"0.2.0"}`,
+		`{"type":"vex_statement","vulnerability":"CVE-2023-4911","purl":"pkg:deb/debian/glibc@2.38","status":"not_affected","justification":"vulnerable_code_not_in_execute_path","impact_statement":"runtime disabled"}`,
+	}, "\n")
+
+	// 1. When extractVEX is off: vex_statement is ignored
+	off, err := readEvents(strings.NewReader(in), Limits{ExtractVEX: false})
+	if err != nil {
+		t.Fatalf("reading with extractVEX false failed: %v", err)
+	}
+	if len(off.VEXStatements) != 0 {
+		t.Errorf("expected 0 vex statements when off, got %d", len(off.VEXStatements))
+	}
+
+	// 2. When extractVEX is on: vex_statement is extracted
+	on, err := readEvents(strings.NewReader(in), Limits{ExtractVEX: true})
+	if err != nil {
+		t.Fatalf("reading with extractVEX true failed: %v", err)
+	}
+	if len(on.VEXStatements) != 1 {
+		t.Fatalf("expected 1 vex statement, got %d", len(on.VEXStatements))
+	}
+	st := on.VEXStatements[0]
+	if st.VulnerabilityID != "CVE-2023-4911" || st.PurlBase != "pkg:deb/debian/glibc" || st.Status != domain.StateNotAffected || st.Justification != "vulnerable_code_not_in_execute_path" || st.Impact != "runtime disabled" {
+		t.Errorf("unexpected vex statement: %+v", st)
 	}
 }
 
@@ -127,14 +156,14 @@ func TestReadEventsRejectsBadOutput(t *testing.T) {
 		"empty output":              ``,
 	}
 	for name, in := range cases {
-		if _, err := readEvents(strings.NewReader(in), false); err == nil {
+		if _, err := readEvents(strings.NewReader(in), Limits{}); err == nil {
 			t.Errorf("%s: no error, the run must fail instead of storing a part of the document", name)
 		}
 	}
 }
 
 func TestReadEventsAllowsAnEmptyInventory(t *testing.T) {
-	res, err := readEvents(strings.NewReader(`{"type":"metadata","format":"SPDX","spec_version":"2.3"}`), false)
+	res, err := readEvents(strings.NewReader(`{"type":"metadata","format":"SPDX","spec_version":"2.3"}`), Limits{})
 	if err != nil {
 		t.Fatalf("an SBOM with no components is a valid inventory: %v", err)
 	}

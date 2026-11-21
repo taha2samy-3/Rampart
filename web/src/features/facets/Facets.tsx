@@ -3,7 +3,7 @@ import { BAND_LABEL, BandShape } from '@/components';
 import { BANDS } from '@/lib/band';
 import { fieldValues, toggleFieldValue } from '@/lib/grammar';
 
-const STATES = ['open', 'under_investigation', 'fixed', 'risk_accepted'] as const;
+const STATES = ['open', 'under_investigation', 'affected', 'not_affected', 'fixed', 'risk_accepted'] as const;
 
 /**
  * Facet rail. Risk and state write into `q` through the grammar. The other

@@ -20,6 +20,9 @@ type SBOMParserOptions struct {
 	// findings, besides filling the inventory. Default false: an SBOM is assets, and what is found in it is the matcher's
 	// work (D131). A format that states none (SPDX, Syft) is unaffected.
 	ExtractVulnerabilities bool `json:"extractVulnerabilities" yaml:"extractVulnerabilities"`
+	// ExtractVEX extracts exploitability assertions (VEX statements: status, justification, impact, action) from the document
+	// (CycloneDX VEX/VDR, OpenVEX, or CSAF) and emits them in canonical format to suppress non-exploitable findings in quality gates and dashboards.
+	ExtractVEX bool `json:"extractVEX" yaml:"extractVEX"`
 }
 
 // ClusterSBOMParser represents a cluster-wide SBOM parser CRD.

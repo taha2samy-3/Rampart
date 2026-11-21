@@ -12,6 +12,8 @@ func TestValidateClusterSBOMParserSpec(t *testing.T) {
 		name, spec, want string // want is a part of the error, empty for valid
 	}{
 		{"sbom-spdx", good, ""},
+		{"sbom-openvex", `{"format":"openvex","runtime":"wasm","options":{"extractVEX":true}}`, ""},
+		{"sbom-cyclonedx", `{"format":"cyclonedx","runtime":"wasm","options":{"extractVEX":true,"extractVulnerabilities":true}}`, ""},
 		{"sbom-my.reader_2", `{"format":"my.reader_2","runtime":"wasm"}`, ""},
 		{"spdx", good, `starts with "sbom-"`},
 		{"sbom-", good, `starts with "sbom-"`},
