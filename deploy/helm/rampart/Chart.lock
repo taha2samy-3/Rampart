@@ -4,7 +4,7 @@ dependencies:
   version: 0.2.1
 - name: rampart-parsers
   repository: oci://ghcr.io/rampart-aspm/charts
-  version: 0.1.0
+  version: 0.2.0
 - name: rampart-sbom-parsers
   repository: oci://ghcr.io/rampart-aspm/charts
   version: 0.1.0
