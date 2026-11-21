@@ -143,6 +143,29 @@ export interface FindingRow {
   sla_due_date?: string | null;
 }
 
+export interface Occurrence {
+  id: string;
+  tenant_id: string;
+  finding_id: string;
+  ingest_run_id: string;
+  scan_source_id: string;
+  asset_id: string;
+  track: string;
+  occurrence_key: string;
+  scanner_family: string;
+  scanner_name: string;
+  scanner_version?: string;
+  tool_record_id?: string;
+  location?: unknown;
+  tool_severity?: string;
+  normalized?: Record<string, unknown> | null;
+  raw?: Record<string, unknown> | string | null;
+  present: boolean;
+  seen_count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
 /** Normalised list page (doc 11 shape; the backend spelling is accepted too). */
 export interface Page<T> {
   items: T[];

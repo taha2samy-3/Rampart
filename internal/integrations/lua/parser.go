@@ -296,6 +296,19 @@ func (p *LuaParser) tableToRawFinding(tbl *lua.LTable) domain.RawFinding {
 		})
 	}
 
+	if goMap, ok := luaToGo(tbl).(map[string]any); ok && len(goMap) > 0 {
+		attrs := make(map[string]any, len(goMap))
+		for k, v := range goMap {
+			if k != "secret_value" && k != "secret" && k != "Secret" {
+				attrs[k] = v
+			}
+		}
+		rf.Attributes = attrs
+		if rawBytes, err := json.Marshal(attrs); err == nil {
+			rf.RawPayload = rawBytes
+		}
+	}
+
 	return rf
 }
 

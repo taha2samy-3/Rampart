@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, ApplicationFreshness, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
+import type { AppSummary, ApplicationPage, ApplicationFreshness, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -109,6 +109,11 @@ export const bulkTriage = (body: BulkBody) => post<BulkResult>('/api/v1/findings
 export async function getFindingSources(id: string, signal?: AbortSignal): Promise<FindingSources> {
   const raw = await get<{ reported_by?: Reporter[] | null; also_reported_by?: CorrelatedRef[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
   return { reported_by: raw.reported_by ?? [], also_reported_by: raw.also_reported_by ?? [] };
+}
+/** All concrete occurrences of this finding from reporting scanners with raw & normalized data. */
+export async function getFindingOccurrences(id: string, signal?: AbortSignal): Promise<Occurrence[]> {
+  const raw = await get<{ occurrences?: Occurrence[] | null }>(`/api/v1/findings/${encodeURIComponent(id)}`, { signal });
+  return raw.occurrences ?? [];
 }
 /** The package a scanner named for a finding, read from its latest occurrence; null for a finding with none (a query may not return undefined). */
 export async function getFindingPackage(id: string, signal?: AbortSignal): Promise<PackageEvidence | null> {

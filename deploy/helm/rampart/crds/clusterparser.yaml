@@ -89,6 +89,25 @@ spec:
                       type: integer
                     timeoutSeconds:
                       type: integer
+                display:
+                  type: object
+                  description: Optional display metadata and attribute hints for the UI inspector.
+                  properties:
+                    title:
+                      type: string
+                    icon:
+                      type: string
+                    summary:
+                      type: string
+                    highlightedAttributes:
+                      type: array
+                      items:
+                        type: string
+                    attributeLabels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                  x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
               properties:

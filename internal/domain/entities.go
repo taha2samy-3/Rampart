@@ -403,6 +403,7 @@ type RawFinding struct {
 	// SecretVerified: the scanner tried the credential against its provider and it is live (docs/06 SECRET_VERIFIED).
 	SecretVerified bool            `json:"secret_verified,omitempty"`
 	VEX            *VEXStatement   `json:"vex,omitempty"`
+	Attributes     map[string]any  `json:"attributes,omitempty"`
 	RawPayload     json.RawMessage `json:"raw_payload,omitempty"`
 }
 

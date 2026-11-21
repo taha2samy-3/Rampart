@@ -231,7 +231,7 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			Description: raw.Description, ToolSeverity: raw.ToolSeverity, Severity: raw.Severity, Location: raw.Location, CWEs: raw.CWEs,
 			VulnID: canonicalVulnID(raw), CVSSVector: raw.CVSSVector, SecretVerified: raw.SecretVerified,
 			ContentHash: normalize.ComputeContentHash(raw.Title, raw.Description, raw.ToolSeverity, raw.CVSSVector, "", raw.Location.PrimaryPath()),
-			SeenAt:      pp.ScanFinished, RawPayload: raw.RawPayload,
+			SeenAt:      pp.ScanFinished, Attributes: raw.Attributes, RawPayload: raw.RawPayload,
 		})
 		if len(f.buf) >= p.batchRows {
 			if err := flush(f); err != nil {

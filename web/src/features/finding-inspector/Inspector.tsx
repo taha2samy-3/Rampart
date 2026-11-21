@@ -9,6 +9,7 @@ import { toBand } from '@/lib/band';
 import { ComplianceSection } from './ComplianceSection';
 import { locationOf, whereText } from '@/lib/location';
 import { EvidenceSection } from './EvidenceSection';
+import { ScannerEvidenceSection } from './ScannerEvidenceSection';
 import { VulnerabilitySection } from './VulnerabilitySection';
 import { absoluteDate, dueShort, relativeDays, shortAge } from '@/lib/format';
 import { factorKind, factorLabel, type SegmentKind } from '@/lib/score';
@@ -115,6 +116,8 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
       </section>
 
       <EvidenceSection finding={f} />
+
+      <ScannerEvidenceSection finding={f} />
 
       <ComplianceSection finding={f} />
 

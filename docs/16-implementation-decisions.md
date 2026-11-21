@@ -2645,4 +2645,18 @@ D143 records the design. These are the choices made while building it that D143 
 3. **UI Representation**: Tables and inspectors display explicit Kubernetes Custom Resource coordinates: `ClusterParser/<name>`, `ClusterSBOMParser/<format>`, and `Parser/<name>`, alongside clean CLI upload flags (`--parser <format>`).
 4. **Root-Level Elimination**: The keyword and fallbacks for `builtin:` and `builtin:sbom-` are purged from the engine, including `internal/sbom/wasm.go`, `internal/integrations/registry.go`, `internal/ingest/package_parsers.go`, `internal/query/gate.go`, and frontend UI filters.
 
+## D147: Unified Scanner Evidence Pipeline and Dynamic Key-Value UI governed by CRD metadata (2026-11-21)
+
+**Context.** Previously, parsers extracted rich scanner-specific metadata (e.g. Git commit author/hash in Gitleaks, cURL reproducers in Nuclei, remediation guides in Checkov, layer hashes in Trivy), but 70% of this data was discarded because `RawFinding` had fixed fields. Hardcoding each tool's fields in Go and TypeScript would break the Kubernetes extensible CRD architecture.
+
+**Decision.**
+1. **Zero-Hardcoding Hybrid Architecture**: Extended `domain.RawFinding` with generic `Attributes map[string]any` and `RawPayload json.RawMessage`. Synchronized `pkg/domain/entities.go` across both `defectdojo` and the standalone `parsers` repository.
+2. **Lossless Ingestion & Occurrence Storage**: In `internal/ingest/merge.go`, occurrences store the complete raw scanner record in `occurrence.raw` (JSONB) and all extracted dynamic key-value attributes in `occurrence.normalized` (JSONB). Secrets and sensitive credentials (`secret`, `secret_value`) are strictly redacted before normalization.
+3. **CRD Display Schema**: Extended `ClusterParser` and `Parser` CRDs with optional `spec.display` schema (`title`, `icon`, `summary`, `highlightedAttributes`, `attributeLabels`) without forcing every parser to write complex UI layout code.
+4. **Smart Auto-Adaptive Evidence Section**: Implemented `ScannerEvidenceSection` in `web/src/features/finding-inspector/`:
+   - Auto-infers data types: Safe clickable links for URLs, mailto links for emails, monospace with one-click copy for Git commits/hashes/PURLs/ARNs, styled markdown blocks for remediation instructions, and badges for booleans/statuses.
+   - Multi-scanner occurrence switcher for findings reported by multiple scanners.
+   - Interactive, collapsible Raw Scanner Record JSON viewer with search and one-click JSON copy.
+
+
 

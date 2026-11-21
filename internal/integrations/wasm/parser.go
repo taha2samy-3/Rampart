@@ -247,6 +247,9 @@ func (p *WasmParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseCont
 			}
 
 			// Ensure required default fields if omitted by wasm module
+			if len(rf.RawPayload) == 0 {
+				rf.RawPayload = bytes.Clone(line)
+			}
 			if rf.Title == "" {
 				rf.Title = rf.RuleID
 			}

@@ -43,6 +43,7 @@ export const qk = {
     all: () => ['findings'] as const,
     events: (id: string) => ['findings', 'events', id] as const,
     sources: (id: string) => ['findings', 'sources', id] as const,
+    occurrences: (id: string) => ['findings', 'occurrences', id] as const,
     controls: (id: string) => ['findings', 'controls', id] as const,
     list: (q: string, sort: string) => ['findings', 'list', { q, sort }] as const,
   },

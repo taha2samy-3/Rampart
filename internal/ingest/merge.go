@@ -41,6 +41,7 @@ type StagedRecord struct {
 	SecretVerified bool // the scanner says the credential is live
 	ContentHash    string
 	SeenAt         time.Time
+	Attributes     map[string]any
 	RawPayload     []byte
 }
 
@@ -332,6 +333,19 @@ func (e *Engine) mergeBatch(
 			occKey = fmt.Sprintf("%s:%s:%d", rec.FindingKey, rec.Location.Code.FilePath, rec.Location.Code.StartLine)
 		}
 
+		var normalizedJSON []byte
+		if len(rec.Attributes) > 0 {
+			normalizedJSON, _ = json.Marshal(rec.Attributes)
+		} else if len(rec.RawPayload) > 0 {
+			var m map[string]any
+			if err := json.Unmarshal(rec.RawPayload, &m); err == nil && len(m) > 0 {
+				delete(m, "secret")
+				delete(m, "Secret")
+				delete(m, "secret_value")
+				normalizedJSON, _ = json.Marshal(m)
+			}
+		}
+
 		occ := &domain.Occurrence{
 			ID:            domain.NewID(),
 			TenantID:      scope.TenantID,
@@ -349,6 +363,7 @@ func (e *Engine) mergeBatch(
 			SeenCount:     1,
 			FirstSeen:     rec.SeenAt,
 			LastSeen:      rec.SeenAt,
+			Normalized:    normalizedJSON,
 			Raw:           rec.RawPayload,
 		}
 		occurrencesToUpsert = append(occurrencesToUpsert, occ)
