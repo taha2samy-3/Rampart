@@ -1,7 +1,11 @@
 import { expect, test } from './fixtures';
 import path from 'node:path';
+import fs from 'node:fs';
 
-const ARTIFACT_DIR = '/home/taha/.gemini/antigravity/brain/d93d25a6-e153-4f10-b53b-482a5ecb51d6';
+const ARTIFACT_DIR = process.env.ARTIFACT_DIR || path.join(__dirname, '..', 'test-results');
+if (!fs.existsSync(ARTIFACT_DIR)) {
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+}
 
 test('capture screenshots of dedicated finding detail page (/findings/$id)', async ({ page, consoleErrors }) => {
   void consoleErrors;
