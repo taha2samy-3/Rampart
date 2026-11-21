@@ -2658,5 +2658,25 @@ D143 records the design. These are the choices made while building it that D143 
    - Multi-scanner occurrence switcher for findings reported by multiple scanners.
    - Interactive, collapsible Raw Scanner Record JSON viewer with search and one-click JSON copy.
 
+## D148: Dedicated VEX Parser Subsystem, Embedded SBOM VDR Handling, and Interactive UI Integration (2026-11-21)
+
+**Context.** VEX (Vulnerability Exploitability eXchange) standards (OpenVEX 0.2, CycloneDX 1.4-1.6 VEX/VDR, CSAF 2.0) define machine-readable assertions authored by software suppliers asserting whether a product/component is actually affected by a vulnerability. In earlier implementations:
+1. `parsers/wasm/openvex` attempted to generate synthetic `RawFinding` records with `info` severity, leading `internal/ingest/processor.go` to reject it with `ErrCodeVEXDocument`.
+2. CycloneDX SBOM readers extracted packages but discarded embedded `vulnerabilities.analysis` (VDR) blocks.
+3. The UI provided export download links for OpenVEX and CycloneDX VEX, but provided no interface for uploading VEX documents, no dry-run impact simulation, and no visual exploitability indicators on findings.
+
+**Decision.**
+1. **Dedicated VEX Parser Subsystem**: Established clear separation between scanner parsers (`ClusterParser`), SBOM readers (`ClusterSBOMParser`), and VEX decision engines (`internal/vex` / `ClusterVEXParser`). VEX documents never generate findings; they decide existing findings via the `(Application, Component PURL, Vulnerability ID)` tuple.
+2. **Embedded CycloneDX VDR / VEX Ingestion**: Enhanced CycloneDX SBOM parsing to extract both components and embedded vulnerability analysis blocks. The ingestion pipeline applies embedded analysis statements directly to the application's findings in the same ingestion cycle.
+3. **Smart Ingest Gateway Routing**: In `internal/ingest/processor.go`, uploading a standalone VEX document with an application context is automatically routed to the VEX matcher/decision engine instead of throwing `ErrCodeVEXDocument`.
+4. **Interactive Web UI VEX Management**:
+   - Added "Apply VEX Document" modal on the Application details page with live dry-run impact preview (`POST /api/v1/vex?application=<id>&dryRun=true`), displaying matched transitions, unchanged findings, and unmatched assertions before live commitment.
+   - Added visual exploitability badges in `FindingsTable` (e.g. `[VEX: Not Affected - Code Not Reachable]`) and a dedicated filter for VEX-suppressed findings.
+   - Added an authentic VEX Exploitability Card in `FindingDetailRoute` and `Inspector` displaying supplier author attribution, standard justification, impact statement, and remediation advice.
+5. **Declarative GitOps Feeds**: Defined the `ClusterVEXSource` CRD specification to automate periodic synchronization and cryptographic verification of upstream vendor VEX feeds (e.g. Red Hat CSAF, Chainguard OpenVEX) via River background jobs.
+
+Comprehensive architecture, standards mappings, and implementation roadmap recorded in `docs/47-vex-lifecycle-architecture-and-ui-integration.md`.
+
+
 
 
