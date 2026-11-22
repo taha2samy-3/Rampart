@@ -136,6 +136,7 @@ Following user direction, Rampart **v0.3.20+ completely purges the word, prefix,
 | **cyclonedx** | SBOM | `ClusterSBOMParser` | `cluster:sbom-cyclonedx` | `ClusterSBOMParser/cyclonedx` | `--parser cyclonedx` |
 | **spdx** | SBOM | `ClusterSBOMParser` | `cluster:sbom-spdx` | `ClusterSBOMParser/spdx` | `--parser spdx` |
 | **syft** | SBOM | `ClusterSBOMParser` | `cluster:sbom-syft` | `ClusterSBOMParser/syft` | `--parser syft` |
+| **openvex** | SBOM / VEX | `ClusterSBOMParser` | `cluster:sbom-openvex` | `ClusterSBOMParser/openvex` | `--parser openvex` |
 
 ---
 

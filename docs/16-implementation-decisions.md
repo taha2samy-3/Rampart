@@ -2658,5 +2658,27 @@ D143 records the design. These are the choices made while building it that D143 
    - Multi-scanner occurrence switcher for findings reported by multiple scanners.
    - Interactive, collapsible Raw Scanner Record JSON viewer with search and one-click JSON copy.
 
+## D148: CRD-Driven OpenVEX Reader and Decoupled VEX Extraction Architecture (2026-11-22)
+
+**Context.** VEX (Vulnerability Exploitability eXchange) documents state triage and exploitability assessments (e.g. `not_affected`, `under_investigation`, `fixed`) for components and CVEs. Previously, an experimental attempt introduced OpenVEX as a vulnerability report scanner in `rampart-parsers`, mistakenly producing finding occurrences instead of modulating triage dispositions. Furthermore, hardcoded fallback parsing violated the zero-builtin principle (D127, D141), and the system lacked CRD-level declarative switches to selectively govern VEX extraction during SBOM and VEX ingestion.
+
+**Decision.**
+1. **Domain Boundary Separation**:
+   - `rampart-parsers` (report parsers) is strictly reserved for tools that discover findings (SAST, SCA, Secrets, IaC, DAST, Compliance). OpenVEX was completely eliminated from `rampart-parsers`.
+   - `rampart-sbom-parsers` (SBOM readers) is the authoritative home for software inventory formats and VEX triage documents.
+2. **`ClusterSBOMParser` with OpenVEX Format**:
+   - Introduced `sbom-openvex` as a standalone WASM module (`wasm/sbom-openvex/parser.wasm`) governed by `ClusterSBOMParser/sbom-openvex` (`format: openvex`).
+   - The reader parses OpenVEX v0.1.0/v0.2.0 JSON streams and emits normalized NDJSON events: `type: "metadata"` and `type: "vex_statement"`.
+3. **Declarative `extractVEX` Option**:
+   - Extended `ClusterSBOMParser` and `SBOMParser` CRD specifications (`spec.options.extractVEX: bool`) across `deploy/crds/` and `deploy/helm/rampart/crds/`.
+   - Enabled `extractVEX: true` by default on `sbom-cyclonedx` and `sbom-openvex`, and `false` on `sbom-spdx`.
+4. **Streaming Protocol & Ingestion Processing**:
+   - `internal/sbom/host.go`: Extended the streaming reader to unpack `type: "vex_statement"` events (vulnerability, aliases, PURL, canonical PURL base, status, justification, impact, action, timestamp) into `domain.VEXStatement` structs when `Limits.ExtractVEX` is active.
+   - `internal/ingest/processor_sbom.go`: Implemented VEX statement processing via `st.FindFindingsForVEX`. Matching active findings have their triage state transitioned (e.g. `not_affected`, `affected`), updating justification and impact statements and creating `timeline` audit events.
+5. **Helm Chart & Builtin Elimination**:
+   - Upgraded dependency chart `rampart-sbom-parsers` to `0.2.0` and Rampart Helm chart to `0.3.23`.
+   - Added the visual `NO-BUILTIN` badge to `web/src/components/Logo.tsx` next to the Rampart wordmark, reinforcing the core guarantee that all 16 vulnerability scanners and 4 SBOM readers reach the server dynamically as Kubernetes CRDs.
+
+
 
 
