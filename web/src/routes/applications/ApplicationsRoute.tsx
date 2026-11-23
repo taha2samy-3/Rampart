@@ -4,8 +4,9 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { listApplications, qk, toProblem } from '@/api';
 import type { AppSummary } from '@/api/types';
-import { BandMixBar, EmptyState, ProblemMessage, ScoreBar, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
+import { BandMixBar, BandShape, BAND_TEXT_CLASS, EmptyState, ProblemMessage, ScoreBar, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
 import { openText } from '@/lib/apps';
+import { bandFromScore } from '@/lib/band';
 import { absoluteDate, shortAge } from '@/lib/format';
 
 /** Applications, the riskiest first (docs/13). A row opens the application page. */
@@ -97,10 +98,16 @@ function AppRow({ app, index, maxOpen, onOpen }: { app: AppSummary; index: numbe
         <span className={`mt-1 block truncate text-[11.5px] leading-4 ${text ? '' : 'text-ink-2'}`}>{text || t('apps.noOpen')}</span>
       </Td>
       <Td>
-        <span className="flex items-center gap-2">
-          <span className="w-9 text-end text-14 font-semibold tnum">{app.risk_score}</span>
-          <ScoreBar breakdown={null} score={app.risk_score} />
-        </span>
+        {(() => {
+          const b = bandFromScore(app.risk_score);
+          return (
+            <span className="flex items-center gap-2">
+              <BandShape band={b} size={11} />
+              <span className={`w-9 text-end text-14 font-semibold tnum ${BAND_TEXT_CLASS[b]}`}>{app.risk_score}</span>
+              <ScoreBar breakdown={null} score={app.risk_score} band={b} />
+            </span>
+          );
+        })()}
       </Td>
       <Td align="end" className={app.sla_breached > 0 ? 'font-semibold' : 'text-ink-2'}>{app.sla_breached}</Td>
       <Td align="end" className="text-ink-2" title={app.last_scan ? absoluteDate(app.last_scan) : undefined}>

@@ -1,5 +1,6 @@
 import type { ScoreBreakdown } from '@/api/types';
 import { describeScore, scoreSegments, type SegmentKind } from '@/lib/score';
+import { bandFromScore, type Band } from '@/lib/band';
 import { cn } from '@/lib/cn';
 
 const FILL: Record<SegmentKind, string> = {
@@ -7,6 +8,14 @@ const FILL: Record<SegmentKind, string> = {
   threat: 'bg-[var(--seg-threat)]',
   context: 'bg-[var(--seg-context)]',
   reduction: 'border-[1.5px] border-[var(--seg-reduction)] bg-transparent',
+};
+
+const BAND_FILL: Record<Band, string> = {
+  critical: 'bg-critical',
+  high: 'bg-high',
+  medium: 'bg-medium',
+  low: 'bg-low',
+  info: 'bg-[var(--seg-severity)]',
 };
 
 /**
@@ -21,16 +30,20 @@ export function ScoreBar({
   score,
   size = 'row',
   className,
+  band,
 }: {
   breakdown: ScoreBreakdown | null | undefined;
   score: number;
   size?: 'row' | 'full';
   className?: string;
+  band?: Band;
 }) {
   // Without a breakdown (an application's score is the highest of its findings, D43) the bar still shows the
   // score's length on the 1000 scale, as one segment, instead of an empty track (D61).
   const parts = scoreSegments(breakdown);
   const segments = parts.length > 0 || score <= 0 ? parts : [{ kind: 'severity' as SegmentKind, fraction: Math.min(1, score / 1000) }];
+  const effectiveBand = band ?? (score > 0 ? bandFromScore(score) : 'info');
+
   return (
     <span
       role="img"
@@ -45,7 +58,10 @@ export function ScoreBar({
         <span
           key={s.kind}
           data-segment={s.kind}
-          className={cn('block h-full shrink-0 border-e border-e-[var(--surface)] box-border', FILL[s.kind])}
+          className={cn(
+            'block h-full shrink-0 border-e border-e-[var(--surface)] box-border',
+            parts.length > 0 ? FILL[s.kind] : BAND_FILL[effectiveBand],
+          )}
           style={{ inlineSize: `${(s.fraction * 100).toFixed(2)}%`, minInlineSize: '2px' }}
         />
       ))}

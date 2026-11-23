@@ -4,7 +4,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getApplication, getApplicationTrend, qk, toProblem } from '@/api';
 import type { ApplicationPage } from '@/api/types';
-import { AgeBars, BandBars, BandShape, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components';
+import { AgeBars, ApplicationScoreCard, BandBars, BandShape, BAND_LABEL, BandTrendPanels, DeadlineBar, EmptyState, ProblemMessage, Select, Skeleton, Table, TBody, Td, Th, THead, Tr, VelocityBars, toWeeks, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components';
 import type { ChartBand } from '@/components';
 import { openText } from '@/lib/apps';
 import { ChangesSection, FindingDetailModal, type FindingDetailTarget } from './ChangesSection';
@@ -17,7 +17,7 @@ import { ApplicationSettingsSection } from './ApplicationSettingsSection';
 import { ApplicationDependencyGraphSection } from './ApplicationDependencyGraphSection';
 import { ApplicationLicensesSection } from './ApplicationLicensesSection';
 import { ApplicationSourcesSection } from './ApplicationSourcesSection';
-import { toBand } from '@/lib/band';
+import { toBand, bandFromScore } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
 export type AppTab = 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'sources' | 'settings';
@@ -76,6 +76,7 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
   const appQuerySlug = app.slug || `"${app.name}"`;
 
   const totalOpenFindings = app.open ? app.open.critical + app.open.high + app.open.medium + app.open.low : 0;
+  const appBand = bandFromScore(app.risk_score ?? 0);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -113,12 +114,36 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-ctl border border-rule bg-surface px-2.5 py-1 text-12 font-medium text-ink">
-              Risk Score: <span className="font-mono font-semibold text-accent">{app.risk_score}</span>
+            <span
+              data-testid="app-posture-badge"
+              className={cn(
+                'inline-flex items-center gap-2 rounded-ctl border px-3 py-1.5 text-12 font-medium shadow-2xs',
+                appBand === 'critical' && 'border-critical/30 bg-critical/10 text-critical',
+                appBand === 'high' && 'border-high/30 bg-high/10 text-high',
+                appBand === 'medium' && 'border-medium/30 bg-medium/10 text-medium',
+                appBand === 'low' && 'border-low/30 bg-low/10 text-low',
+                appBand === 'info' && 'border-rule bg-surface text-ink-2',
+              )}
+            >
+              <BandShape band={appBand} size={13} label />
+              <span className="font-semibold tracking-wide uppercase text-11">
+                {BAND_LABEL[appBand]}
+              </span>
+              <span className="text-ink-2/60">·</span>
+              <span className="font-mono font-bold text-ink">
+                {app.risk_score ?? 0}
+                <span className="font-normal text-11 text-ink-2"> / 1000</span>
+              </span>
             </span>
             {app.open && (
               <span className="inline-flex items-center gap-1.5 rounded-ctl border border-rule bg-surface px-2.5 py-1 text-12 font-medium text-ink">
-                Open Findings: <span className="font-semibold text-critical">{totalOpenFindings}</span>
+                Open Findings: <span className="font-mono font-semibold text-critical">{totalOpenFindings}</span>
+              </span>
+            )}
+            {(app.sla?.breached ?? 0) > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-ctl border border-critical/30 bg-critical/10 px-2.5 py-1 text-12 font-semibold text-critical">
+                <span className="h-1.5 w-1.5 rounded-full bg-critical animate-pulse" aria-hidden="true" />
+                {app.sla.breached} SLA {app.sla.breached === 1 ? 'breach' : 'breaches'}
               </span>
             )}
           </div>
@@ -153,6 +178,8 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
             </TabsList>
 
             <TabsContent value="overview" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationScoreCard app={app} appQuerySlug={appQuerySlug} className="mb-6" />
+
               <section className="mt-2" aria-labelledby="app-summary">
                 <h2 id="app-summary" className="mb-1 text-14 font-semibold">{t('apps.summary')}</h2>
                 <p className="m-0 text-13">
