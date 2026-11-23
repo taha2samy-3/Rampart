@@ -1226,6 +1226,55 @@ const server = http.createServer((req, res) => {
     if (p === '/api/v1/groups') return json(res, { groups: GROUPS });
     if (p === '/api/v1/views') return json(res, { views: VIEWS });
     if (p === '/api/v1/settings') return json(res, { riskAcceptanceApproval: true, riskAcceptanceMaxDays: 90 });
+    if (p === '/api/v1/scoring' && req.method === 'GET') {
+      return json(res, {
+        product: 'Rampart',
+        version: '0.3.24',
+        customised: true,
+        risk: {
+          base: { critical: 100, high: 70, medium: 40, low: 10, info: 0 },
+          bands: { critical: 800, high: 500, medium: 200 },
+          factors: [
+            {
+              name: 'IN_KEV',
+              when: 'finding.in_kev == true',
+              points: 300,
+              reason: 'Known exploited in the wild',
+              group: 'threat',
+            },
+            {
+              name: 'PRODUCTION_ENV',
+              when: "app.environment == 'production'",
+              points: 60,
+              reason: 'Running in live production',
+              group: 'context',
+            },
+            {
+              name: 'HAS_VPN_REDUCTION',
+              when: 'has(app.attributes.has_vpn) && app.attributes.has_vpn == true',
+              points: -80,
+              reason: 'Protected by enterprise VPN perimeter',
+              group: 'reduction',
+            },
+          ],
+        },
+        sla: {
+          matrix: {
+            critical: { critical: 7, high: 14, medium: 30, low: 60 },
+            high: { critical: 14, high: 30, medium: 60, low: 90 },
+            medium: { critical: 30, high: 60, medium: 90, low: 120 },
+            low: { critical: 60, high: 90, medium: 120, low: 180 },
+          },
+          kevDueDate: true,
+          maxDays: 90,
+          startFrom: 'first_observed',
+          restartOnReactivation: false,
+          pauseDuringRiskAcceptance: true,
+        },
+        environments: ['production', 'staging', 'development', 'sandbox'],
+        application_types: ['web', 'api', 'mobile', 'backend', 'desktop', 'embedded'],
+      });
+    }
     if (p === '/api/v1/inventory') return json(res, { assets: INVENTORY });
     if (p === '/api/v1/inventory/components') {
       return json(res, {
