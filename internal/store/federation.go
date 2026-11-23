@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -50,10 +51,17 @@ func (s *PostgresStore) SaveTrustRules(ctx context.Context, tenantID, scanSource
 				repo = &r.Repository
 			}
 
+			var boundClaimsJSON []byte
+			if len(r.BoundClaims) > 0 {
+				boundClaimsJSON, _ = json.Marshal(r.BoundClaims)
+			} else {
+				boundClaimsJSON = []byte("{}")
+			}
+
 			_, err := tx.Exec(ctx, `
-				INSERT INTO source_trust (id, tenant_id, scan_source_id, issuer, provider, repository_id, repository_owner_id, project_id, namespace_id, repository, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-				id, tenantID, scanSourceID, r.Issuer, r.Provider, repoID, ownerID, projID, nsID, repo)
+				INSERT INTO source_trust (id, tenant_id, scan_source_id, issuer, provider, repository_id, repository_owner_id, project_id, namespace_id, repository, bound_claims, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+				id, tenantID, scanSourceID, r.Issuer, r.Provider, repoID, ownerID, projID, nsID, repo, boundClaimsJSON)
 			if err != nil {
 				return fmt.Errorf("store: failed to insert trust rule: %w", err)
 			}
@@ -70,7 +78,7 @@ func (s *PostgresStore) ListTrustRules(ctx context.Context, tenantID uuid.UUID) 
 			SELECT id, tenant_id, scan_source_id, issuer, provider,
 			       coalesce(repository_id, ''), coalesce(repository_owner_id, ''),
 			       coalesce(project_id, ''), coalesce(namespace_id, ''),
-			       coalesce(repository, ''), created_at
+			       coalesce(repository, ''), coalesce(bound_claims, '{}'::jsonb), created_at
 			FROM source_trust
 			WHERE tenant_id = $1
 			ORDER BY created_at ASC`, tenantID)
@@ -81,14 +89,18 @@ func (s *PostgresStore) ListTrustRules(ctx context.Context, tenantID uuid.UUID) 
 
 		for rows.Next() {
 			var rec domain.TrustRuleRecord
+			var rawBoundClaims []byte
 			if err := rows.Scan(
 				&rec.ID, &rec.TenantID, &rec.ScanSourceID,
 				&rec.Rule.Issuer, &rec.Rule.Provider,
 				&rec.Rule.RepositoryID, &rec.Rule.RepositoryOwnerID,
 				&rec.Rule.ProjectID, &rec.Rule.NamespaceID,
-				&rec.Rule.Repository, &rec.CreatedAt,
+				&rec.Rule.Repository, &rawBoundClaims, &rec.CreatedAt,
 			); err != nil {
 				return err
+			}
+			if len(rawBoundClaims) > 0 {
+				_ = json.Unmarshal(rawBoundClaims, &rec.Rule.BoundClaims)
 			}
 			records = append(records, rec)
 		}
@@ -108,7 +120,7 @@ func (s *PostgresStore) ListTrustRulesByIssuer(ctx context.Context, tenantID uui
 			SELECT id, tenant_id, scan_source_id, issuer, provider,
 			       coalesce(repository_id, ''), coalesce(repository_owner_id, ''),
 			       coalesce(project_id, ''), coalesce(namespace_id, ''),
-			       coalesce(repository, ''), created_at
+			       coalesce(repository, ''), coalesce(bound_claims, '{}'::jsonb), created_at
 			FROM source_trust
 			WHERE tenant_id = $1 AND issuer = $2
 			ORDER BY created_at ASC`, tenantID, issuer)
@@ -119,14 +131,18 @@ func (s *PostgresStore) ListTrustRulesByIssuer(ctx context.Context, tenantID uui
 
 		for rows.Next() {
 			var rec domain.TrustRuleRecord
+			var rawBoundClaims []byte
 			if err := rows.Scan(
 				&rec.ID, &rec.TenantID, &rec.ScanSourceID,
 				&rec.Rule.Issuer, &rec.Rule.Provider,
 				&rec.Rule.RepositoryID, &rec.Rule.RepositoryOwnerID,
 				&rec.Rule.ProjectID, &rec.Rule.NamespaceID,
-				&rec.Rule.Repository, &rec.CreatedAt,
+				&rec.Rule.Repository, &rawBoundClaims, &rec.CreatedAt,
 			); err != nil {
 				return err
+			}
+			if len(rawBoundClaims) > 0 {
+				_ = json.Unmarshal(rawBoundClaims, &rec.Rule.BoundClaims)
 			}
 			records = append(records, rec)
 		}

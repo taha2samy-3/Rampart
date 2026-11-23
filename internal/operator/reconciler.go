@@ -194,16 +194,68 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		return status, nil
 	}
 
-	// Secret synchronization (D4 line 30, D17)
-	if cr.Spec.SecretRef != nil && r.secrets != nil && r.secretStore != nil {
-		secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, cr.Spec.SecretRef.Name, cr.Spec.SecretRef.Key)
+	// Application binding resolution (D140, D17)
+	var appID uuid.UUID
+	hasRef := cr.Spec.ApplicationRef.Name != "" ||
+		cr.Spec.ApplicationRef.Repository != "" ||
+		(cr.Spec.ApplicationRef.Selector != nil && len(cr.Spec.ApplicationRef.Selector.MatchLabels) > 0)
+	if hasRef {
+		if err := cr.Spec.ApplicationRef.Validate(); err != nil {
+			status.SetCondition("Ready", "False", "InvalidApplicationRef", err.Error())
+			return status, nil
+		}
+		app, err := r.store.FindApplicationByRef(ctx, tenant.ID, cr.Spec.ApplicationRef)
 		if err != nil {
-			status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secretRef %s/%s: %v", cr.Spec.SecretRef.Name, cr.Spec.SecretRef.Key, err))
+			status.SetCondition("Ready", "False", "StorageError", err.Error())
+			return status, err
+		}
+		if app == nil {
+			status.SetCondition("Ready", "False", "ApplicationNotFound", "no matching application found for applicationRef in tenant")
+			return status, nil
+		}
+		appID = app.ID
+	}
+
+	// Security categories validation
+	categories := cr.Spec.Categories
+	if len(categories) == 0 {
+		categories = []string{"all"}
+	}
+	for _, cat := range categories {
+		if cat != "all" && !domain.FindingCategory(cat).IsValid() {
+			status.SetCondition("Ready", "False", "InvalidCategory", fmt.Sprintf("invalid security category %q", cat))
+			return status, nil
+		}
+	}
+
+	// Federation spec validation
+	feds := cr.Spec.Auth.AllFederations()
+	for i, fed := range feds {
+		if err := fed.Validate(); err != nil {
+			status.SetCondition("Ready", "False", "InvalidFederation", fmt.Sprintf("invalid federation[%d]: %v", i, err))
+			return status, nil
+		}
+	}
+
+	// Secret synchronization (D4 line 30, D17)
+	var secretName, secretKey string
+	if cr.Spec.Auth.TokenSecretRef != nil {
+		secretName = cr.Spec.Auth.TokenSecretRef.Name
+		secretKey = cr.Spec.Auth.TokenSecretRef.Key
+	} else if cr.Spec.SecretRef != nil {
+		secretName = cr.Spec.SecretRef.Name
+		secretKey = cr.Spec.SecretRef.Key
+	}
+
+	if secretName != "" && secretKey != "" && r.secrets != nil && r.secretStore != nil {
+		secretBytes, err := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, secretName, secretKey)
+		if err != nil {
+			status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secretRef %s/%s: %v", secretName, secretKey, err))
 			return status, nil
 		}
 
-		secretKey := fmt.Sprintf("scansource:%s:%s", cr.Metadata.Name, cr.Spec.SecretRef.Key)
-		if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, secretKey, secretBytes); err != nil {
+		matKey := fmt.Sprintf("scansource:%s:%s", cr.Metadata.Name, secretKey)
+		if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, matKey, secretBytes); err != nil {
 			status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material: %v", err))
 			return status, err
 		}
@@ -228,13 +280,41 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 		}
 	}
 
-	sourceID, err := r.store.SaveScanSource(ctx, tenant.ID, cr.Metadata.Name, cr.Spec.ScannerFamily, policy)
+	scanType := cr.Spec.Type
+	if scanType == "" {
+		scanType = cr.Spec.ScannerFamily
+	}
+	if scanType == "" {
+		scanType = "upload"
+	}
+	srcRecord := &domain.ScanSource{
+		TenantID:        tenant.ID,
+		Name:            cr.Metadata.Name,
+		ScannerFamily:   cr.Spec.ScannerFamily,
+		Type:            scanType,
+		ApplicationID:   appID,
+		ApplicationRef:  cr.Spec.ApplicationRef,
+		Categories:      categories,
+		Auth:            cr.Spec.Auth,
+		IngestionPolicy: policy,
+	}
+	sourceID, err := r.store.SaveScanSourceRecord(ctx, srcRecord)
 	if err != nil {
 		status.SetCondition("Ready", "False", "StorageError", err.Error())
 		return status, err
 	}
 
-	if len(cr.Spec.TrustRules) > 0 {
+	trustRules := append([]domain.TrustRule(nil), cr.Spec.TrustRules...)
+	for _, fed := range feds {
+		if len(fed.BoundClaims) > 0 {
+			trustRules = append(trustRules, domain.TrustRule{
+				Issuer:      fed.Issuer,
+				BoundClaims: fed.BoundClaims,
+			})
+		}
+	}
+
+	if len(trustRules) > 0 {
 		trSaver, ok := r.store.(interface {
 			SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
 		})
@@ -242,7 +322,7 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 			status.SetCondition("Ready", "False", "StorageError", "store does not support trust rules")
 			return status, fmt.Errorf("store does not support trust rules")
 		}
-		if err := trSaver.SaveTrustRules(ctx, tenant.ID, sourceID, cr.Spec.TrustRules); err != nil {
+		if err := trSaver.SaveTrustRules(ctx, tenant.ID, sourceID, trustRules); err != nil {
 			status.SetCondition("Ready", "False", "StorageError", fmt.Sprintf("failed to save trust rules: %v", err))
 			return status, err
 		}

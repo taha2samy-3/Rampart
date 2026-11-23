@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,19 +107,28 @@ const (
 
 // TrustRule defines CI OIDC federation rules for a ScanSource (D22).
 type TrustRule struct {
-	Issuer            string `json:"issuer"`
-	Provider          string `json:"provider"`
-	RepositoryID      string `json:"repositoryId,omitempty"`
-	RepositoryOwnerID string `json:"repositoryOwnerId,omitempty"`
-	ProjectID         string `json:"projectId,omitempty"`
-	NamespaceID       string `json:"namespaceId,omitempty"`
-	Repository        string `json:"repository,omitempty"`
+	Issuer            string            `json:"issuer"`
+	Provider          string            `json:"provider,omitempty"`
+	RepositoryID      string            `json:"repositoryId,omitempty"`
+	RepositoryOwnerID string            `json:"repositoryOwnerId,omitempty"`
+	ProjectID         string            `json:"projectId,omitempty"`
+	NamespaceID       string            `json:"namespaceId,omitempty"`
+	Repository        string            `json:"repository,omitempty"`
+	BoundClaims       map[string]string `json:"boundClaims,omitempty"`
 }
 
 // Validate checks that the trust rule contains valid and complete identifiers.
 func (r *TrustRule) Validate() error {
-	if r.Issuer == "" {
+	if strings.TrimSpace(r.Issuer) == "" {
 		return fmt.Errorf("issuer cannot be empty")
+	}
+	if len(r.BoundClaims) > 0 {
+		for k, v := range r.BoundClaims {
+			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+				return fmt.Errorf("boundClaims cannot contain empty keys or values")
+			}
+		}
+		return nil
 	}
 	if r.Provider != "github" && r.Provider != "gitlab" {
 		return fmt.Errorf("provider must be 'github' or 'gitlab', got %q", r.Provider)
@@ -139,4 +149,183 @@ type TrustRuleRecord struct {
 	ScanSourceID uuid.UUID `json:"scan_source_id"`
 	Rule         TrustRule `json:"rule"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// ApplicationSelector matches applications by labels.
+type ApplicationSelector struct {
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+}
+
+// ApplicationRef names the target Application a ScanSource is exclusively bound to (D140).
+// Supports multi-mode resolution: by name/slug, label selector, or repository URL.
+type ApplicationRef struct {
+	Name       string               `json:"name,omitempty"`
+	Selector   *ApplicationSelector `json:"selector,omitempty"`
+	Repository string               `json:"repository,omitempty"`
+}
+
+// Validate ensures at least one resolution mode is provided and valid.
+func (r ApplicationRef) Validate() error {
+	hasName := strings.TrimSpace(r.Name) != ""
+	hasSelector := r.Selector != nil && len(r.Selector.MatchLabels) > 0
+	hasRepo := strings.TrimSpace(r.Repository) != ""
+
+	if !hasName && !hasSelector && !hasRepo {
+		return fmt.Errorf("applicationRef must specify at least one of name, selector, or repository")
+	}
+	if hasName && len(r.Name) > 255 {
+		return fmt.Errorf("applicationRef.name cannot exceed 255 characters")
+	}
+	if hasRepo && len(r.Repository) > 500 {
+		return fmt.Errorf("applicationRef.repository cannot exceed 500 characters")
+	}
+	return nil
+}
+
+// SecretRef points to a Kubernetes Secret by name and key.
+type SecretRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+// Validate ensures the secret reference is populated.
+func (s SecretRef) Validate() error {
+	if strings.TrimSpace(s.Name) == "" || strings.TrimSpace(s.Key) == "" {
+		return fmt.Errorf("secretRef name and key must not be empty")
+	}
+	return nil
+}
+
+// FederationSpec defines universal workload identity federation parameters (RFC 8693).
+type FederationSpec struct {
+	Issuer      string            `json:"issuer"`
+	BoundClaims map[string]string `json:"boundClaims"`
+}
+
+// Validate ensures the federation specification is non-empty and well-formed.
+func (f FederationSpec) Validate() error {
+	if strings.TrimSpace(f.Issuer) == "" {
+		return fmt.Errorf("federation.issuer cannot be empty")
+	}
+	if len(f.BoundClaims) == 0 {
+		return fmt.Errorf("federation.boundClaims cannot be empty")
+	}
+	for k, v := range f.BoundClaims {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			return fmt.Errorf("federation.boundClaims cannot contain empty keys or values")
+		}
+	}
+	return nil
+}
+
+// AuthSpec defines the authentication contract for a ScanSource.
+// Supports multi-auth: tokenSecretRef and federation/federations can be configured simultaneously.
+type AuthSpec struct {
+	TokenSecretRef *SecretRef       `json:"tokenSecretRef,omitempty"`
+	Federation     *FederationSpec  `json:"federation,omitempty"`
+	Federations    []FederationSpec `json:"federations,omitempty"`
+}
+
+// AllFederations returns the combined slice of all configured federation specs.
+func (a AuthSpec) AllFederations() []FederationSpec {
+	var list []FederationSpec
+	if a.Federation != nil {
+		list = append(list, *a.Federation)
+	}
+	list = append(list, a.Federations...)
+	return list
+}
+
+// Validate ensures at least one valid authentication mode is specified.
+func (a AuthSpec) Validate() error {
+	hasToken := a.TokenSecretRef != nil
+	feds := a.AllFederations()
+	if !hasToken && len(feds) == 0 {
+		return fmt.Errorf("at least one of tokenSecretRef or federation/federations must be specified")
+	}
+	if a.TokenSecretRef != nil {
+		if err := a.TokenSecretRef.Validate(); err != nil {
+			return err
+		}
+	}
+	for i, f := range feds {
+		if err := f.Validate(); err != nil {
+			return fmt.Errorf("federation[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// ApplicationScanSource describes a ScanSource bound to an Application, including its run statistics.
+type ApplicationScanSource struct {
+	ID            uuid.UUID  `json:"id"`
+	Name          string     `json:"name"`
+	Type          string     `json:"type"`
+	ScannerFamily string     `json:"scanner_family,omitempty"`
+	Categories    []string   `json:"categories"`
+	AuthType      string     `json:"auth_type"`
+	Active        bool       `json:"active"`
+	TrackedRefs   []string   `json:"tracked_refs,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	DisabledAt    *time.Time `json:"disabled_at,omitempty"`
+	TotalRuns     int        `json:"total_runs"`
+	LastScanAt    *time.Time `json:"last_scan_at,omitempty"`
+}
+
+// ScanSource defines an ingestion source bound to a specific Application (D140).
+type ScanSource struct {
+	ID              uuid.UUID        `json:"id"`
+	TenantID        uuid.UUID        `json:"tenant_id"`
+	Name            string           `json:"name"`
+	ApplicationRef  ApplicationRef   `json:"applicationRef"`
+	ApplicationID   uuid.UUID        `json:"application_id"`
+	Categories      []string         `json:"categories"`
+	Type            string           `json:"type"`
+	Auth            AuthSpec         `json:"auth"`
+	ScannerFamily   string           `json:"scannerFamily,omitempty"`
+	IngestionPolicy *IngestionPolicy `json:"ingestionPolicy,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	DisabledAt      *time.Time       `json:"disabled_at,omitempty"`
+}
+
+// PermitsCategory checks if the given FindingCategory is allowed by this ScanSource.
+func (s *ScanSource) PermitsCategory(cat FindingCategory) bool {
+	if s == nil || len(s.Categories) == 0 {
+		return true // Default allows all
+	}
+	for _, c := range s.Categories {
+		if c == "all" || c == string(cat) {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks the ScanSource configuration.
+func (s *ScanSource) Validate() error {
+	if strings.TrimSpace(s.Name) == "" {
+		return fmt.Errorf("scansource name cannot be empty")
+	}
+	if err := s.ApplicationRef.Validate(); err != nil {
+		return err
+	}
+	if len(s.Categories) == 0 {
+		return fmt.Errorf("categories must specify at least one category or 'all'")
+	}
+	for _, cat := range s.Categories {
+		if cat != "all" && !FindingCategory(cat).IsValid() {
+			return fmt.Errorf("invalid category %q", cat)
+		}
+	}
+	if s.Auth.TokenSecretRef != nil || s.Auth.Federation != nil || len(s.Auth.Federations) > 0 {
+		if err := s.Auth.Validate(); err != nil {
+			return err
+		}
+	}
+	if s.IngestionPolicy != nil {
+		if err := s.IngestionPolicy.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

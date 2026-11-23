@@ -1,0 +1,78 @@
+{{- if and .Values.bootstrap .Values.bootstrap.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $labels := include "rampart.labels" . }}
+
+{{- range .Values.bootstrap.applications }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: Application
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace | default $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  name: {{ .name }}
+  businessCriticality: {{ .businessCriticality | default "medium" | quote }}
+  lifecycle: {{ .lifecycle | default "production" | quote }}
+  {{- with .type }}
+  type: {{ . | quote }}
+  {{- end }}
+  {{- with .repository }}
+  repository: {{ . | quote }}
+  {{- end }}
+  {{- with .branch }}
+  branch: {{ . | quote }}
+  {{- end }}
+  {{- with .environment }}
+  environment: {{ . | quote }}
+  {{- end }}
+  {{- with .tags }}
+  tags:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+{{- range .Values.bootstrap.scanSources }}
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ScanSource
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace | default $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .type | default "upload" | quote }}
+  {{- with .scannerFamily }}
+  scannerFamily: {{ . | quote }}
+  {{- end }}
+  {{- with .categories }}
+  categories:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .applicationRef }}
+  applicationRef:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .auth }}
+  auth:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .trackedRefs }}
+  trackedRefs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .ingestionPolicy }}
+  ingestionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+{{- end }}

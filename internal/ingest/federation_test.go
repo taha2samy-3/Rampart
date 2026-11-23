@@ -261,6 +261,167 @@ func TestFederation_TokenExchange(t *testing.T) {
 		}
 	})
 
+	t.Run("valid AWS STS token with generic boundClaims succeeds", func(t *testing.T) {
+		awsSourceID := domain.NewID()
+		awsRule := domain.TrustRule{
+			Issuer: idp.server.URL,
+			BoundClaims: map[string]string{
+				"account_id": "123456789012",
+				"role_arn":   "arn:aws:iam::123456789012:role/checkout-ci",
+			},
+		}
+		_ = memStore.SaveTrustRules(context.Background(), tenant.ID, awsSourceID, []domain.TrustRule{awsRule})
+
+		std := jwt.Claims{
+			Issuer:   idp.server.URL,
+			Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+			Subject:  "arn:aws:sts::123456789012:assumed-role/checkout-ci/session",
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"account_id": "123456789012",
+			"role_arn":   "arn:aws:iam::123456789012:role/checkout-ci",
+		}
+		rawJWT := idp.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+
+		rec, res := exchangeToken(mux, tenant.Slug, form)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for AWS STS, got %d: %v", rec.Code, rec.Body.String())
+		}
+		tok, ok := res["access_token"].(string)
+		if !ok || !strings.HasPrefix(tok, "rpt_") {
+			t.Fatalf("expected valid access_token, got: %v", res["access_token"])
+		}
+
+		tokenHash := auth.HashToken(tok)
+		saved, err := memStore.LookupTokenByHash(context.Background(), tenant.ID, tokenHash)
+		if err != nil || saved == nil || saved.ScanSourceID == nil || *saved.ScanSourceID != awsSourceID {
+			t.Fatalf("expected token bound to awsSourceID %v, got: %v", awsSourceID, saved)
+		}
+	})
+
+	t.Run("valid Azure Entra ID token with boundClaims succeeds", func(t *testing.T) {
+		azSourceID := domain.NewID()
+		azRule := domain.TrustRule{
+			Issuer: idp.server.URL,
+			BoundClaims: map[string]string{
+				"appid": "00000000-0000-0000-0000-000000000000",
+				"tid":   "tenant-uuid-1234",
+			},
+		}
+		_ = memStore.SaveTrustRules(context.Background(), tenant.ID, azSourceID, []domain.TrustRule{azRule})
+
+		std := jwt.Claims{
+			Issuer:   idp.server.URL,
+			Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+			Subject:  "sp-object-id",
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"appid": "00000000-0000-0000-0000-000000000000",
+			"tid":   "tenant-uuid-1234",
+		}
+		rawJWT := idp.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+
+		rec, res := exchangeToken(mux, tenant.Slug, form)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for Azure, got %d: %v", rec.Code, rec.Body.String())
+		}
+		if _, ok := res["access_token"].(string); !ok {
+			t.Fatalf("missing access_token in Azure response: %v", res)
+		}
+	})
+
+	t.Run("AWS token claim mismatch is rejected with 400 invalid_grant", func(t *testing.T) {
+		mismatchSourceID := domain.NewID()
+		mismatchRule := domain.TrustRule{
+			Issuer: idp.server.URL,
+			BoundClaims: map[string]string{
+				"aws_account_id": "888888888888",
+			},
+		}
+		_ = memStore.SaveTrustRules(context.Background(), tenant.ID, mismatchSourceID, []domain.TrustRule{mismatchRule})
+
+		std := jwt.Claims{
+			Issuer:   idp.server.URL,
+			Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+			Subject:  "attacker",
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"aws_account_id": "999999999999", // mismatch
+		}
+		rawJWT := idp.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+
+		rec, res := exchangeToken(mux, tenant.Slug, form)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
+		}
+		if res["error"] != "invalid_grant" {
+			t.Fatalf("expected invalid_grant, got: %v", res["error"])
+		}
+	})
+
+	t.Run("AWS token missing required claim is rejected with 400 invalid_grant", func(t *testing.T) {
+		missingSourceID := domain.NewID()
+		missingRule := domain.TrustRule{
+			Issuer: idp.server.URL,
+			BoundClaims: map[string]string{
+				"aws_account_id": "777777777777",
+				"role_arn":       "arn:aws:iam::777777777777:role/checkout-ci",
+			},
+		}
+		_ = memStore.SaveTrustRules(context.Background(), tenant.ID, missingSourceID, []domain.TrustRule{missingRule})
+
+		std := jwt.Claims{
+			Issuer:   idp.server.URL,
+			Audience: jwt.Audience{"rampart:rampart.example.com:acme"},
+			Subject:  "user",
+			Expiry:   jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			ID:       uuid.New().String(),
+		}
+		claims := map[string]any{
+			"aws_account_id": "777777777777",
+			// role_arn missing
+		}
+		rawJWT := idp.signRSA(claims, std)
+
+		form := url.Values{
+			"grant_type":         {ingest.GrantTypeTokenExchange},
+			"subject_token_type": {ingest.TokenTypeJWT},
+			"subject_token":      {rawJWT},
+		}
+
+		rec, res := exchangeToken(mux, tenant.Slug, form)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
+		}
+		if res["error"] != "invalid_grant" {
+			t.Fatalf("expected invalid_grant, got: %v", res["error"])
+		}
+	})
+
 	t.Run("wrong audience is rejected", func(t *testing.T) {
 		std := jwt.Claims{
 			Issuer:   idp.server.URL,

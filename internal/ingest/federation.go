@@ -358,10 +358,17 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 8. Match claims against trust rules (immutable IDs per D22)
+	// 8. Match claims against trust rules (immutable IDs per D22, Universal boundClaims per docs/48)
 	var matchedRule *domain.TrustRuleRecord
 	for _, tr := range trustRules {
 		rule := tr.Rule
+		if len(rule.BoundClaims) > 0 {
+			if MatchClaims(verifiedClaims, rule.BoundClaims) {
+				matchedRule = &tr
+				break
+			}
+			continue
+		}
 		if rule.Provider == "github" {
 			repoID := claimStr(verifiedClaims, "repository_id")
 			ownerID := claimStr(verifiedClaims, "repository_owner_id")
@@ -513,4 +520,44 @@ func claimStr(claims map[string]any, key string) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// MatchClaims evaluates verified JWT claims against a generic boundClaims dictionary (docs/48).
+func MatchClaims(verifiedClaims map[string]any, boundClaims map[string]string) bool {
+	if len(boundClaims) == 0 {
+		return false
+	}
+	for expectedKey, expectedVal := range boundClaims {
+		actualVal, exists := getNestedClaim(verifiedClaims, expectedKey)
+		if !exists {
+			return false
+		}
+		if claimStr(map[string]any{"_": actualVal}, "_") != expectedVal {
+			return false
+		}
+	}
+	return true
+}
+
+func getNestedClaim(claims map[string]any, path string) (any, bool) {
+	if val, ok := claims[path]; ok {
+		return val, true
+	}
+	parts := strings.Split(path, ".")
+	if len(parts) == 1 {
+		return nil, false
+	}
+	var current any = claims
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		val, exists := m[part]
+		if !exists {
+			return nil, false
+		}
+		current = val
+	}
+	return current, true
 }

@@ -1609,32 +1609,303 @@ func (s *PostgresStore) GetApplicationBySlug(ctx context.Context, tenantID uuid.
 	return app, nil
 }
 
-// SaveScanSource implements apply.ConfigStore.
-func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		policyJSON, _ := json.Marshal(policy)
-		if policy == nil {
-			policyJSON = []byte("{}")
+// FindApplicationByRef implements apply.ConfigStore.
+func (s *PostgresStore) FindApplicationByRef(ctx context.Context, tenantID uuid.UUID, ref domain.ApplicationRef) (*domain.Application, error) {
+	if strings.TrimSpace(ref.Name) != "" {
+		app, err := s.GetApplicationBySlug(ctx, tenantID, ref.Name)
+		if err == nil && app != nil {
+			return app, nil
+		}
+	}
+
+	if strings.TrimSpace(ref.Repository) != "" {
+		clean := strings.TrimSuffix(strings.TrimSpace(ref.Repository), ".git")
+		query := `
+			SELECT id, tenant_id, hierarchy_node_id, coalesce(hierarchy_path, ''), slug, name,
+			       coalesce(description, ''), business_criticality, internet_facing, data_classification,
+			       compensating_controls, compliance_scope, selectors, lifecycle, type, repository, branch,
+			       environment, owners, tags, version, created_at
+			FROM application
+			WHERE tenant_id = $1 AND lower(rtrim(repository, '.git')) = lower($2)
+			LIMIT 1`
+		var a domain.Application
+		var rawSelectors []byte
+		var rawOwners []byte
+		found := false
+		err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+			row := tx.QueryRow(ctx, query, tenantID, clean)
+			err := row.Scan(
+				&a.ID, &a.TenantID, &a.HierarchyNodeID, &a.HierarchyPath, &a.Slug, &a.Name,
+				&a.Description, &a.BusinessCriticality, &a.InternetFacing, &a.DataClassification,
+				&a.CompensatingControls, &a.ComplianceScope, &rawSelectors, &a.Lifecycle, &a.Type, &a.Repository, &a.Branch,
+				&a.Environment, &rawOwners, &a.Tags, &a.Version, &a.CreatedAt,
+			)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			}
+			found = true
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if len(rawSelectors) > 0 {
+				_ = json.Unmarshal(rawSelectors, &a.Selectors)
+			}
+			if len(rawOwners) > 0 {
+				_ = json.Unmarshal(rawOwners, &a.Owners)
+			}
+			return &a, nil
+		}
+	}
+
+	if ref.Selector != nil && len(ref.Selector.MatchLabels) > 0 {
+		var matchTags []string
+		for k, v := range ref.Selector.MatchLabels {
+			matchTags = append(matchTags, k+"="+v)
 		}
 		query := `
-			INSERT INTO scan_source (id, tenant_id, name, type, scanner_family, ingestion_policy, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			SELECT id, tenant_id, hierarchy_node_id, coalesce(hierarchy_path, ''), slug, name,
+			       coalesce(description, ''), business_criticality, internet_facing, data_classification,
+			       compensating_controls, compliance_scope, selectors, lifecycle, type, repository, branch,
+			       environment, owners, tags, version, created_at
+			FROM application
+			WHERE tenant_id = $1 AND tags @> $2
+			LIMIT 1`
+		var a domain.Application
+		var rawSelectors []byte
+		var rawOwners []byte
+		found := false
+		err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+			row := tx.QueryRow(ctx, query, tenantID, matchTags)
+			err := row.Scan(
+				&a.ID, &a.TenantID, &a.HierarchyNodeID, &a.HierarchyPath, &a.Slug, &a.Name,
+				&a.Description, &a.BusinessCriticality, &a.InternetFacing, &a.DataClassification,
+				&a.CompensatingControls, &a.ComplianceScope, &rawSelectors, &a.Lifecycle, &a.Type, &a.Repository, &a.Branch,
+				&a.Environment, &rawOwners, &a.Tags, &a.Version, &a.CreatedAt,
+			)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			}
+			found = true
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if len(rawSelectors) > 0 {
+				_ = json.Unmarshal(rawSelectors, &a.Selectors)
+			}
+			if len(rawOwners) > 0 {
+				_ = json.Unmarshal(rawOwners, &a.Owners)
+			}
+			return &a, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// SaveScanSourceRecord saves a full ScanSource domain object with application binding and categories.
+func (s *PostgresStore) SaveScanSourceRecord(ctx context.Context, src *domain.ScanSource) (uuid.UUID, error) {
+	if src == nil {
+		return uuid.Nil, errors.New("scansource cannot be nil")
+	}
+	var id uuid.UUID
+	err := s.withTenantTx(ctx, src.TenantID, func(tx pgx.Tx) error {
+		policyJSON, _ := json.Marshal(src.IngestionPolicy)
+		if src.IngestionPolicy == nil {
+			policyJSON = []byte("{}")
+		}
+		claimsJSON := []byte("{}")
+		hasToken := src.Auth.TokenSecretRef != nil
+		feds := src.Auth.AllFederations()
+		hasFed := len(feds) > 0
+		authType := "token"
+		if hasToken && hasFed {
+			authType = "multi"
+		} else if hasFed {
+			authType = "federation"
+		}
+
+		if len(feds) > 0 && len(feds[0].BoundClaims) > 0 {
+			claimsJSON, _ = json.Marshal(feds[0].BoundClaims)
+		}
+		cats := src.Categories
+		if len(cats) == 0 {
+			cats = []string{"all"}
+		}
+		scanType := src.Type
+		if scanType == "" {
+			scanType = src.ScannerFamily
+		}
+		if scanType == "" {
+			scanType = "upload"
+		}
+		var appID *uuid.UUID
+		if src.ApplicationID != uuid.Nil {
+			appID = &src.ApplicationID
+		}
+
+		newID := src.ID
+		if newID == uuid.Nil {
+			newID = domain.NewID()
+		}
+
+		query := `
+			INSERT INTO scan_source (
+				id, tenant_id, name, type, scanner_family, application_id,
+				categories, auth_type, bound_claims, ingestion_policy, created_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			ON CONFLICT (tenant_id, name) DO UPDATE SET
 				scanner_family = EXCLUDED.scanner_family,
-				-- The resource is the source of truth: one with no policy means the defaults, so a policy (or a trackedRefs list)
-				-- taken out of it is taken out of the source too. It used to keep the old one, so it could be added and never removed.
+				type = EXCLUDED.type,
+				application_id = EXCLUDED.application_id,
+				categories = EXCLUDED.categories,
+				auth_type = EXCLUDED.auth_type,
+				bound_claims = EXCLUDED.bound_claims,
 				ingestion_policy = EXCLUDED.ingestion_policy,
 				disabled_at = NULL
 			RETURNING id`
-		scanType := scannerFamily
-		if scanType == "" {
-			scanType = "generic"
-		}
-		newID := domain.NewID()
-		return tx.QueryRow(ctx, query, newID, tenantID, name, scanType, scannerFamily, policyJSON, time.Now().UTC()).Scan(&id)
+
+		return tx.QueryRow(ctx, query,
+			newID, src.TenantID, src.Name, scanType, src.ScannerFamily, appID,
+			cats, authType, claimsJSON, policyJSON, time.Now().UTC(),
+		).Scan(&id)
 	})
 	return id, err
+}
+
+// SaveScanSource implements apply.ConfigStore.
+func (s *PostgresStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error) {
+	return s.SaveScanSourceRecord(ctx, &domain.ScanSource{
+		TenantID:        tenantID,
+		Name:            name,
+		ScannerFamily:   scannerFamily,
+		Type:            scannerFamily,
+		Categories:      []string{"all"},
+		IngestionPolicy: policy,
+	})
+}
+
+// GetScanSource retrieves the ScanSource domain entity including application binding and permitted categories.
+func (s *PostgresStore) GetScanSource(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.ScanSource, error) {
+	if sourceID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	var src domain.ScanSource
+	var appID *uuid.UUID
+	var categories []string
+	var authType, tokenHash *string
+	var boundClaimsJSON []byte
+	var ingestionPolicyJSON []byte
+	var disabledAt *time.Time
+	var appName string
+
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		query := `
+			SELECT s.id, s.tenant_id, s.name, s.type, s.scanner_family,
+			       COALESCE(s.application_id, s.default_application_id),
+			       s.categories, s.auth_type, s.token_hash, s.bound_claims, s.ingestion_policy,
+			       s.disabled_at, s.created_at, COALESCE(a.name, '')
+			FROM scan_source s
+			LEFT JOIN application a ON COALESCE(s.application_id, s.default_application_id) = a.id
+			WHERE s.tenant_id = $1 AND s.id = $2`
+		row := tx.QueryRow(ctx, query, tenantID, sourceID)
+		err := row.Scan(
+			&src.ID, &src.TenantID, &src.Name, &src.Type, &src.ScannerFamily,
+			&appID, &categories, &authType, &tokenHash, &boundClaimsJSON,
+			&ingestionPolicyJSON, &disabledAt, &src.CreatedAt, &appName,
+		)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if appID != nil {
+			src.ApplicationID = *appID
+			src.ApplicationRef = domain.ApplicationRef{Name: appName}
+		}
+		src.Categories = categories
+		src.DisabledAt = disabledAt
+		if len(ingestionPolicyJSON) > 0 && string(ingestionPolicyJSON) != "{}" {
+			var p domain.IngestionPolicy
+			if err := json.Unmarshal(ingestionPolicyJSON, &p); err == nil {
+				src.IngestionPolicy = &p
+			}
+		}
+		if authType != nil && *authType == "federation" && len(boundClaimsJSON) > 0 && string(boundClaimsJSON) != "{}" {
+			var claims map[string]string
+			if err := json.Unmarshal(boundClaimsJSON, &claims); err == nil {
+				src.Auth.Federation = &domain.FederationSpec{
+					BoundClaims: claims,
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &src, nil
+}
+
+// GetApplicationScanSources returns all scan sources bound to an application, including run statistics.
+func (s *PostgresStore) GetApplicationScanSources(ctx context.Context, tenantID, appID uuid.UUID) ([]domain.ApplicationScanSource, error) {
+	query := `
+		SELECT s.id, s.name, s.type, COALESCE(s.scanner_family, ''),
+		       s.categories, s.auth_type, s.created_at, s.disabled_at,
+		       COALESCE(s.ingestion_policy->'trackedRefs', '[]'::jsonb),
+		       COUNT(r.id)::int AS total_runs,
+		       MAX(r.created_at) AS last_scan_at
+		FROM scan_source s
+		LEFT JOIN ingest_run r ON r.tenant_id = s.tenant_id AND r.scan_source_id = s.id
+		WHERE s.tenant_id = $1 AND COALESCE(s.application_id, s.default_application_id) = $2
+		GROUP BY s.id, s.name, s.type, s.scanner_family, s.categories, s.auth_type, s.created_at, s.disabled_at, s.ingestion_policy
+		ORDER BY s.name ASC`
+
+	var sources []domain.ApplicationScanSource
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, tenantID, appID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var item domain.ApplicationScanSource
+			var trackedRefsJSON []byte
+			var lastScanAt *time.Time
+			if err := rows.Scan(
+				&item.ID, &item.Name, &item.Type, &item.ScannerFamily,
+				&item.Categories, &item.AuthType, &item.CreatedAt, &item.DisabledAt,
+				&trackedRefsJSON, &item.TotalRuns, &lastScanAt,
+			); err != nil {
+				return err
+			}
+			item.Active = item.DisabledAt == nil
+			item.LastScanAt = lastScanAt
+			if len(trackedRefsJSON) > 0 {
+				_ = json.Unmarshal(trackedRefsJSON, &item.TrackedRefs)
+			}
+			sources = append(sources, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sources, nil
 }
 
 // GetScanSourceIngestionPolicy retrieves the ingestion policy for a scan source.

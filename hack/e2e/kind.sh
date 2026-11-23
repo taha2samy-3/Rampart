@@ -146,6 +146,33 @@ YAML
 kubectl -n "$TEAM_NS" wait --for=condition=Ready application/checkout scansource/github connector/e2e-webhook --timeout=120s
 [ -n "$(kubectl -n "$TEAM_NS" get application checkout -o jsonpath='{.status.applicationId}')" ] || fail "status.applicationId is empty"
 
+log "A ScanSource bound to an application with categories becomes Ready=True (D140)"
+kubectl apply -f - <<YAML
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ScanSource
+metadata: {name: checkout-sast, namespace: $TEAM_NS}
+spec:
+  applicationRef: {name: checkout}
+  categories: [sast, secret]
+  auth:
+    federation:
+      issuer: "https://token.actions.githubusercontent.com"
+      boundClaims:
+        repository: "acme/checkout"
+YAML
+kubectl -n "$TEAM_NS" wait --for=condition=Ready scansource/checkout-sast --timeout=60s
+
+log "A ScanSource referencing a non-existent Application gets Ready=False with ApplicationNotFound (D140)"
+kubectl apply -f - <<YAML
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ScanSource
+metadata: {name: missing-app-source, namespace: $TEAM_NS}
+spec:
+  applicationRef: {name: non-existent-app}
+  categories: [sast]
+YAML
+wait_until 60 "ApplicationNotFound" bash -c "[ \"\$(kubectl -n $TEAM_NS get scansource missing-app-source -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].reason}')\" = ApplicationNotFound ]"
+
 log "An Application in a namespace no Tenant lists is not ready, and says why (D17, D20)"
 kubectl create namespace orphan-ns >/dev/null
 kubectl apply -f - <<YAML
@@ -175,6 +202,8 @@ assert_eq "$(pg "select rolcanlogin::text||rolbypassrls::text from pg_roles wher
 assert_eq "$(pg "select tenant_id is not null from tenant_namespace where namespace='$TEAM_NS'")" "t" "namespace ownership recorded (D20)"
 assert_eq "$(pg "select count(*) from application where slug='checkout'")" "1" "application stored"
 assert_eq "$(pg "select count(*) from connector where name='e2e-webhook'")" "1" "connector stored"
+assert_eq "$(pg "select count(*) from scan_source where name='checkout-sast' and application_id is not null and 'sast' = any(categories)")" "1" "checkout-sast stored with application_id and categories"
+assert_eq "$(pg "select count(*) from source_trust where bound_claims->>'repository' = 'acme/checkout'")" "1" "source_trust recorded bound claims"
 assert_eq "$(pg "select count(*) from secret_material")" "2" "two secrets synced (scansource and connector)"
 assert_eq "$(pg "select count(*) from secret_material where position('$SECRET_VALUE'::bytea in encrypted_value) > 0")" "0" "no Secret is stored in plaintext"
 assert_eq "$(pg "select count(*) from information_schema.tables where table_schema='river' and table_name='river_job'")" "1" "river schema"

@@ -406,3 +406,27 @@ sbomAnalyzer:
 # Their risk policy reads app.environment, so they need this server (schema version 51): the chart and the server move together.
 policies:
   enabled: true
+
+# Bootstrap initial resources (Applications and ScanSources) declaratively via GitOps / Helm.
+# When enabled, the chart will render Application and ScanSource Custom Resources upon installation.
+bootstrap:
+  enabled: false
+  applications: []
+    # - name: payments-api
+    #   businessCriticality: high
+    #   lifecycle: production
+    #   repository: https://github.com/acme/payments
+    #   branch: main
+    #   environment: production
+    #   tags: ["tier=1", "app=payments"]
+  scanSources: []
+    # - name: payments-ci
+    #   type: upload
+    #   categories: [sast, sca, secret]
+    #   applicationRef:
+    #     name: payments-api
+    #   auth:
+    #     federation:
+    #       issuer: https://token.actions.githubusercontent.com
+    #       boundClaims:
+    #         repository: acme/payments

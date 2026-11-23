@@ -169,7 +169,7 @@ const workflowRoute = createRoute({
 });
 
 export interface ApplicationSearch {
-  tab?: 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'settings';
+  tab?: 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'sources' | 'settings';
 }
 
 const overviewRoute = createRoute({ getParentRoute: () => appRoute, path: '/overview', component: OverviewRoute });
@@ -178,7 +178,7 @@ const applicationRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/applications/$id',
   validateSearch: (s: Record<string, unknown>): ApplicationSearch => ({
-    tab: ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'settings'].includes(s.tab as string) ? (s.tab as ApplicationSearch['tab']) : undefined,
+    tab: ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'sources', 'settings'].includes(s.tab as string) ? (s.tab as ApplicationSearch['tab']) : undefined,
   }),
   component: function Application() {
     return <ApplicationRoute id={applicationRoute.useParams().id} search={applicationRoute.useSearch()} />;

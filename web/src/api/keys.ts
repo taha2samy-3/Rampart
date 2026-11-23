@@ -26,6 +26,7 @@ export const qk = {
     compliance: (id: string) => ['applications', 'compliance', id] as const,
     changes: (id: string, from: string, to: string) => ['applications', 'changes', id, from, to] as const,
     freshness: (id: string) => ['applications', id, 'freshness'] as const,
+    sources: (id: string) => ['applications', id, 'sources'] as const,
   },
   scoring: () => ['scoring'] as const,
   overview: () => ['overview'] as const,

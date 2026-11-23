@@ -149,7 +149,6 @@ const ACCEPTANCES = [
 
 const PARSERS = (() => {
   const ago = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
-  const missing = 'its WASM module is not installed on this server (parsers.delivery in the chart)';
   const p = (id, name, family, runtime, extra = {}) => {
     const isSbom = family === 'sbom';
     const isTenant = extra.origin === 'tenant' || id.startsWith('mapping:');
@@ -633,6 +632,45 @@ const server = http.createServer((req, res) => {
           { category: 'container', scanners: ['trivy'], last_scan: day(6), open: {} },
           { category: 'dast', scanners: [], open: {} },
           { category: 'cspm', scanners: [], open: {} },
+        ],
+      });
+    }
+    const appSourcesMatch = /^\/api\/v1\/applications\/([^/]+)\/sources$/.exec(p);
+    if (appSourcesMatch) {
+      const a = APP_ROWS.find((x) => x.id === appSourcesMatch[1] || x.slug === appSourcesMatch[1]);
+      if (!a) return problem(res, 404, 'Application not found', 'No such application.');
+      return json(res, {
+        items: [
+          {
+            id: 'src-1',
+            tenant_id: 't-test',
+            application_id: a.id,
+            name: `${a.slug}-ci`,
+            type: 'upload',
+            categories: ['sast', 'sca', 'secret'],
+            auth_type: 'multi',
+            scanner_family: 'trivy',
+            active: true,
+            total_runs: 142,
+            last_scan_at: day(0.2),
+            created_at: day(30),
+            updated_at: day(0.2),
+          },
+          {
+            id: 'src-2',
+            tenant_id: 't-test',
+            application_id: a.id,
+            name: 'nightly-deep-scan',
+            type: 'apiPull',
+            categories: ['sast'],
+            auth_type: 'token',
+            scanner_family: 'semgrep',
+            active: true,
+            total_runs: 28,
+            last_scan_at: day(1),
+            created_at: day(30),
+            updated_at: day(1),
+          },
         ],
       });
     }

@@ -16,10 +16,11 @@ import { cn } from '@/lib/cn';
 import { ApplicationSettingsSection } from './ApplicationSettingsSection';
 import { ApplicationDependencyGraphSection } from './ApplicationDependencyGraphSection';
 import { ApplicationLicensesSection } from './ApplicationLicensesSection';
+import { ApplicationSourcesSection } from './ApplicationSourcesSection';
 import { toBand } from '@/lib/band';
 import { absoluteDate, dueShort, shortAge } from '@/lib/format';
 
-export type AppTab = 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'settings';
+export type AppTab = 'overview' | 'cves' | 'sbom' | 'graph' | 'licenses' | 'attest' | 'sources' | 'settings';
 
 /** One application: where it stands, its deadlines, how fast things get fixed, its worst findings and its coverage. */
 export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: string } }) {
@@ -51,7 +52,7 @@ export function ApplicationRoute({ id, search }: { id: string; search?: { tab?: 
 
 function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string } }) {
   const navigate = useNavigate();
-  const tab: AppTab = search?.tab && ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'settings'].includes(search.tab)
+  const tab: AppTab = search?.tab && ['overview', 'cves', 'sbom', 'graph', 'licenses', 'attest', 'sources', 'settings'].includes(search.tab)
     ? (search.tab as AppTab)
     : 'overview';
 
@@ -144,6 +145,9 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
               </TabsTrigger>
               <TabsTrigger value="attest">
                 {t('apps.tabAttest', { defaultValue: 'Compliance Attestations' })}
+              </TabsTrigger>
+              <TabsTrigger value="sources">
+                {t('apps.tabSources', { defaultValue: 'Scan Sources' })}
               </TabsTrigger>
               <TabsTrigger value="settings">{t('appSettings.tab')}</TabsTrigger>
             </TabsList>
@@ -267,12 +271,16 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
               <ApplicationLicensesSection app={app} />
             </TabsContent>
 
-            <TabsContent value="settings" className="mt-4 focus-visible:outline-none">
-              <ApplicationSettingsSection key={`${app.id}:${app.version}`} app={app} />
-            </TabsContent>
-
             <TabsContent value="attest" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
               <ApplicationAttestSection app={app} />
+            </TabsContent>
+
+            <TabsContent value="sources" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+              <ApplicationSourcesSection app={app} />
+            </TabsContent>
+
+            <TabsContent value="settings" className="mt-4 focus-visible:outline-none">
+              <ApplicationSettingsSection key={`${app.id}:${app.version}`} app={app} />
             </TabsContent>
           </Tabs>
         </section>

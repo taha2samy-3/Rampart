@@ -12,11 +12,11 @@ import (
 // internet reaches it, what data it holds, what stands in front of it, and where it is in its life. A field left out
 // is left alone. The same values the Application resource takes (docs/04), so a person and a resource say it alike.
 type ApplicationContextUpdate struct {
-	BusinessCriticality  *string         `json:"business_criticality,omitempty"`
-	InternetFacing       *bool           `json:"internet_facing,omitempty"`
-	DataClassification   *[]string       `json:"data_classification,omitempty"`
-	CompensatingControls *[]string       `json:"compensating_controls,omitempty"`
-	Lifecycle            *string         `json:"lifecycle,omitempty"`
+	BusinessCriticality  *string   `json:"business_criticality,omitempty"`
+	InternetFacing       *bool     `json:"internet_facing,omitempty"`
+	DataClassification   *[]string `json:"data_classification,omitempty"`
+	CompensatingControls *[]string `json:"compensating_controls,omitempty"`
+	Lifecycle            *string   `json:"lifecycle,omitempty"`
 	// Environment is where the application runs (D140): production, staging, test or development; the empty string says it again
 	// as "not described".
 	Environment *string         `json:"environment,omitempty"`

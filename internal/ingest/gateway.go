@@ -312,6 +312,26 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scanSrc, _ := g.store.GetScanSource(r.Context(), tenantID, sourceID)
+	if scanSrc != nil {
+		if scanSrc.ApplicationID != domain.NilID && req.Context.Application != "" && strings.ToLower(req.Context.Application) != "unassigned" {
+			boundApp, _ := g.store.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
+			if boundApp != nil && strings.ToLower(req.Context.Application) != strings.ToLower(boundApp.Slug) && req.Context.Application != scanSrc.ApplicationID.String() {
+				problemJSON(w, http.StatusForbidden, "forbidden", "Application mismatch",
+					fmt.Sprintf("ScanSource %q is bound to application %q, cannot ingest to declared application %q", scanSrc.Name, boundApp.Slug, req.Context.Application))
+				return
+			}
+		}
+		if req.FormatHint != "" {
+			cat := g.categoryOf(r.Context(), &domain.Upload{TenantID: tenantID, FormatHint: req.FormatHint})
+			if !scanSrc.PermitsCategory(cat) {
+				problemJSON(w, http.StatusForbidden, "forbidden", "Category not permitted for this scan source",
+					fmt.Sprintf("ScanSource %q does not permit security category %q (allowed: %s)", scanSrc.Name, cat, strings.Join(scanSrc.Categories, ", ")))
+				return
+			}
+		}
+	}
+
 	sum := sha256.Sum256(rawBody)
 	reqHash := hex.EncodeToString(sum[:])
 	key := r.Header.Get("Idempotency-Key")
@@ -431,6 +451,15 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	// D10: asset, application and track from the declared context. Without a parsed report the asset is
 	// a repository, or an image when the context names one.
 	cat := g.categoryOf(r.Context(), upload)
+	if upload.ScanSourceID != uuid.Nil {
+		if src, err := g.store.GetScanSource(r.Context(), tenantID, upload.ScanSourceID); err == nil && src != nil {
+			if !src.PermitsCategory(cat) {
+				problemJSON(w, http.StatusForbidden, "forbidden", "Category not permitted for this scan source",
+					fmt.Sprintf("ScanSource %q does not permit security category %q (allowed: %s)", src.Name, cat, strings.Join(src.Categories, ", ")))
+				return
+			}
+		}
+	}
 	var runID uuid.UUID
 	err = g.store.InTenantTx(r.Context(), tenantID, func(st Store) error {
 		won, err := st.CompleteUpload(r.Context(), tenantID, uploadID, req.SHA256)
@@ -448,9 +477,30 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		appID, _, err := ResolveApplicationWith(r.Context(), st, tenantID, asset, upload.Context.Application, false)
-		if err != nil {
-			return err
+
+		var appID uuid.UUID
+		var scanSrc *domain.ScanSource
+		if upload.ScanSourceID != uuid.Nil {
+			scanSrc, _ = st.GetScanSource(r.Context(), tenantID, upload.ScanSourceID)
+		}
+		if scanSrc != nil && scanSrc.ApplicationID != domain.NilID {
+			boundApp, _ := st.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
+			if upload.Context.Application != "" && strings.ToLower(upload.Context.Application) != "unassigned" && boundApp != nil {
+				if strings.ToLower(upload.Context.Application) != strings.ToLower(boundApp.Slug) && upload.Context.Application != scanSrc.ApplicationID.String() {
+					return fmt.Errorf("application mismatch: scan source %q is bound to %q", scanSrc.Name, boundApp.Slug)
+				}
+			}
+			appID = scanSrc.ApplicationID
+			if sel, ok := st.(selectorStore); ok {
+				_, _ = sel.MoveAssetToApplication(r.Context(), tenantID, asset.ID, appID)
+			}
+			asset.ApplicationID = &appID
+		} else {
+			var appErr error
+			appID, _, appErr = ResolveApplicationWith(r.Context(), st, tenantID, asset, upload.Context.Application, false)
+			if appErr != nil {
+				return appErr
+			}
 		}
 		runID = domain.NewID()
 		run := &domain.IngestRun{
@@ -616,6 +666,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/forbidden","title":"Token is bound to another scan source"}`, http.StatusForbidden)
 		return
 	}
+	scanSrc, _ := g.store.GetScanSource(r.Context(), tenantID, sourceID)
 	track := ""
 
 	if len(data) == 0 {
@@ -676,7 +727,34 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	primaryCategory := domain.CategorySAST
 	if isSBOM {
 		primaryCategory = domain.CategorySCA
+	} else if selectedParser != nil {
+		rawCat := strings.ToLower(strings.TrimSpace(selectedParser.Descriptor().Category))
+		switch rawCat {
+		case "sca", "sbom":
+			primaryCategory = domain.CategorySCA
+		case "secret", "secrets":
+			primaryCategory = domain.CategorySecret
+		default:
+			fc := domain.FindingCategory(rawCat)
+			if fc.IsValid() {
+				primaryCategory = fc
+			}
+		}
 	}
+
+	if scanSrc != nil && !scanSrc.PermitsCategory(primaryCategory) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type":   "https://rampart.aspm.dev/problems/forbidden",
+			"title":  "Category not permitted for this scan source",
+			"status": http.StatusForbidden,
+			"detail": fmt.Sprintf("ScanSource %q does not permit security category %q (allowed: %s)", scanSrc.Name, primaryCategory, strings.Join(scanSrc.Categories, ", ")),
+			"code":   "category_not_permitted",
+		})
+		return
+	}
+
 	// Before anything is created: a parser whose module is not on this server cannot read the file, and the upload must not leave an application, an
 	// asset and a failed run behind for it (docs/34 item 21, W3).
 	if mr, ok := selectedParser.(interface{ RequiredModules() []string }); ok {
@@ -700,55 +778,99 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		return
 	}
 
-	// Creating an application from an upload is restricted. CI tokens and automated ingestion can NEVER create applications
-	// (GitOps governance: applications must be declared declaratively via Application CRD).
-	// Only maintainers or admins can explicitly pass createApplication=true.
-	// Without createApplication=true, createMissing defaults to false (fail-closed: missing application returns 404).
+	var appID uuid.UUID
+	var appCreated bool
+	var scanApp *domain.Application
 	createChoice := strings.ToLower(strings.TrimSpace(get("createApplication")))
-	createMissing := false
-	if createChoice == "true" || createChoice == "1" || createChoice == "yes" {
-		if caller.Role == auth.RoleIngest {
+
+	if scanSrc != nil && scanSrc.ApplicationID != domain.NilID {
+		var appErr error
+		scanApp, appErr = g.store.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
+		if appErr != nil || scanApp == nil {
 			w.Header().Set("Content-Type", "application/problem+json")
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"type":   "https://rampart.aspm.dev/problems/forbidden",
-				"status": http.StatusForbidden,
-				"title":  "CI tokens cannot create applications",
-				"detail": "Applications must be declared declaratively via Application CRD. Ingestion tokens are restricted to reporting against existing applications.",
+				"type":   "https://rampart.aspm.dev/problems/application-not-found",
+				"status": http.StatusNotFound,
+				"title":  "Bound application not found",
+				"detail": fmt.Sprintf("ScanSource %q references application %s which does not exist", scanSrc.Name, scanSrc.ApplicationID),
 			})
 			return
 		}
-		if caller.Role.Rank() < auth.RoleMaintainer.Rank() {
+
+		if declaredApp != "" && strings.ToLower(declaredApp) != "unassigned" {
+			if strings.ToLower(declaredApp) != strings.ToLower(scanApp.Slug) && declaredApp != scanSrc.ApplicationID.String() {
+				w.Header().Set("Content-Type", "application/problem+json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"type":   "https://rampart.aspm.dev/problems/forbidden",
+					"status": http.StatusForbidden,
+					"title":  "Application mismatch",
+					"detail": fmt.Sprintf("ScanSource %q is bound to application %q, cannot ingest to declared application %q", scanSrc.Name, scanApp.Slug, declaredApp),
+					"code":   "application_mismatch",
+				})
+				return
+			}
+		}
+
+		appID = scanSrc.ApplicationID
+		if asset != nil {
+			if sel, ok := g.store.(selectorStore); ok {
+				_, _ = sel.MoveAssetToApplication(r.Context(), tenantID, asset.ID, appID)
+			}
+			asset.ApplicationID = &appID
+		}
+	} else {
+		// Creating an application from an upload is restricted. CI tokens and automated ingestion can NEVER create applications
+		// (GitOps governance: applications must be declared declaratively via Application CRD).
+		// Only maintainers or admins can explicitly pass createApplication=true.
+		// Without createApplication=true, createMissing defaults to false (fail-closed: missing application returns 404).
+		createMissing := false
+		if createChoice == "true" || createChoice == "1" || createChoice == "yes" {
+			if caller.Role == auth.RoleIngest {
+				w.Header().Set("Content-Type", "application/problem+json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"type":   "https://rampart.aspm.dev/problems/forbidden",
+					"status": http.StatusForbidden,
+					"title":  "CI tokens cannot create applications",
+					"detail": "Applications must be declared declaratively via Application CRD. Ingestion tokens are restricted to reporting against existing applications.",
+				})
+				return
+			}
+			if caller.Role.Rank() < auth.RoleMaintainer.Rank() {
+				w.Header().Set("Content-Type", "application/problem+json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"type":   "https://rampart.aspm.dev/problems/forbidden",
+					"status": http.StatusForbidden,
+					"title":  "Creating an application needs the maintainer or admin role",
+				})
+				return
+			}
+			createMissing = true
+		}
+		var err error
+		appID, appCreated, err = ResolveApplicationWith(r.Context(), g.store, tenantID, asset, declaredApp, createMissing)
+		if errors.Is(err, ErrApplicationNotFound) {
 			w.Header().Set("Content-Type", "application/problem+json")
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(http.StatusNotFound)
+			detail := fmt.Sprintf("There is no application %q in this tenant. Applications must be declared declaratively via Application CRD or created by an administrator.", strings.ToLower(declaredApp))
+			if caller.Role.Rank() >= auth.RoleMaintainer.Rank() && caller.Role != auth.RoleIngest {
+				detail = fmt.Sprintf("There is no application %q in this tenant. Check the name, create it via CRD, or send createApplication=true.", strings.ToLower(declaredApp))
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"type":   "https://rampart.aspm.dev/problems/forbidden",
-				"status": http.StatusForbidden,
-				"title":  "Creating an application needs the maintainer or admin role",
+				"type":   "https://rampart.aspm.dev/problems/application-not-found",
+				"status": http.StatusNotFound,
+				"title":  "No such application",
+				"detail": detail,
 			})
 			return
 		}
-		createMissing = true
-	}
-	appID, appCreated, err := ResolveApplicationWith(r.Context(), g.store, tenantID, asset, declaredApp, createMissing)
-	if errors.Is(err, ErrApplicationNotFound) {
-		w.Header().Set("Content-Type", "application/problem+json")
-		w.WriteHeader(http.StatusNotFound)
-		detail := fmt.Sprintf("There is no application %q in this tenant. Applications must be declared declaratively via Application CRD or created by an administrator.", strings.ToLower(declaredApp))
-		if caller.Role.Rank() >= auth.RoleMaintainer.Rank() && caller.Role != auth.RoleIngest {
-			detail = fmt.Sprintf("There is no application %q in this tenant. Check the name, create it via CRD, or send createApplication=true.", strings.ToLower(declaredApp))
+		if err != nil {
+			http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve application"}`, http.StatusInternalServerError)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"type":   "https://rampart.aspm.dev/problems/application-not-found",
-			"status": http.StatusNotFound,
-			"title":  "No such application",
-			"detail": detail,
-		})
-		return
-	}
-	if err != nil {
-		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/internal","title":"Failed to resolve application"}`, http.StatusInternalServerError)
-		return
 	}
 
 	// D10: an asset that already belongs to an application stays in it, whatever the upload names. Say so, instead
@@ -757,7 +879,9 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	if appCreated && createChoice == "" {
 		warnings = append(warnings, fmt.Sprintf("application %q did not exist and was created; send createApplication=false to refuse that, or createApplication=true to say it is meant", strings.ToLower(declaredApp)))
 	}
-	if app, err := g.store.GetApplication(r.Context(), tenantID, appID); err == nil && app != nil {
+	if scanApp != nil {
+		filedUnder = scanApp.Slug
+	} else if app, err := g.store.GetApplication(r.Context(), tenantID, appID); err == nil && app != nil {
 		filedUnder = app.Slug
 		if want := strings.ToLower(declaredApp); want != "" && want != app.Slug {
 			warnings = append(warnings, fmt.Sprintf("application %q was not used: this asset already belongs to %q (D10); move the asset to change it", want, app.Slug))
@@ -768,8 +892,14 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		track = ResolveTrack(uploadCtx)
 	}
 
-	// D10: ephemeral is decided by the ref (PRs, feature branches), not by the track name.
-	isEphemeral := IsEphemeralFor(r.Context(), g.store, tenantID, sourceID, uploadCtx.Branch)
+	// D10 / D140: ephemeral is decided by the ref (PRs, feature branches).
+	// When an application is bound and has a branch configured, that branch is the production baseline (D140).
+	isEphemeral := false
+	if scanApp != nil && strings.TrimSpace(scanApp.Branch) != "" {
+		isEphemeral = strings.TrimSpace(uploadCtx.Branch) != strings.TrimSpace(scanApp.Branch)
+	} else {
+		isEphemeral = IsEphemeralFor(r.Context(), g.store, tenantID, sourceID, uploadCtx.Branch)
+	}
 
 	// D2: the run exists (and is visible) before any finding is touched.
 	run := &domain.IngestRun{

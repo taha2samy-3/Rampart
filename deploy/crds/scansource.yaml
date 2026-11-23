@@ -29,12 +29,107 @@ spec:
             spec:
               type: object
               properties:
+                applicationRef:
+                  type: object
+                  description: The target Application this ScanSource is exclusively bound to (D140). Can bind by name/slug, label selector, or repository URL.
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 255
+                      description: Name or slug of the target Application resource in this namespace.
+                    selector:
+                      type: object
+                      description: Label selector to match target Application.
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    repository:
+                      type: string
+                      maxLength: 500
+                      description: Repository URL of the target Application (e.g. https://github.com/org/repo).
+                categories:
+                  type: array
+                  description: >-
+                    The security testing disciplines permitted for this source (D17).
+                    Accepts one or more disciplines, or 'all'.
+                  items:
+                    type: string
+                    enum:
+                      - sast
+                      - sca
+                      - secret
+                      - container
+                      - dast
+                      - iac
+                      - cspm
+                      - compliance
+                      - license
+                      - supply_chain
+                      - all
+                auth:
+                  type: object
+                  description: "Authentication contract: standard API token secretRef, single federation, and/or multiple OIDC federations."
+                  properties:
+                    tokenSecretRef:
+                      type: object
+                      description: Reference to a Kubernetes Secret containing a scoped ingest token for standard authentication.
+                      required:
+                        - name
+                        - key
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                    federation:
+                      type: object
+                      description: Universal Workload Identity Federation via OIDC token exchange (RFC 8693).
+                      required:
+                        - issuer
+                      properties:
+                        issuer:
+                          type: string
+                          format: uri
+                          description: "Trusted OIDC Issuer URL (e.g. https://token.actions.githubusercontent.com, https://sts.amazonaws.com)."
+                        boundClaims:
+                          type: object
+                          description: "Key-value dictionary of claims required to match in the incoming JWT (e.g. repository_id, account_id)."
+                          x-kubernetes-preserve-unknown-fields: true
+                    federations:
+                      type: array
+                      description: Multiple Universal Workload Identity Federation rules for multi-issuer or multi-repo setups.
+                      items:
+                        type: object
+                        required:
+                          - issuer
+                        properties:
+                          issuer:
+                            type: string
+                            format: uri
+                            description: "Trusted OIDC Issuer URL."
+                          boundClaims:
+                            type: object
+                            description: "Key-value dictionary of claims required to match in the incoming JWT."
+                            x-kubernetes-preserve-unknown-fields: true
                 scannerFamily:
                   type: string
+                  description: Legacy scanner family or parser ID; optional when categories is declared.
                 type:
                   type: string
+                  description: Ingestion mode (upload, apiPull, webhook, ci, manual).
+                  default: upload
+                  enum:
+                    - upload
+                    - apiPull
+                    - webhook
+                    - ci
+                    - manual
                 secretRef:
                   type: object
+                  description: Legacy secret reference. Deprecated in favor of spec.auth.tokenSecretRef.
                   properties:
                     name:
                       type: string
@@ -70,9 +165,7 @@ spec:
                   type: array
                   maxItems: 50
                   description: >-
-                    The branches whose runs change the inventory (D10). An exact name, a prefix ending in * ("release/*",
-                    "hotfix-*"), or * for every ref. Any other ref is ephemeral: it feeds the CI gate and changes nothing.
-                    Empty: main, master, default, release/*, prod, production. A pull request is always ephemeral.
+                    Legacy tracked refs list. In modern Rampart, the production branch is inherited from the bound Application (D140).
                   items:
                     type: string
                     minLength: 1
@@ -80,6 +173,7 @@ spec:
                     pattern: '^[^\s*]+\*?$|^\*$'
                 trustRules:
                   type: array
+                  description: Legacy trust rules list. Deprecated in favor of spec.auth.federation.
                   items:
                     type: object
                     properties:
@@ -110,12 +204,12 @@ spec:
                   type: object
                   description: Projects, mapping, pull, webhook and triageSync (docs/10 §8). Validated by the operator, which refuses fields this version does not build.
                   x-kubernetes-preserve-unknown-fields: true
-              required:
-                - scannerFamily
             status:
               type: object
               properties:
                 scanSourceId:
+                  type: string
+                applicationId:
                   type: string
                 observedGeneration:
                   type: integer
@@ -140,4 +234,3 @@ spec:
                       - status
       subresources:
         status: {}
-

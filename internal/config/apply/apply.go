@@ -51,7 +51,9 @@ type ConfigStore interface {
 	GetTenantByNamespace(ctx context.Context, namespace string) (*domain.Tenant, error)
 	SaveApplication(ctx context.Context, app domain.Application) error
 	GetApplicationBySlug(ctx context.Context, tenantID uuid.UUID, slug string) (*domain.Application, error)
+	FindApplicationByRef(ctx context.Context, tenantID uuid.UUID, ref domain.ApplicationRef) (*domain.Application, error)
 	SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error)
+	SaveScanSourceRecord(ctx context.Context, src *domain.ScanSource) (uuid.UUID, error)
 	// SaveSLAPolicy stores an SLAPolicy of a tenant. A spec that failed validation is stored with its error, so
 	// the object's status can say why it is not applied (docs/16 D41).
 	SaveSLAPolicy(ctx context.Context, tenantID uuid.UUID, p PolicyObject) error
@@ -1113,19 +1115,103 @@ func (m *MemoryConfigStore) GetApplicationBySlug(ctx context.Context, tenantID u
 	return &app, nil
 }
 
+func (m *MemoryConfigStore) FindApplicationByRef(ctx context.Context, tenantID uuid.UUID, ref domain.ApplicationRef) (*domain.Application, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 1. By Name / Slug
+	if strings.TrimSpace(ref.Name) != "" {
+		key := tenantID.String() + ":" + ref.Name
+		if app, ok := m.applications[key]; ok {
+			return &app, nil
+		}
+		for _, app := range m.applications {
+			if app.TenantID == tenantID && (strings.EqualFold(app.Slug, ref.Name) || strings.EqualFold(app.Name, ref.Name)) {
+				return &app, nil
+			}
+		}
+	}
+
+	// 2. By Repository
+	if strings.TrimSpace(ref.Repository) != "" {
+		targetRepo := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(ref.Repository)), ".git")
+		for _, app := range m.applications {
+			if app.TenantID == tenantID {
+				appRepo := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(app.Repository)), ".git")
+				if appRepo != "" && appRepo == targetRepo {
+					return &app, nil
+				}
+			}
+		}
+	}
+
+	// 3. By Selector (matchLabels)
+	if ref.Selector != nil && len(ref.Selector.MatchLabels) > 0 {
+		for _, app := range m.applications {
+			if app.TenantID != tenantID {
+				continue
+			}
+			matched := true
+			for k, v := range ref.Selector.MatchLabels {
+				labelMatched := false
+				tagFormat1 := k + "=" + v
+				tagFormat2 := k + ":" + v
+				for _, tag := range app.Tags {
+					if tag == tagFormat1 || tag == tagFormat2 || (k == "app" && tag == v) {
+						labelMatched = true
+						break
+					}
+				}
+				if !labelMatched && app.Attributes != nil {
+					if val, ok := app.Attributes[k]; ok && fmt.Sprint(val) == v {
+						labelMatched = true
+					}
+				}
+				if !labelMatched {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return &app, nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
 func (m *MemoryConfigStore) SaveScanSource(ctx context.Context, tenantID uuid.UUID, name string, scannerFamily string, policy *domain.IngestionPolicy) (uuid.UUID, error) {
+	return m.SaveScanSourceRecord(ctx, &domain.ScanSource{
+		TenantID:        tenantID,
+		Name:            name,
+		ScannerFamily:   scannerFamily,
+		Type:            scannerFamily,
+		Categories:      []string{"all"},
+		IngestionPolicy: policy,
+	})
+}
+
+func (m *MemoryConfigStore) SaveScanSourceRecord(ctx context.Context, src *domain.ScanSource) (uuid.UUID, error) {
+	if src == nil {
+		return uuid.Nil, errors.New("scansource cannot be nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := tenantID.String() + ":" + name
+	key := src.TenantID.String() + ":" + src.Name
 	id, ok := m.scanSources[key]
 	if !ok {
-		id = domain.NewID()
+		if src.ID != uuid.Nil {
+			id = src.ID
+		} else {
+			id = domain.NewID()
+		}
 		m.scanSources[key] = id
 	}
 	if m.scanSourcePolicies == nil {
 		m.scanSourcePolicies = map[string]*domain.IngestionPolicy{}
 	}
-	m.scanSourcePolicies[key] = policy
+	m.scanSourcePolicies[key] = src.IngestionPolicy
 	return id, nil
 }
 

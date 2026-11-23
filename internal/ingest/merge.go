@@ -664,6 +664,7 @@ type MemoryStore struct {
 	tokens                map[string]*auth.TokenRecord
 	tenants               map[uuid.UUID]*domain.Tenant
 	scanSources           map[string]uuid.UUID
+	scanSourceRecords     map[string]*domain.ScanSource
 	users                 map[uuid.UUID]auth.User
 	userIDs               map[string]uuid.UUID
 	members               map[string]memMember
@@ -702,6 +703,7 @@ type memBinding struct {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		scanSources:           make(map[string]uuid.UUID),
+		scanSourceRecords:     make(map[string]*domain.ScanSource),
 		findings:              make(map[string]*domain.Finding),
 		occurrences:           make(map[string]*domain.Occurrence),
 		sboms:                 make(map[string]*domain.SBOM),
@@ -2069,12 +2071,35 @@ func (m *MemoryStore) EnsureScanSource(ctx context.Context, tenantID uuid.UUID, 
 		ref = "default"
 	}
 	if id, err := uuid.Parse(ref); err == nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.scanSourceRecords == nil {
+			m.scanSourceRecords = make(map[string]*domain.ScanSource)
+		}
+		recKey := tenantID.String() + ":" + id.String()
+		if src, ok := m.scanSourceRecords[recKey]; ok {
+			if src.DisabledAt != nil {
+				return uuid.Nil, store.ErrSourceDisabled
+			}
+			return id, nil
+		}
+		m.scanSourceRecords[recKey] = &domain.ScanSource{
+			ID:         id,
+			TenantID:   tenantID,
+			Name:       id.String(),
+			Type:       "upload",
+			Categories: []string{"all"},
+		}
 		return id, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := tenantID.String() + ":" + ref
 	if id, ok := m.scanSources[key]; ok {
+		recKey := tenantID.String() + ":" + id.String()
+		if src, ok := m.scanSourceRecords[recKey]; ok && src.DisabledAt != nil {
+			return uuid.Nil, store.ErrSourceDisabled
+		}
 		return id, nil
 	}
 	if ref != "default" {
@@ -2082,6 +2107,18 @@ func (m *MemoryStore) EnsureScanSource(ctx context.Context, tenantID uuid.UUID, 
 	}
 	id := domain.NewID()
 	m.scanSources[key] = id
+	if m.scanSourceRecords == nil {
+		m.scanSourceRecords = make(map[string]*domain.ScanSource)
+	}
+	recKey := tenantID.String() + ":" + id.String()
+	m.scanSourceRecords[recKey] = &domain.ScanSource{
+		ID:            id,
+		TenantID:      tenantID,
+		Name:          "default",
+		Type:          "upload",
+		ScannerFamily: "generic",
+		Categories:    []string{"all"},
+	}
 	return id, nil
 }
 
@@ -2417,6 +2454,128 @@ func (m *MemoryStore) GetScanSourceIngestionPolicy(ctx context.Context, tenantID
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.sourcePolicies[tenantID.String()+":"+sourceID.String()], nil
+}
+
+func (m *MemoryStore) GetScanSource(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.ScanSource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	key := tenantID.String() + ":" + sourceID.String()
+	if src, ok := m.scanSourceRecords[key]; ok {
+		return src, nil
+	}
+	// Fallback check if it was known in scanSources map
+	for k, id := range m.scanSources {
+		if id == sourceID {
+			parts := strings.SplitN(k, ":", 2)
+			if len(parts) == 2 && parts[0] == tenantID.String() {
+				return &domain.ScanSource{
+					ID:         sourceID,
+					TenantID:   tenantID,
+					Name:       parts[1],
+					Categories: []string{"all"},
+				}, nil
+			}
+		}
+	}
+	if sourceID != uuid.Nil {
+		return &domain.ScanSource{
+			ID:         sourceID,
+			TenantID:   tenantID,
+			Name:       "default",
+			Categories: []string{"all"},
+		}, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (m *MemoryStore) SaveScanSourceRecord(ctx context.Context, src *domain.ScanSource) (uuid.UUID, error) {
+	if src == nil {
+		return uuid.Nil, errors.New("scansource cannot be nil")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if src.ID == uuid.Nil {
+		src.ID = domain.NewID()
+	}
+	if len(src.Categories) == 0 {
+		src.Categories = []string{"all"}
+	}
+	if m.scanSourceRecords == nil {
+		m.scanSourceRecords = make(map[string]*domain.ScanSource)
+	}
+	if m.scanSources == nil {
+		m.scanSources = make(map[string]uuid.UUID)
+	}
+	key := src.TenantID.String() + ":" + src.ID.String()
+	m.scanSourceRecords[key] = src
+	nameKey := src.TenantID.String() + ":" + src.Name
+	m.scanSources[nameKey] = src.ID
+	if src.IngestionPolicy != nil {
+		if m.sourcePolicies == nil {
+			m.sourcePolicies = make(map[string]*domain.IngestionPolicy)
+		}
+		m.sourcePolicies[key] = src.IngestionPolicy
+	}
+	return src.ID, nil
+}
+
+func (m *MemoryStore) SetScanSource(src *domain.ScanSource) {
+	_, _ = m.SaveScanSourceRecord(context.Background(), src)
+}
+
+func (m *MemoryStore) GetApplicationScanSources(ctx context.Context, tenantID, appID uuid.UUID) ([]domain.ApplicationScanSource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var res []domain.ApplicationScanSource
+	for _, src := range m.scanSourceRecords {
+		if src.TenantID == tenantID && src.ApplicationID == appID {
+			authType := "token"
+			hasToken := src.Auth.TokenSecretRef != nil
+			feds := src.Auth.AllFederations()
+			if hasToken && len(feds) > 0 {
+				authType = "multi"
+			} else if len(feds) > 0 {
+				authType = "federation"
+			}
+
+			var trackedRefs []string
+			if src.IngestionPolicy != nil {
+				trackedRefs = src.IngestionPolicy.TrackedRefs
+			}
+
+			totalRuns := 0
+			var lastScan *time.Time
+			for _, run := range m.ingestRuns {
+				if run.TenantID == tenantID && run.ScanSourceID == src.ID {
+					totalRuns++
+					if lastScan == nil || run.CreatedAt.After(*lastScan) {
+						t := run.CreatedAt
+						lastScan = &t
+					}
+				}
+			}
+
+			res = append(res, domain.ApplicationScanSource{
+				ID:            src.ID,
+				Name:          src.Name,
+				Type:          src.Type,
+				ScannerFamily: src.ScannerFamily,
+				Categories:    src.Categories,
+				AuthType:      authType,
+				Active:        src.DisabledAt == nil,
+				TrackedRefs:   trackedRefs,
+				CreatedAt:     src.CreatedAt,
+				DisabledAt:    src.DisabledAt,
+				TotalRuns:     totalRuns,
+				LastScanAt:    lastScan,
+			})
+		}
+	}
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].Name < res[j].Name
+	})
+	return res, nil
 }
 
 // SetIngestionPolicy sets the policy of a scan source, as the operator does for a ScanSource resource.

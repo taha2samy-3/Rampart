@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, ApplicationFreshness, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
+import type { AppSummary, ApplicationPage, ApplicationFreshness, ApplicationScanSource, ApplicationScanSourcesResponse, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -261,6 +261,10 @@ export const getApplicationTrend = (id: string, days: number, signal?: AbortSign
   get<{ days: number; points: AppTrendPoint[]; aging: AgeBuckets }>(`/api/v1/applications/${encodeURIComponent(id)}/trend?days=${days}`, { signal });
 export const getApplicationFreshness = (id: string, signal?: AbortSignal) =>
   get<ApplicationFreshness>(`/api/v1/applications/${encodeURIComponent(id)}/freshness`, { signal });
+export async function getApplicationSources(id: string, signal?: AbortSignal): Promise<ApplicationScanSource[]> {
+  const raw = await get<ApplicationScanSourcesResponse>(`/api/v1/applications/${encodeURIComponent(id)}/sources`, { signal });
+  return raw.sources ?? [];
+}
 
 // --- Parsers Catalogue (docs/19 §2, docs/13 §9) ---
 export async function listParsers(signal?: AbortSignal): Promise<ParserDescriptor[]> {

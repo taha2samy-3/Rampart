@@ -39,6 +39,9 @@ type Store interface {
 	LockScope(ctx context.Context, scope CloseScope) error
 	RecomputeOccurrenceCounts(ctx context.Context, tenantID uuid.UUID, findingIDs []uuid.UUID) error
 	EnsureScanSource(ctx context.Context, tenantID uuid.UUID, ref string) (uuid.UUID, error)
+	GetScanSource(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.ScanSource, error)
+	GetApplicationScanSources(ctx context.Context, tenantID, appID uuid.UUID) ([]domain.ApplicationScanSource, error)
+	SaveScanSourceRecord(ctx context.Context, src *domain.ScanSource) (uuid.UUID, error)
 	GetScanSourceIngestionPolicy(ctx context.Context, tenantID, sourceID uuid.UUID) (*domain.IngestionPolicy, error)
 	GetTenantBySlug(ctx context.Context, slug string) (*domain.Tenant, error)
 

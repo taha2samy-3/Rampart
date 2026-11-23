@@ -315,6 +315,10 @@ export interface AppSummary {
   tags?: string[];
   business_criticality: string;
   internet_facing: boolean;
+  type?: string;
+  repository?: string;
+  branch?: string;
+  environment?: string;
   open: Record<OpenBand, number>;
   risk_score: number;
   exposure_count: number;
@@ -413,6 +417,26 @@ export interface ApplicationFreshness {
   analyzers: FreshnessAnalyzer[];
   sbom?: FreshnessSBOM;
   rescored_at?: string;
+}
+
+export interface ApplicationScanSource {
+  id: string;
+  name: string;
+  type: string;
+  scanner_family?: string;
+  categories: string[];
+  auth_type: string;
+  active: boolean;
+  tracked_refs?: string[];
+  created_at: string;
+  disabled_at?: string;
+  total_runs: number;
+  last_scan_at?: string;
+}
+
+export interface ApplicationScanSourcesResponse {
+  sources: ApplicationScanSource[];
+  total: number;
 }
 
 export interface ApplicationPage extends AppSummary {
