@@ -43,14 +43,32 @@ func handleCLI(args []string) (bool, error) {
 	}
 
 	cmd := args[0]
+	if cmd == "-v" || cmd == "--version" {
+		return true, runVersion(args[1:], os.Stdout)
+	}
+	if cmd == "-h" || cmd == "--help" || cmd == "help" {
+		printCLIHelp(os.Stdout)
+		return true, nil
+	}
 	if strings.HasPrefix(cmd, "-") {
 		return false, nil // Normal flag for target server runner
 	}
 
 	switch cmd {
 	case "version":
-		fmt.Printf("Rampart ASPM Platform v%s (Phase 1 Ingest Core)\n", Version)
-		return true, nil
+		return true, runVersion(args[1:], os.Stdout)
+
+	case "status":
+		return true, runStatus(args[1:], os.Stdout)
+
+	case "whoami":
+		return true, runWhoami(args[1:], os.Stdout)
+
+	case "logout":
+		return true, runLogout(args[1:], os.Stdout)
+
+	case "auth":
+		return true, runAuth(args[1:], os.Stdout)
 
 	case "login":
 		return true, runLogin(args[1:])
@@ -869,39 +887,13 @@ func parseFlexibleFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 func resolveToken(explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if env := os.Getenv("RAMPART_TOKEN"); env != "" {
-		return env
-	}
-	homeDir, _ := os.UserHomeDir()
-	cfgPath := filepath.Join(homeDir, ".rampart", "credentials.json")
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		var creds map[string]string
-		if json.Unmarshal(data, &creds) == nil {
-			return creds["token"]
-		}
-	}
-	return ""
+	tok, _ := resolveTokenWithSource(explicit)
+	return tok
 }
 
 func resolveServer(explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if env := os.Getenv("RAMPART_SERVER"); env != "" {
-		return env
-	}
-	homeDir, _ := os.UserHomeDir()
-	cfgPath := filepath.Join(homeDir, ".rampart", "credentials.json")
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		var creds map[string]string
-		if json.Unmarshal(data, &creds) == nil && creds["server"] != "" {
-			return creds["server"]
-		}
-	}
-	return "http://localhost:8080"
+	srv, _ := resolveServerWithSource(explicit)
+	return srv
 }
 
 func runFindings(args []string, out io.Writer) error {
