@@ -221,7 +221,7 @@ func Breakdown(f *domain.Finding, app *domain.Application, feeds *enrich.FeedSto
 		criticality = strings.ToLower(app.BusinessCriticality)
 		in.App = risk.AppInput{Criticality: criticality, InternetFacing: app.InternetFacing,
 			DataClassification: lower(app.DataClassification), CompensatingControls: app.CompensatingControls,
-			Type: app.Type, Environment: strings.ToLower(app.Environment)}
+			Type: app.Type, Environment: strings.ToLower(app.Environment), Attributes: app.Attributes}
 	}
 	return p.Evaluate(in), criticality
 }

@@ -8,6 +8,9 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"rampart/internal/domain"
 )
 
@@ -62,8 +65,9 @@ type VulnInput struct {
 	ExploitMaturity  string
 }
 
-// AppInput: `app.criticality`, `.internet_facing`, `.data_classification`, `.compensating_controls`, `.type`, `.environment`.
+// AppInput: `app.criticality`, `.internet_facing`, `.data_classification`, `.compensating_controls`, `.type`, `.environment`, `.attributes`.
 // Type is "repo" or empty; Environment is production, staging, test, development or empty when nobody said (D140).
+// Attributes holds arbitrary dynamic enterprise metadata for custom policy rules.
 type AppInput struct {
 	Criticality          string
 	InternetFacing       bool
@@ -71,6 +75,7 @@ type AppInput struct {
 	CompensatingControls []string
 	Type                 string
 	Environment          string
+	Attributes           map[string]any
 }
 
 func (in Input) activation() map[string]any {
@@ -84,6 +89,21 @@ func (in Input) activation() map[string]any {
 		}
 		return v
 	}
+	attrs := in.App.Attributes
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+	appMap := map[string]any{
+		"criticality": in.App.Criticality, "internet_facing": in.App.InternetFacing,
+		"data_classification": str(in.App.DataClassification), "compensating_controls": str(in.App.CompensatingControls),
+		"type": in.App.Type, "environment": in.App.Environment,
+		"attributes": attrs,
+	}
+	for k, v := range attrs {
+		if _, exists := appMap[k]; !exists {
+			appMap[k] = v
+		}
+	}
 	return map[string]any{
 		"finding": map[string]any{
 			"severity": in.Finding.Severity, "category": in.Finding.Category, "rule_id": in.Finding.RuleID,
@@ -91,11 +111,7 @@ func (in Input) activation() map[string]any {
 		},
 		"vuln": map[string]any{"id": in.Vuln.ID, "kev": in.Vuln.KEV, "epss": in.Vuln.EPSS, "exploited": in.Vuln.Exploited,
 			"exploited_sources": str(in.Vuln.ExploitedSources), "exploit_maturity": maturity(in.Vuln.ExploitMaturity)},
-		"app": map[string]any{
-			"criticality": in.App.Criticality, "internet_facing": in.App.InternetFacing,
-			"data_classification": str(in.App.DataClassification), "compensating_controls": str(in.App.CompensatingControls),
-			"type": in.App.Type, "environment": in.App.Environment,
-		},
+		"app": appMap,
 	}
 }
 
@@ -194,6 +210,26 @@ func init() {
 		cel.Variable("finding", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("vuln", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("app", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Function("attr",
+			cel.Overload("attr_map_string_any",
+				[]*cel.Type{cel.MapType(cel.StringType, cel.DynType), cel.StringType, cel.DynType},
+				cel.DynType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					if len(args) != 3 {
+						return types.NoSuchOverloadErr()
+					}
+					idx, ok := args[0].(traits.Indexer)
+					if !ok {
+						return args[2]
+					}
+					val := idx.Get(args[1])
+					if val == nil || types.IsError(val) {
+						return args[2]
+					}
+					return val
+				}),
+			),
+		),
 	)
 }
 
@@ -298,7 +334,7 @@ func fullInput() Input {
 	return Input{
 		Finding: FindingInput{Severity: "high", Category: "sast", RuleID: "r", Scanner: "s", CWEs: []int{79}, SecretVerified: true, Track: "main"},
 		Vuln:    VulnInput{ID: "CVE-0000-0000", KEV: true, EPSS: 0.5, Exploited: true, ExploitedSources: []string{"s"}, ExploitMaturity: "poc"},
-		App:     AppInput{Criticality: "high", InternetFacing: true, DataClassification: []string{"pii"}, CompensatingControls: []string{"waf"}, Type: "repo", Environment: "production"},
+		App:     AppInput{Criticality: "high", InternetFacing: true, DataClassification: []string{"pii"}, CompensatingControls: []string{"waf"}, Type: "repo", Environment: "production", Attributes: map[string]any{}},
 	}
 }
 

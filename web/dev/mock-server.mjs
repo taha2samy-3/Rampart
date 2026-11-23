@@ -175,15 +175,15 @@ const PARSERS = (() => {
     p('cluster:nuclei', 'nuclei Parser', 'report', 'lua', { category: 'dast' }),
     p('cluster:prowler', 'prowler Parser', 'report', 'wasm', { category: 'compliance' }),
     p('cluster:sarif', 'sarif Parser', 'report', 'wasm', { category: 'sast', version: '2.1.0', last_run: { id: RUNS[1].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
-    p('cluster:semgrep', 'semgrep Parser', 'report', 'wasm', { category: 'sast', last_run: { id: RUNS[2].id, status: 'failed', error: 'parse_error', at: ago(5) }, last_success: ago(70) }),
+    p('cluster:semgrep', 'semgrep Parser', 'report', 'wasm', { category: 'sast', last_run: { id: RUNS[0].id, status: 'completed', at: ago(1) }, last_success: ago(1) }),
     p('cluster:snyk', 'snyk Parser', 'report', 'wasm', { category: 'sca' }),
     p('cluster:trivy', 'trivy Parser', 'report', 'wasm', { category: 'sca' }),
     p('cluster:trufflehog', 'trufflehog Parser', 'report', 'wasm', { category: 'secrets' }),
     p('cluster:zap', 'zap Parser', 'report', 'lua', { category: 'dast' }),
-    p('cluster:broken', 'broken Parser', 'report', 'wasm', { category: 'sast', status: 'refused', error: 'spec.detect: no filename or content probe is given, so no upload could be matched to it' }),
+    p('cluster:bandit', 'bandit Parser', 'report', 'wasm', { category: 'sast', status: 'ready' }),
     p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
     p('cluster:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
-    p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { status: 'module_missing', unavailable: missing }),
+    p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { version: '2.3', status: 'ready' }),
     p('cluster:sbom-openvex', 'openvex SBOM Parser', 'sbom', 'wasm', { version: '0.2', status: 'installed' }),
   ];
 })();
@@ -496,7 +496,7 @@ const server = http.createServer((req, res) => {
       { id: 'owasp-top10-2021', name: 'OWASP Top 10', version: '2021', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: 10 },
       { id: 'pci-dss-4.0.1-req6', name: 'PCI DSS, requirement 6 and 8.6.2', version: '4.0.1', source: 'https://www.pcisecuritystandards.org/document_library/', kind: 'category', note: 'PCI DSS does not list weaknesses by CWE, so each requirement is assessed by the kind of scan that evidences it.', controls: 6, origin: 'builtin' },
       { id: 'acme-secure-coding', name: 'ACME secure coding policy', version: '2026.1', source: 'https://wiki.acme.example/secpol', kind: 'custom', controls: 5, origin: 'tenant', scope: 'pci', window_days: 30 },
-      { id: 'acme-draft', name: 'acme-draft', version: '', kind: 'custom', controls: 0, origin: 'tenant', error: 'compliance framework: control "SC-9": unknown category "sasst" (one of sast, sca, secret, iac, container, dast, cspm, compliance, license, supply_chain)' },
+      { id: 'acme-draft', name: 'ACME Cloud Security Benchmark', version: '1.0-draft', kind: 'custom', controls: 8, origin: 'tenant' },
     ] });
     if (p.startsWith('/api/v1/taxonomies/') && p.endsWith('/history')) {
       const d = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
@@ -593,10 +593,30 @@ const server = http.createServer((req, res) => {
     }
     const am = /^\/api\/v1\/applications\/([^/]+)\/summary$/.exec(p);
     if (am) {
-      const a = APP_ROWS.find((x) => x.id === am[1]);
+      const a = APP_ROWS.find((x) => x.id === am[1] || x.slug === am[1]);
       if (!a) return problem(res, 404, 'Application not found', 'No such application.');
       return json(res, {
-        ...a, sla: { within: 14, late: 3, breached: a.sla_breached, adherence: 14 / (17 + a.sla_breached) },
+        ...a,
+        context: {
+          business_criticality: a.business_criticality,
+          internet_facing: a.internet_facing,
+          data_classification: ['pci_cardholder_data', 'pii', 'secret_credentials'],
+          compensating_controls: ['waf_in_blocking_mode', 'mutual_tls_mesh'],
+          lifecycle: 'production',
+          type: 'repo',
+          repository: `github.com/acme/${a.slug}`,
+          branch: 'main',
+          environment: 'production',
+          managed_by: 'crd',
+          attributes: {
+            has_vpn: true,
+            in_financial_zone: true,
+            pci_dss: true,
+            tier: 1,
+            sla_hours: 48,
+          },
+        },
+        sla: { within: 14, late: 3, breached: a.sla_breached, adherence: 14 / (17 + a.sla_breached) },
         mttr: [{ band: 'critical', days: 3.2, fixed: 3 }, { band: 'high', days: 11.8, fixed: 9 }, { band: 'medium', days: 27.5, fixed: 14 }, { band: 'low', days: 41.0, fixed: 6 }],
         coverage: [
           { asset_id: 'as-1', asset: `github.com/acme/${a.slug}`, scanner: 'semgrep', last_scan: day(0.2) },
@@ -614,6 +634,233 @@ const server = http.createServer((req, res) => {
           { category: 'dast', scanners: [], open: {} },
           { category: 'cspm', scanners: [], open: {} },
         ],
+      });
+    }
+    const appChangesMatch = /^\/api\/v1\/applications\/([^/]+)\/changes$/.exec(p);
+    if (appChangesMatch) {
+      const from = url.searchParams.get('from') || day(30).slice(0, 10);
+      const to = url.searchParams.get('to') || day(0).slice(0, 10);
+      const mkRow = (id, vuln, title, sev, band, score, state, res = undefined) => ({
+        id,
+        vulnerability_id: vuln,
+        rule_id: vuln,
+        title,
+        category: 'sca',
+        severity: sev,
+        risk_band: band,
+        risk_score: score,
+        state,
+        resolution: res,
+        asset: 'github.com/acme/checkout',
+        first_seen: day(15),
+        resolved_at: res ? day(2) : null,
+        at: day(2)
+      });
+      return json(res, {
+        application: appChangesMatch[1],
+        from,
+        to,
+        days: 30,
+        summary: {
+          new: 4,
+          closed: 3,
+          reopened: 1,
+          open_at_start: 13,
+          open_at_end: 15,
+          previous: { from: day(60).slice(0, 10), to: day(31).slice(0, 10), new: 5, closed: 4 }
+        },
+        daily: [
+          { day: day(20).slice(0, 10), new: 2, closed: 0 },
+          { day: day(12).slice(0, 10), new: 1, closed: 1 },
+          { day: day(5).slice(0, 10), new: 1, closed: 1 },
+          { day: day(2).slice(0, 10), new: 0, closed: 1 }
+        ],
+        new: [
+          mkRow('f0000000-0000-4000-8000-000000000007', 'CVE-2023-44487', 'HTTP/2 Rapid Reset Denial of Service', 'critical', 'critical', 970, 'open'),
+          mkRow('f0000000-0000-4000-8000-000000000004', 'AWS-KEY-001', 'AWS access key committed in config/prod.env', 'critical', 'critical', 1000, 'open'),
+          mkRow('f0000000-0000-4000-8000-000000000003', 'CVE-2026-2359', 'Multer vulnerable to Denial of Service', 'high', 'high', 720, 'open'),
+          mkRow('f0000000-0000-4000-8000-000000000008', 'SSRF-002', 'Server-side request forgery in webhook fetcher', 'high', 'high', 650, 'open')
+        ],
+        closed: [
+          mkRow('f-closed-1', 'CVE-2024-21626', 'runc container escape patched in v1.1.12', 'critical', 'critical', 880, 'fixed', 'fixed'),
+          mkRow('f-closed-2', 'CVE-2023-38545', 'curl SOCKS5 heap buffer overflow', 'high', 'high', 710, 'fixed', 'fixed'),
+          mkRow('f-closed-3', 'SEMGREP-102', 'Cross-site scripting via unescaped template', 'medium', 'medium', 450, 'fixed', 'fixed')
+        ],
+        reopened: [
+          mkRow('f-reopen-1', 'CVE-2022-42889', 'Apache Commons Text Text4Shell RCE', 'high', 'high', 750, 'open')
+        ],
+        open: [
+          mkRow('f0000000-0000-4000-8000-000000000007', 'CVE-2023-44487', 'HTTP/2 Rapid Reset Denial of Service', 'critical', 'critical', 970, 'open'),
+          mkRow('f0000000-0000-4000-8000-000000000004', 'AWS-KEY-001', 'AWS access key committed in config/prod.env', 'critical', 'critical', 1000, 'open')
+        ],
+        truncated: []
+      });
+    }
+    const appComplianceMatch = /^\/api\/v1\/applications\/([^/]+)\/compliance$/.exec(p);
+    if (appComplianceMatch) {
+      return json(res, {
+        application: appComplianceMatch[1],
+        evaluated_at: new Date().toISOString(),
+        frameworks: [
+          {
+            id: 'pci-dss-4.0.1-req6',
+            name: 'PCI DSS 4.0.1 (Payment Security)',
+            version: '4.0.1',
+            origin: 'builtin',
+            verdict: 'meets',
+            controls: 6,
+            clear: 6,
+            open: 0,
+            at_risk: 0,
+            not_assessed: 0,
+            open_findings: 0,
+            overdue_findings: 0,
+            accepted_findings: 1,
+            window_days: 30
+          },
+          {
+            id: 'acme-secure-coding',
+            name: 'Enterprise Secure Coding Policy',
+            version: '2026.1',
+            origin: 'tenant',
+            verdict: 'at_risk',
+            controls: 5,
+            clear: 3,
+            open: 1,
+            at_risk: 1,
+            not_assessed: 0,
+            open_findings: 2,
+            overdue_findings: 0,
+            earliest_due: new Date(Date.now() + 7 * 86400000).toISOString(),
+            accepted_findings: 1,
+            window_days: 30
+          },
+          {
+            id: 'owasp-top10-2021',
+            name: 'OWASP Top 10 (2021)',
+            version: '2021',
+            origin: 'builtin',
+            verdict: 'gaps',
+            controls: 10,
+            clear: 4,
+            open: 5,
+            at_risk: 1,
+            not_assessed: 0,
+            open_findings: 15,
+            overdue_findings: 4,
+            earliest_due: new Date(Date.now() + 2 * 86400000).toISOString(),
+            accepted_findings: 2,
+            window_days: 30
+          }
+        ],
+        not_in_scope: []
+      });
+    }
+    const appCompListMatch = /^\/api\/v1\/applications\/([^/]+)\/components$/.exec(p);
+    if (appCompListMatch) {
+      return json(res, {
+        components: [
+          {
+            name: 'express-fileupload',
+            version: '1.4.0',
+            purl: 'pkg:npm/express-fileupload@1.4.0',
+            ecosystem: 'npm',
+            license: 'MIT',
+            type: 'npm',
+            direct: true,
+            depth: 1,
+            vulnerabilities: 2,
+            application_name: 'Checkout'
+          },
+          {
+            name: 'axios',
+            version: '0.21.1',
+            purl: 'pkg:npm/axios@0.21.1',
+            ecosystem: 'npm',
+            license: 'MIT',
+            type: 'npm',
+            direct: true,
+            depth: 1,
+            vulnerabilities: 1,
+            application_name: 'Checkout'
+          },
+          {
+            name: 'log4j-core',
+            version: '2.14.1',
+            purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1',
+            ecosystem: 'maven',
+            license: 'Apache-2.0',
+            type: 'maven',
+            direct: true,
+            depth: 1,
+            vulnerabilities: 2,
+            application_name: 'Checkout'
+          },
+          {
+            name: 'react',
+            version: '18.2.0',
+            purl: 'pkg:npm/react@18.2.0',
+            ecosystem: 'npm',
+            license: 'MIT',
+            type: 'npm',
+            direct: true,
+            depth: 1,
+            vulnerabilities: 0,
+            application_name: 'Checkout'
+          },
+          {
+            name: 'loose-envify',
+            version: '1.4.0',
+            purl: 'pkg:npm/loose-envify@1.4.0',
+            ecosystem: 'npm',
+            license: 'MIT',
+            type: 'npm',
+            direct: false,
+            depth: 2,
+            vulnerabilities: 0,
+            application_name: 'Checkout'
+          },
+          {
+            name: 'gpl-tool',
+            version: '1.0.0',
+            purl: 'pkg:generic/gpl-tool@1.0.0',
+            ecosystem: 'generic',
+            license: 'GPL-3.0',
+            type: 'generic',
+            direct: false,
+            depth: 2,
+            vulnerabilities: 0,
+            application_name: 'Checkout'
+          }
+        ]
+      });
+    }
+    const appGraphMatch = /^\/api\/v1\/applications\/([^/]+)\/sbom\/graph$/.exec(p);
+    if (appGraphMatch) {
+      const zRisk = { critical: 0, high: 0, medium: 0, low: 0 };
+      return json(res, {
+        asset_id: appGraphMatch[1],
+        format: 'CycloneDX',
+        spec_version: '1.5',
+        root: 'app',
+        has_dependencies: true,
+        total_components: 5,
+        direct_components: 3,
+        transitive_components: 2,
+        unreachable_components: 0,
+        nodes: [
+          { id: 'app', name: 'Checkout Payment Gateway', version: '2.14.0', root: true, depth: 0, vulnerabilities: zRisk },
+          { id: 'pkg:npm/express-fileupload@1.4.0', name: 'express-fileupload', version: '1.4.0', purl: 'pkg:npm/express-fileupload@1.4.0', direct: true, depth: 1, licenses: ['MIT'], vulnerabilities: { ...zRisk, high: 1, medium: 1 } },
+          { id: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1', name: 'log4j-core', version: '2.14.1', purl: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1', direct: true, depth: 1, licenses: ['Apache-2.0'], vulnerabilities: { ...zRisk, critical: 1, high: 1 } },
+          { id: 'pkg:npm/react@18.2.0', name: 'react', version: '18.2.0', purl: 'pkg:npm/react@18.2.0', direct: true, depth: 1, licenses: ['MIT'], vulnerabilities: zRisk },
+          { id: 'pkg:npm/loose-envify@1.4.0', name: 'loose-envify', version: '1.4.0', purl: 'pkg:npm/loose-envify@1.4.0', direct: false, depth: 2, licenses: ['MIT'], vulnerabilities: { ...zRisk, low: 1 } },
+        ],
+        edges: [
+          { from: 'app', to: 'pkg:npm/express-fileupload@1.4.0' },
+          { from: 'app', to: 'pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1' },
+          { from: 'app', to: 'pkg:npm/react@18.2.0' },
+          { from: 'pkg:npm/react@18.2.0', to: 'pkg:npm/loose-envify@1.4.0' },
+        ]
       });
     }
     if (p === '/api/v1/dashboards/overview') return json(res, OVERVIEW());

@@ -175,6 +175,10 @@ spec:
                   type: string
                   enum: [production, staging, test, development]
                   description: 'Where the application runs. Left out, the application is not described, and the score gives it no environment points.'
+                attributes:
+                  type: object
+                  description: 'Arbitrary dynamic attributes and custom enterprise metadata for policy scoring.'
+                  x-kubernetes-preserve-unknown-fields: true
                 complianceScope:
                   description: >-
                     The compliance scopes the application is in, for example pci or sox. A ComplianceFramework with

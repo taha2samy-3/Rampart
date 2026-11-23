@@ -223,9 +223,10 @@ func TestDirectUpload_CreatingAnApplicationIsAnExplicitChoice(t *testing.T) {
 	if rec.Code != http.StatusCreated || !out.ApplicationCreated || out.Application != "billing" || len(out.Warnings) != 0 || !exists("billing") {
 		t.Fatalf("explicit create: %d %+v", rec.Code, out)
 	}
-	// A CI token may do it too (its first upload of a new service is what it exists for).
-	if rec, out = send(ci, map[string]string{"application": "payments", "createApplication": "true"}); rec.Code != http.StatusCreated || !out.ApplicationCreated {
-		t.Fatalf("a CI token creating: %d %s", rec.Code, rec.Body.String())
+	// A CI token may NEVER create an application (GitOps governance: applications must be declared via CRD).
+	rec, _ = send(ci, map[string]string{"application": "payments", "createApplication": "true"})
+	if rec.Code != http.StatusForbidden || exists("payments") {
+		t.Fatalf("a CI token creating: want 403 and nothing made, got %d %s", rec.Code, rec.Body.String())
 	}
 	// A triager may not: it decides about findings, it does not add applications.
 	rec, _ = send(triager, map[string]string{"application": "shadow", "createApplication": "true"})
@@ -241,11 +242,23 @@ func TestDirectUpload_CreatingAnApplicationIsAnExplicitChoice(t *testing.T) {
 		}
 	}
 
-	// Without the parameter nothing breaks: it is made, with a warning that says how to choose.
-	rec, out = send(admin, map[string]string{"application": "legacy-pipeline"})
-	if rec.Code != http.StatusCreated || !out.ApplicationCreated || len(out.Warnings) != 1 || !strings.Contains(out.Warnings[0], "createApplication") {
-		t.Fatalf("the old behaviour, with a warning: %d %+v", rec.Code, out)
+	// A CI token reporting to an existing application succeeds.
+	rec, out = send(ci, map[string]string{"application": "billing"})
+	if rec.Code != http.StatusCreated || out.ApplicationCreated || out.Application != "billing" {
+		t.Fatalf("CI reporting to existing application: %d %+v", rec.Code, out)
 	}
+
+	// Without createApplication=true, a missing application is refused (fail-closed, no accidental creations).
+	rec, _ = send(admin, map[string]string{"application": "legacy-pipeline"})
+	if rec.Code != http.StatusNotFound || exists("legacy-pipeline") {
+		t.Fatalf("missing application without explicit create flag: want 404, got %d %s", rec.Code, rec.Body.String())
+	}
+	// CI token reporting to a missing application is refused with 404.
+	rec, _ = send(ci, map[string]string{"application": "legacy-ci-svc"})
+	if rec.Code != http.StatusNotFound || exists("legacy-ci-svc") {
+		t.Fatalf("CI reporting to missing application: want 404, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	// No application named at all is Unassigned, which is never a creation the caller has to ask for.
 	if rec, out = send(admin, map[string]string{"createApplication": "false"}); rec.Code != http.StatusCreated || out.ApplicationCreated {
 		t.Errorf("no application named: %d %+v", rec.Code, out)

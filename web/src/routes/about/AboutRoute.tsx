@@ -44,12 +44,13 @@ export function AboutRoute() {
           <section aria-labelledby="ctx">
             <h2 id="ctx" className="text-16 font-semibold">{t('about.contextTitle')}</h2>
             <p className="mb-1 mt-1 text-13 text-ink-2">{t('about.contextBody')}</p>
-            <ul className="m-0 list-disc ps-5 text-13">
+            <ul className="m-0 list-disc space-y-1 ps-5 text-13">
               <li>{t('about.ctxCriticality')}</li>
               <li>{t('about.ctxInternet')}</li>
               <li>{t('about.ctxData')}</li>
               <li>{t('about.ctxControls')}</li>
               <li>{t('about.ctxProduction')}</li>
+              <li>{t('about.ctxAttributes')}</li>
             </ul>
           </section>
         </div>

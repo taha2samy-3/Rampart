@@ -28,10 +28,11 @@ type ApplicationSpec struct {
 	// Type is what kind of thing the application is (D140). "repo" is built: it names one branch of one repository, with
 	// Repository and Branch. "machine" is designed and refused until a host source exists. Empty is a repository-wide
 	// application, as before, and takes neither Repository nor Branch.
-	Type        string `json:"type,omitempty"`
-	Repository  string `json:"repository,omitempty"`
-	Branch      string `json:"branch,omitempty"`
-	Environment string `json:"environment,omitempty"`
+	Type        string         `json:"type,omitempty"`
+	Repository  string         `json:"repository,omitempty"`
+	Branch      string         `json:"branch,omitempty"`
+	Environment string         `json:"environment,omitempty"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
 }
 
 // ApplicationTypes are the types an Application resource may name today.
@@ -199,7 +200,8 @@ func (s ApplicationSpec) ToApplication(id, tenantID uuid.UUID, slug string) (App
 		ID: id, TenantID: tenantID, Slug: slug, Name: name, BusinessCriticality: crit, InternetFacing: s.InternetFacing,
 		Owners: s.Owners, DataClassification: classes, CompensatingControls: controls, Lifecycle: lifecycle,
 		ComplianceScope: scopes, HierarchyPath: hierarchyPath, Type: typ, Repository: repository, Branch: branch, Environment: environment,
-		Selectors: Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
+		Attributes: s.Attributes,
+		Selectors:  Selectors{Repositories: s.Selectors.Repositories, Images: s.Selectors.Images},
 	}, nil
 }
 

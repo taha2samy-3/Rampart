@@ -141,13 +141,13 @@ type selectorStore interface {
 // ResolveApplication resolves the application of an asset in the order of D10, and records it on the asset:
 //  1. the application the asset already belongs to, unless that is the tenant's Unassigned application;
 //  2. the application whose selectors match the asset key (D56);
-//  3. the application the upload names (created if missing);
+//  3. the application the upload names (must exist, never created on the fly);
 //  4. the tenant's built-in Unassigned application.
 //
 // An asset in Unassigned is resolved again on every run, so a selector declared after the first scan still
 // claims it. Moving an asset moves its findings in the same transaction.
 func ResolveApplication(ctx context.Context, st Store, tenantID uuid.UUID, asset *domain.Asset, declaredSlug string) (uuid.UUID, error) {
-	return resolveApplication(ctx, st, tenantID, asset, declaredSlug, true, nil)
+	return resolveApplication(ctx, st, tenantID, asset, declaredSlug, false, nil)
 }
 
 // ErrApplicationNotFound is returned when an upload names an application that does not exist and may not create it.

@@ -79,7 +79,15 @@ func (f *fakeWriter) UpdateApplicationContext(_ context.Context, tenantID, appID
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &domain.Application{ID: appID, TenantID: tenantID, Slug: "shop", Name: "Shop", BusinessCriticality: *u.BusinessCriticality}, nil
+	crit := "medium"
+	if u.BusinessCriticality != nil {
+		crit = *u.BusinessCriticality
+	}
+	var attrs map[string]any
+	if u.Attributes != nil {
+		attrs = *u.Attributes
+	}
+	return &domain.Application{ID: appID, TenantID: tenantID, Slug: "shop", Name: "Shop", BusinessCriticality: crit, Attributes: attrs}, nil
 }
 
 func TestUpdateApplicationContext(t *testing.T) {
@@ -110,6 +118,15 @@ func TestUpdateApplicationContext(t *testing.T) {
 	}
 	if *f.got.BusinessCriticality != "critical" || !*f.got.InternetFacing || strings.Join(*f.got.DataClassification, ",") != "pci,pii" || strings.Join(*f.got.CompensatingControls, ",") != "api_gateway,waf" {
 		t.Errorf("the update is normalised before it is stored: %+v", f.got)
+	}
+
+	f = &fakeWriter{MemoryStore: ingest.NewMemoryStore()}
+	rec = patch(f, "admin", `{"attributes":{"has_vpn":true,"cloud_provider":"aws"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if f.got.Attributes == nil || (*f.got.Attributes)["has_vpn"] != true || (*f.got.Attributes)["cloud_provider"] != "aws" {
+		t.Errorf("attributes not decoded: %+v", f.got.Attributes)
 	}
 
 	for name, body := range map[string]string{

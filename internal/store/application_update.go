@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -29,22 +30,30 @@ func (s *PostgresStore) UpdateApplicationContext(ctx context.Context, tenantID, 
 	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var prev domain.Application
 		var managedBy string
-		err := tx.QueryRow(ctx, `SELECT managed_by, business_criticality, internet_facing, data_classification, compensating_controls, lifecycle, type, environment
+		var prevAttrs []byte
+		err := tx.QueryRow(ctx, `SELECT managed_by, business_criticality, internet_facing, data_classification, compensating_controls, lifecycle, type, environment, attributes
 			FROM application WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, appID).
-			Scan(&managedBy, &prev.BusinessCriticality, &prev.InternetFacing, &prev.DataClassification, &prev.CompensatingControls, &prev.Lifecycle, &prev.Type, &prev.Environment)
+			Scan(&managedBy, &prev.BusinessCriticality, &prev.InternetFacing, &prev.DataClassification, &prev.CompensatingControls, &prev.Lifecycle, &prev.Type, &prev.Environment, &prevAttrs)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
+		if len(prevAttrs) > 0 {
+			_ = json.Unmarshal(prevAttrs, &prev.Attributes)
+		}
 		if managedBy == "crd" {
 			return ErrManagedByResource
 		}
 		next := u.Apply(prev)
+		attrsJSON, _ := json.Marshal(next.Attributes)
+		if next.Attributes == nil {
+			attrsJSON = []byte("{}")
+		}
 		if _, err := tx.Exec(ctx, `UPDATE application SET business_criticality = $3, internet_facing = $4, data_classification = $5,
-			compensating_controls = $6, lifecycle = $7, environment = $8, version = version + 1 WHERE tenant_id = $1 AND id = $2`,
-			tenantID, appID, next.BusinessCriticality, next.InternetFacing, nonNil(next.DataClassification), nonNil(next.CompensatingControls), next.Lifecycle, next.Environment); err != nil {
+			compensating_controls = $6, lifecycle = $7, environment = $8, attributes = $9, version = version + 1 WHERE tenant_id = $1 AND id = $2`,
+			tenantID, appID, next.BusinessCriticality, next.InternetFacing, nonNil(next.DataClassification), nonNil(next.CompensatingControls), next.Lifecycle, next.Environment, attrsJSON); err != nil {
 			return err
 		}
 		if domain.ScoreContextChanged(prev, next) {

@@ -49,6 +49,8 @@ type ApplicationContext struct {
 	Environment string `json:"environment"`
 	// ManagedBy is "crd" when an Application resource owns it (read only here), else "ui" or "none".
 	ManagedBy string `json:"managed_by"`
+	// Attributes holds arbitrary enterprise context attributes (D55) evaluated by custom risk policies.
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // aggregator returns the store's aggregates, or answers 501 when it has none (the in-memory store).
@@ -127,6 +129,7 @@ func (a *API) handleApplicationSummary(w http.ResponseWriter, r *http.Request) {
 			BusinessCriticality: app.BusinessCriticality, InternetFacing: app.InternetFacing, Lifecycle: app.Lifecycle, ManagedBy: app.ManagedBy,
 			DataClassification: nonNilStrings(app.DataClassification), CompensatingControls: nonNilStrings(app.CompensatingControls),
 			Type: app.Type, Repository: app.Repository, Branch: app.Branch, Environment: app.Environment,
+			Attributes: app.Attributes,
 		}
 		if app.Version > 0 {
 			page.Version = "v" + strconv.Itoa(app.Version)

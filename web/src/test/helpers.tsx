@@ -95,6 +95,7 @@ export interface Scenario {
   decide?: 200 | 400;
   events?: { id: string; at: string; actor: string; type: string; from?: unknown; to?: unknown; note?: string }[];
   parsers?: ParserDescriptor[] | 'error';
+  scoring?: unknown;
   /** GET /api/v1/analyzers; `error` answers 500. */
   analyzers?: AnalyzerItem[] | 'error';
   /** The history GET /api/v1/analyzers/events returns, by `kind/scope/namespace/name`. A test adds its own event to it. */
@@ -554,6 +555,7 @@ export function mockFetch(sc: Scenario): Calls {
       return found ? json(found) : json({ title: 'Run not found', status: 404 }, 404);
     }
     if (path === '/api/v1/scoring') {
+      if (sc.scoring) return json(sc.scoring);
       return json({
         product: 'Rampart', version: 'test', customised: false,
         risk: { base: { critical: 900, high: 600, medium: 300, low: 100 }, bands: { critical: 800, high: 500, medium: 250, low: 0 }, factors: [{ name: 'KEV', when: 'The vulnerability is on the CISA list', points: 100, reason: 'Known exploited', group: 'threat' }] },

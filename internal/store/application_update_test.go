@@ -70,6 +70,28 @@ func TestUpdateApplicationContext_OnPostgreSQL(t *testing.T) {
 		t.Error("the same value again does not move the score")
 	}
 
+	reset("none")
+	attrs := map[string]any{"has_vpn": true, "network_tier": "dmz"}
+	gotAttrs, err := appStore.UpdateApplicationContext(ctx, tn.ID, app.ID, domain.ApplicationContextUpdate{Attributes: &attrs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAttrs.Attributes["has_vpn"] != true || gotAttrs.Attributes["network_tier"] != "dmz" {
+		t.Errorf("attributes were not saved: %+v", gotAttrs.Attributes)
+	}
+	if !flagged() {
+		t.Error("updating attributes must flag the application for re-score")
+	}
+
+	reset("none")
+	sameAttrs := map[string]any{"has_vpn": true, "network_tier": "dmz"}
+	if _, err := appStore.UpdateApplicationContext(ctx, tn.ID, app.ID, domain.ApplicationContextUpdate{Attributes: &sameAttrs}); err != nil {
+		t.Fatal(err)
+	}
+	if flagged() {
+		t.Error("identical attributes should not flag re-score")
+	}
+
 	reset("crd")
 	if _, err := appStore.UpdateApplicationContext(ctx, tn.ID, app.ID, domain.ApplicationContextUpdate{BusinessCriticality: str("low")}); !errors.Is(err, store.ErrManagedByResource) {
 		t.Errorf("an application a resource manages must be refused: %v", err)

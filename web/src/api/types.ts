@@ -358,6 +358,8 @@ export interface ApplicationContext {
   environment: '' | 'production' | 'staging' | 'test' | 'development';
   /** "crd": an Application resource owns it and it is read only here; "ui" or "none": it can be changed here. */
   managed_by: 'crd' | 'ui' | 'none' | '';
+  /** Dynamic context attributes (e.g. has_vpn, network_tier) evaluated by custom risk policies. */
+  attributes?: Record<string, unknown>;
 }
 export type ApplicationContextUpdate = Partial<Pick<ApplicationContext, 'business_criticality' | 'internet_facing' | 'data_classification' | 'compensating_controls' | 'lifecycle' | 'environment'>>;
 
@@ -367,7 +369,7 @@ export interface ScoringFactor {
   when: string;
   points: number;
   reason?: string;
-  group: 'severity' | 'threat' | 'context' | 'reduction';
+  group: 'severity' | 'threat' | 'context' | 'reduction' | (string & {});
 }
 export interface ScoringResponse {
   product: string;

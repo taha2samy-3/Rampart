@@ -20,7 +20,7 @@ dependencies:
   # It is an OCI chart: `helm dependency update` pulls it, so the package ghcr.io/rampart-aspm/charts/rampart-policies must be public.
   - name: rampart-policies
     alias: policies
-    version: 0.2.1
+    version: 0.3.0
     repository: oci://ghcr.io/rampart-aspm/charts
     condition: policies.enabled
   # The default parsers. The server knows no parser by name (D141): each one reaches it as a ClusterParser or ClusterSBOMParser

@@ -177,3 +177,53 @@ func TestPolicy_ReadsTypeAndEnvironment(t *testing.T) {
 		t.Fatal("a misspelled variable must be refused")
 	}
 }
+
+// Enterprise custom scoring with dynamic attributes on app and safe attr() lookup.
+func TestPolicy_DynamicAttributes(t *testing.T) {
+	custom := []byte(`{
+		"base": {"critical": 600, "high": 400},
+		"factors": [
+			{"name": "AIR_GAPPED_VPN", "when": "attr(app, 'has_vpn', false) == true", "points": -150, "group": "reduction", "reason": "App behind internal VPN"},
+			{"name": "DMZ_TIER", "when": "attr(app.attributes, 'network_tier', 'internal') == 'dmz'", "points": 100, "group": "context", "reason": "App placed in DMZ network tier"}
+		]
+	}`)
+	p, err := risk.ParseRiskPolicySpec(custom)
+	if err != nil {
+		t.Fatalf("custom policy compilation failed: %v", err)
+	}
+
+	// 1. App with has_vpn = true and network_tier = "dmz"
+	inMatch := risk.Input{
+		Finding: risk.FindingInput{Severity: "high"},
+		App: risk.AppInput{
+			Attributes: map[string]any{
+				"has_vpn":      true,
+				"network_tier": "dmz",
+			},
+		},
+	}
+	// Base (400) - 150 (AIR_GAPPED_VPN) + 100 (DMZ_TIER) = 350
+	b := p.Evaluate(inMatch)
+	if b.TotalScore != 350 {
+		t.Fatalf("expected 350, got %d (factors: %+v)", b.TotalScore, b.Factors)
+	}
+	if len(b.Factors) != 2 {
+		t.Fatalf("expected 2 factors, got %d", len(b.Factors))
+	}
+
+	// 2. App with empty attributes: safe evaluation, no panic, no factors match
+	inEmpty := risk.Input{
+		Finding: risk.FindingInput{Severity: "high"},
+		App:     risk.AppInput{},
+	}
+	bEmpty := p.Evaluate(inEmpty)
+	if bEmpty.TotalScore != 400 {
+		t.Fatalf("expected 400, got %d", bEmpty.TotalScore)
+	}
+	if len(bEmpty.Factors) != 0 {
+		t.Fatalf("expected 0 factors, got %d", len(bEmpty.Factors))
+	}
+	if len(bEmpty.Errors) != 0 {
+		t.Fatalf("expected 0 errors, got %+v", bEmpty.Errors)
+	}
+}

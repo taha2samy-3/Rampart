@@ -1013,14 +1013,14 @@ func (s *PostgresStore) LookupApplication(ctx context.Context, tenantID uuid.UUI
 // applicationCols and scanApplication read every field the score and the SLA use (D40, D55).
 const applicationCols = `id, tenant_id, slug, name, coalesce(description, ''), business_criticality, internet_facing,
 	data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, coalesce(hierarchy_path, ''),
-	compliance_scope, managed_by, type, repository, branch, environment`
+	compliance_scope, managed_by, type, repository, branch, environment, attributes`
 
 func scanApplication(row pgx.Row, app *domain.Application) error {
-	var owners, selectors []byte
+	var owners, selectors, attrs []byte
 	var hPath string
 	if err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &app.BusinessCriticality, &app.InternetFacing,
 		&app.DataClassification, &app.CompensatingControls, &owners, &selectors, &app.Lifecycle, &app.Version, &app.CreatedAt, &hPath,
-		&app.ComplianceScope, &app.ManagedBy, &app.Type, &app.Repository, &app.Branch, &app.Environment); err != nil {
+		&app.ComplianceScope, &app.ManagedBy, &app.Type, &app.Repository, &app.Branch, &app.Environment, &attrs); err != nil {
 		return err
 	}
 	app.HierarchyPath = hPath
@@ -1029,6 +1029,9 @@ func scanApplication(row pgx.Row, app *domain.Application) error {
 	}
 	if len(selectors) > 0 {
 		_ = json.Unmarshal(selectors, &app.Selectors)
+	}
+	if len(attrs) > 0 {
+		_ = json.Unmarshal(attrs, &app.Attributes)
 	}
 	return nil
 }
@@ -1046,14 +1049,18 @@ func (s *PostgresStore) CreateApplication(ctx context.Context, app *domain.Appli
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
+		attrsJSON, _ := json.Marshal(app.Attributes)
+		if app.Attributes == nil {
+			attrsJSON = []byte("{}")
+		}
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
 			                         data_classification, compensating_controls, lifecycle, version, created_at, managed_by,
-			                         hierarchy_path)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, 'none', $12)
+			                         hierarchy_path, attributes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, 'none', $12, $13)
 			ON CONFLICT (tenant_id, slug) DO NOTHING`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
-			nonNil(app.DataClassification), nonNil(app.CompensatingControls), app.Lifecycle, createdAt, nonEmpty(app.HierarchyPath))
+			nonNil(app.DataClassification), nonNil(app.CompensatingControls), app.Lifecycle, createdAt, nonEmpty(app.HierarchyPath), attrsJSON)
 		if err == nil && tag.RowsAffected() == 0 {
 			return ErrApplicationExists
 		}
@@ -1501,18 +1508,25 @@ func (s *PostgresStore) GetTenantByNamespace(ctx context.Context, namespace stri
 func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Application) error {
 	owners, _ := json.Marshal(nonNil(app.Owners))
 	selectors, _ := json.Marshal(app.Selectors)
+	attrsJSON, _ := json.Marshal(app.Attributes)
+	if app.Attributes == nil {
+		attrsJSON = []byte("{}")
+	}
 	saved := false
 	err := s.withTenantTx(ctx, app.TenantID, func(tx pgx.Tx) error {
 		var prev domain.Application
 		var managedBy string
 		var existed bool
-		var prevOwners []byte
-		err := tx.QueryRow(ctx, `SELECT managed_by, business_criticality, internet_facing, data_classification, compensating_controls, owners
+		var prevOwners, prevAttrs []byte
+		err := tx.QueryRow(ctx, `SELECT managed_by, business_criticality, internet_facing, data_classification, compensating_controls, owners, attributes
 			FROM application WHERE tenant_id = $1 AND slug = $2 FOR UPDATE`, app.TenantID, app.Slug).
-			Scan(&managedBy, &prev.BusinessCriticality, &prev.InternetFacing, &prev.DataClassification, &prev.CompensatingControls, &prevOwners)
+			Scan(&managedBy, &prev.BusinessCriticality, &prev.InternetFacing, &prev.DataClassification, &prev.CompensatingControls, &prevOwners, &prevAttrs)
 		switch {
 		case err == nil:
 			existed = true
+			if len(prevAttrs) > 0 {
+				_ = json.Unmarshal(prevAttrs, &prev.Attributes)
+			}
 		case errors.Is(err, pgx.ErrNoRows):
 		default:
 			return err
@@ -1543,21 +1557,21 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO application (id, tenant_id, slug, name, description, business_criticality, internet_facing,
 			                         data_classification, compensating_controls, owners, selectors, lifecycle, version, created_at, managed_by,
-			                         hierarchy_node_id, hierarchy_path, compliance_scope, type, repository, branch, environment)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15, $16, $17, $18, $19, $20)
+			                         hierarchy_node_id, hierarchy_path, compliance_scope, type, repository, branch, environment, attributes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, 'crd', $14, $15, $16, $17, $18, $19, $20, $21)
 			ON CONFLICT (tenant_id, slug) DO UPDATE SET
 				name = EXCLUDED.name, description = EXCLUDED.description,
 				business_criticality = EXCLUDED.business_criticality, internet_facing = EXCLUDED.internet_facing,
 				data_classification = EXCLUDED.data_classification, compensating_controls = EXCLUDED.compensating_controls,
 				owners = EXCLUDED.owners, selectors = EXCLUDED.selectors, lifecycle = EXCLUDED.lifecycle, managed_by = 'crd',
 				compliance_scope = EXCLUDED.compliance_scope, type = EXCLUDED.type, repository = EXCLUDED.repository,
-				branch = EXCLUDED.branch, environment = EXCLUDED.environment,
+				branch = EXCLUDED.branch, environment = EXCLUDED.environment, attributes = EXCLUDED.attributes,
 				hierarchy_node_id = COALESCE(EXCLUDED.hierarchy_node_id, application.hierarchy_node_id),
 				hierarchy_path = COALESCE(EXCLUDED.hierarchy_path, application.hierarchy_path),
 				version = application.version + 1`,
 			app.ID, app.TenantID, app.Slug, app.Name, app.Description, app.BusinessCriticality, app.InternetFacing,
 			nonNil(app.DataClassification), nonNil(app.CompensatingControls), owners, selectors, app.Lifecycle, createdAt,
-			hNodeID, nonEmpty(hPath), nonNil(app.ComplianceScope), app.Type, app.Repository, app.Branch, app.Environment); err != nil {
+			hNodeID, nonEmpty(hPath), nonNil(app.ComplianceScope), app.Type, app.Repository, app.Branch, app.Environment, attrsJSON); err != nil {
 			return err
 		}
 		if hPath != "" {
@@ -1580,27 +1594,7 @@ func (s *PostgresStore) SaveApplication(ctx context.Context, app domain.Applicat
 
 // scoreContextChanged says whether a change to an application moves the score or the due date of its findings.
 func scoreContextChanged(a, b domain.Application) bool {
-	same := func(x, y []string) bool {
-		if len(x) != len(y) {
-			return false
-		}
-		seen := map[string]int{}
-		for _, v := range x {
-			seen[v]++
-		}
-		for _, v := range y {
-			seen[v]--
-		}
-		for _, n := range seen {
-			if n != 0 {
-				return false
-			}
-		}
-		return true
-	}
-	return a.BusinessCriticality != b.BusinessCriticality || a.InternetFacing != b.InternetFacing ||
-		a.Environment != b.Environment || a.Type != b.Type ||
-		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls)
+	return domain.ScoreContextChanged(a, b)
 }
 
 // GetApplicationBySlug implements apply.ConfigStore.

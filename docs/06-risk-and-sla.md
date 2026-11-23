@@ -35,6 +35,32 @@ Bands (lower bounds): critical 800, high 600, medium 300, low 0. The band drives
 
 Factors are CEL expressions evaluated with a fixed environment: `finding`, `vuln`, `asset`, `app`, `env`, `now`. Cost-limited (CEL cost budget) and compiled once per policy version.
 
+### 2.1 Dynamic Enterprise Attributes & Edge Cases
+
+Rampart applications support arbitrary dynamic enterprise attributes declared under `spec.attributes` in the `Application` CRD and stored as `attributes JSONB` in PostgreSQL (Migration 55). These are exposed in CEL expressions via `app.attributes`.
+
+When authoring custom risk policy factors or writing CEL rules against dynamic attributes, engineers must adhere to the following operational guardrails and edge-case behaviors:
+
+1. **Case Sensitivity in Attribute Keys (حساسية حالة الأحرف في السمات)**:
+   - JSONB keys in PostgreSQL and CEL map lookups are strictly **case-sensitive**.
+   - `app.attributes.has_vpn` is NOT equivalent to `app.attributes.has_VPN` or `app.attributes.hasVpn`.
+   - **Standard**: All attribute keys declared in CRDs and evaluated in CEL policies MUST strictly follow `snake_case` (e.g., `has_vpn`, `network_tier`, `pci_scope`, `container_hardened`).
+
+2. **Handling Missing Attributes & Fail-Safe Defaults (غياب السمة من التطبيق)**:
+   - In CEL, accessing an undeclared key via dot-notation (e.g., `app.attributes.has_vpn`) on a map that does not contain that key can cause evaluation errors if unguarded.
+   - Always guard dynamic attribute access using one of two safe patterns:
+     - The standard CEL membership check: `has(app.attributes.has_vpn) && app.attributes.has_vpn == true`
+     - Or the Rampart helper: `attr(app, 'has_vpn', false)`
+   - This ensures that if a new or legacy application does not carry the attribute, scoring evaluates safely to `false` without failing the factor evaluation or halting the ingestion pipeline.
+
+3. **Strict Type Coercion in YAML/JSON (التحويل التلقائي للأنواع)**:
+   - CEL enforces strict type validation. A boolean condition `app.attributes.has_vpn == true` will evaluate to `false` (or fail) if the attribute in YAML was quoted as a string: `has_vpn: "true"`.
+   - Ensure manifests provide the native JSON/YAML data types:
+     - Booleans: `true` / `false` (unquoted)
+     - Numbers: `80` (unquoted integer/float)
+     - Strings: `"internal"` / `"dmz"`
+     - Lists: `["pci", "hipaa"]`
+
 **Roll-ups**: `application.risk_score = max(open finding score)` plus a density term `min(100, 2 × count(open critical/high))`, shown separately as "max risk" and "exposure count" (Brinqa max-based asset score, Dependency-Track inherited risk). Hierarchy nodes aggregate children. **Posture score** (0–1000, higher is better) = 1000 − weighted open risk normalized by asset count, with SLA adherence and coverage as modifiers; defined in the same policy so it is tunable.
 
 ## 3. SSVC (P2)

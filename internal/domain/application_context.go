@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,14 +12,15 @@ import (
 // internet reaches it, what data it holds, what stands in front of it, and where it is in its life. A field left out
 // is left alone. The same values the Application resource takes (docs/04), so a person and a resource say it alike.
 type ApplicationContextUpdate struct {
-	BusinessCriticality  *string   `json:"business_criticality,omitempty"`
-	InternetFacing       *bool     `json:"internet_facing,omitempty"`
-	DataClassification   *[]string `json:"data_classification,omitempty"`
-	CompensatingControls *[]string `json:"compensating_controls,omitempty"`
-	Lifecycle            *string   `json:"lifecycle,omitempty"`
+	BusinessCriticality  *string         `json:"business_criticality,omitempty"`
+	InternetFacing       *bool           `json:"internet_facing,omitempty"`
+	DataClassification   *[]string       `json:"data_classification,omitempty"`
+	CompensatingControls *[]string       `json:"compensating_controls,omitempty"`
+	Lifecycle            *string         `json:"lifecycle,omitempty"`
 	// Environment is where the application runs (D140): production, staging, test or development; the empty string says it again
 	// as "not described".
-	Environment *string `json:"environment,omitempty"`
+	Environment *string         `json:"environment,omitempty"`
+	Attributes  *map[string]any `json:"attributes,omitempty"`
 }
 
 // ErrEmptyUpdate is an update that changes nothing.
@@ -29,7 +31,7 @@ var lifecycles = []string{"planning", "development", "production", "deprecated"}
 // Validate normalises the update in place and refuses a value the score does not know, so a typo is an error and not
 // a silently lower score (the same rule as the resource, D55).
 func (u *ApplicationContextUpdate) Validate() error {
-	if u.BusinessCriticality == nil && u.InternetFacing == nil && u.DataClassification == nil && u.CompensatingControls == nil && u.Lifecycle == nil && u.Environment == nil {
+	if u.BusinessCriticality == nil && u.InternetFacing == nil && u.DataClassification == nil && u.CompensatingControls == nil && u.Lifecycle == nil && u.Environment == nil && u.Attributes == nil {
 		return ErrEmptyUpdate
 	}
 	if u.BusinessCriticality != nil {
@@ -108,6 +110,9 @@ func (u ApplicationContextUpdate) Apply(a Application) Application {
 	if u.Environment != nil {
 		a.Environment = *u.Environment
 	}
+	if u.Attributes != nil {
+		a.Attributes = *u.Attributes
+	}
 	return a
 }
 
@@ -123,5 +128,17 @@ func ScoreContextChanged(a, b Application) bool {
 		return slices.Equal(sx, sy)
 	}
 	return a.BusinessCriticality != b.BusinessCriticality || a.InternetFacing != b.InternetFacing || a.Environment != b.Environment || a.Type != b.Type ||
-		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls)
+		!same(a.DataClassification, b.DataClassification) || !same(a.CompensatingControls, b.CompensatingControls) || !mapsEqual(a.Attributes, b.Attributes)
+}
+
+func mapsEqual(a, b map[string]any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return string(ja) == string(jb)
 }
