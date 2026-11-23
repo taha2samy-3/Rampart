@@ -821,49 +821,34 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 			asset.ApplicationID = &appID
 		}
 	} else {
-		// Creating an application from an upload is restricted. CI tokens and automated ingestion can NEVER create applications
-		// (GitOps governance: applications must be declared declaratively via Application CRD).
-		// Only maintainers or admins can explicitly pass createApplication=true.
-		// Without createApplication=true, createMissing defaults to false (fail-closed: missing application returns 404).
-		createMissing := false
+		// Creating an application from an upload is the caller's explicit choice, as in DefectDojo (auto_create_context) and
+		// Veracode (create profile): createApplication=true creates a missing one (a maintainer, or a CI token),
+		// createApplication=false refuses it, and without the parameter the old behaviour stays (it is created) with a
+		// warning, so no pipeline breaks. A typo in a pipeline used to make a new empty application.
+		createChoice := strings.ToLower(strings.TrimSpace(get("createApplication")))
+		createMissing := createChoice != "false" && createChoice != "0" && createChoice != "no"
 		if createChoice == "true" || createChoice == "1" || createChoice == "yes" {
-			if caller.Role == auth.RoleIngest {
+			if caller.Role != auth.RoleIngest && caller.Role.Rank() < auth.RoleMaintainer.Rank() {
 				w.Header().Set("Content-Type", "application/problem+json")
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"type":   "https://rampart.aspm.dev/problems/forbidden",
 					"status": http.StatusForbidden,
-					"title":  "CI tokens cannot create applications",
-					"detail": "Applications must be declared declaratively via Application CRD. Ingestion tokens are restricted to reporting against existing applications.",
+					"title":  "Creating an application needs the maintainer role (or a CI token)",
 				})
 				return
 			}
-			if caller.Role.Rank() < auth.RoleMaintainer.Rank() {
-				w.Header().Set("Content-Type", "application/problem+json")
-				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"type":   "https://rampart.aspm.dev/problems/forbidden",
-					"status": http.StatusForbidden,
-					"title":  "Creating an application needs the maintainer or admin role",
-				})
-				return
-			}
-			createMissing = true
 		}
 		var err error
 		appID, appCreated, err = ResolveApplicationWith(r.Context(), g.store, tenantID, asset, declaredApp, createMissing)
 		if errors.Is(err, ErrApplicationNotFound) {
 			w.Header().Set("Content-Type", "application/problem+json")
 			w.WriteHeader(http.StatusNotFound)
-			detail := fmt.Sprintf("There is no application %q in this tenant. Applications must be declared declaratively via Application CRD or created by an administrator.", strings.ToLower(declaredApp))
-			if caller.Role.Rank() >= auth.RoleMaintainer.Rank() && caller.Role != auth.RoleIngest {
-				detail = fmt.Sprintf("There is no application %q in this tenant. Check the name, create it via CRD, or send createApplication=true.", strings.ToLower(declaredApp))
-			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"type":   "https://rampart.aspm.dev/problems/application-not-found",
 				"status": http.StatusNotFound,
 				"title":  "No such application",
-				"detail": detail,
+				"detail": fmt.Sprintf("There is no application %q in this tenant. Check the name, create it via CRD, or send createApplication=true.", strings.ToLower(declaredApp)),
 			})
 			return
 		}

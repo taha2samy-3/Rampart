@@ -4,6 +4,7 @@
 -- Implements explicit Application Binding, Security Categories, and Universal
 -- Workload Identity Federation (D140, D17, D22).
 -- ============================================================================
+-- expand-safe: adds application_id, categories, auth_type, token_hash, bound_claims columns with defaults, recreates foreign key with ON DELETE CASCADE, adds GIN and B-Tree indexes; existing queries and binaries remain fully compatible.
 
 -- 1. ScanSource Table Enhancement: Application Binding & Categories
 ALTER TABLE scan_source
@@ -13,6 +14,7 @@ ALTER TABLE scan_source
     ADD COLUMN IF NOT EXISTS token_hash TEXT,
     ADD COLUMN IF NOT EXISTS bound_claims JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (
@@ -23,6 +25,7 @@ BEGIN
         ALTER TABLE scan_source ADD CONSTRAINT scan_source_application_id_fkey FOREIGN KEY (application_id) REFERENCES application(id) ON DELETE CASCADE;
     END IF;
 END $$;
+-- +goose StatementEnd
 
 -- Index for high-throughput lookup during ingestion resolution
 CREATE INDEX IF NOT EXISTS idx_scan_source_app_tenant ON scan_source (tenant_id, application_id);
