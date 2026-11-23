@@ -1,5 +1,5 @@
 # The WASM parser modules, delivered to the pod as image volumes (docs/35 B1, docs/34 items 20 and 21 W1).
-# Use with:  helm upgrade ... -f deploy/helm/rampart/values-parsers-v1.yaml   (image volumes; for a runtime without them use values-parsers-v1-init.yaml)
+# Use with:  helm upgrade ... -f deploy/helm/rampart/values-parsers-v1.yaml
 #
 # Resolved from the public registry on 2026-11-19, tag v1: `crane digest <image>:v1` for the image, and the SHA-256 of /parser.wasm
 # read out of that image (`crane export <image>@<digest> - | tar -xO parser.wasm | sha256sum`). The server refuses to start unless each
@@ -9,20 +9,19 @@ parsers:
   delivery:
     mode: imageVolume
   modules:
-    sarif: {image: "ghcr.io/rampart-aspm/parsers/sarif:v0.2.0", sha256: "1b0760456568ab747882e95ced03873811649c02baa5bd70a21eef76aaddd80c"}
-    trivy: {image: "ghcr.io/rampart-aspm/parsers/trivy:v0.2.0", sha256: "911dd893d169b64c9f4853351d5ea56d9147ad68c11d52879e895eb0dd07396d"}
-    grype: {image: "ghcr.io/rampart-aspm/parsers/grype:v0.2.0", sha256: "3ae4c2ad1f8bcd216099ef12f6de1a33e17130dd4edf9a184935dfe277fe397a"}
-    semgrep: {image: "ghcr.io/rampart-aspm/parsers/semgrep:v0.2.0", sha256: "47b8ad8eb69f7ce0a6d945a4c78005d8205a8b7c7242e6f21cef3249b841b5e6"}
-    gitleaks: {image: "ghcr.io/rampart-aspm/parsers/gitleaks:v0.2.0", sha256: "4a296ffe6817b4681894024a0885d31fdc7ac9f3e5174be989b5b1061439263e"}
-    trufflehog: {image: "ghcr.io/rampart-aspm/parsers/trufflehog:v0.2.0", sha256: "e8f393fb4a3a2c5e374690d4ee0d3164c6aad478fd654d95e6225d3fadba3c5e"}
-    checkov: {image: "ghcr.io/rampart-aspm/parsers/checkov:v0.2.0", sha256: "acde8abaea0dcc860f73df67399c5b2b592e7a277f8433c80cb57f53498b3052"}
-    snyk: {image: "ghcr.io/rampart-aspm/parsers/snyk:v0.2.0", sha256: "c18740066081e21089d9e0ea21d7e0fc11404b3e268b13d3f4c5c71ddba59ce2"}
-    kubebench: {image: "ghcr.io/rampart-aspm/parsers/kubebench:v0.2.0", sha256: "eaa58a75e8f935fbcbfa2982aa0002be216891c5fb966b22bbd32ceec2cefb70"}
-    prowler: {image: "ghcr.io/rampart-aspm/parsers/prowler:v0.2.0", sha256: "81126b535c31b5579aaad5829d7877e919028ae0db238f0fda91e469afb7f482"}
-    gitlab: {image: "ghcr.io/rampart-aspm/parsers/gitlab:v0.2.0", sha256: "0c33658da64b4b447ba780b205356360480153b81cf3f97051b5fbd0164d487b"}
-    dependencycheck: {image: "ghcr.io/rampart-aspm/parsers/dependencycheck:v0.2.0", sha256: "86172754611e001f6368f4ac289046450401d4ae12ee731474c62fb8edc09855"}
-    openvex: {image: "ghcr.io/rampart-aspm/parsers/openvex:v0.2.0", sha256: "39e00d59341a3ad9a09dddf6ba693b242db8cd3745e9fd6193cba5219f1abb48"}
-    sbom-openvex: {image: "ghcr.io/rampart-aspm/parsers/openvex:v0.2.0", sha256: "39e00d59341a3ad9a09dddf6ba693b242db8cd3745e9fd6193cba5219f1abb48"}
+    sarif: {image: "ghcr.io/rampart-aspm/parsers/sarif@sha256:613c6e5a701418f331e32d9ea891b2d3dac42ae91c497839c76f9619420eab90", sha256: "362621120f8006580033ce9f8398f6bc99b32767500884647317ee33bcdc2d56"}
+    trivy: {image: "ghcr.io/rampart-aspm/parsers/trivy@sha256:3cd674bb56a46444265661ee8a2ec0630490191c5fe5d6957be97337435c0a12", sha256: "c992d02cd8c7057b2b5b526b5f1d354b01a3b1dd0574f16ad577468620eae6ed"}
+    grype: {image: "ghcr.io/rampart-aspm/parsers/grype@sha256:a62705a770d0d889703abb8fa0245d47ba62818eb4b5e16f41ccf5ab7e0b4ad3", sha256: "b1adc3341d695b467eaffc4b6c9b4b059c886028e4ed9c22f428b9a23aaa3f67"}
+    semgrep: {image: "ghcr.io/rampart-aspm/parsers/semgrep@sha256:a50328e0b874c90cf7de2f6c5fd1da9ffa0f76e7d36913b28c14c8d55932d18d", sha256: "7ad124083711db619f0d2168baa8a3694ecafb87ab2065abd51ccff7047e182f"}
+    gitleaks: {image: "ghcr.io/rampart-aspm/parsers/gitleaks@sha256:a567d798b2c6f140bba807b2f6f091a465a12841d2285e06eadac09b387d213c", sha256: "9ed4cc98a30ad06f971e1b0382735dce2da46a814a8512602b643a7d9d3f66ad"}
+    trufflehog: {image: "ghcr.io/rampart-aspm/parsers/trufflehog@sha256:96bf2b14afed7a91d3f62c4ef99849febfa12d43d3155552c4a30d73128aa498", sha256: "eca327e7c20ef00ac1983779be89b25f1488e3fae744286fdd15bf1972065dbf"}
+    checkov: {image: "ghcr.io/rampart-aspm/parsers/checkov@sha256:e48aa39be9106a851534d7a7233b1cbd63930d83a5f4a0feb84d4f956204dee9", sha256: "5dc0d05295839fb0082d35465e646a5db76bffe056ba0aa36debd4dfbbfbf796"}
+    snyk: {image: "ghcr.io/rampart-aspm/parsers/snyk@sha256:ee0675b787699a63507cf57871d9cafc6929a0fd0d482db95e818c8bc035fbd7", sha256: "4f797401bb29a36333fa615e56705f982575a5129e7eafffecd3c41de13b2b78"}
+    kubebench: {image: "ghcr.io/rampart-aspm/parsers/kubebench@sha256:e169f9a6ad4d0bf7b1363cca4ceb3c05560056117ba462c5c91a250a770e1e81", sha256: "7030914f2c11d56ac90cda6cfbc3f927ee8cb64463750c1f9d7c85000969ab75"}
+    prowler: {image: "ghcr.io/rampart-aspm/parsers/prowler@sha256:4e18ee16e98b90386a1d8e0e5681c8616d9e6e48be858d80ce57d2bdb71aca13", sha256: "665bdde79cd269a78a5e1fdb24d886a4c5306d2f8a463bdf62b594b3fd60450b"}
+    gitlab: {image: "ghcr.io/rampart-aspm/parsers/gitlab@sha256:d55a026bccbc24fa72776a39f91aa9b3f5ce04bfca144525658ab211b71e5ed7", sha256: "dc7f3c7b35a7e3fe457c5571cf5397854f8dea60459332b83e1320bb0d1d6fe7"}
+    dependencycheck: {image: "ghcr.io/rampart-aspm/parsers/dependencycheck@sha256:3ff3ceae2c06143614a2881d930451c02dab1475f3379d543c2afd738359df33", sha256: "bc4cd4f5af9f2d58e538619018998b80bd26fb0e870a95b98ae880644102d067"}
+    openvex: {image: "ghcr.io/rampart-aspm/parsers/openvex@sha256:e7da2d1f3016a910dda52bef66007cdca78cf210bd95ebe995b709fdfc4a0b0c", sha256: "50e457a2b5416c939ab782d9ec9572e74b198239129624eee21682e19d58d3f5"}
     sbom-cyclonedx: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-cyclonedx@sha256:a25a69380918f842a28a88601eac28dca30bc2d4307fc44bd923a514413fc9dc", sha256: "f139832ee9d647c8fac247bc18dd250d4b1c709f1bf137d5673d641623da3f09"}
     sbom-spdx: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-spdx@sha256:0f4bb8709a4e4ded8c2634cee91f4416d5dbb05a4ee6e87960932767e89fbcde", sha256: "f2ff3ce096ab132ff154b359312cb90a07ac3fcdef9a38fadab17fc35d308d6d"}
     sbom-syft: {image: "ghcr.io/rampart-aspm/sbom-parsers/sbom-syft@sha256:71fa5d52023cfdf50c72e17ffe7267b57fe01aa8ff1a43f23addd04d640fed58", sha256: "9fe3b94aa74a08079b62bb058cb6af7d0aa5122b85af253d2b03026186afd823"}
