@@ -328,11 +328,12 @@ func TestCLIHelpAndRouting(t *testing.T) {
 	// 3. Routing for status, whoami, logout, auth via handleCLI
 	for _, cmd := range []string{"status", "whoami", "logout", "auth"} {
 		var args []string
-		if cmd == "auth" {
+		switch cmd {
+		case "auth":
 			args = []string{"auth", "status", "--timeout", "100ms"}
-		} else if cmd == "logout" {
+		case "logout":
 			args = []string{"logout"}
-		} else {
+		default:
 			args = []string{cmd, "--timeout", "100ms"}
 		}
 		handled, _ := handleCLI(args)

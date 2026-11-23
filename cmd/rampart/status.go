@@ -278,12 +278,12 @@ func runStatus(args []string, out io.Writer) error {
 		return enc.Encode(report)
 	}
 
-	fmt.Fprintln(out, "Rampart ASPM Status")
-	fmt.Fprintln(out, "===================")
-	fmt.Fprintf(out, "Client Version: %s\n\n", Version)
+	_, _ = fmt.Fprintln(out, "Rampart ASPM Status")
+	_, _ = fmt.Fprintln(out, "===================")
+	_, _ = fmt.Fprintf(out, "Client Version: %s\n\n", Version)
 
-	fmt.Fprintln(out, "Server Connection:")
-	fmt.Fprintf(out, "  URL:     %s (%s)\n", srvInfo.URL, srvInfo.Source)
+	_, _ = fmt.Fprintln(out, "Server Connection:")
+	_, _ = fmt.Fprintf(out, "  URL:     %s (%s)\n", srvInfo.URL, srvInfo.Source)
 	if srvInfo.Connected {
 		srvVer := srvInfo.Version
 		if srvVer == "" {
@@ -293,15 +293,15 @@ func runStatus(args []string, out io.Writer) error {
 		if prodName == "" {
 			prodName = "Rampart"
 		}
-		fmt.Fprintf(out, "  Status:  Connected (%dms)\n", srvInfo.LatencyMs)
-		fmt.Fprintf(out, "  Version: %s (%s)\n\n", srvVer, prodName)
+		_, _ = fmt.Fprintf(out, "  Status:  Connected (%dms)\n", srvInfo.LatencyMs)
+		_, _ = fmt.Fprintf(out, "  Version: %s (%s)\n\n", srvVer, prodName)
 	} else {
-		fmt.Fprintf(out, "  Status:  Unreachable (%s)\n\n", srvInfo.Error)
+		_, _ = fmt.Fprintf(out, "  Status:  Unreachable (%s)\n\n", srvInfo.Error)
 	}
 
-	fmt.Fprintln(out, "Authentication:")
+	_, _ = fmt.Fprintln(out, "Authentication:")
 	if authInfo.Authenticated {
-		fmt.Fprintf(out, "  Status:  Authenticated (%s)\n", authInfo.Source)
+		_, _ = fmt.Fprintf(out, "  Status:  Authenticated (%s)\n", authInfo.Source)
 		if authInfo.User != nil {
 			displayName := authInfo.User.Name
 			if displayName == "" {
@@ -309,29 +309,29 @@ func runStatus(args []string, out io.Writer) error {
 			} else if authInfo.User.Email != "" && authInfo.User.Email != displayName {
 				displayName += fmt.Sprintf(" <%s>", authInfo.User.Email)
 			}
-			fmt.Fprintf(out, "  User:    %s\n", displayName)
+			_, _ = fmt.Fprintf(out, "  User:    %s\n", displayName)
 		}
 		if authInfo.Role != "" {
-			fmt.Fprintf(out, "  Role:    %s\n", authInfo.Role)
+			_, _ = fmt.Fprintf(out, "  Role:    %s\n", authInfo.Role)
 		}
 		if authInfo.Tenant != nil && authInfo.Tenant.Slug != "" {
 			tenantName := authInfo.Tenant.Slug
 			if authInfo.Tenant.Name != "" && authInfo.Tenant.Name != authInfo.Tenant.Slug {
 				tenantName += fmt.Sprintf(" (%s)", authInfo.Tenant.Name)
 			}
-			fmt.Fprintf(out, "  Tenant:  %s\n", tenantName)
+			_, _ = fmt.Fprintf(out, "  Tenant:  %s\n", tenantName)
 		}
 		if authInfo.TokenMasked != "" {
-			fmt.Fprintf(out, "  Token:   %s\n", authInfo.TokenMasked)
+			_, _ = fmt.Fprintf(out, "  Token:   %s\n", authInfo.TokenMasked)
 		}
 	} else {
 		if targetToken != "" {
-			fmt.Fprintf(out, "  Status:  Failed (%s)\n", authInfo.Error)
-			fmt.Fprintf(out, "  Token:   %s (%s)\n", authInfo.TokenMasked, authInfo.Source)
-			fmt.Fprintln(out, "  Note:    Token is invalid, expired, or server rejected it. Run 'rampart login'.")
+			_, _ = fmt.Fprintf(out, "  Status:  Failed (%s)\n", authInfo.Error)
+			_, _ = fmt.Fprintf(out, "  Token:   %s (%s)\n", authInfo.TokenMasked, authInfo.Source)
+			_, _ = fmt.Fprintln(out, "  Note:    Token is invalid, expired, or server rejected it. Run 'rampart login'.")
 		} else {
-			fmt.Fprintln(out, "  Status:  Not logged in")
-			fmt.Fprintln(out, "  Note:    Run 'rampart login' or export RAMPART_TOKEN to authenticate.")
+			_, _ = fmt.Fprintln(out, "  Status:  Not logged in")
+			_, _ = fmt.Fprintln(out, "  Note:    Run 'rampart login' or export RAMPART_TOKEN to authenticate.")
 		}
 	}
 
@@ -405,7 +405,7 @@ func runWhoami(args []string, out io.Writer) error {
 	}
 	roleStr := authInfo.Role
 
-	fmt.Fprintf(out, "Logged in to %s as %s (role: %s, tenant: %s)\n", targetServer, userStr, roleStr, tenantStr)
+	_, _ = fmt.Fprintf(out, "Logged in to %s as %s (role: %s, tenant: %s)\n", targetServer, userStr, roleStr, tenantStr)
 	return nil
 }
 
@@ -424,7 +424,7 @@ func runLogout(args []string, out io.Writer) error {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintln(out, "No saved credentials found. Already logged out.")
+			_, _ = fmt.Fprintln(out, "No saved credentials found. Already logged out.")
 			return nil
 		}
 		return fmt.Errorf("logout: failed to read credentials: %w", err)
@@ -439,9 +439,9 @@ func runLogout(args []string, out io.Writer) error {
 	}
 
 	if server != "" {
-		fmt.Fprintf(out, "Successfully logged out. Removed credentials for %s.\n", server)
+		_, _ = fmt.Fprintf(out, "Successfully logged out. Removed credentials for %s.\n", server)
 	} else {
-		fmt.Fprintln(out, "Successfully logged out. Removed stored credentials.")
+		_, _ = fmt.Fprintln(out, "Successfully logged out. Removed stored credentials.")
 	}
 	return nil
 }
@@ -459,7 +459,7 @@ func runVersion(args []string, out io.Writer) error {
 	}
 
 	if *short {
-		fmt.Fprintln(out, Version)
+		_, _ = fmt.Fprintln(out, Version)
 		return nil
 	}
 
@@ -492,16 +492,16 @@ func runVersion(args []string, out io.Writer) error {
 		return enc.Encode(payload)
 	}
 
-	fmt.Fprintf(out, "Rampart ASPM Platform v%s (Client)\n", Version)
+	_, _ = fmt.Fprintf(out, "Rampart ASPM Platform v%s (Client)\n", Version)
 	if *checkServer {
 		if srvInfo.Connected {
 			ver := srvInfo.Version
 			if ver == "" {
 				ver = "unknown"
 			}
-			fmt.Fprintf(out, "Connected Server: %s (v%s, %dms)\n", srvInfo.URL, ver, srvInfo.LatencyMs)
+			_, _ = fmt.Fprintf(out, "Connected Server: %s (v%s, %dms)\n", srvInfo.URL, ver, srvInfo.LatencyMs)
 		} else {
-			fmt.Fprintf(out, "Server (%s): unreachable\n", srvInfo.URL)
+			_, _ = fmt.Fprintf(out, "Server (%s): unreachable\n", srvInfo.URL)
 		}
 	}
 	return nil
@@ -527,7 +527,7 @@ func runAuth(args []string, out io.Writer) error {
 }
 
 func printCLIHelp(out io.Writer) {
-	fmt.Fprintf(out, `Rampart Cloud-Native Application Security Posture Management (ASPM) CLI
+	_, _ = fmt.Fprintf(out, `Rampart Cloud-Native Application Security Posture Management (ASPM) CLI
 
 Usage:
   rampart <command> [flags]
