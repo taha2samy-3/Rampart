@@ -1,12 +1,12 @@
 dependencies:
 - name: rampart-policies
   repository: oci://ghcr.io/rampart-aspm/charts
-  version: 0.3.0
+  version: 0.2.1
 - name: rampart-parsers
   repository: oci://ghcr.io/rampart-aspm/charts
   version: 0.2.0
 - name: rampart-sbom-parsers
   repository: oci://ghcr.io/rampart-aspm/charts
-  version: 0.1.0
-digest: sha256:931bf8b3250b22c1c8876ef4f28334b0f5cacb09b5ad8af2aea10a74ee144958
-generated: "2026-11-19T13:36:44.82776552+02:00"
+  version: 0.2.0
+digest: sha256:6e84c2ca4cbefb1ea16dd358c02f702adcc39e9440bf7d90831e8969610b1e72
+generated: "2026-11-23T07:09:29.48128694+02:00"

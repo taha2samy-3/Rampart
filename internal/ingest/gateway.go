@@ -316,7 +316,7 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 	if scanSrc != nil {
 		if scanSrc.ApplicationID != domain.NilID && req.Context.Application != "" && strings.ToLower(req.Context.Application) != "unassigned" {
 			boundApp, _ := g.store.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
-			if boundApp != nil && strings.ToLower(req.Context.Application) != strings.ToLower(boundApp.Slug) && req.Context.Application != scanSrc.ApplicationID.String() {
+			if boundApp != nil && !strings.EqualFold(req.Context.Application, boundApp.Slug) && req.Context.Application != scanSrc.ApplicationID.String() {
 				problemJSON(w, http.StatusForbidden, "forbidden", "Application mismatch",
 					fmt.Sprintf("ScanSource %q is bound to application %q, cannot ingest to declared application %q", scanSrc.Name, boundApp.Slug, req.Context.Application))
 				return
@@ -486,7 +486,7 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 		if scanSrc != nil && scanSrc.ApplicationID != domain.NilID {
 			boundApp, _ := st.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
 			if upload.Context.Application != "" && strings.ToLower(upload.Context.Application) != "unassigned" && boundApp != nil {
-				if strings.ToLower(upload.Context.Application) != strings.ToLower(boundApp.Slug) && upload.Context.Application != scanSrc.ApplicationID.String() {
+				if !strings.EqualFold(upload.Context.Application, boundApp.Slug) && upload.Context.Application != scanSrc.ApplicationID.String() {
 					return fmt.Errorf("application mismatch: scan source %q is bound to %q", scanSrc.Name, boundApp.Slug)
 				}
 			}
@@ -799,7 +799,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		}
 
 		if declaredApp != "" && strings.ToLower(declaredApp) != "unassigned" {
-			if strings.ToLower(declaredApp) != strings.ToLower(scanApp.Slug) && declaredApp != scanSrc.ApplicationID.String() {
+			if !strings.EqualFold(declaredApp, scanApp.Slug) && declaredApp != scanSrc.ApplicationID.String() {
 				w.Header().Set("Content-Type", "application/problem+json")
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]any{
