@@ -5,8 +5,8 @@ import { ApplicationScoreCard } from './ApplicationScoreCard';
 import type { ApplicationPage } from '@/api/types';
 
 vi.mock('@tanstack/react-router', () => ({
-  Link: ({ children, to, search, className, ...props }: any) => (
-    <a href={`${to}?${new URLSearchParams(search as any).toString()}`} className={className} {...props}>
+  Link: ({ children, to, search, className, ...props }: { children?: React.ReactNode; to?: string; search?: Record<string, string>; className?: string; [key: string]: unknown }) => (
+    <a href={`${to}?${new URLSearchParams((search ?? {}) as Record<string, string>).toString()}`} className={className} {...props}>
       {children}
     </a>
   ),

@@ -1,4 +1,3 @@
-/* global fetch */
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { chromium } from '@playwright/test';
@@ -34,8 +33,8 @@ async function run() {
   });
 
   const cleanup = () => {
-    try { mockProc.kill(); } catch {}
-    try { viteProc.kill(); } catch {}
+    try { mockProc.kill(); } catch { /* ignore */ }
+    try { viteProc.kill(); } catch { /* ignore */ }
   };
   process.on('exit', cleanup);
   process.on('SIGINT', cleanup);
