@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
+	"rampart/internal/domain"
 	"rampart/internal/ingest"
 	"rampart/internal/jobs"
 	"rampart/internal/query"
@@ -84,6 +85,8 @@ func TestCLIE2EUploadAndSBOM(t *testing.T) {
 	gw := ingest.NewGateway(queue)
 
 	tenantID := uuid.MustParse("01931f6a-0000-7000-8000-000000000000")
+	_ = gw.Store().CreateApplication(t.Context(), &domain.Application{ID: domain.NewID(), TenantID: tenantID, Slug: "custom-app", Name: "Custom App"})
+	_ = gw.Store().CreateApplication(t.Context(), &domain.Application{ID: domain.NewID(), TenantID: tenantID, Slug: "detected-app", Name: "Detected App"})
 	authn := auth.NewAuthenticatorWithStore(gw.Store())
 	token := authn.DefaultAdminToken(tenantID)
 	gw.SetAuthenticator(authn)
