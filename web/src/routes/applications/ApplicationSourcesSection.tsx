@@ -114,7 +114,7 @@ curl -X POST "https://<rampart-host>/api/v1/ingest" \\
 
   if (isPending) {
     return (
-      <div className="space-y-4 p-4" aria-busy="true" aria-label={t('common.loading')}>
+      <div role="status" className="space-y-4 p-4" aria-busy="true" aria-label={t('common.loading')}>
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-32 w-full" />
       </div>

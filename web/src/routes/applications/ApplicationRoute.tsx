@@ -275,7 +275,7 @@ function Page({ app, search }: { app: ApplicationPage; search?: { tab?: string }
               <ApplicationAttestSection app={app} />
             </TabsContent>
 
-            <TabsContent value="sources" forceMount className="mt-4 data-[state=inactive]:hidden focus-visible:outline-none">
+            <TabsContent value="sources" className="mt-4 focus-visible:outline-none">
               <ApplicationSourcesSection app={app} />
             </TabsContent>
 

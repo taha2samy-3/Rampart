@@ -2,9 +2,13 @@ import { expect, test } from './fixtures';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const ARTIFACT_DIR = process.env.ARTIFACT_DIR || '/home/taha/.gemini/antigravity/brain/d93d25a6-e153-4f10-b53b-482a5ecb51d6';
-if (!fs.existsSync(ARTIFACT_DIR)) {
-  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+const ARTIFACT_DIR = process.env.ARTIFACT_DIR || path.join(process.cwd(), 'playwright-screenshots');
+try {
+  if (!fs.existsSync(ARTIFACT_DIR)) {
+    fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+  }
+} catch {
+  // directory creation fallback
 }
 
 test('capture screenshots of dynamic risk scoring, app settings inspector, and compliance', async ({ page, consoleErrors }) => {

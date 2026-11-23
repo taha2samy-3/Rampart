@@ -333,6 +333,9 @@ export function mockFetch(sc: Scenario): Calls {
         analyzers: [],
       });
     }
+    if (path.startsWith('/api/v1/applications/') && path.endsWith('/sources')) {
+      return json({ items: [] });
+    }
     if (path.startsWith('/api/v1/applications/') && path.endsWith('/summary')) {
       const page = sc.appPages?.[path.split('/')[4] ?? ''];
       return page ? json(page) : json({ type: 'https://rampart.aspm.dev/problems/not-found', title: 'Application not found', status: 404 }, 404);
