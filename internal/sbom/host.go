@@ -267,10 +267,7 @@ func readEvents(r io.Reader, lim Limits) (*Result, error) {
 					purlBase = base
 				}
 			}
-			var t time.Time
-			if ev.Timestamp != "" {
-				t, _ = time.Parse(time.RFC3339, ev.Timestamp)
-			}
+			t := parseVEXTime(ev.Timestamp)
 			res.VEXStatements = append(res.VEXStatements, VEXStatement{
 				VulnerabilityID: vuln,
 				Aliases:         nonEmpty(ev.Aliases),
@@ -299,13 +296,45 @@ func readEvents(r io.Reader, lim Limits) (*Result, error) {
 		for _, n := range view.Nodes {
 			direct[n.ID] = n.Direct
 		}
+		refToPurl := make(map[string]string, len(res.Components))
 		for i := range res.Components {
 			res.Components[i].Direct = direct[graph.ComponentID(res.Components[i])]
+			if res.Components[i].Ref != "" && res.Components[i].Purl != "" {
+				refToPurl[res.Components[i].Ref] = res.Components[i].Purl
+			}
+		}
+		for i := range res.VEXStatements {
+			st := &res.VEXStatements[i]
+			if st.Purl == "" && st.AffectedRef != "" {
+				if p, ok := refToPurl[st.AffectedRef]; ok {
+					st.Purl = p
+				} else if strings.HasPrefix(st.AffectedRef, "pkg:") {
+					st.Purl = st.AffectedRef
+				}
+			}
+			if st.Purl != "" && st.PurlBase == "" {
+				if _, base, err := normalize.CanonicalPURL(st.Purl); err == nil {
+					st.PurlBase = base
+				}
+			}
 		}
 	}
 	res.SBOM.ComponentCount = len(res.Components)
 	res.SBOM.Dependencies = res.Edges
 	return res, nil
+}
+
+func parseVEXTime(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 // event is one line of module output; fields not used by a type stay empty.

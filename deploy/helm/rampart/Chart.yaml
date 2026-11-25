@@ -30,7 +30,7 @@ dependencies:
   # rampart-sbom-parsers must be published (and public).
   - name: rampart-parsers
     alias: parsers
-    version: 0.2.0
+    version: 0.2.1
     repository: oci://ghcr.io/rampart-aspm/charts
     condition: parsers.defaultParsers.enabled
   - name: rampart-sbom-parsers

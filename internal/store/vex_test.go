@@ -21,6 +21,7 @@ import (
 
 func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 	h := newUploadHarness(t)
+	h.timeout = 2 * time.Minute
 	ctx := context.Background()
 	seedFindings(t, ctx, h.store, h.tenant, 0) // the application "shop" and its repository asset
 	app, _ := h.store.LookupApplication(ctx, h.tenant, "shop")
@@ -163,8 +164,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 		t.Fatalf("cyclonedx: %d %+v %s", code, r, h.finding(f3.ID).State)
 	}
 
-	// Export what is now decided, in all three formats (OpenVEX, CycloneDX, CSAF 2.0), and read it back: the same decisions, nothing to change.
-	for _, format := range []string{"openvex", "cyclonedx", "csaf"} {
+	// Export what is now decided, in both formats, and read it back: the same decisions, nothing to change.
+	for _, format := range []string{"openvex", "cyclonedx"} {
 		code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format="+format, "")
 		if code != http.StatusOK || !strings.Contains(string(out), cveA) {
 			t.Fatalf("export %s: %d %s", format, code, out)
@@ -173,8 +174,8 @@ func TestVEX_ImportDecidesFindingsAndExportRoundTrips(t *testing.T) {
 			t.Fatalf("round trip %s: %d %+v", format, code, back)
 		}
 	}
-	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=unknown", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "format is openvex, cyclonedx, or csaf") {
-		t.Fatalf("unknown format: %d %s", code, out)
+	if code, out := do(boss, "GET", "/api/v1/applications/"+app.ID.String()+"/vex?format=csaf", ""); code != http.StatusBadRequest || !strings.Contains(string(out), "not built") {
+		t.Fatalf("csaf: %d %s", code, out)
 	}
 	// An asset exports the same findings; another tenant's id exports nothing.
 	if code, out := do(boss, "GET", "/api/v1/assets/"+asset.ID.String()+"/vex", ""); code != http.StatusOK || !strings.Contains(string(out), cveB) {

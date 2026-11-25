@@ -1,7 +1,6 @@
 package sbom
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,14 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"rampart/internal/domain"
 	"rampart/internal/integrations"
-	"rampart/internal/normalize"
-	"rampart/internal/vex"
 	"rampart/internal/wasmstore"
 )
 
@@ -91,7 +87,7 @@ func NewWasmSBOMParserFromSpec(name string, raw []byte, wasmBinary []byte) (*Was
 	}
 	if len(code) == 0 {
 		cleanName := strings.TrimPrefix(name, "sbom-")
-		data, _, err := store.Load(name, "sbom-"+cleanName, cleanName)
+		data, _, err := store.Load("sbom-"+cleanName, name, cleanName)
 		switch {
 		case err == nil:
 			code = data
@@ -162,68 +158,7 @@ func (p *WasmSBOMParser) ExtractsVEX() bool { return p.spec.Options.ExtractVEX }
 
 // ParseSBOMResult executes the sandboxed WASM module and returns the full Result including VEX statements.
 func (p *WasmSBOMParser) ParseSBOMResult(ctx context.Context, r io.Reader) (*Result, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	res, runErr := run(ctx, p.wasmCode, bytes.NewReader(data), p.name, p.limits(p.spec.Options.ExtractVulnerabilities))
-	if runErr == nil && len(res.VEXStatements) > 0 {
-		return res, nil
-	}
-	// Fallback for OpenVEX documents
-	if p.spec.Format == "openvex" || bytes.Contains(data, []byte("openvex.dev")) {
-		if doc, parseErr := vex.Parse(data); parseErr == nil && doc != nil {
-			vexRes := &Result{
-				SBOM: &domain.SBOM{
-					ID:        domain.NewID(),
-					Format:    "openvex",
-					CreatedAt: time.Now().UTC(),
-				},
-			}
-			if p.spec.Options.ExtractVEX {
-				for _, st := range doc.Statements {
-					if st.Problem != "" || len(st.Vulns) == 0 {
-						continue
-					}
-					vulnID := st.Vulns[0]
-					var aliases []string
-					if len(st.Vulns) > 1 {
-						aliases = st.Vulns[1:]
-					}
-					for _, p := range st.Purls {
-						_, base, _ := normalize.CanonicalPURL(p)
-						vexRes.VEXStatements = append(vexRes.VEXStatements, VEXStatement{
-							VulnerabilityID: vulnID,
-							Aliases:         aliases,
-							Purl:            p,
-							PurlBase:        base,
-							Status:          st.State,
-							Justification:   st.Justification,
-							Impact:          st.Impact,
-							Action:          st.Action,
-							Timestamp:       st.At,
-						})
-					}
-					if len(st.Purls) == 0 {
-						vexRes.VEXStatements = append(vexRes.VEXStatements, VEXStatement{
-							VulnerabilityID: vulnID,
-							Aliases:         aliases,
-							Status:          st.State,
-							Justification:   st.Justification,
-							Impact:          st.Impact,
-							Action:          st.Action,
-							Timestamp:       st.At,
-						})
-					}
-				}
-			}
-			return vexRes, nil
-		}
-	}
-	if runErr != nil {
-		return nil, runErr
-	}
-	return res, nil
+	return run(ctx, p.wasmCode, r, p.name, p.limits(p.spec.Options.ExtractVulnerabilities))
 }
 
 // ParseDocument reads the document once, with the module asked for the vulnerabilities the document states, and returns

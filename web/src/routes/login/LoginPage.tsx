@@ -55,12 +55,20 @@ export function LoginPage({ tenant: tenantParam, search }: { tenant?: string; se
     <div className="grid min-h-dvh grid-cols-1 tablet:grid-cols-[minmax(320px,38%)_1fr]">
       <aside className="hidden flex-col justify-between border-e border-rule bg-chrome p-8 tablet:flex">
         <Logo size={28} />
-        <div className="max-w-[32ch]">
+        <div className="max-w-[34ch]">
           <p className="display text-20 leading-tight">{t('login.positioning')}</p>
           <div className="mt-5">
             <ScoreBar breakdown={SAMPLE} score={950} size="full" />
           </div>
           <p className="mt-2 text-13 text-ink-2">{t('login.legend')}</p>
+          <div className="mt-6 flex items-start gap-2.5 rounded-ctl border border-rule bg-surface px-3 py-2 text-12">
+            <span
+              className="mt-0.5 shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-10 font-semibold uppercase tracking-wider text-accent"
+            >
+              {t('login.noBuiltinBadge')}
+            </span>
+            <span className="leading-snug text-ink-2">{t('login.noBuiltinDesc')}</span>
+          </div>
         </div>
         <span />
       </aside>

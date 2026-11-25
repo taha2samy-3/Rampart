@@ -12,6 +12,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -539,9 +540,14 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 			return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
 		}
 	}
-	count, err := p.storeSBOM(ctx, run, parserID, sbomDoc, components)
-	if err != nil {
-		return 0, err
+	count := 0
+	isVEXOnly := sbomDoc != nil && strings.EqualFold(sbomDoc.Format, "openvex") && len(components) == 0
+	if !isVEXOnly {
+		var err error
+		count, err = p.storeSBOM(ctx, run, parserID, sbomDoc, components)
+		if err != nil {
+			return 0, err
+		}
 	}
 	if len(vexStmts) > 0 {
 		if err := p.applyVEXStatements(ctx, run, parserID, vexStmts); err != nil {
@@ -562,7 +568,11 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 	cleanParser = strings.TrimPrefix(cleanParser, "cluster:")
 	actor := "vex:" + cleanParser
 
-	for _, st := range stmts {
+	// Sort oldest first so that when multiple statements target the same finding, the latest statement wins (D47).
+	sorted := append([]sbom.VEXStatement(nil), stmts...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Timestamp.Before(sorted[j].Timestamp) })
+
+	for _, st := range sorted {
 		if st.VulnerabilityID == "" || st.Status == "" {
 			continue
 		}
@@ -577,6 +587,10 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 				bases = append(bases, base)
 			}
 		}
+		// Require a package identifier so a whole-product statement without package PURLs cannot mutate unrelated findings (D47).
+		if len(bases) == 0 {
+			continue
+		}
 		var appID *uuid.UUID
 		if run.ApplicationID != domain.NilID {
 			appID = &run.ApplicationID
@@ -586,7 +600,10 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 			return err
 		}
 		for _, f := range cands {
-			if st.Purl != "" && f.Location.Package != nil {
+			if st.Purl != "" {
+				if f.Location.Package == nil {
+					continue
+				}
 				targetVer := purlVersion(st.Purl)
 				findingVer := purlVersion(f.Location.Package.Purl)
 				if findingVer == "" {
@@ -599,20 +616,53 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 			if f.State == st.Status && (st.Status != domain.StateNotAffected || f.Justification == st.Justification) {
 				continue
 			}
+			if p.humanDecisionAfter(ctx, run.TenantID, f.ID, st.Timestamp) {
+				continue
+			}
+			note := fmt.Sprintf("VEX (%s statement) applied from SBOM run %s", st.Status, run.ID)
+			if st.Action != "" {
+				note += ". Action: " + st.Action
+			}
 			patch := domain.TriageRequest{
 				State:           st.Status,
 				Justification:   st.Justification,
 				ImpactStatement: st.Impact,
-				Note:            fmt.Sprintf("VEX (%s statement) applied from SBOM run %s", st.Status, run.ID),
+				Note:            note,
 			}
 			evs, terr := domain.ApplyTriage(f, patch, actor, time.Now().UTC())
 			if terr != nil {
 				continue
 			}
-			_ = p.store.UpdateFindingTriage(ctx, run.TenantID, f, f.Version, evs)
+			if uerr := p.store.UpdateFindingTriage(ctx, run.TenantID, f, f.Version, evs); uerr != nil {
+				p.logger.Warn("updating finding triage from VEX statement", "run", run.ID, "finding", f.ID, "err", uerr)
+			}
 		}
 	}
 	return nil
+}
+
+// humanDecisionAfter reports whether a human user decided about the finding after t,
+// ensuring an older VEX document from CI never overwrites a newer manual triage (D47).
+func (p *Processor) humanDecisionAfter(ctx context.Context, tenantID, findingID uuid.UUID, t time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	eg, ok := p.store.(interface {
+		GetFindingEvents(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.FindingEvent, error)
+	})
+	if !ok {
+		return false
+	}
+	evs, err := eg.GetFindingEvents(ctx, tenantID, findingID)
+	if err != nil {
+		return false
+	}
+	for _, e := range evs {
+		if strings.HasPrefix(e.Actor, "user:") && e.At.After(t) && e.Type == "state_changed" {
+			return true
+		}
+	}
+	return false
 }
 
 func purlVersion(p string) string {

@@ -179,11 +179,11 @@ const PARSERS = (() => {
     p('cluster:trivy', 'trivy Parser', 'report', 'wasm', { category: 'sca' }),
     p('cluster:trufflehog', 'trufflehog Parser', 'report', 'wasm', { category: 'secrets' }),
     p('cluster:zap', 'zap Parser', 'report', 'lua', { category: 'dast' }),
-    p('cluster:bandit', 'bandit Parser', 'report', 'wasm', { category: 'sast', status: 'ready' }),
     p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
     p('cluster:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
     p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { version: '2.3', status: 'ready' }),
-    p('cluster:sbom-openvex', 'openvex SBOM Parser', 'sbom', 'wasm', { version: '0.2', status: 'installed' }),
+    p('cluster:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { version: '1.0', status: 'ready' }),
+    p('cluster:sbom-openvex', 'openvex SBOM Parser', 'sbom', 'wasm', { version: '0.2', status: 'ready' }),
   ];
 })();
 

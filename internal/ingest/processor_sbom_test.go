@@ -371,3 +371,174 @@ func TestProcessSBOM_VEXOptionDisabled_DoesNotApplyVEX(t *testing.T) {
 		t.Errorf("expected state open, got %s", f.State)
 	}
 }
+
+func TestProcessSBOM_CycloneDX_EmbeddedVEX_AppliesStatements(t *testing.T) {
+	ctx := context.Background()
+	proc, st, _ := sbomProcessor(t)
+	run := sbomRun()
+
+	vulnID := "CVE-2021-44228"
+	purl := "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+	initialFinding := &domain.Finding{
+		ID:              domain.NewID(),
+		TenantID:        run.TenantID,
+		ApplicationID:   run.ApplicationID,
+		AssetID:         run.AssetID,
+		FindingKey:      "finding-log4j-cve",
+		RuleID:          vulnID,
+		VulnerabilityID: &vulnID,
+		Location: domain.Location{
+			Package: &domain.PackageLocation{
+				Purl:             purl,
+				PurlBase:         "pkg:maven/org.apache.logging.log4j/log4j-core",
+				InstalledVersion: "2.14.1",
+			},
+		},
+		Severity: domain.SeverityCritical,
+		State:    domain.StateOpen,
+		Version:  1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{initialFinding}); err != nil {
+		t.Fatal(err)
+	}
+
+	cdxWithVEX := `{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "components": [
+    {
+      "bom-ref": "log4j-ref",
+      "name": "log4j-core",
+      "version": "2.14.1",
+      "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2021-44228",
+      "analysis": {
+        "state": "not_affected",
+        "justification": "code_not_reachable",
+        "detail": "JndiLookup class stripped at build time"
+      },
+      "affects": [{"ref": "log4j-ref"}]
+    }
+  ]
+}`
+
+	parser, err := sbom.NewWasmSBOMParserFromSpec("cyclonedx", []byte("spec:\n  format: cyclonedx\n  options:\n    extractVulnerabilities: false\n    extractVEX: true\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parser.ExtractsVEX() {
+		t.Fatal("expected ExtractsVEX() to be true")
+	}
+
+	res, err := proc.Process(ctx, ingest.ProcessParams{
+		Run:          run,
+		Parser:       parser,
+		IsSBOM:       true,
+		ScanFinished: time.Now().UTC(),
+		Open:         openString(cdxWithVEX),
+	})
+	if err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+	if res.Status != domain.RunCompleted || res.Components != 1 {
+		t.Fatalf("result = %+v, want completed with 1 component", res)
+	}
+
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-log4j-cve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := findings["finding-log4j-cve"]
+	if f == nil {
+		t.Fatal("finding missing in store")
+	}
+	if f.State != domain.StateNotAffected {
+		t.Errorf("expected state not_affected, got %s", f.State)
+	}
+	if f.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Errorf("expected justification vulnerable_code_not_in_execute_path, got %s", f.Justification)
+	}
+	if f.ImpactStatement != "JndiLookup class stripped at build time" {
+		t.Errorf("expected impact statement, got %q", f.ImpactStatement)
+	}
+}
+
+func TestProcessSBOM_VEX_PreservesNewerHumanDecision(t *testing.T) {
+	ctx := context.Background()
+	proc, st, _ := sbomProcessor(t)
+	run := sbomRun()
+
+	vulnID := "CVE-2023-44487"
+	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
+	initialFinding := &domain.Finding{
+		ID:              domain.NewID(),
+		TenantID:        run.TenantID,
+		ApplicationID:   run.ApplicationID,
+		AssetID:         run.AssetID,
+		FindingKey:      "finding-grpc-human",
+		RuleID:          vulnID,
+		VulnerabilityID: &vulnID,
+		Location: domain.Location{
+			Package: &domain.PackageLocation{
+				Purl:             purl,
+				PurlBase:         "pkg:golang/google.golang.org/grpc",
+				InstalledVersion: "v1.58.2",
+			},
+		},
+		Severity: domain.SeverityCritical,
+		State:    domain.StateOpen,
+		Version:  1,
+	}
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{initialFinding}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a human triager marking the finding under_investigation in 2026 (after the 2023 OpenVEX timestamp).
+	humanAt := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	evs, err := domain.ApplyTriage(initialFinding, domain.TriageRequest{
+		State: domain.StateUnderInvestigation,
+		Note:  "Investigating exposure manually",
+	}, "user:sara@acme.example", humanAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateFindingTriage(ctx, run.TenantID, initialFinding, initialFinding.Version, evs); err != nil {
+		t.Fatal(err)
+	}
+
+	parser, err := sbom.NewWasmSBOMParserFromSpec("openvex", []byte("spec:\n  format: openvex\n  options:\n    extractVEX: true\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// sampleOpenVEX has timestamp 2023-10-15T00:00:00Z, which is older than humanAt.
+	res, err := proc.Process(ctx, ingest.ProcessParams{
+		Run:          run,
+		Parser:       parser,
+		IsSBOM:       true,
+		ScanFinished: time.Now().UTC(),
+		Open:         openString(sampleOpenVEX),
+	})
+	if err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+	if res.Status != domain.RunCompleted {
+		t.Fatalf("run status = %s, want %s", res.Status, domain.RunCompleted)
+	}
+
+	findings, err := st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-grpc-human"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := findings["finding-grpc-human"]
+	if f == nil {
+		t.Fatal("finding missing in store")
+	}
+	if f.State != domain.StateUnderInvestigation {
+		t.Errorf("newer human decision was overwritten: state = %s, want %s", f.State, domain.StateUnderInvestigation)
+	}
+}

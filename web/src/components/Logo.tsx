@@ -23,7 +23,7 @@ export function LogoMark({ size = 24, className }: { size?: number; className?: 
 export function Logo({
   size = 24,
   showWord = true,
-  badge = 'no-builtin',
+  badge = false,
 }: {
   size?: number;
   showWord?: boolean;

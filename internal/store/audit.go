@@ -105,7 +105,7 @@ func (s *PostgresStore) FindFindingsForVEX(ctx context.Context, tenantID uuid.UU
 			  AND (vulnerability_id = ANY($2)
 			       OR vulnerability_id IN (SELECT vulnerability_id FROM vulnerability_alias WHERE alias = ANY($2))
 			       OR vulnerability_id IN (SELECT alias FROM vulnerability_alias WHERE vulnerability_id = ANY($2)))
-			  AND (purl_base = ANY($3) OR location->'package'->>'purl_base' = ANY($3))
+			  AND (cardinality($3::text[]) = 0 OR purl_base = ANY($3) OR location->'package'->>'purl_base' = ANY($3))
 			  AND ($4::uuid IS NULL OR application_id = $4)
 			ORDER BY id LIMIT 5000`, tenantID, ids, purlBases, appID)
 		if err != nil {

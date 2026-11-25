@@ -48,6 +48,8 @@ export const en = {
     },
     positioning: 'Every finding from every scanner in one queue, with the reason for each score.',
     legend: 'Scanner severity, threat intelligence, exposure and context. Controls that lower risk are outlined.',
+    noBuiltinBadge: 'no-builtin',
+    noBuiltinDesc: 'Zero compiled-in parsers — all scanners, SBOM readers, and policies load dynamically via Kubernetes CRDs.',
     sessionEnded: 'Your session ended. Sign in again.',
     password: {
       or: 'Or sign in as the local administrator',
@@ -128,7 +130,7 @@ export const en = {
     cat_vex: 'VEX',
     cat_other: 'Other',
     reportIntro: 'A parser reads a scanner report, a SARIF file or a Semgrep result, into findings. Each upload is read by the parser it names, or by the one that recognises the file.',
-    sbomIntro: 'An SBOM parser reads a CycloneDX, SPDX or Syft document into the inventory of an application: its components and how they depend on each other. It opens no findings; the analyzers do that.',
+    sbomIntro: 'An SBOM parser reads a CycloneDX, SPDX, Syft, or OpenVEX document into the application inventory and VEX exploitability decisions. It opens no findings; the analyzers do that.',
     addHelp: 'Another format is added as a parser resource (a ClusterParser, or a ClusterSBOMParser for an SBOM), with no release.',
     loadFailed: 'The parsers could not be loaded',
     tableReport: 'Parsers',
