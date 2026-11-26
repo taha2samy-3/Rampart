@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"rampart/internal/domain"
+	"rampart/internal/store"
 )
 
 // The native reports of Trivy, Grype, Semgrep and Gitleaks, uploaded without saying what they are, are detected,
@@ -81,24 +84,33 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 	}
 
 	// A secret never reaches the database: not the AWS key Semgrep and Gitleaks saw, nor the API key.
-	for _, secret := range []string{"AKIAIOSFODNN7EXAMPLE", "7f3a9c1e5b2d48f6a0c9e1d3b5a7f9c2e4d6b8a0"} {
-		var n int
-		err := h.pool.QueryRow(ctx, `SELECT
-			(SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND (raw::text LIKE '%'||$2||'%' OR location::text LIKE '%'||$2||'%' OR normalized::text LIKE '%'||$2||'%'))
-		  + (SELECT count(*) FROM finding WHERE tenant_id = $1 AND (location::text LIKE '%'||$2||'%' OR title LIKE '%'||$2||'%' OR description LIKE '%'||$2||'%'))`, h.tenant, secret).Scan(&n)
-		if err != nil {
-			t.Fatal(err)
+	// Query inside a tenant transaction so RLS does not hide rows and silently return 0.
+	if err := h.store.InTenantTx(ctx, h.tenant, func(st store.Store) error {
+		tx := st.(interface{ PgxTx() pgx.Tx }).PgxTx()
+		for _, secret := range []string{"AKIAIOSFODNN7EXAMPLE", "7f3a9c1e5b2d48f6a0c9e1d3b5a7f9c2e4d6b8a0"} {
+			var n int
+			err := tx.QueryRow(ctx, `SELECT
+				(SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND (raw::text LIKE '%'||$2||'%' OR location::text LIKE '%'||$2||'%' OR normalized::text LIKE '%'||$2||'%'))
+			  + (SELECT count(*) FROM finding WHERE tenant_id = $1 AND (location::text LIKE '%'||$2||'%' OR title LIKE '%'||$2||'%' OR description LIKE '%'||$2||'%'))`, h.tenant, secret).Scan(&n)
+			if err != nil {
+				return err
+			}
+			if n != 0 {
+				t.Fatalf("SECURITY VIOLATION: the secret %q is stored in %d places", secret[:6]+"...", n)
+			}
 		}
-		if n != 0 {
-			t.Fatalf("SECURITY VIOLATION: the secret %q is stored in %d places", secret[:6]+"...", n)
+		for _, secret := range []string{"wJalrXUtnFEMI", "ghp_7f3a9c1e5b2d48f6", "xoxb-EXAMPLE-TOKEN"} {
+			var n int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND (raw::text LIKE '%'||$2||'%' OR normalized::text LIKE '%'||$2||'%')`, h.tenant, secret).Scan(&n); err != nil {
+				return err
+			}
+			if n != 0 {
+				t.Fatalf("SECURITY VIOLATION: a TruffleHog credential (%s...) is stored", secret[:5])
+			}
 		}
-	}
-	for _, secret := range []string{"wJalrXUtnFEMI", "ghp_7f3a9c1e5b2d48f6", "xoxb-EXAMPLE-TOKEN"} {
-		var n int
-		_ = h.pool.QueryRow(ctx, `SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND (raw::text LIKE '%'||$2||'%' OR normalized::text LIKE '%'||$2||'%')`, h.tenant, secret).Scan(&n)
-		if n != 0 {
-			t.Fatalf("SECURITY VIOLATION: a TruffleHog credential (%s...) is stored", secret[:5])
-		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	// A credential TruffleHog verified is live: it scores higher than the same kind of secret that was not, and the
 	// difference is the SECRET_VERIFIED factor (docs/06, D42).
@@ -129,10 +141,16 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 	if after.SecretVerified || after.RiskScore >= live.RiskScore {
 		t.Fatalf("after revocation: verified %v, score %d -> %d", after.SecretVerified, live.RiskScore, after.RiskScore)
 	}
-	// The records themselves are still there, redacted.
-	var redacted int
-	_ = h.pool.QueryRow(ctx, `SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND raw::text LIKE '%[redacted]%'`, h.tenant).Scan(&redacted)
-	if redacted < 6 {
-		t.Fatalf("%d redacted records, want the Gitleaks, TruffleHog and Semgrep ones", redacted)
+	// Secret occurrences are recorded, with raw payload stripped (D149: secret findings keep no raw payload).
+	var secretOccs, secretWithRaw int
+	if err := h.pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE f.category = 'secret'),
+		count(*) FILTER (WHERE f.category = 'secret' AND o.raw IS NOT NULL)
+		FROM occurrence o JOIN finding f ON f.tenant_id = o.tenant_id AND f.id = o.finding_id
+		WHERE o.tenant_id = $1`, h.tenant).Scan(&secretOccs, &secretWithRaw); err != nil {
+		t.Fatal(err)
+	}
+	if secretOccs < 5 || secretWithRaw != 0 {
+		t.Fatalf("secret occurrences=%d with raw=%d; want >=5 stripped secret occurrences and 0 raw payloads", secretOccs, secretWithRaw)
 	}
 }

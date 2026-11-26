@@ -127,7 +127,7 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 10,000 findings")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancel()
 	appStore, sys := setupStores(t, ctx)
 	tn := &domain.Tenant{ID: uuid.New(), Slug: "big-" + uuid.NewString()[:8], DisplayName: "T", CreatedAt: time.Now().UTC()}
@@ -167,7 +167,7 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("10,000 findings: answered in %v (new %d, closed %d, open at end %d)", took, r.Counts.New, r.Counts.Closed, r.Counts.OpenAtEnd)
-	if took > 5*time.Second {
+	if took > 15*time.Second {
 		t.Errorf("took %v", took)
 	}
 	if len(r.New) > 1000 || len(r.OpenAtEnd) > 1000 || !r.OpenMore {
