@@ -49,6 +49,10 @@ func TestConnectorsAPI_ReadDescribeValidate(t *testing.T) {
 	if first["name"] != "slack-appsec" || first["managed_by"] != "resource" {
 		t.Fatalf("list item: %v", first)
 	}
+	// docs/50: the kind comes from the catalogue, so the UI files a slack connector under Notifiers.
+	if first["kind"] != domain.ConnectorKindNotifier {
+		t.Fatalf("list item kind: %v", first["kind"])
+	}
 
 	code, cat := call(http.MethodGet, "/api/v1/connectors/catalogue", "")
 	if entries, _ := cat["items"].([]any); code != http.StatusOK || len(entries) != len(domain.ConnectorCatalogue()) {

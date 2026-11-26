@@ -105,6 +105,26 @@ export function AdministrationRoute() {
         )}
       </section>
       {canAnywhere('owner') && <AccessSection />}
+      <ApiAccessSection />
     </div>
+  );
+}
+
+/**
+ * How programs reach the API (moved here from the retired Integrations page, docs/50). It is guidance, not token
+ * issuance: there is no token API (D82), and it does not describe tokens read from a Secret (tokenSecretRef) as a
+ * way in, because nothing reads them for authentication today (docs/51 step 4.2).
+ */
+function ApiAccessSection() {
+  const { t } = useTranslation();
+  return (
+    <section className="mt-8" aria-labelledby="api-access-h" data-testid="api-access">
+      <h2 id="api-access-h" className="text-13 font-semibold">{t('admin.apiTitle')}</h2>
+      <p className="m-0 mt-1 max-w-[72ch] text-13 text-ink">{t('admin.apiNoTokens')}</p>
+      <ul className="m-0 mt-2 flex max-w-[72ch] list-disc flex-col gap-1 ps-5 text-13 text-ink-2">
+        <li>{t('admin.apiCi')}</li>
+        <li>{t('admin.apiCli')}</li>
+      </ul>
+    </section>
   );
 }

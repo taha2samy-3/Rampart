@@ -63,6 +63,18 @@ func (w *AdvisoryRefreshWorker) Timeout(*river.Job[AdvisoryRefreshArgs]) time.Du
 	return AdvisoryJobTimeout
 }
 
+// riverPriority keeps a priority inside what River accepts (1 first to 4 last; 0 is River's default, 1). A value
+// above 4 makes River refuse the insert, so it is the lowest priority instead.
+func riverPriority(p int) int {
+	switch {
+	case p <= 0:
+		return 0
+	case p > 4:
+		return 4
+	}
+	return p
+}
+
 // EnqueueAdvisoryRefresh inserts an advisory refresh job into River with deduplication.
 func (q *RiverQueue) EnqueueAdvisoryRefresh(ctx context.Context, args AdvisoryRefreshArgs, priority int) error {
 	opts := &river.InsertOpts{
@@ -71,9 +83,7 @@ func (q *RiverQueue) EnqueueAdvisoryRefresh(ctx context.Context, args AdvisoryRe
 		UniqueOpts: river.UniqueOpts{
 			ByArgs: true,
 		},
-	}
-	if priority > 0 {
-		opts.Priority = priority
+		Priority: riverPriority(priority),
 	}
 	_, err := q.client.Insert(ctx, args, opts)
 	return err
@@ -87,9 +97,7 @@ func (q *RiverQueue) EnqueueAdvisoryRefreshTx(ctx context.Context, tx pgx.Tx, ar
 		UniqueOpts: river.UniqueOpts{
 			ByArgs: true,
 		},
-	}
-	if priority > 0 {
-		opts.Priority = priority
+		Priority: riverPriority(priority),
 	}
 	_, err := q.client.InsertTx(ctx, tx, args, opts)
 	return err

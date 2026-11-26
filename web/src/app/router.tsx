@@ -28,7 +28,7 @@ const IngestionRoute = lazy(() => import('@/routes/ingestion/IngestionRoute').th
 const AboutRoute = lazy(() => import('@/routes/about/AboutRoute').then((m) => ({ default: m.AboutRoute })));
 const FeedsRoute = lazy(() => import('@/routes/feeds/FeedsRoute').then((m) => ({ default: m.FeedsRoute })));
 const TicketingRoute = lazy(() => import('@/routes/ticketing/TicketingRoute').then((m) => ({ default: m.TicketingRoute })));
-const IntegrationsRoute = lazy(() => import('@/routes/integrations/IntegrationsRoute').then((m) => ({ default: m.IntegrationsRoute })));
+const NotifiersRoute = lazy(() => import('@/routes/notifiers/NotifiersRoute').then((m) => ({ default: m.NotifiersRoute })));
 const InventoryRoute = lazy(() => import('@/routes/inventory/InventoryRoute').then((m) => ({ default: m.InventoryRoute })));
 const OverviewRoute = lazy(() => import('@/routes/overview/OverviewRoute').then((m) => ({ default: m.OverviewRoute })));
 const VulnerabilitiesRoute = lazy(() => import('@/routes/vulnerabilities/VulnerabilitiesRoute').then((m) => ({ default: m.VulnerabilitiesRoute })));
@@ -210,7 +210,16 @@ const ticketingRoute = createRoute({
     return <TicketingRoute search={ticketingRoute.useSearch()} />;
   },
 });
-const integrationsRoute = createRoute({ getParentRoute: () => appRoute, path: '/integrations', component: IntegrationsRoute });
+const notifiersRoute = createRoute({ getParentRoute: () => appRoute, path: '/notifiers', component: NotifiersRoute });
+// /integrations was retired (docs/50): its notifiers moved to /notifiers, its parser packages to /parsers and its
+// tokens text to /administration. Old links and bookmarks land on /notifiers; kept for two releases.
+const integrationsRedirect = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/integrations',
+  beforeLoad: () => {
+    throw redirect({ to: '/notifiers', replace: true });
+  },
+});
 
 const inventoryRoute = createRoute({ getParentRoute: () => appRoute, path: '/inventory', component: InventoryRoute });
 
@@ -223,7 +232,7 @@ const vulnerabilityRoute = createRoute({
   },
 });
 
-const BUILT = new Set(['parsers', 'policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'ticketing', 'integrations', 'inventory', 'vulnerabilities']);
+const BUILT = new Set(['parsers', 'policies', 'findings', 'ingestion', 'workflow', 'overview', 'applications', 'administration', 'compliance', 'feeds', 'ticketing', 'notifiers', 'inventory', 'vulnerabilities']);
 const placeholderRoutes = NAV_ITEMS.filter((n) => !BUILT.has(n.id)).map((item) =>
   createRoute({ getParentRoute: () => appRoute, path: item.path, component: () => <NotBuilt item={item} /> }),
 );
@@ -253,7 +262,8 @@ const routeTree = rootRoute.addChildren([
     policiesRoute,
     feedsRoute,
     ticketingRoute,
-    integrationsRoute,
+    notifiersRoute,
+    integrationsRedirect,
     inventoryRoute,
     vulnerabilitiesRoute,
     vulnerabilityRoute,

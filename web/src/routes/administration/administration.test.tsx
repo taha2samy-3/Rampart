@@ -61,4 +61,17 @@ describe('administration: the audit log', () => {
     renderApp('/administration');
     expect(await screen.findByText('The audit log could not be loaded.')).toBeInTheDocument();
   });
+  // docs/50 step 4: the tokens text moved here from the retired Integrations page. It is guidance, not issuance.
+  it('says how programs get access, and issues no token', async () => {
+    mockFetch({ loggedIn: true, role: 'admin' });
+    renderApp('/administration');
+    const section = await screen.findByTestId('api-access');
+    expect(within(section).getByRole('heading', { name: 'API access' })).toBeInTheDocument();
+    expect(within(section).getByText(/not listed or issued here/)).toBeInTheDocument();
+    expect(within(section).getByText(/CI federation/)).toBeInTheDocument();
+    expect(within(section).getByText(/rampart login/)).toBeInTheDocument();
+    expect(within(section).queryByText(/tokenSecretRef/)).toBeNull();
+    expect(within(section).queryByRole('button')).toBeNull();
+    expect(await axe(section)).toHaveNoViolations();
+  });
 });

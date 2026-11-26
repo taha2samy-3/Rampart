@@ -453,7 +453,7 @@ func (g *Gateway) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		scopes = append(scopes, "no_close")
 	}
 	// D80: the token is bound to the run that exchanged it: its repository, ref and commit.
-	scopes = append(scopes, federationBindings(matchedRule.Rule.Provider, iss, verifiedClaims)...)
+	scopes = append(scopes, federationBindings(matchedRule.Rule, iss, verifiedClaims)...)
 
 	// 11. Issue short-lived API token (role: ingest, 15 minutes, bound to scanSourceID)
 	subject := claimStr(verifiedClaims, "repository")

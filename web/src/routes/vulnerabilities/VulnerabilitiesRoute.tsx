@@ -188,7 +188,7 @@ export function VulnerabilitiesRoute() {
                   <span
                     className={cn(
                       'inline-flex items-center gap-1 rounded px-2 py-0.5 text-12 font-medium uppercase',
-                      v.severity === 'critical' && 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
+                      v.severity === 'critical' && 'bg-critical/10 text-critical dark:text-critical',
                       v.severity === 'high' && 'bg-high/10 text-high',
                     )}
                   >
@@ -200,7 +200,7 @@ export function VulnerabilitiesRoute() {
                 </Td>
                 <Td>
                   {v.kev ? (
-                    <span className="inline-flex rounded-full bg-critical/15 px-2 py-0.5 text-12 font-semibold text-critical">
+                    <span className="text-12 font-semibold text-critical">
                       CISA KEV
                     </span>
                   ) : (

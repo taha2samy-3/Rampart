@@ -32,7 +32,7 @@ func (m *mockWorkflowService) Request(_ context.Context, _ uuid.UUID, _ string, 
 
 type fakeVerifier struct{ tickets map[string]bool } // "<finding>|<ref>"
 
-func (f fakeVerifier) FindingHasTicket(_ context.Context, _, finding uuid.UUID, ref string) (bool, error) {
+func (f fakeVerifier) FindingHasTicket(_ context.Context, _, finding uuid.UUID, _, ref string) (bool, error) {
 	return f.tickets[finding.String()+"|"+ref], nil
 }
 

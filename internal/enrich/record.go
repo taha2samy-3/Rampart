@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"rampart/internal/domain"
-
 	"github.com/jackc/pgx/v5"
 )
 
@@ -139,56 +137,16 @@ func (s *FeedSyncer) readRecordFromDB(ctx context.Context, id string) (*Vulnerab
 	return &r, nil
 }
 
-// Record reads the record of a vulnerability by its id or by one of its aliases (a GHSA id finds its CVE).
-// Depending on AdvisoryMode (hybrid, live, stored), it serves cached data from the database and/or queries
-// upstream advisory APIs live and stores the resulting report into the database (like a feed).
+// Record reads the record of a vulnerability by its id or by one of its aliases (a GHSA id finds its CVE), from the
+// database only. A page view never calls the internet (docs/51 step 1.5, Q4): the feeds keep the table, and the
+// "Refresh" button (LiveAdvisory.Refresh, under single flight and a cooldown) is the only live fetch. A record that is
+// missing or not scored yet is answered as it is stored, so the page says "not synced yet" or "awaiting analysis".
 func (s *FeedSyncer) Record(ctx context.Context, id string) (*VulnerabilityRecord, error) {
 	id = strings.TrimSpace(id)
-	if id == "" {
+	if id == "" || s.pool == nil {
 		return nil, nil
 	}
-
-	mode := s.AdvisoryMode()
-	var (
-		r   *VulnerabilityRecord
-		err error
-	)
-
-	// In Hybrid or Stored mode, check the database first
-	if mode != domain.AdvisoryModeLive && s.pool != nil {
-		r, err = s.readRecordFromDB(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		// If found and has a narrative description or summary, check freshness
-		if r != nil && (strings.TrimSpace(r.Description) != "" || strings.TrimSpace(r.Summary) != "") {
-			isStale := false
-			if r.UpdatedAt != nil {
-				age := time.Since(*r.UpdatedAt)
-				if (r.CVSSScore == nil || *r.CVSSScore == 0) && age > 1*time.Hour {
-					isStale = true
-				} else if age > 24*time.Hour {
-					isStale = true
-				}
-			}
-			if !isStale {
-				return r, nil
-			}
-		}
-	}
-
-	// In Stored mode, do not perform live on-demand fetching
-	if mode == domain.AdvisoryModeStored {
-		return r, nil
-	}
-
-	// In Hybrid (when missing/empty) or Live mode: fetch live from upstream APIs and persist to database!
-	liveRec, liveErr := s.FetchAndPersistLiveAdvisory(ctx, id)
-	if liveErr == nil && liveRec != nil {
-		return liveRec, nil
-	}
-
-	return r, nil
+	return s.readRecordFromDB(ctx, id)
 }
 
 func deref(s *string) string {

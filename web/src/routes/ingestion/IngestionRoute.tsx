@@ -26,8 +26,6 @@ export interface IngestionSearch {
   sel?: string;
 }
 
-const ACTIVE = new Set(['queued', 'parsing', 'merging', 'enriching', 'scoring']);
-
 /** Where a run came from, as one short line: repository and branch, else the image, else the scanner. */
 function sourceText(r: RunRow): string {
   const c = r.context;
@@ -56,8 +54,8 @@ export function IngestionRoute({ search }: { search: IngestionSearch }) {
     initialPageParam: '',
     getNextPageParam: (last) => last.nextCursor || undefined,
     retry: (n, err) => toProblem(err).status >= 500 && n < 1,
-    // A run in progress changes under the reader; poll while any visible run is still going.
-    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.items.some((r) => ACTIVE.has(r.status))) ? 3000 : false),
+    // A run in progress changes under the reader: the `ingests` stream event refetches it (useLiveEvents), and the
+    // stream's own fallback polls while it is down, so this page does not poll on its own (docs/51 step 3.3).
   });
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
   const inList = rows.find((r) => r.id === selectedId);

@@ -56,3 +56,7 @@ spec:
     namespace: security-tools
     port: 50051
   timeoutSeconds: 30
+  # The reference server listens in clear text. Rampart uses TLS unless this is written: the tracker carries the
+  # tenant's tracker credentials on every call, so serve TLS (or a mesh with mTLS) before pointing it at a real tracker.
+  tls:
+    insecure: true

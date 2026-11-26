@@ -466,11 +466,17 @@ func (s *Service) failed(ctx context.Context, rec domain.SBOMAnalysis, args jobs
 		state = domain.AnalysisTimedOut
 	}
 	finished := s.now()
+	last := attempt >= maxAttempts
 	rec.State, rec.Error, rec.FinishedAt = state, cause.Error(), &finished
+	if !last {
+		// River retries this job after a backoff. Until then the row stays claimed (pending, with the error), so a person or the
+		// sweep cannot claim it again and run a second merge of the same SBOM and analyzer beside the retry (docs/51 step 2.3).
+		// A worker that dies leaves it stale after an hour, which frees it as before.
+		rec.State, rec.FinishedAt = domain.AnalysisPending, nil
+	}
 	if err := s.save(ctx, rec); err != nil {
 		s.log.Warn("analysis: recording a failure failed", "error", err)
 	}
-	last := attempt >= maxAttempts
 	msg := fmt.Sprintf("%s failed on attempt %d of %d: %s", map[string]string{"analyzer": "The analyzer", "merge": "Merging its findings"}[stage], attempt, maxAttempts, cause)
 	if state == domain.AnalysisTimedOut {
 		msg = fmt.Sprintf("The analyzer did not answer in time on attempt %d of %d: %s", attempt, maxAttempts, cause)

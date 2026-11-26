@@ -111,14 +111,20 @@ func TestRefreshVulnerabilities(t *testing.T) {
 	twoMinAgo := now.Add(-2 * time.Minute)
 	sbomA := uuid.New()
 	_ = st.SaveSBOM(ctx, &domain.SBOM{ID: sbomA, TenantID: tenantID, AssetID: appA, Format: "cyclonedx"}, nil)
+	// A person asked (the claim keeps the time apart, docs/51 step 2.2), and the analysis finished.
+	osv := domain.AnalyzerRef{Kind: "sbom", Name: "osv"}
+	_, _ = st.ClaimSBOMAnalysis(ctx, domain.SBOMAnalysis{TenantID: tenantID, SBOMID: sbomA, Analyzer: osv, Trigger: domain.TriggerManual}, time.Hour)
 	_ = st.SaveSBOMAnalysis(ctx, domain.SBOMAnalysis{
 		TenantID:   tenantID,
 		SBOMID:     sbomA,
-		Analyzer:   domain.AnalyzerRef{Kind: "sbom", Name: "osv"},
+		Analyzer:   osv,
 		State:      domain.AnalysisCompleted,
 		Trigger:    domain.TriggerManual,
 		FinishedAt: &twoMinAgo,
 	})
+	// The daily sweep claims it again: the manual time survives the new trigger (before, the cooldown was lost here).
+	_, _ = st.ClaimSBOMAnalysis(ctx, domain.SBOMAnalysis{TenantID: tenantID, SBOMID: sbomA, Analyzer: osv, Trigger: domain.TriggerScheduled}, time.Hour)
+	_ = st.SaveSBOMAnalysis(ctx, domain.SBOMAnalysis{TenantID: tenantID, SBOMID: sbomA, Analyzer: osv, State: domain.AnalysisCompleted, Trigger: domain.TriggerScheduled, FinishedAt: &now})
 
 	api.SetAnalysisLimits(50, 5*time.Minute)
 	if c, resp := post(tri, "/api/v1/applications/"+appA.String()+"/refresh-vulnerabilities", ""); c != http.StatusAccepted || resp.Status != "cooldown" || resp.CooldownUntil == "" {
@@ -127,6 +133,7 @@ func TestRefreshVulnerabilities(t *testing.T) {
 
 	// Test In-Flight Limit (docs/39 Slice D.3): cap manual work across the platform with 429 Retry-After
 	api.SetAnalysisLimits(1, time.Nanosecond) // cooldown immediately elapsed, but in-flight limit = 1
+	api.SetInFlightCounter(st)                // the system store in a server (docs/51 step 2.1)
 	// Claim one analysis in flight
 	_, _ = st.ClaimSBOMAnalysis(ctx, domain.SBOMAnalysis{
 		TenantID: tenantID,

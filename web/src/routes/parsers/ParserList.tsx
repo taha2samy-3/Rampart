@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { listParsers, qk, toProblem } from '@/api';
+import { listIntegrationPackages, listParsers, qk, toProblem } from '@/api';
 import type { ParserDescriptor } from '@/api/types';
 import { EmptyState, ProblemMessage, SearchField, Spinner, Table, TBody, Td, Th, THead, Tr } from '@/components';
 import { absoluteDateTime } from '@/lib/format';
@@ -162,7 +162,7 @@ export function ParserList({ family }: { family: Family }) {
                 )}
               >
                 <span>{c.label}</span>
-                <span className={cn('text-11', category === c.id ? 'font-semibold text-accent' : 'text-ink-3')}>
+                <span className={cn('text-12', category === c.id ? 'font-semibold text-accent' : 'text-ink-2')}>
                   ({c.count})
                 </span>
               </button>
@@ -272,17 +272,15 @@ function ParserInspector({ p }: { p: ParserDescriptor | null }) {
     <div className="space-y-5 p-4 text-13">
       <header>
         <div className="flex items-center gap-2">
-          <h3 className="break-words text-14 font-semibold">{p.name}</h3>
-          <span className="rounded bg-chrome px-1.5 py-0.5 text-10 font-semibold uppercase tracking-wider text-ink-3">
-            {kind}
-          </span>
+          <h2 className="break-words text-14 font-semibold">{p.name}</h2>
+          <span className="text-12 text-ink-2">{kind}</span>
         </div>
         <p className="mt-0.5 break-all font-mono text-12 text-ink-2">{ref}</p>
         {p.description && <p className="mt-1 text-ink-2">{p.description}</p>}
       </header>
 
       <section aria-labelledby="pi-status">
-        <h4 id="pi-status" className="font-semibold">{t('parsers.colStatus')}</h4>
+        <h3 id="pi-status" className="font-semibold">{t('parsers.colStatus')}</h3>
         <p className={cn('mt-1 inline-flex items-center gap-1.5', healthOf(p) === 'problem' && 'text-critical')}>
           <StatusMark health={healthOf(p)} />
           {t(`parsers.status_${status}`)}
@@ -305,8 +303,10 @@ function ParserInspector({ p }: { p: ParserDescriptor | null }) {
         {p.origin && <Row label={t('parsers.from')}>{t(`parsers.origin_${p.origin}`)}</Row>}
       </dl>
 
+      {isMappingParser(p) && <PackageDetails name={cleanName} />}
+
       <section aria-labelledby="pi-last">
-        <h4 id="pi-last" className="font-semibold">{t('parsers.lastRun')}</h4>
+        <h3 id="pi-last" className="font-semibold">{t('parsers.lastRun')}</h3>
         {p.last_run ? (
           <>
             <p className={cn('mt-1', p.last_run.status === 'failed' && 'text-critical')}>
@@ -325,5 +325,48 @@ function ParserInspector({ p }: { p: ParserDescriptor | null }) {
         )}
       </section>
     </div>
+  );
+}
+
+/** A parser that an IntegrationPackage of kind parser describes: GET /api/v1/parsers lists it as `mapping:<name>`. */
+function isMappingParser(p: ParserDescriptor): boolean {
+  return p.runtime === 'mapping' || p.id.startsWith('mapping:');
+}
+
+/**
+ * The package behind a mapping parser (docs/50 step 3): its runtime, version, compile error and what uses it, from
+ * GET /api/v1/integration-packages. The parsers list does not carry these, and a package that failed to compile
+ * must say why here, where the parser is looked at.
+ */
+function PackageDetails({ name }: { name: string }) {
+  const { t } = useTranslation();
+  const q = useQuery({ queryKey: qk.connectors.packages(), queryFn: ({ signal }) => listIntegrationPackages(signal) });
+  const pkg = q.data?.find((x) => x.kind === 'parser' && x.name === name);
+  return (
+    <section aria-labelledby="pi-package" data-testid="parser-package">
+      <h3 id="pi-package" className="font-semibold">{t('parsers.packageTitle')}</h3>
+      {q.isPending ? (
+        <p className="mt-1 text-ink-2">{t('common.loading')}</p>
+      ) : q.isError ? (
+        <div className="mt-1"><ProblemMessage problem={toProblem(q.error)} title={t('parsers.packageFailed')} onRetry={() => void q.refetch()} /></div>
+      ) : !pkg ? (
+        <p className="mt-1 text-ink-2">{t('parsers.packageMissing', { name })}</p>
+      ) : (
+        <>
+          <dl className="mt-1 space-y-1">
+            <Row label={t('parsers.packageRuntime')}>{pkg.runtime || t('parsers.runtime_unknown')}</Row>
+            <Row label={t('parsers.version')}>{pkg.version || t('parsers.packageNoVersion')}</Row>
+            <Row label={t('parsers.packageUsedBy')}>{pkg.used_by.length ? pkg.used_by.join(', ') : t('parsers.packageUsedByUploads', { name: pkg.name })}</Row>
+            <Row label={t('parsers.packageState')}>{pkg.error ? t('parsers.packageNotUsed') : t('parsers.packageInstalled')}</Row>
+          </dl>
+          {pkg.error && (
+            <>
+              <p className="mt-2 font-semibold">{t('parsers.problem')}</p>
+              <p className="mt-0.5 break-words font-mono text-12 text-critical">{pkg.error}</p>
+            </>
+          )}
+        </>
+      )}
+    </section>
   );
 }

@@ -38,7 +38,7 @@ func TestAllFourAnalyzerKindsAreReconciledAndListed(t *testing.T) {
 			return op.ReconcileClusterExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "sonatype", Generation: 1}, Spec: svc})
 		}},
 		{"tenant external", func() (*operator.PolicyStatus, error) {
-			return op.ReconcileExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "mine", Namespace: "acme-ns", Generation: 1}, Spec: svc})
+			return op.ReconcileExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "mine", Namespace: "acme-ns", Generation: 1}, Spec: map[string]any{"service": map[string]any{"name": "sonatype", "port": 50051}}})
 		}},
 		{"cluster sbom", func() (*operator.PolicyStatus, error) {
 			return op.ReconcileClusterSBOMAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "native-matcher", Generation: 1}, Spec: map[string]any{"engine": "hybrid"}})
@@ -90,6 +90,9 @@ func TestAnAnalyzerTheServerCannotUseIsRefusedWithItsReason(t *testing.T) {
 		{"tenant endpoint", func() (*operator.PolicyStatus, error) {
 			return op.ReconcileExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "e", Namespace: "acme-ns", Generation: 1}, Spec: map[string]any{"endpoint": "169.254.169.254:80"}})
 		}, "not an endpoint"},
+		{"tenant service in another namespace", func() (*operator.PolicyStatus, error) {
+			return op.ReconcileExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "o", Namespace: "acme-ns", Generation: 1}, Spec: map[string]any{"service": map[string]any{"name": "a", "namespace": "rampart-system", "port": 1}}})
+		}, "only in its own namespace"},
 		{"no address", func() (*operator.PolicyStatus, error) {
 			return op.ReconcileClusterExternalAnalyzer(ctx, &operator.PolicyCR{Metadata: operator.Metadata{Name: "n", Generation: 1}, Spec: map[string]any{}})
 		}, "no address"},
@@ -111,5 +114,27 @@ func TestAnAnalyzerTheServerCannotUseIsRefusedWithItsReason(t *testing.T) {
 		if r.Status != "False" || !strings.Contains(r.Message, c.why) {
 			t.Errorf("%s: want Ready=False saying %q, got %+v", c.name, c.why, r)
 		}
+	}
+}
+
+func TestAnalyzerNameCollisionAcrossKindsIsRefused(t *testing.T) {
+	ctx := context.Background()
+	op, _, _ := analyzerFixture(t)
+
+	if _, err := op.ReconcileClusterSBOMAnalyzer(ctx, &operator.PolicyCR{
+		Metadata: operator.Metadata{Name: "osv", Generation: 1},
+		Spec:     map[string]any{"engine": "osv"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := op.ReconcileClusterExternalAnalyzer(ctx, &operator.PolicyCR{
+		Metadata: operator.Metadata{Name: "osv", Generation: 1},
+		Spec:     map[string]any{"service": map[string]any{"name": "osv-ext", "namespace": "tools", "port": 50051}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := st.GetCondition("Ready"); r == nil || r.Status != "False" || !strings.Contains(r.Message, "already used") {
+		t.Fatalf("expected Ready=False on cross-kind analyzer name collision, got %+v", r)
 	}
 }

@@ -1609,7 +1609,9 @@ func (s *PostgresStore) GetApplicationBySlug(ctx context.Context, tenantID uuid.
 	return app, nil
 }
 
-// FindApplicationByRef implements apply.ConfigStore.
+// FindApplicationByRef implements apply.ConfigStore. A reference that matches more than one application is refused with
+// domain.ErrAmbiguousApplicationRef: under D140 one repository has an application per branch, and the first row PostgreSQL
+// returned decided which one a source was bound to (docs/51 step 2.5).
 func (s *PostgresStore) FindApplicationByRef(ctx context.Context, tenantID uuid.UUID, ref domain.ApplicationRef) (*domain.Application, error) {
 	if strings.TrimSpace(ref.Name) != "" {
 		app, err := s.GetApplicationBySlug(ctx, tenantID, ref.Name)
@@ -1617,101 +1619,73 @@ func (s *PostgresStore) FindApplicationByRef(ctx context.Context, tenantID uuid.
 			return app, nil
 		}
 	}
-
 	if strings.TrimSpace(ref.Repository) != "" {
+		// The suffix .git, not the characters of it: rtrim(repository, '.git') turned acme/rampart into acme/rampar.
 		clean := strings.TrimSuffix(strings.TrimSpace(ref.Repository), ".git")
-		query := `
-			SELECT id, tenant_id, hierarchy_node_id, coalesce(hierarchy_path, ''), slug, name,
-			       coalesce(description, ''), business_criticality, internet_facing, data_classification,
-			       compensating_controls, compliance_scope, selectors, lifecycle, type, repository, branch,
-			       environment, owners, tags, version, created_at
-			FROM application
-			WHERE tenant_id = $1 AND lower(rtrim(repository, '.git')) = lower($2)
-			LIMIT 1`
-		var a domain.Application
-		var rawSelectors []byte
-		var rawOwners []byte
-		found := false
-		err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-			row := tx.QueryRow(ctx, query, tenantID, clean)
-			err := row.Scan(
-				&a.ID, &a.TenantID, &a.HierarchyNodeID, &a.HierarchyPath, &a.Slug, &a.Name,
-				&a.Description, &a.BusinessCriticality, &a.InternetFacing, &a.DataClassification,
-				&a.CompensatingControls, &a.ComplianceScope, &rawSelectors, &a.Lifecycle, &a.Type, &a.Repository, &a.Branch,
-				&a.Environment, &rawOwners, &a.Tags, &a.Version, &a.CreatedAt,
-			)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return nil
-				}
-				return err
-			}
-			found = true
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		if found {
-			if len(rawSelectors) > 0 {
-				_ = json.Unmarshal(rawSelectors, &a.Selectors)
-			}
-			if len(rawOwners) > 0 {
-				_ = json.Unmarshal(rawOwners, &a.Owners)
-			}
-			return &a, nil
+		app, err := s.findOneApplication(ctx, tenantID, `regexp_replace(lower(repository), '\.git$', '') = lower($2)`, clean)
+		if err != nil || app != nil {
+			return app, err
 		}
 	}
-
 	if ref.Selector != nil && len(ref.Selector.MatchLabels) > 0 {
 		var matchTags []string
 		for k, v := range ref.Selector.MatchLabels {
 			matchTags = append(matchTags, k+"="+v)
 		}
-		query := `
-			SELECT id, tenant_id, hierarchy_node_id, coalesce(hierarchy_path, ''), slug, name,
-			       coalesce(description, ''), business_criticality, internet_facing, data_classification,
-			       compensating_controls, compliance_scope, selectors, lifecycle, type, repository, branch,
-			       environment, owners, tags, version, created_at
-			FROM application
-			WHERE tenant_id = $1 AND tags @> $2
-			LIMIT 1`
-		var a domain.Application
-		var rawSelectors []byte
-		var rawOwners []byte
-		found := false
-		err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-			row := tx.QueryRow(ctx, query, tenantID, matchTags)
-			err := row.Scan(
+		return s.findOneApplication(ctx, tenantID, `tags @> $2`, matchTags)
+	}
+	return nil, nil
+}
+
+// findOneApplication returns the one application of the tenant that matches where (with $2 as arg), nil when none does, and
+// domain.ErrAmbiguousApplicationRef when several do.
+func (s *PostgresStore) findOneApplication(ctx context.Context, tenantID uuid.UUID, where string, arg any) (*domain.Application, error) {
+	query := `
+		SELECT id, tenant_id, hierarchy_node_id, coalesce(hierarchy_path, ''), slug, name,
+		       coalesce(description, ''), business_criticality, internet_facing, data_classification,
+		       compensating_controls, compliance_scope, selectors, lifecycle, type, repository, branch,
+		       environment, owners, tags, version, created_at
+		FROM application
+		WHERE tenant_id = $1 AND ` + where + `
+		ORDER BY slug
+		LIMIT 2`
+	var found []domain.Application
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, tenantID, arg)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a domain.Application
+			var rawSelectors, rawOwners []byte
+			if err := rows.Scan(
 				&a.ID, &a.TenantID, &a.HierarchyNodeID, &a.HierarchyPath, &a.Slug, &a.Name,
 				&a.Description, &a.BusinessCriticality, &a.InternetFacing, &a.DataClassification,
 				&a.CompensatingControls, &a.ComplianceScope, &rawSelectors, &a.Lifecycle, &a.Type, &a.Repository, &a.Branch,
 				&a.Environment, &rawOwners, &a.Tags, &a.Version, &a.CreatedAt,
-			)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return nil
-				}
+			); err != nil {
 				return err
 			}
-			found = true
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		if found {
 			if len(rawSelectors) > 0 {
 				_ = json.Unmarshal(rawSelectors, &a.Selectors)
 			}
 			if len(rawOwners) > 0 {
 				_ = json.Unmarshal(rawOwners, &a.Owners)
 			}
-			return &a, nil
+			found = append(found, a)
 		}
+		return rows.Err()
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case len(found) == 0:
+		return nil, nil
+	case len(found) > 1:
+		return nil, fmt.Errorf("%w: %s and %s both match; name the application", domain.ErrAmbiguousApplicationRef, found[0].Slug, found[1].Slug)
 	}
-
-	return nil, nil
+	return &found[0], nil
 }
 
 // SaveScanSourceRecord saves a full ScanSource domain object with application binding and categories.

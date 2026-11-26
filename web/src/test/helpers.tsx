@@ -40,6 +40,9 @@ export interface Scenario {
   upload?: Record<string, unknown> | 404;
   /** GET /integration-packages with null lists, as an old server wrote them. */
   packagesNull?: boolean;
+  /** GET /connectors and GET /integration-packages instead of the defaults; 'error' answers 500. */
+  connectors?: Record<string, unknown>[] | 'error';
+  packages?: Record<string, unknown>[] | 'error';
   feeds?: unknown | 'error';
   /** GET /applications/{id}/changes; `error` answers 500. The query (from, to) of each call is in the calls. */
   appChanges?: unknown | 'error';
@@ -70,7 +73,7 @@ export interface Scenario {
   /** The frameworks and the status of each control (by framework id). 'error' answers 500 on status. */
   taxonomies?: { id: string; name: string; version: string; origin?: string; error?: string }[];
   taxonomyHistory?: string[];
-  taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error';
+  taxonomyStatus?: Record<string, { status: Record<string, unknown>[] }> | 'error' | { refused: string };
   /** GET /api/v1/me/access: roles on single applications (default none). */
   access?: Record<string, string>;
   /** The access bindings GET /api/v1/access-bindings returns; POST and DELETE are recorded in the calls. */
@@ -228,16 +231,6 @@ export function mockFetch(sc: Scenario): Calls {
       if (path.endsWith('/components')) return json({ components: sc.inventory?.components ?? [], total: sc.inventory?.total ?? (sc.inventory?.components ?? []).length, truncated: sc.inventory?.truncated ?? false });
       return json({ assets: sc.inventory?.assets ?? [] });
     }
-    if (path === '/api/v1/inventory/components/scan' && (init?.method ?? 'GET') === 'POST') {
-      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
-      const purl = body.purl || 'pkg:npm/lodash@4.17.20';
-      return json({
-        status: 'started',
-        purl,
-        message: `On-demand vulnerability scan initiated for ${purl}`,
-        scanned_at: new Date().toISOString(),
-      }, 202);
-    }
     if (/^\/api\/v1\/applications\/[^/]+\/components$/.test(path)) {
       return json({
         components: sc.inventory?.components ?? [
@@ -287,8 +280,9 @@ export function mockFetch(sc: Scenario): Calls {
     }
     if (path.startsWith('/api/v1/taxonomies/') && path.endsWith('/status')) {
       if (sc.taxonomyStatus === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if (sc.taxonomyStatus && 'refused' in sc.taxonomyStatus) return json({ type: 'u', title: 'not-found', status: 404, detail: sc.taxonomyStatus.refused }, 404);
       const id = path.split('/')[4] ?? '';
-      const body = sc.taxonomyStatus?.[id] ?? { status: [] };
+      const body = (sc.taxonomyStatus as Record<string, { status: Record<string, unknown>[] }> | undefined)?.[id] ?? { status: [] };
       return json({ id, name: id, version: '1', source: 'https://owasp.org/Top10/', kind: 'cwe', controls: body.status.length, evaluated_at: '2026-11-12T10:00:00Z', window_days: 30, ...body });
     }
     if (path === '/api/v1/me/access') return json({ role: sc.role ?? 'triager', applications: sc.access ?? {} });
@@ -399,21 +393,26 @@ export function mockFetch(sc: Scenario): Calls {
     }
     // Connectors are resources (D82): listed, described and validated, never created here.
     if (path === '/api/v1/connectors') {
+      if (sc.connectors === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if (sc.connectors) return json({ items: sc.connectors });
+      // Each with the catalogue's kind, as GET /api/v1/connectors sends it (docs/50).
       return json({ items: [
-        { name: 'jira-container-binding', type: 'externalTracker', direction: 'bidirectional', enabled: true, managed_by: 'resource',
+        { name: 'jira-container-binding', type: 'externalTracker', kind: 'tracker', direction: 'bidirectional', enabled: true, managed_by: 'resource',
           spec: { externalTracker: { trackerRef: { scope: 'cluster', name: 'jira-tracker' }, defaultProject: 'SEC' } },
           status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connected to jira-tracker' }] } },
-        { name: 'jira-sec', type: 'jira', direction: 'bidirectional', enabled: true, managed_by: 'resource',
+        { name: 'jira-sec', type: 'jira', kind: 'tracker', direction: 'bidirectional', enabled: true, managed_by: 'resource',
           status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connector verified successfully' }] } },
-        { name: 'slack-appsec', type: 'slack', direction: 'outbound', enabled: true, managed_by: 'resource',
+        { name: 'slack-appsec', type: 'slack', kind: 'notifier', direction: 'outbound', enabled: true, managed_by: 'resource',
           status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'PendingVerification', message: 'Connector registered, connection not yet tested' }] } },
-        { name: 'chat-sec', type: 'plugin', direction: 'outbound', enabled: true, managed_by: 'resource', spec: { plugin: { name: 'google-chat' } },
+        { name: 'chat-sec', type: 'plugin', kind: 'notifier', direction: 'outbound', enabled: true, managed_by: 'resource', spec: { plugin: { name: 'google-chat' } },
           status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'NotProbed', message: 'A declarative notifier has no check request; the first delivery tests it' }] } },
       ] });
     }
     // D94: tools installed as data.
     if (path === '/api/v1/integration-packages') {
       // What the server answered before the fix: a parser package with null lists (Go nil slices).
+      if (sc.packages === 'error') return json({ type: 'u', title: 'boom', status: 500 }, 500);
+      if (sc.packages) return json({ items: sc.packages });
       if (sc.packagesNull) return json({ items: [{ name: 'pip-audit', kind: 'parser', runtime: 'mapping', version: '1.0.0', egress: null, secrets: null, config: null, used_by: null, updated_at: '2026-11-16T10:00:00Z' }] });
       return json({ items: [
         { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Google Chat spaces', egress: ['chat.googleapis.com'],

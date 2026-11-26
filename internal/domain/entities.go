@@ -181,6 +181,10 @@ type UploadContext struct {
 	ScanStarted  time.Time `json:"scan_started,omitempty"`
 	ScanFinished time.Time `json:"scan_finished,omitempty"`
 	Tags         []string  `json:"tags,omitempty"`
+	// VEXDecider is who may decide findings through the VEX statements inside this upload: "user:<subject>" when the uploader
+	// holds the triager role or higher, empty otherwise (an ingest or CI token). The gateway always sets it from the
+	// authenticated caller and never takes it from the client (docs/51 step 1.2; /api/v1/vex requires the same role).
+	VEXDecider string `json:"vex_decider,omitempty"`
 }
 
 // IngestStats stores exact metrics for an ingest run (normative D2).
@@ -194,6 +198,10 @@ type IngestStats struct {
 	SkippedMinSeverity int `json:"skipped_min_severity"`
 	RecordErrors       int `json:"record_errors"`
 	WeakFingerprints   int `json:"weak_fingerprints"`
+	// VEXApplied counts the findings a VEX statement inside an SBOM decided; VEXSkipped the statements that decided nothing
+	// because the uploader may not decide, the run is ephemeral, or a person decided later (docs/51 step 1.2).
+	VEXApplied int `json:"vex_applied,omitempty"`
+	VEXSkipped int `json:"vex_skipped,omitempty"`
 }
 
 // IngestRun models a single execution of report ingestion (D2).

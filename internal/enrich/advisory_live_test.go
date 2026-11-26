@@ -2,9 +2,12 @@ package enrich_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
@@ -131,8 +134,11 @@ func TestAdvisoryClient_FetchNVDLive(t *testing.T) {
 	}
 }
 
-func TestFeedSyncer_AdvisoryMode_StoredVsLive(t *testing.T) {
+// docs/51 step 1.5: a page view (Record) never calls upstream, in any mode; the refresh does, except in stored mode.
+func TestAdvisory_RecordNeverFetchesLive_RefreshHonoursStoredMode(t *testing.T) {
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"id": "GHSA-live-1234",
@@ -147,27 +153,86 @@ func TestFeedSyncer_AdvisoryMode_StoredVsLive(t *testing.T) {
 
 	syncer := enrich.NewFeedSyncer(nil)
 	syncer.SetAdvisoryClient(client)
+	live := enrich.NewLiveAdvisory(syncer, nil, "", nil)
 
-	// In Stored mode: must not fetch from network and must return nil without DB pool
+	for _, mode := range []domain.AdvisoryMode{domain.AdvisoryModeStored, domain.AdvisoryModeHybrid, domain.AdvisoryModeLive} {
+		syncer.SetAdvisoryMode(mode)
+		rec, err := live.Record(context.Background(), "GHSA-live-1234")
+		if err != nil || rec != nil {
+			t.Fatalf("%s: Record must read the database only: rec=%+v err=%v", mode, rec, err)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("Record called upstream %d times", n)
+	}
+
 	syncer.SetAdvisoryMode(domain.AdvisoryModeStored)
-	rec, err := syncer.Record(context.Background(), "GHSA-live-1234")
-	if err != nil {
-		t.Fatalf("unexpected error in stored mode: %v", err)
+	if _, err := live.Refresh(context.Background(), "GHSA-live-1234"); !errors.Is(err, enrich.ErrLiveFetchOff) {
+		t.Fatalf("stored mode: err = %v, want ErrLiveFetchOff", err)
 	}
-	if rec != nil {
-		t.Errorf("expected nil in stored mode without DB, got %+v", rec)
+	syncer.SetAdvisoryMode(domain.AdvisoryModeHybrid)
+	rec, err := live.Refresh(context.Background(), "GHSA-live-1234")
+	if err != nil || rec == nil || rec.Description != "Live fetched markdown advisory" {
+		t.Fatalf("hybrid refresh: rec=%+v err=%v", rec, err)
+	}
+	if live.Persists() {
+		t.Fatalf("no system pool was given: nothing may be stored")
 	}
 
-	// In Hybrid mode: missing in DB triggers live fetch and returns synthesized advisory
-	syncer.SetAdvisoryMode(domain.AdvisoryModeHybrid)
-	recHybrid, err := syncer.Record(context.Background(), "GHSA-live-1234")
-	if err != nil {
-		t.Fatalf("unexpected error in hybrid mode: %v", err)
+	// The cooldown: the same id again is refused with how long to wait; after it, it is fetched again.
+	now := time.Now()
+	live.SetClock(func() time.Time { return now })
+	var cool *enrich.RefreshCooldownError
+	if _, err := live.Refresh(context.Background(), "ghsa-live-1234"); !errors.As(err, &cool) || cool.RetryAfter <= 0 {
+		t.Fatalf("within the cooldown: err = %v", err)
 	}
-	if recHybrid == nil {
-		t.Fatal("expected non-nil in hybrid mode")
+	live.SetClock(func() time.Time { return now.Add(enrich.DefaultRefreshCooldown + time.Second) })
+	if _, err := live.Refresh(context.Background(), "GHSA-live-1234"); err != nil {
+		t.Fatalf("after the cooldown: %v", err)
 	}
-	if recHybrid.Description != "Live fetched markdown advisory" {
-		t.Errorf("got description %q", recHybrid.Description)
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("upstream calls = %d, want 2", n)
+	}
+}
+
+// The live NVD call sends the scheduled sync's key, keeps a 4.0 score out of the v3 fields and prefers NVD's Primary.
+func TestAdvisoryClient_FetchNVDLive_KeyPrimaryAndNoV4InV3(t *testing.T) {
+	var gotKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("apiKey")
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("cveId") {
+		case "CVE-2026-0004": // only a 4.0 metric
+			_, _ = w.Write([]byte(`{"vulnerabilities":[{"cve":{"id":"CVE-2026-0004","metrics":{
+				"cvssMetricV40":[{"type":"Primary","cvssData":{"version":"4.0","baseScore":8.7,"vectorString":"CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"}}]}}}]}`))
+		case "CVE-2026-0031": // a CNA's Secondary first, NVD's Primary second
+			_, _ = w.Write([]byte(`{"vulnerabilities":[{"cve":{"id":"CVE-2026-0031","metrics":{
+				"cvssMetricV31":[
+					{"type":"Secondary","cvssData":{"version":"3.1","baseScore":5.3,"vectorString":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"}},
+					{"type":"Primary","cvssData":{"version":"3.1","baseScore":9.8,"vectorString":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}]}}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := enrich.NewAdvisoryClient()
+	client.NVDURL = server.URL
+
+	e, err := client.FetchNVDLive(context.Background(), "CVE-2026-0004", "the-key")
+	if err != nil || e == nil {
+		t.Fatalf("v4 only: %+v %v", e, err)
+	}
+	if gotKey != "the-key" {
+		t.Errorf("apiKey header = %q, want the configured key", gotKey)
+	}
+	if e.CVSSv3Score != 0 || e.CVSSv3Vector != "" {
+		t.Errorf("a 4.0 score was stored in the v3 fields: %v %q", e.CVSSv3Score, e.CVSSv3Vector)
+	}
+	e, err = client.FetchNVDLive(context.Background(), "CVE-2026-0031", "")
+	if err != nil || e == nil || e.CVSSv3Score != 9.8 {
+		t.Fatalf("Primary must be preferred over Secondary: %+v %v", e, err)
+	}
+	if gotKey != "" {
+		t.Errorf("no key configured, yet apiKey = %q", gotKey)
 	}
 }

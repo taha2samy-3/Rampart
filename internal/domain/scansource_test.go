@@ -107,8 +107,9 @@ func TestScanSource_AuthSpecValidation(t *testing.T) {
 		auth := domain.AuthSpec{
 			TokenSecretRef: &domain.SecretRef{Name: "my-sec", Key: "token"},
 			Federation: &domain.FederationSpec{
-				Issuer:      "https://sts.amazonaws.com",
-				BoundClaims: map[string]string{"account_id": "123456789012"},
+				Issuer:          "https://sts.amazonaws.com",
+				BoundClaims:     map[string]string{"account_id": "123456789012"},
+				RepositoryClaim: "repository", RefClaim: "ref",
 			},
 		}
 		if err := auth.Validate(); err != nil {
@@ -122,11 +123,13 @@ func TestScanSource_AuthSpecValidation(t *testing.T) {
 			Federations: []domain.FederationSpec{
 				{
 					Issuer:      "https://token.actions.githubusercontent.com",
-					BoundClaims: map[string]string{"repository_id": "999"},
+					Provider:    "github",
+					BoundClaims: map[string]string{"repository_id": "999", "repository_owner_id": "1"},
 				},
 				{
-					Issuer:      "https://sts.amazonaws.com",
-					BoundClaims: map[string]string{"account_id": "123456789012"},
+					Issuer:          "https://sts.amazonaws.com",
+					BoundClaims:     map[string]string{"account_id": "123456789012"},
+					RepositoryClaim: "repository", RefClaim: "ref",
 				},
 			},
 		}
@@ -157,8 +160,9 @@ func TestScanSource_AuthSpecValidation(t *testing.T) {
 	t.Run("valid universal federation", func(t *testing.T) {
 		auth := domain.AuthSpec{
 			Federation: &domain.FederationSpec{
-				Issuer:      "https://sts.amazonaws.com",
-				BoundClaims: map[string]string{"account_id": "123456789012", "role_arn": "arn:aws:iam::..."},
+				Issuer:          "https://sts.amazonaws.com",
+				BoundClaims:     map[string]string{"account_id": "123456789012", "role_arn": "arn:aws:iam::..."},
+				RepositoryClaim: "repository", RefClaim: "ref", // a generic issuer names the claims that bind the job (D80)
 			},
 		}
 		if err := auth.Validate(); err != nil {
@@ -180,11 +184,11 @@ func TestScanSource_AuthSpecValidation(t *testing.T) {
 }
 
 func TestScanSource_TrustRuleValidation(t *testing.T) {
-	t.Run("generic boundClaims valid for any provider (AWS / Azure)", func(t *testing.T) {
+	t.Run("generic boundClaims valid for any issuer that names its repository and ref claims (AWS / Azure)", func(t *testing.T) {
 		rule := domain.TrustRule{
-			Issuer:      "https://sts.amazonaws.com",
-			Provider:    "aws",
-			BoundClaims: map[string]string{"account_id": "123456789012"},
+			Issuer:          "https://sts.amazonaws.com",
+			BoundClaims:     map[string]string{"account_id": "123456789012"},
+			RepositoryClaim: "repository", RefClaim: "ref",
 		}
 		if err := rule.Validate(); err != nil {
 			t.Fatalf("expected rule with boundClaims to be valid, got: %v", err)
@@ -218,5 +222,30 @@ func TestScanSource_FullLifecycleValidation(t *testing.T) {
 
 	if err := src.Validate(); err != nil {
 		t.Fatalf("expected valid scansource, got: %v", err)
+	}
+}
+
+// docs/51 step 1.3: a boundClaims rule must bind the repository and the ref, and GitHub and GitLab by immutable ids (D22, D80).
+func TestTrustRule_BoundClaimsMustBindRepositoryAndRef(t *testing.T) {
+	bad := []domain.TrustRule{
+		{Issuer: "https://token.actions.githubusercontent.com", BoundClaims: map[string]string{"repository": "acme/payments"}},
+		{Issuer: "https://token.actions.githubusercontent.com", Provider: "github", BoundClaims: map[string]string{"repository": "acme/payments"}},
+		{Issuer: "https://gitlab.com", Provider: "gitlab", BoundClaims: map[string]string{"project_path": "acme/payments"}},
+		{Issuer: "https://sts.example", BoundClaims: map[string]string{"sub": "x"}, RepositoryClaim: "repo"},
+		{Issuer: "https://sts.example", Provider: "bitbucket", BoundClaims: map[string]string{"sub": "x"}},
+	}
+	for i, r := range bad {
+		if err := r.Validate(); err == nil {
+			t.Errorf("rule %d must be refused: %+v", i, r)
+		}
+	}
+	good := []domain.TrustRule{
+		{Issuer: "https://token.actions.githubusercontent.com", Provider: "github", BoundClaims: map[string]string{"repository_id": "1", "repository_owner_id": "2"}},
+		{Issuer: "https://sts.example", BoundClaims: map[string]string{"sub": "x"}, RepositoryClaim: "repo", RefClaim: "branch"},
+	}
+	for i, r := range good {
+		if err := r.Validate(); err != nil {
+			t.Errorf("rule %d must be accepted: %v", i, err)
+		}
 	}
 }

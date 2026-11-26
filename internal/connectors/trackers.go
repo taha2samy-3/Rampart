@@ -871,6 +871,7 @@ type DefaultTrackerResolver struct {
 	client         *SafeClient
 	publicURL      string
 	dialTracker    func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)
+	conns          *TrackerConnections // one gRPC connection per external tracker, closed by Close
 }
 
 type domainConnectorStore interface {
@@ -888,7 +889,19 @@ func NewDefaultTrackerResolver(st domainConnectorStore, secretResolver SecretRes
 		client:         client,
 		publicURL:      publicURL,
 		dialTracker:    trackerclient.Dial,
+		conns:          NewTrackerConnections(),
 	}
+}
+
+// Connections is the resolver's gRPC connection cache, for the inbound webhook handler to share.
+func (r *DefaultTrackerResolver) Connections() *TrackerConnections { return r.conns }
+
+// Close closes every external tracker connection the resolver keeps. The server calls it at shutdown.
+func (r *DefaultTrackerResolver) Close() error {
+	if r.conns == nil {
+		return nil
+	}
+	return r.conns.Close()
 }
 
 // SetTrackerDialer overrides the gRPC dialer used when resolving externalTracker containers (for tests).
@@ -1026,7 +1039,7 @@ func (r *DefaultTrackerResolver) resolveExternalTracker(ctx context.Context, ten
 	if obj.Error != "" {
 		return nil, fmt.Errorf("connector %q: external tracker %q was refused: %s", conn.Name, cfg.TrackerRef.Name, obj.Error)
 	}
-	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	spec, err := parseStoredTracker(obj)
 	if err != nil {
 		return nil, fmt.Errorf("connector %q: invalid external tracker spec %q: %w", conn.Name, cfg.TrackerRef.Name, err)
 	}
@@ -1046,23 +1059,23 @@ func (r *DefaultTrackerResolver) resolveExternalTracker(ctx context.Context, ten
 		secrets[secName] = string(b)
 	}
 
-	dialFn := r.dialTracker
-	if dialFn == nil {
-		dialFn = trackerclient.Dial
+	if r.conns == nil { // a resolver built as a literal (tests)
+		r.conns = NewTrackerConnections()
 	}
-	cli, err := dialFn(trackerclient.DialConfig{
+	// One connection per tracker, reused by every pending ticket and every tenant bound to it (docs/51 step 1.4).
+	cli, err := r.conns.Client(trackerIdentity(obj), trackerclient.DialConfig{
 		Target:  spec.Target(obj.Namespace),
 		Secure:  spec.UseTLS(),
 		Timeout: spec.Timeout(),
-	})
+	}, r.dialTracker)
 	if err != nil {
 		return nil, fmt.Errorf("connector %q: dial external tracker %q: %w", conn.Name, cfg.TrackerRef.Name, err)
 	}
 	t, err := NewGrpcTracker(cfg, cli, secrets, r.publicURL)
 	if err != nil {
-		_ = cli.Close()
 		return nil, err
 	}
+	t.shared = true // the connection belongs to r.conns: CloseClient leaves it open
 	t.SetTenantSlug(slug)
 	t.SetConnectorName(conn.Name)
 	t.SetAcceptedFields(conn.Status.AcceptedFields)

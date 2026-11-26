@@ -2679,6 +2679,67 @@ D143 records the design. These are the choices made while building it that D143 
    - Upgraded dependency chart `rampart-sbom-parsers` to `0.2.0` and Rampart Helm chart to `0.3.23`.
    - Added the visual `NO-BUILTIN` badge to `web/src/components/Logo.tsx` next to the Rampart wordmark, reinforcing the core guarantee that all 16 vulnerability scanners and 4 SBOM readers reach the server dynamically as Kubernetes CRDs.
 
+**Correction (2026-11-26, docs/51 step 1.1).** D147 item 2 says secrets are "strictly redacted before normalization". They were not: `occurrence.raw` kept the parser's record as given and the redaction removed three top-level keys in one branch only. D149 makes it true.
 
+## D149: Secrets are redacted by the core, whatever the parser emits; and CI that hid failing tests (2026-11-26)
 
+**Context.** The review of 2026-11-26 ([docs/51](51-fix-plan-after-review-2026-11-26.md)) found two things that each invalidate a guarantee the project relies on.
+1. The PostgreSQL job of CI ran `go test ... | tee` without `pipefail`, so it took `tee`'s exit code: from 2026-11-11 it passed while the store suite failed (it timed out at 10 minutes under `-race`, and `TestMigrationsAreExpandOnly` failed on 00057).
+2. D42 says a secret is never stored, but since D147 `occurrence.raw` stored a parser's raw record as given, and the WASM host filled an empty raw payload with the whole emitted line, `secret_value` included. Parsers come from outside (D141), so the core cannot rely on them to redact.
 
+**Decision.**
+1. The two `| tee` steps set `pipefail`; the store job has `-timeout 25m` (the suite takes about 5 minutes without the race detector). Not set file-wide: with `pipefail`, `helm template ... | grep -q` can fail on SIGPIPE when `grep -q` exits first. The 00057 marker is fixed (a comment; goose tracks version numbers, not content).
+2. `internal/ingest/redact.go`, applied by the processor to every finding before the merge: a finding of category `secret` keeps no raw payload; for every finding, the keys `secret`, `secret_value`, `secretValue` are removed at any depth, and for a secret finding also `Match`, `Line`, `Raw`, `RawV2`; any string that contains the secret value (four characters or more) becomes `[redacted]`. The WASM host no longer uses the emitted line as the raw payload of a secret finding.
+3. Migration 00058 removes what is stored: the raw record of secret findings and the same keys from `normalized`. It lifts `FORCE ROW LEVEL SECURITY` inside its transaction, because the policy applies to the owner that runs migrations and the UPDATE would otherwise match nothing where the owner is not a superuser (00056's backfill does exactly that).
+
+**Why not trust the parsers.** The first-party parsers redact some fields (`../parsers/wasm/gitleaks` redacts `Secret` and `Match`, not `Line`), and any third-party module may redact none. One rule in the core covers every parser that exists and every one that will.
+
+**Verified.** Unit tests with a hostile record (secret in a nested attribute, a renamed key, the raw payload); the PostgreSQL test of native reports now also checks `normalized` for TruffleHog credentials; the migration applied on PostgreSQL 16. **Not verified:** the number of rows 00058 changes on a real database (run it with a count first on the dev cluster, docs/51 Q3).
+
+## D150: VEX inside an SBOM decides only for someone who may decide (2026-11-26)
+
+**Context.** D148 applied the VEX statements of an SBOM upload to findings with no role check, across the whole application, also from a pull request's ephemeral run, and let an undated statement override a person. `/api/v1/vex` requires the triager role and the application scope (D47). A CI token could therefore set findings to `not_affected`, which the gate and the SLA then ignore.
+
+**Decision.**
+1. The gateway writes `context.vex_decider` on every upload from the authenticated caller ("user:<email or subject>" for the triager role and higher, empty for an ingest, federated or source token) and never takes it from the client.
+2. Without a decider the statements are not applied and are counted (`stats.vex_skipped`); this is the owner's question Q2 of docs/51 answered with the proposal (a CI token never decides). Making them requests a triager approves is left for later.
+3. Only the findings of the uploaded asset; never from an ephemeral run; a statement without a time never overrides a person's decision; a decided finding is scored again, as a triage action is; applied and skipped are counted in the run.
+4. A document with VEX statements and no component is a VEX document whatever its format, so a CycloneDX VEX BOM no longer becomes the asset's newest SBOM with zero components.
+
+**Not done.** CycloneDX statements still take the document's `metadata.timestamp` when the analysis has none, so a CI-built SBOM is "newer" than a person's earlier decision; with item 1 this only matters for a triager's own upload. Per-application roles are not consulted (the tenant role decides, as for the upload itself).
+
+## D151: A federation binds the job to its repository and branch, and removing it revokes it (2026-11-26)
+
+**Context.** docs/48's `ScanSource.auth.federation(s)` with `boundClaims` produced trust rules with no provider. The token exchanged under them was bound only to the commit (D80 binds repository and ref only for GitHub and GitLab), so a feature-branch job could upload as `main`; the rule skipped D22's immutable-id check, so `repository: acme/payments` trusted whoever owns that name next; and the reconciler replaced the stored rules only when the new list was not empty, so a removed federation kept working. `rampart apply` ignored `auth` entirely (two mappings, against D55).
+
+**Decision.** A federation names `provider: github|gitlab` (and then binds `repository_id` and `repository_owner_id`, or `project_id` and `namespace_id`, D22), or for any other issuer names `repositoryClaim` and `refClaim`; a federation that names neither is refused with its reason. The exchanged token is bound to those claims. The operator and `rampart apply` replace the stored rules on every reconcile, with an empty list too, and disabling a source deletes its rules (D21). Migration 00061 adds `source_trust.repository_claim` and `ref_claim`. The CRD (both copies, bundle) and the chart example changed accordingly.
+
+**Consequence.** A federation applied under docs/48 without a provider or claim names is now refused at reconcile (`InvalidFederation`) until it says how the job is bound. That is intended: it was not safe.
+
+## D152: External trackers and the advisory refresh (2026-11-26, recorded after the fact for f1f90f1)
+
+1. **The tracker contract returns.** `pkg/api/tracker/v1` with `ClusterExternalTracker` and `ExternalTracker` (f1f90f1, docs/49) reverses D96 for trackers, and namespaced gRPC trackers amend D94; neither had been recorded. Why: the owner's direction that tools are installed without a core change (docs/19), as analyzers already are (D142, D143).
+2. **A tracker connection uses TLS** unless `tls.insecure: true` is written, because every call carries the tenant's tracker credentials; it was clear text by default. `tls.caSecretRef` and `auth.secretRef` are refused until the server reads Secrets, as for analyzers (D143 item 7).
+3. **A namespaced `ExternalTracker` or `ExternalAnalyzer` names a Service only in its own namespace** (otherwise a tenant could make the server dial any Service in the cluster); checked at reconcile, at apply and again when a stored tracker is used.
+4. **One gRPC connection per tracker**, re-dialled when its spec changes and closed at shutdown; it was one per pending ticket, never closed.
+5. **A ticket reference belongs to its connector**: `FindingHasTicket` and `FindFindingByTicketRef` filter by the connector the webhook came through.
+6. **The advisory refresh** (docs/43, docs/44): a vulnerability page reads only the database; only `POST /vulnerabilities/{id}/refresh` fetches live, with the triager role, one fetch per id at a time and a 5-minute cooldown per id (429, `Retry-After`); it writes through the system role (the application role may not write `vulnerability`, so every write had failed silently), uses the scheduled sync's NVD key, and never echoes the upstream error. The docs/44 sweeper's two bugs are fixed (River priority within 1 to 4; lock and unlock on one connection) but it is **still not wired**, and `ClusterAdvisorySource` is **still read by nothing** (docs/51 Q5; the mode is always hybrid). `POST /inventory/components/scan` answers 501: it re-scored the whole tenant per request and ignored its package.
+
+## D153: Analyses: a held claim, a cooldown that survives, a cap that counts (2026-11-26)
+
+1. While River waits to retry a failed analysis, its row stays `pending` (with the error), so a person or the sweep cannot claim it and run a second merge beside the retry; `failed`/`timed_out` is written on the last attempt. The stale rule (one hour) still frees a row a dead worker left.
+2. Migration 00062 keeps `sbom_analysis.last_manual_at` apart from the trigger the next claim overwrites; the 5-minute cooldown of docs/39 reads it, and covers `POST /assets/{id}/analyze` too (429, `Retry-After`).
+3. The platform cap on manual analyses counts through the system store: on the application role row-level security made it 0, so the 429 never fired. Without `database.systemUrl` the cap is not applied.
+4. A failed dispatch answers 503 instead of "already running or up to date".
+
+## D154: Smaller corrections of the review (2026-11-26)
+
+| Decision | Why |
+|---|---|
+| A report with no findings closes under the parser's name (`trivy`), not its id (`cluster:trivy`). | The findings carry the tool's family; with the id a clean rescan closed nothing. |
+| Migration 00059 rewrites stored `builtin:`/`lua:`/`wasm:` parser ids to `cluster:` and scope families to the tool's name. | D146 removed the code that read the old ids 12 minutes after adding it, so compliance evidence, the gate and "last run" lost every earlier run. |
+| Migration 00060: `scan_source.application_id` is `ON DELETE SET NULL`. | With 00056's cascade and `ingest_run.scan_source_id ON DELETE CASCADE`, deleting an application erased its ingest history (D21, D49). |
+| An `applicationRef` that matches several applications is refused (`AmbiguousApplicationRef`); `.git` is matched as a suffix. | Under D140 one repository has an application per branch, and `LIMIT 1` without an order picked one at random; `rtrim(repository, '.git')` turned `acme/rampart` into `acme/rampar`. |
+| A scan source that cannot be read (other than absent) refuses the upload with 503. | Its application binding and categories are checked from it; the error was ignored and the checks skipped. |
+| The chart's bootstrap Application renders `displayName`, not `name`, `lifecycle` and `tags`; chart 0.3.27. | The CRD prunes fields it does not list. |
+| `/integrations` is retired for `/notifiers`; `GET /api/v1/connectors` items carry `kind`; the UI takes bands from the server; a test refuses colour and size classes outside the theme. | docs/50 as revised: `/notifications` is the inbox (D45); two hard-coded type lists drifted; the UI invented a medium band at 400 and an `info` band, the server's default is 300 with no `info`; 13 files used classes that compile to nothing, so severity had no colour. |

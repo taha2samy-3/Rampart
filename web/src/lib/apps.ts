@@ -10,7 +10,11 @@ export function openText(open: Record<OpenBand, number>, t: TFunction): string {
     .join(', ');
 }
 
-/** The worst band with an open finding, for the shape next to a name. */
+/**
+ * The worst band with an open finding, for the shape next to a name. The bands are the server's own (each finding's
+ * `risk_band`), so this is also the band of an application's score: that score is the highest of its open findings
+ * (D43). Undefined when nothing is open.
+ */
 export function worstBand(open: Record<OpenBand, number>): OpenBand | undefined {
   return ORDER.find((b) => (open[b] ?? 0) > 0);
 }

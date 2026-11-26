@@ -251,6 +251,25 @@ stringData:
 	}, ExternalTrackerConnectorConfig{}},
 }
 
+// The kinds of connector the catalogue knows. The UI files a connector under the page of its kind (trackers on
+// Ticketing, notifiers on Notifiers), so a new type lands where it belongs without a list kept in the UI (docs/50).
+const (
+	ConnectorKindTracker  = "tracker"
+	ConnectorKindNotifier = "notifier"
+	ConnectorKindSource   = "source"
+)
+
+// ConnectorKindOf is the catalogue's kind of a connector type. It is empty for a type the catalogue does not list:
+// a deferred type such as gitlab, which Validate refuses as not supported.
+func ConnectorKindOf(t ConnectorType) string {
+	for _, c := range connectorCatalogue {
+		if c.entry.Type == t {
+			return c.entry.Kind
+		}
+	}
+	return ""
+}
+
 // ConnectorCatalogue lists the connector types this build supports, with their schemas (D82).
 func ConnectorCatalogue() []ConnectorCatalogueEntry {
 	out := make([]ConnectorCatalogueEntry, 0, len(connectorCatalogue))

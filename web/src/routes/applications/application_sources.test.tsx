@@ -74,11 +74,10 @@ describe('Application Sources & Pipelines Tab', () => {
     // Source 1 checks
     expect(screen.getByText('checkout-ci')).toBeInTheDocument();
     expect(screen.getByText('(semgrep)')).toBeInTheDocument();
-    expect(screen.getByText('Token + OIDC Federation')).toBeInTheDocument();
+    expect(screen.getByText('Token and OIDC federation')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('14')).toBeInTheDocument();
-    expect(screen.getByText('sast')).toBeInTheDocument();
-    expect(screen.getByText('sca')).toBeInTheDocument();
+    expect(screen.getByText(/^sast, sca/)).toBeInTheDocument();
 
     // Source 2 checks
     expect(screen.getByText('dast-scheduled')).toBeInTheDocument();

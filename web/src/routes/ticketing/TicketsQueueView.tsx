@@ -34,9 +34,8 @@ export function TicketsQueueView() {
   return (
     <div className="mt-4 space-y-8">
       <section aria-labelledby="tq-outbox-heading">
-        <div className="mb-2 flex items-baseline justify-between">
+        <div className="mb-2">
           <h2 id="tq-outbox-heading" className="text-14 font-semibold text-ink">Outbox Queue</h2>
-          <span className="text-12 text-ink-2">Live updates via SSE</span>
         </div>
         {data.outbox.length === 0 ? (
           <EmptyState title="Outbox is clear">No pending or failed ticket creations in the queue.</EmptyState>

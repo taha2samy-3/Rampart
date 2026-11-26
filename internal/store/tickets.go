@@ -24,7 +24,7 @@ type Tickets interface {
 	CreateTicket(ctx context.Context, tenantID uuid.UUID, t *domain.Ticket) (*domain.Ticket, error)
 	LinkFinding(ctx context.Context, tenantID, ticketID, findingID uuid.UUID) error
 	TicketsOfFinding(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.Ticket, error)
-	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error)
+	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef string) (bool, error)
 	SetTicketState(ctx context.Context, tenantID, ticketID uuid.UUID, state string) error
 	CountTicketsCreatedSince(ctx context.Context, tenantID uuid.UUID, connector string, since time.Time) (int, error)
 	RecordWebhookDelivery(ctx context.Context, tenantID uuid.UUID, connector, deliveryID string, expiresAt time.Time) (bool, error)
@@ -44,7 +44,7 @@ type TicketOutbox interface {
 	SkipTicket(ctx context.Context, tenantID, findingID uuid.UUID, reason string) error
 	// FindingHasTicket says whether a ticket with this reference was opened for the finding. It is what ties a ticket
 	// that comes back in a webhook to a finding.
-	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error)
+	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef string) (bool, error)
 }
 
 var ticketAction = domain.ActionCreateTicket
@@ -237,7 +237,9 @@ func (s *PostgresStore) SkipTicket(ctx context.Context, tenantID, findingID uuid
 	})
 }
 
-func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error) {
+// FindingHasTicket says whether the connector opened a ticket with this reference for the finding. connector "" accepts any;
+// a webhook passes its own, so a ticket "123" of one tracker never answers for another tracker's "123" (docs/51 step 2.11).
+func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef string) (bool, error) {
 	if ticketRef == "" {
 		return false, nil
 	}
@@ -247,8 +249,8 @@ func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingI
 		err := tx.QueryRow(ctx, `SELECT EXISTS (
 			SELECT 1 FROM ticket_finding tf
 			JOIN ticket t ON t.tenant_id = tf.tenant_id AND t.id = tf.ticket_id
-			WHERE tf.tenant_id = $1 AND tf.finding_id = $2 AND t.external_ref = $3
-		)`, tenantID, findingID, ticketRef).Scan(&ok)
+			WHERE tf.tenant_id = $1 AND tf.finding_id = $2 AND t.external_ref = $3 AND ($4 = '' OR t.connector = $4)
+		)`, tenantID, findingID, ticketRef, connector).Scan(&ok)
 		if err != nil {
 			return err
 		}
@@ -259,8 +261,8 @@ func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingI
 		return tx.QueryRow(ctx, `SELECT EXISTS (
 			SELECT 1 FROM action_ledger
 			WHERE tenant_id = $1 AND finding_id = $2 AND action = $3
-			AND status = 'done' AND result->>'ticket_id' = $4
-		)`, tenantID, findingID, ticketAction, ticketRef).Scan(&ok)
+			AND status = 'done' AND result->>'ticket_id' = $4 AND ($5 = '' OR result->>'connector' = $5)
+		)`, tenantID, findingID, ticketAction, ticketRef, connector).Scan(&ok)
 	})
 	return ok, err
 }
@@ -291,8 +293,9 @@ func (s *PostgresStore) FindFindingByTicketRef(ctx context.Context, tenantID uui
 			SELECT finding_id
 			  FROM action_ledger
 			 WHERE tenant_id = $1 AND action = $2 AND status = 'done' AND result->>'ticket_id' = $3
+			   AND ($4 = '' OR result->>'connector' = $4)
 			 ORDER BY updated_at DESC LIMIT 1`,
-			tenantID, ticketAction, ticketRef).Scan(&findingID)
+			tenantID, ticketAction, ticketRef, connector).Scan(&findingID)
 		if err == pgx.ErrNoRows {
 			return nil
 		}

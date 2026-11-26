@@ -1,7 +1,7 @@
 import type { ComponentType, SVGProps } from 'react';
 import {
-  IconAdmin, IconApplications, IconCompliance, IconFeeds, IconFindings, IconIngestion, IconIntegrations,
-  IconInventory, IconOverview, IconParsers, IconPolicies, IconTicketing, IconVulnerabilities, IconWorkflow,
+  IconAdmin, IconApplications, IconCompliance, IconFeeds, IconFindings, IconIngestion, IconInventory,
+  IconNotifiers, IconOverview, IconParsers, IconPolicies, IconTicketing, IconVulnerabilities, IconWorkflow,
 } from '@/components/icons';
 
 export interface NavItem {
@@ -32,7 +32,7 @@ export const NAV_GROUPS: NavItem[][] = [
     { id: 'policies', path: '/policies', icon: IconPolicies, phase: 2, what: 'Risk and SLA policies; automation rules and exceptions follow in Phase 5.' },
     { id: 'feeds', path: '/feeds', icon: IconFeeds, phase: 3, what: 'Where vulnerability data comes from, and when each source last synced.' },
     { id: 'ticketing', path: '/ticketing', icon: IconTicketing, phase: 3, what: 'External tracker containers, bindings, and ticket delivery.' },
-    { id: 'integrations', path: '/integrations', icon: IconIntegrations, phase: 3, what: 'Notifiers, sources, installed packages and API tokens.' },
+    { id: 'notifiers', path: '/notifiers', icon: IconNotifiers, phase: 3, what: 'Where Rampart sends messages: Slack, Teams, email, webhooks and notifier packages.' },
     { id: 'administration', path: '/administration', icon: IconAdmin, phase: 2, what: 'Users, teams, access bindings and the audit log; identity providers follow in Phase 4.' },
   ],
 ];

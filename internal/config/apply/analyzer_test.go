@@ -50,13 +50,14 @@ func TestApplyRefusesAnAnalyzerTheServerCannotUseAndStoresItWithTheReason(t *tes
 		"kind: ExternalAnalyzer\nmetadata: {name: ssrf, namespace: acme-ns}\nspec: {endpoint: '169.254.169.254:80'}",
 		"kind: ClusterExternalAnalyzer\nmetadata: {name: web}\nspec: {protocol: http, endpoint: 'a:1'}",
 		"kind: ClusterSBOMAnalyzer\nmetadata: {name: bad}\nspec: {engine: magic}",
+		"kind: ExternalAnalyzer\nmetadata: {name: elsewhere, namespace: acme-ns}\nspec: {service: {name: a, namespace: rampart-system, port: 1}}",
 	} {
 		if _, err := ap.ApplyDocument(ctx, []byte("apiVersion: rampart.aspm.dev/v1alpha1\n"+d)); err == nil || !strings.Contains(err.Error(), "not applied") {
 			t.Errorf("a refused analyzer must be reported as stored and not applied, got %v for %s", err, d)
 		}
 	}
 	list, _ := store.ListAnalyzers(ctx, tn.ID)
-	if len(list) != 3 {
+	if len(list) != 4 {
 		t.Fatalf("a refused analyzer is still listed, so the screen can say why: %+v", list)
 	}
 	for _, a := range list {

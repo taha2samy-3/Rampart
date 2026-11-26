@@ -95,7 +95,7 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 	}
 	for _, secret := range []string{"wJalrXUtnFEMI", "ghp_7f3a9c1e5b2d48f6", "xoxb-EXAMPLE-TOKEN"} {
 		var n int
-		_ = h.pool.QueryRow(ctx, `SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND raw::text LIKE '%'||$2||'%'`, h.tenant, secret).Scan(&n)
+		_ = h.pool.QueryRow(ctx, `SELECT count(*) FROM occurrence WHERE tenant_id = $1 AND (raw::text LIKE '%'||$2||'%' OR normalized::text LIKE '%'||$2||'%')`, h.tenant, secret).Scan(&n)
 		if n != 0 {
 			t.Fatalf("SECURITY VIOLATION: a TruffleHog credential (%s...) is stored", secret[:5])
 		}

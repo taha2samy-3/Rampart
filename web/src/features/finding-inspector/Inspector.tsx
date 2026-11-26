@@ -43,7 +43,7 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
         <Link
           to="/findings/$id"
           params={{ id: f.id }}
-          className="shrink-0 rounded border border-rule px-2 py-0.5 text-11 font-medium text-accent hover:bg-chrome inline-flex items-center gap-1"
+          className="shrink-0 rounded border border-rule px-2 py-0.5 text-12 font-medium text-accent hover:bg-chrome inline-flex items-center gap-1"
           title="Open full finding details page"
         >
           Full page ↗
@@ -72,10 +72,9 @@ export function Inspector({ row, selectedId, onTriage, onAccept, onEdit }: { row
       )}
       {f.risk_acceptance_id && <AcceptedLine id={f.risk_acceptance_id} />}
       {f.state === 'not_affected' && (
-        <div className="mt-3 rounded border border-success/30 bg-success/10 p-2.5 text-12 text-ink">
-          <div className="flex items-center gap-1.5 font-semibold text-success">
-            <span className="size-2 rounded-full bg-success" />
-            <span>VEX Assessment: Not Affected</span>
+        <div className="mt-3 border-s-2 border-resolved ps-2.5 text-12 text-ink">
+          <div className="flex items-center gap-1.5 font-semibold text-ink">
+            <span>VEX assessment: not affected</span>
           </div>
           {f.justification && (
             <p className="mt-1 mb-0 text-ink-2">

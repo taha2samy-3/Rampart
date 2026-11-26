@@ -2422,7 +2422,7 @@ func (m *MemoryStore) SkipTicket(ctx context.Context, tenantID, findingID uuid.U
 	return nil
 }
 
-func (m *MemoryStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error) {
+func (m *MemoryStore) FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, _ /* connector */, ticketRef string) (bool, error) {
 	return false, nil
 }
 

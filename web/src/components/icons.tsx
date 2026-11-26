@@ -89,8 +89,9 @@ export const IconParsers = (p: P) => (
 export const IconFeeds = (p: P) => (
   <svg {...base(p)}><path d="M3 4.5C3 3.4 5.2 2.5 8 2.5s5 .9 5 2-2.2 2-5 2-5-.9-5-2ZM3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" /></svg>
 );
-export const IconIntegrations = (p: P) => (
-  <svg {...base(p)}><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7V8a3.5 3.5 0 0 1-7 0ZM8 11.5v2" /></svg>
+/** Notifiers: a message sent out. Not the bell, which is the person's own inbox in the top bar. */
+export const IconNotifiers = (p: P) => (
+  <svg {...base(p)}><path d="M13.5 2.5 2.5 7l4.25 2.25L9 13.5Z" /><path d="m6.75 9.25 6.75-6.75" /></svg>
 );
 export const IconTicketing = (p: P) => (
   <svg {...base(p)}><path d="M2.5 4.5h11v2.25a1.25 1.25 0 0 0 0 2.5V11.5h-11V9.25a1.25 1.25 0 0 0 0-2.5Z" /><path d="M6.5 4.5v7M9.5 6.75h2M9.5 9.25h2" /></svg>

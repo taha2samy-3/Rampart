@@ -86,7 +86,7 @@ function stubGraph(body: unknown, status = 200) {
 }
 
 describe('Application Route: Tags, Licenses & Dependency Graph Tabs', () => {
-  it('renders application version and tags as pill badges in header', async () => {
+  it('renders application version and tags in the header, as plain text', async () => {
     mockFetch({
       loggedIn: true,
       appPages: { [APP_ID]: appWithTags },
@@ -97,9 +97,7 @@ describe('Application Route: Tags, Licenses & Dependency Graph Tabs', () => {
 
     expect(await screen.findByText('Rampart Demo App')).toBeInTheDocument();
     expect(screen.getByText('v1.4.0')).toBeInTheDocument();
-    expect(screen.getByText('#production')).toBeInTheDocument();
-    expect(screen.getByText('#backend')).toBeInTheDocument();
-    expect(screen.getByText('#pci-dss')).toBeInTheDocument();
+    expect(screen.getByText('production, backend, pci-dss')).toBeInTheDocument();
   });
 
   it('navigates to Licenses tab and groups components by license and risk', async () => {

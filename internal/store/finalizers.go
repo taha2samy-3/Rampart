@@ -37,6 +37,10 @@ func (s *PostgresStore) DisableScanSource(ctx context.Context, tenantID uuid.UUI
 			return err
 		}
 		revoked = int(tag.RowsAffected())
+		// Its CI trust goes with it: no new token can be exchanged for a disabled source (D21, docs/51 step 1.3).
+		if _, err := tx.Exec(ctx, `DELETE FROM source_trust WHERE tenant_id = $1 AND scan_source_id = $2`, tenantID, id); err != nil {
+			return err
+		}
 		// The material the operator copied for this source (its keys are scansource:<name>:<key>).
 		_, err = tx.Exec(ctx, `DELETE FROM secret_material WHERE tenant_id = $1 AND key LIKE $2 ESCAPE '\'`, tenantID, likeEscape("scansource:"+name+":")+"%")
 		return err

@@ -51,7 +51,7 @@ func TestGroupAndCorrelationTickets_OnPostgreSQL(t *testing.T) {
 		return f
 	}
 	has := func(f uuid.UUID, ref string) bool {
-		b, err := appStore.FindingHasTicket(ctx, tn.ID, f, ref)
+		b, err := appStore.FindingHasTicket(ctx, tn.ID, f, "", ref)
 		if err != nil {
 			t.Fatal(err)
 		}

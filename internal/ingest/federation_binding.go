@@ -21,10 +21,11 @@ const (
 // federated token was issued for.
 var ErrContextMismatch = errors.New("upload context does not match the CI token")
 
-// federationBindings derives the binding scopes from the verified claims of a GitHub or GitLab ID token.
-func federationBindings(provider, issuer string, claims map[string]any) []string {
+// federationBindings derives the binding scopes from the verified claims of the token a rule matched: the provider's own claims
+// for GitHub and GitLab, or the claims the rule names (RepositoryClaim, RefClaim) for any other issuer (docs/51 step 1.3).
+func federationBindings(rule domain.TrustRule, issuer string, claims map[string]any) []string {
 	var out []string
-	switch provider {
+	switch rule.Provider {
 	case "github":
 		if repo := claimStr(claims, "repository"); repo != "" {
 			if server := githubServer(issuer); server != "" {
@@ -45,6 +46,17 @@ func federationBindings(provider, issuer string, claims map[string]any) []string
 				ref = "refs/tags/" + ref
 			}
 			out = append(out, bindRefPrefix+ref)
+		}
+	default:
+		if c := strings.TrimSpace(rule.RepositoryClaim); c != "" {
+			if repo := claimStr(claims, c); repo != "" {
+				out = append(out, bindRepoPrefix+repo)
+			}
+		}
+		if c := strings.TrimSpace(rule.RefClaim); c != "" {
+			if ref := claimStr(claims, c); ref != "" {
+				out = append(out, bindRefPrefix+ref)
+			}
 		}
 	}
 	if sha := claimStr(claims, "sha"); sha != "" {

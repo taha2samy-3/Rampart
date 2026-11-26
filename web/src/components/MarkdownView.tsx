@@ -37,7 +37,7 @@ function renderInline(text: string): React.ReactNode[] {
       nodes.push(
         <code
           key={`code-${match.index}`}
-          className="rounded border border-rule bg-layer-2 px-1 py-0.5 font-mono text-12 text-ink"
+          className="rounded border border-rule bg-chrome px-1 py-0.5 font-mono text-12 text-ink"
         >
           {inlineCode}
         </code>
@@ -271,7 +271,7 @@ export function MarkdownView({ content, className }: MarkdownViewProps) {
             return (
               <pre
                 key={idx}
-                className="my-2 max-h-80 overflow-x-auto rounded border border-rule bg-layer-2 p-3 font-mono text-12 leading-relaxed text-ink"
+                className="my-2 max-h-80 overflow-x-auto rounded border border-rule bg-chrome p-3 font-mono text-12 leading-relaxed text-ink"
               >
                 <code>{block.code}</code>
               </pre>

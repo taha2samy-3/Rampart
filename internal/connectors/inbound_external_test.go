@@ -21,7 +21,7 @@ type externalVerifier struct {
 	ref       string
 }
 
-func (v externalVerifier) FindingHasTicket(_ context.Context, _, finding uuid.UUID, ref string) (bool, error) {
+func (v externalVerifier) FindingHasTicket(_ context.Context, _, finding uuid.UUID, _, ref string) (bool, error) {
 	return finding == v.findingID && ref == v.ref, nil
 }
 

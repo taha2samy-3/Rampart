@@ -124,7 +124,7 @@ func TestTicketOutbox_OnPostgreSQL(t *testing.T) {
 		t.Fatalf("a ticket already opened is not opened again: %d calls", tr.calls)
 	}
 	has := func(f uuid.UUID, ref string) bool {
-		b, err := appStore.FindingHasTicket(ctx, tn.ID, f, ref)
+		b, err := appStore.FindingHasTicket(ctx, tn.ID, f, "", ref)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -258,10 +258,17 @@ func TestTicketTable_MultiTracker_Grouping_Reactivation_OnPostgreSQL(t *testing.
 	if err := appStore.LinkFinding(ctx, tnA.ID, tJira.ID, f2.ID); err != nil {
 		t.Fatalf("LinkFinding f2 -> tJira failed: %v", err)
 	}
-	hasF1Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-101")
-	hasF2Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f2.ID, "SEC-101")
+	hasF1Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "", "SEC-101")
+	hasF2Jira, _ := appStore.FindingHasTicket(ctx, tnA.ID, f2.ID, "", "SEC-101")
 	if !hasF1Jira || !hasF2Jira {
 		t.Fatalf("one ticket covers both findings: f1=%v, f2=%v", hasF1Jira, hasF2Jira)
+	}
+	// docs/51 step 2.11: the reference belongs to the connector that opened it; another tracker's "SEC-101" is not this ticket.
+	if own, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "jira", "SEC-101"); !own {
+		t.Fatal("the connector that opened the ticket finds it")
+	}
+	if other, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "other-tracker", "SEC-101"); other {
+		t.Fatal("a webhook of another connector must not act on this ticket")
 	}
 
 	// 3. Reactivated finding: f1 is fixed, then later a new ticket JIRA-2 is opened
@@ -280,13 +287,13 @@ func TestTicketTable_MultiTracker_Grouping_Reactivation_OnPostgreSQL(t *testing.
 	if err := appStore.LinkFinding(ctx, tnA.ID, tJira2.ID, f1.ID); err != nil {
 		t.Fatalf("LinkFinding f1 -> tJira2 failed: %v", err)
 	}
-	hasReactivated, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-202")
+	hasReactivated, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "", "SEC-202")
 	if !hasReactivated {
 		t.Fatal("reactivated finding has new ticket SEC-202")
 	}
 
 	// 4. Verifier answers per ticket
-	hasUnknown, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "SEC-999")
+	hasUnknown, _ := appStore.FindingHasTicket(ctx, tnA.ID, f1.ID, "", "SEC-999")
 	if hasUnknown {
 		t.Fatal("unknown ticket must answer false")
 	}
@@ -299,7 +306,7 @@ func TestTicketTable_MultiTracker_Grouping_Reactivation_OnPostgreSQL(t *testing.
 	if len(ticketsB) != 0 {
 		t.Fatalf("tenant isolation broken: tenantB saw tenantA tickets: %d", len(ticketsB))
 	}
-	hasB, _ := appStore.FindingHasTicket(ctx, tnB.ID, f1.ID, "SEC-101")
+	hasB, _ := appStore.FindingHasTicket(ctx, tnB.ID, f1.ID, "", "SEC-101")
 	if hasB {
 		t.Fatal("tenantB must not verify tenantA's ticket")
 	}
@@ -353,7 +360,7 @@ func TestProcessTickets_LookupBeforeRetry_OnPostgreSQL(t *testing.T) {
 	if failingTracker.createCalls != 1 {
 		t.Fatalf("expected exactly 1 CreateIssue call, got %d", failingTracker.createCalls)
 	}
-	has, _ := appStore.FindingHasTicket(ctx, tn.ID, f.ID, "SEC-AMBIGUOUS-1")
+	has, _ := appStore.FindingHasTicket(ctx, tn.ID, f.ID, "", "SEC-AMBIGUOUS-1")
 	if !has {
 		t.Fatal("expected ticket to be recorded via FindIssueByLabel")
 	}

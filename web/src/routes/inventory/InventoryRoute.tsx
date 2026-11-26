@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { get, post, qk, toProblem } from '@/api';
+import { get, qk, toProblem } from '@/api';
 import type { InventoryAsset } from '@/api/types';
 import {
-  Button,
   EmptyState,
-  IconRefresh,
   Input,
   ProblemMessage,
   Spinner,
@@ -43,8 +41,6 @@ export function InventoryRoute() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<'assets' | 'components'>('assets');
   const [search, setSearch] = useState('');
-  const [scanningPurl, setScanningPurl] = useState<string | null>(null);
-  const [scanFeedback, setScanFeedback] = useState<{ purl: string; message: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     document.title = `${t('nav.inventory', { defaultValue: 'Inventory' })} · Rampart`;
@@ -66,34 +62,6 @@ export function InventoryRoute() {
       return { rows: res.components ?? [], total: res.total ?? (res.components ?? []).length, truncated: res.truncated ?? false };
     },
   });
-
-  const handleScanComponent = async (c: ComponentRow) => {
-    try {
-      setScanningPurl(c.purl);
-      const res = await post<{ status: string; message: string; purl: string }>('/api/v1/inventory/components/scan', {
-        purl: c.purl,
-        name: c.name,
-        version: c.version,
-        asset_id: c.asset_id,
-        force: true,
-      });
-      setScanFeedback({
-        purl: c.purl,
-        message: res.message || t('inventory.scanInitiated', { name: c.name, defaultValue: `On-demand scan initiated for ${c.name}` }),
-        ok: true,
-      });
-      void componentsQuery.refetch();
-    } catch (err) {
-      const prob = toProblem(err);
-      setScanFeedback({
-        purl: c.purl,
-        message: prob.detail || t('inventory.scanFailed', { name: c.name, defaultValue: `Failed to initiate scan for ${c.name}` }),
-        ok: false,
-      });
-    } finally {
-      setScanningPurl(null);
-    }
-  };
 
   const components = componentsQuery.data?.rows ?? [];
   const lowerSearch = search.trim().toLowerCase();
@@ -198,26 +166,6 @@ export function InventoryRoute() {
         </TabsContent>
 
         <TabsContent value="components" className="flex flex-col gap-4">
-          {scanFeedback && (
-            <div
-              role="status"
-              className={`flex items-center justify-between rounded border px-3 py-2 text-12 font-medium ${
-                scanFeedback.ok
-                  ? 'border-resolved/20 bg-resolved/10 text-resolved'
-                  : 'border-critical/20 bg-critical/10 text-critical'
-              }`}
-            >
-              <span>{scanFeedback.message}</span>
-              <button
-                type="button"
-                onClick={() => setScanFeedback(null)}
-                className="ml-2 text-12 opacity-70 hover:opacity-100"
-                aria-label="Dismiss scan status"
-              >
-                ✕
-              </button>
-            </div>
-          )}
           {componentsQuery.isLoading ? (
             <div className="flex h-48 items-center justify-center">
               <Spinner />
@@ -246,7 +194,6 @@ export function InventoryRoute() {
                   <Th>Track</Th>
                   <Th>License</Th>
                   <Th align="end">Vulnerabilities</Th>
-                  <Th align="end">Actions</Th>
                 </tr>
               </THead>
               <TBody>
@@ -274,23 +221,6 @@ export function InventoryRoute() {
                       >
                         {c.vulnerabilities > 0 ? `${c.vulnerabilities} open` : 'Clean'}
                       </Link>
-                    </Td>
-                    <Td align="end">
-                      <Button
-                        variant="ghost"
-                        disabled={scanningPurl !== null}
-                        loading={scanningPurl === c.purl}
-                        onClick={() => void handleScanComponent(c)}
-                        className="h-7 px-2.5 text-12 flex items-center gap-1 text-accent hover:text-accent hover:bg-accent/10"
-                        title={t('inventory.scanNowTooltip', {
-                          name: c.name,
-                          defaultValue: `Force on-demand vulnerability scan for ${c.name}`,
-                        })}
-                        aria-label={`Scan ${c.name}`}
-                      >
-                        <IconRefresh className="size-3" />
-                        <span>{t('inventory.scanNow', { defaultValue: 'Scan Now' })}</span>
-                      </Button>
                     </Td>
                   </Tr>
                 ))}

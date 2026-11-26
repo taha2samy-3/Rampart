@@ -248,6 +248,12 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	// Issue tracking for critical findings (D66, D70): the merge reserves the ticket, the sweeper below opens it.
 	trackerResolver := connectors.NewDefaultTrackerResolver(storeBackend, secretResolver, safeClient, r.cfg.Server.PublicURL)
+	// docs/51 step 1.4: the resolver keeps one gRPC connection per external tracker; they are closed at shutdown.
+	defer func() {
+		if err := trackerResolver.Close(); err != nil {
+			r.logger.Warn("tickets: closing the external tracker connections failed", "error", err)
+		}
+	}()
 
 	var queue jobs.JobQueue = jobs.NewInMemJobQueue()
 	// Notifications are one job per connector and message (docs/23 K4, D97): the worker resolves the connector and
@@ -329,7 +335,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	wfService := workflow.New(storeBackend)
 	wfService.SetScorer(scorer)
 	inboundHandler := connectors.NewInboundWebhookHandler(storeBackend, wfService, secretResolver).
-		WithSettings(storeBackend).WithLogger(r.logger).WithRateLimit(r.cfg.Limits.WebhookPerMinute)
+		WithSettings(storeBackend).WithLogger(r.logger).WithRateLimit(r.cfg.Limits.WebhookPerMinute).
+		WithTrackerConnections(trackerResolver.Connections()) // docs/51 step 1.4: no dial per webhook
 	if pgStore != nil { // a ticket is tied to its finding by the outbox, which only PostgreSQL has
 		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
 	}
@@ -353,10 +360,29 @@ func (r *Runner) Run(ctx context.Context) error {
 		hub := query.NewLiveHub(sysStore, r.logger)
 		queryAPI.SetLiveHub(hub)
 		go hub.Run(ctx)
+		// The platform cap on manual analyses counts every tenant, which only the system role can see (docs/51 step 2.1).
+		queryAPI.SetInFlightCounter(sysStore)
 	}
 	// KEV and EPSS come from the global vulnerability table, which the feed sync fills (D19).
+	// docs/51 step 1.5: page views read the table only; the "Refresh" button fetches live (triager, single flight,
+	// cooldown) and stores the result as the system role, which may write the global table. Without database.systemUrl
+	// the live result is shown but not stored. The live NVD call uses the scheduled sync's key (feeds.nvdApiKeyFile).
 	if pgStore != nil {
-		queryAPI.SetIntelSource(enrich.NewFeedSyncer(pgStore.Pool()))
+		var livePool *pgxpool.Pool
+		if sysStore != nil {
+			livePool = sysStore.Pool()
+		} else {
+			r.logger.Warn("vulnerability refresh: database.systemUrl is not set, so a live advisory is shown but not stored")
+		}
+		liveNVDKey := ""
+		if r.cfg.Feeds.NVDAPIKeyFile != "" {
+			if key, kerr := readSecretFile(r.cfg.Feeds.NVDAPIKeyFile); kerr == nil {
+				liveNVDKey = strings.TrimSpace(string(key))
+			} else {
+				r.logger.Warn("feeds.nvdApiKeyFile could not be read; the vulnerability refresh calls NVD at the keyless rate", "err", kerr)
+			}
+		}
+		queryAPI.SetIntelSource(enrich.NewLiveAdvisory(enrich.NewFeedSyncer(pgStore.Pool()), livePool, liveNVDKey, r.logger))
 	}
 	// Findings whose SLA has run out are marked every 15 minutes (docs/06 section 4).
 	{

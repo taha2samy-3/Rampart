@@ -203,10 +203,12 @@ func TestScanSourceReconciler_Auth_Federation(t *testing.T) {
 			Categories:     []string{"sast", "sca"},
 			Auth: domain.AuthSpec{
 				Federation: &domain.FederationSpec{
-					Issuer: "https://token.actions.githubusercontent.com",
+					Issuer:   "https://token.actions.githubusercontent.com",
+					Provider: "github",
 					BoundClaims: map[string]string{
-						"repository": "acme/payments",
-						"ref":        "refs/heads/main",
+						"repository_id":       "123",
+						"repository_owner_id": "456",
+						"ref":                 "refs/heads/main",
 					},
 				},
 			},
@@ -354,11 +356,13 @@ func TestScanSourceReconciler_MultiAuth_TokenAndFederations(t *testing.T) {
 				Federations: []domain.FederationSpec{
 					{
 						Issuer:      "https://token.actions.githubusercontent.com",
-						BoundClaims: map[string]string{"repository_id": "111"},
+						Provider:    "github",
+						BoundClaims: map[string]string{"repository_id": "111", "repository_owner_id": "1"},
 					},
 					{
-						Issuer:      "https://sts.amazonaws.com",
-						BoundClaims: map[string]string{"account_id": "222"},
+						Issuer:          "https://sts.amazonaws.com",
+						BoundClaims:     map[string]string{"account_id": "222"},
+						RepositoryClaim: "repository", RefClaim: "ref",
 					},
 				},
 			},
@@ -372,5 +376,42 @@ func TestScanSourceReconciler_MultiAuth_TokenAndFederations(t *testing.T) {
 	cond := status.GetCondition("Ready")
 	if cond == nil || cond.Status != "True" || cond.Reason != "Reconciled" {
 		t.Fatalf("expected Ready=True/Reconciled, got %+v", cond)
+	}
+}
+
+// docs/51 step 1.3: removing the federation from a ScanSource revokes it. Before, the reconciler saved rules only when there were
+// some, so the old row stayed and CI could still exchange tokens.
+func TestScanSourceReconciler_RemovedFederationIsRevoked(t *testing.T) {
+	ctx := context.Background()
+	op, store, secrets, tn := setupOperatorBindingTest(t)
+	secrets.Secrets["core-ns/ci-pat:token"] = []byte("rpt_example")
+	_ = store.SaveApplication(ctx, domain.Application{ID: domain.NewID(), TenantID: tn.ID, Slug: "rev-app", Name: "rev-app", Version: 1, CreatedAt: time.Now().UTC()})
+
+	cr := &operator.ScanSourceCR{
+		Metadata: operator.Metadata{Name: "rev-src", Namespace: "core-ns"},
+		Spec: operator.ScanSourceSpec{
+			ApplicationRef: domain.ApplicationRef{Name: "rev-app"},
+			Categories:     []string{"sast"},
+			Auth: domain.AuthSpec{
+				Federation: &domain.FederationSpec{
+					Issuer: "https://token.actions.githubusercontent.com", Provider: "github",
+					BoundClaims: map[string]string{"repository_id": "1", "repository_owner_id": "2"},
+				},
+			},
+		},
+	}
+	if st, err := op.ReconcileScanSource(ctx, cr); err != nil || st.GetCondition("Ready").Status != "True" {
+		t.Fatalf("reconcile: %v %+v", err, st.GetCondition("Ready"))
+	}
+	if rules, _ := store.ListTrustRules(ctx, tn.ID); len(rules) != 1 || rules[0].Rule.Provider != "github" {
+		t.Fatalf("want the one federation stored with its provider, got %+v", rules)
+	}
+	cr.Spec.Auth.Federation = nil
+	cr.Spec.Auth.TokenSecretRef = &domain.SecretRef{Name: "ci-pat", Key: "token"} // auth still has one mode
+	if st, err := op.ReconcileScanSource(ctx, cr); err != nil || st.GetCondition("Ready").Status != "True" {
+		t.Fatalf("reconcile without the federation: %v %+v", err, st.GetCondition("Ready"))
+	}
+	if rules, _ := store.ListTrustRules(ctx, tn.ID); len(rules) != 0 {
+		t.Fatalf("a federation removed from the resource must be revoked, still stored: %+v", rules)
 	}
 }

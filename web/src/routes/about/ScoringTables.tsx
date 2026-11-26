@@ -31,7 +31,7 @@ export function BaseAndBands({ scoring }: { scoring: ScoringResponse }) {
         <h3 id="sc-bands" className="text-13 font-semibold">{t('about.bandsTitle')}</h3>
         <ul className="m-0 mt-1 list-none p-0 text-13 text-ink-2">
           {(['critical', 'high', 'medium'] as const).map((b) => (
-            <li key={b} className="capitalize">{t('about.bandFrom', { band: b, from: bands[b] })}</li>
+            <li key={b} className="first-letter:uppercase">{t('about.bandFrom', { band: b, from: bands[b] })}</li>
           ))}
           <li>{t('about.bandLow', { to: bands.medium })}</li>
         </ul>
@@ -106,12 +106,13 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
+            aria-pressed={selectedGroup === 'all'}
             onClick={() => setSelectedGroup('all')}
             className={cn(
-              'rounded-md px-2.5 py-1 text-12 font-medium transition-colors',
+              'rounded-ctl border px-2.5 py-1 text-12 font-medium',
               selectedGroup === 'all'
-                ? 'bg-accent text-white shadow-xs'
-                : 'bg-chrome/80 text-ink-2 hover:bg-chrome hover:text-ink-1',
+                ? 'border-accent bg-accent text-accent-contrast'
+                : 'border-rule bg-surface text-ink-2 hover:bg-chrome hover:text-ink',
             )}
           >
             {t('about.allGroups')} ({factors.length})
@@ -123,12 +124,13 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
               <button
                 key={g}
                 type="button"
+                aria-pressed={selectedGroup === g}
                 onClick={() => setSelectedGroup(g)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-12 font-medium transition-colors',
+                  'rounded-ctl border px-2.5 py-1 text-12 font-medium',
                   selectedGroup === g
-                    ? 'bg-accent text-white shadow-xs'
-                    : 'bg-chrome/80 text-ink-2 hover:bg-chrome hover:text-ink-1',
+                    ? 'border-accent bg-accent text-accent-contrast'
+                    : 'border-rule bg-surface text-ink-2 hover:bg-chrome hover:text-ink',
                 )}
               >
                 {label} ({count})
@@ -139,7 +141,7 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
 
         <div className="flex items-center gap-2">
           <div className="relative min-w-[200px] max-w-xs">
-            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-2" />
             <Input
               type="search"
               value={search}
@@ -150,7 +152,7 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
             />
           </div>
           {filteredFactors.length > 0 && (
-            <Button variant="ghost" onClick={toggleAll} className="h-7 px-2 text-11">
+            <Button variant="ghost" onClick={toggleAll} className="h-7 px-2 text-12">
               {allAreExpanded ? t('about.collapseAll') : t('about.expandAll')}
             </Button>
           )}
@@ -158,7 +160,7 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
       </div>
 
       {filteredFactors.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-line p-6 text-center text-13 text-ink-2">
+        <div className="border border-dashed border-rule p-6 text-13 text-ink-2">
           {t('about.noMatchingFactors')}
         </div>
       ) : (
@@ -179,9 +181,7 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
                   <Td colSpan={2} className="h-8 text-12 font-semibold text-ink-2">
                     <span className="flex items-center gap-2">
                       <span>{groupTitle}</span>
-                      <span className="rounded-full bg-chrome-2 px-1.5 py-0.2 text-10 font-normal text-ink-3">
-                        {rows.length}
-                      </span>
+                      <span className="text-12 font-normal tnum text-ink-2">{rows.length}</span>
                     </span>
                   </Td>
                 </Tr>,
@@ -196,32 +196,22 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
                     <Tr key={f.name} className="align-top">
                       <Td className="whitespace-normal py-2.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <code className="rounded bg-chrome px-1.5 py-0.5 font-mono text-11 font-semibold text-ink-1">
+                          <code className="bg-chrome px-1.5 py-0.5 font-mono text-12 font-semibold text-ink">
                             {f.name}
                           </code>
-                          {hasAttr && (
-                            <span className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-10 font-medium text-sky-700 dark:text-sky-300">
-                              {t('about.badgeAttributeAware')}
-                            </span>
-                          )}
-                          {hasEnv && (
-                            <span className="inline-flex items-center rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-10 font-medium text-purple-700 dark:text-purple-300">
-                              {t('about.badgeEnvAware')}
-                            </span>
-                          )}
-                          {isThreat && (
-                            <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-10 font-medium text-amber-700 dark:text-amber-300">
-                              {t('about.badgeThreatIntel')}
-                            </span>
-                          )}
-                          {f.points < 0 && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-10 font-medium text-emerald-700 dark:text-emerald-300">
-                              {t('about.badgeMitigation')}
-                            </span>
-                          )}
                         </div>
+                        {(() => {
+                          // What the rule reads, said in words (docs/13: plain text for tags, colour is for risk).
+                          const traits = [
+                            hasAttr && t('about.badgeAttributeAware'),
+                            hasEnv && t('about.badgeEnvAware'),
+                            isThreat && t('about.badgeThreatIntel'),
+                            f.points < 0 && t('about.badgeMitigation'),
+                          ].filter(Boolean);
+                          return traits.length > 0 ? <p className="m-0 mt-0.5 text-12 text-ink-2 first-letter:uppercase">{traits.join(', ')}</p> : null;
+                        })()}
 
-                        <p className="mt-1 text-13 font-medium text-ink-1">{f.reason || f.name}</p>
+                        <p className="mt-1 text-13 font-medium text-ink">{f.reason || f.name}</p>
 
                         <div className="mt-1 flex items-center gap-3">
                           <button
@@ -233,22 +223,22 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
                                 [f.name]: !prev[f.name],
                               }))
                             }
-                            className="text-11 font-medium text-ink-2 underline-offset-2 hover:text-ink-1 hover:underline"
+                            className="text-12 font-medium text-ink-2 underline-offset-2 hover:text-ink hover:underline"
                           >
                             {isOpen ? t('about.collapseAll') : t('about.showRule')}
                           </button>
                         </div>
 
                         {isOpen && (
-                          <div className="mt-2 rounded-md border border-line bg-canvas p-2.5 font-mono text-12 text-ink-1 shadow-2xs">
-                            <div className="mb-1.5 flex items-center justify-between text-11 text-ink-3">
-                              <span className="font-sans font-medium uppercase tracking-wider text-ink-2">
+                          <div className="mt-2 border border-rule bg-surface p-2.5 font-mono text-12 text-ink">
+                            <div className="mb-1.5 flex items-center justify-between text-12 text-ink-2">
+                              <span className="font-sans font-medium text-ink-2">
                                 {t('about.celRuleTitle')}
                               </span>
                               <button
                                 type="button"
                                 onClick={() => copyRule(f.name, f.when)}
-                                className="flex items-center gap-1 font-sans text-ink-2 hover:text-ink-1"
+                                className="flex items-center gap-1 font-sans text-ink-2 hover:text-ink"
                                 title={t('about.copyRule')}
                               >
                                 {isCopied ? (
@@ -264,21 +254,14 @@ export function FactorsTable({ factors }: { factors: ScoringFactor[] }) {
                                 )}
                               </button>
                             </div>
-                            <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-chrome/60 p-2 text-11 leading-relaxed text-ink-1">
+                            <pre className="overflow-x-auto whitespace-pre-wrap break-all bg-chrome p-2 text-12 leading-relaxed text-ink">
                               <code>{f.when}</code>
                             </pre>
                           </div>
                         )}
                       </Td>
                       <Td align="end" className="py-2.5">
-                        <span
-                          className={cn(
-                            'inline-flex items-center rounded px-2 py-0.5 font-mono text-12 font-bold',
-                            f.points < 0
-                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-                          )}
-                        >
+                        <span className={cn('text-13 font-semibold tnum', f.points < 0 ? 'text-resolved' : 'text-ink')}>
                           {signed(f.points)}
                         </span>
                       </Td>
@@ -318,8 +301,8 @@ export function SlaMatrix({ scoring }: { scoring: ScoringResponse }) {
                 {band}
               </Th>
               {BANDS.map((crit) => (
-                <Td key={crit} align="end">
-                  {t('about.slaDays', { count: matrix[band]?.[crit] ?? 0 })}
+                <Td key={crit} align="end" className={matrix[band]?.[crit] === undefined ? 'text-ink-2' : undefined}>
+                  {matrix[band]?.[crit] === undefined ? t('about.slaNotConfigured') : t('about.slaDays', { count: matrix[band][crit] })}
                 </Td>
               ))}
             </Tr>

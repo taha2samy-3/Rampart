@@ -43,7 +43,7 @@ type InboundConnectorStore interface {
 // TicketVerifier says whether Rampart itself opened this ticket for this finding. A webhook is only acted on for
 // a ticket Rampart created: a label on someone else's ticket proves nothing (D70).
 type TicketVerifier interface {
-	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, ticketRef string) (bool, error)
+	FindingHasTicket(ctx context.Context, tenantID, findingID uuid.UUID, connector, ticketRef string) (bool, error)
 }
 
 // TenantNotifier tells the people of a tenant something, in the app (docs/16 D45).
@@ -99,6 +99,7 @@ type InboundWebhookHandler struct {
 	store          InboundConnectorStore
 	trackerStore   domain.TrackerStore
 	dialTracker    func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)
+	trackerConns   *TrackerConnections // when set, webhooks reuse the tracker's kept connection instead of dialing one each
 	workflow       WorkflowService
 	secretResolver SecretResolver
 	verifier       TicketVerifier
@@ -167,6 +168,13 @@ func (h *InboundWebhookHandler) WithLogger(l *slog.Logger) *InboundWebhookHandle
 // WithTrackerStore configures where ClusterExternalTracker and ExternalTracker definitions are resolved for container webhooks.
 func (h *InboundWebhookHandler) WithTrackerStore(s domain.TrackerStore) *InboundWebhookHandler {
 	h.trackerStore = s
+	return h
+}
+
+// WithTrackerConnections shares a connection cache (DefaultTrackerResolver.Connections) so that each webhook does not
+// dial the tracker container again (docs/51 step 1.4).
+func (h *InboundWebhookHandler) WithTrackerConnections(c *TrackerConnections) *InboundWebhookHandler {
+	h.trackerConns = c
 	return h
 }
 
@@ -319,7 +327,7 @@ func (h *InboundWebhookHandler) parseExternalWebhook(r *http.Request, tenantID u
 	if err != nil || !found || obj.Error != "" {
 		return nil, http.StatusServiceUnavailable, "referenced external tracker is unavailable"
 	}
-	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	spec, err := parseStoredTracker(obj)
 	if err != nil || !spec.IsEnabled() {
 		return nil, http.StatusServiceUnavailable, "referenced external tracker is disabled or invalid"
 	}
@@ -327,20 +335,30 @@ func (h *InboundWebhookHandler) parseExternalWebhook(r *http.Request, tenantID u
 	if dialFn == nil {
 		dialFn = trackerclient.Dial
 	}
-	cli, err := dialFn(trackerclient.DialConfig{
+	dcfg := trackerclient.DialConfig{
 		Target:  spec.Target(obj.Namespace),
 		Secure:  spec.UseTLS(),
 		Timeout: spec.Timeout(),
-	})
+	}
+	var cli *trackerclient.Client
+	if h.trackerConns != nil {
+		cli, err = h.trackerConns.Client(trackerIdentity(obj), dcfg, dialFn)
+	} else {
+		cli, err = dialFn(dcfg)
+	}
 	if err != nil {
 		return nil, http.StatusBadGateway, "failed to dial external tracker container"
 	}
-	defer func() { _ = cli.Close() }()
 
 	tr, err := NewGrpcTracker(cfg, cli, nil, "")
 	if err != nil {
+		if h.trackerConns == nil {
+			_ = cli.Close()
+		}
 		return nil, http.StatusBadGateway, "failed to initialize external tracker adapter"
 	}
+	tr.shared = h.trackerConns != nil
+	defer func() { _ = tr.CloseClient() }() // closes only a connection dialed for this webhook
 	tr.SetConnectorName(conn.Name)
 
 	lowerHeaders := make(map[string]string, len(r.Header))
@@ -389,7 +407,7 @@ func (h *InboundWebhookHandler) handleExternalTracker(w http.ResponseWriter, r *
 			findingID = id
 		}
 	}
-	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, ref) {
+	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, conn.Name, ref) {
 		reply(w, http.StatusOK, "ignored_unknown_ticket")
 		return
 	}
@@ -442,11 +460,11 @@ func (h *InboundWebhookHandler) expiry(ctx context.Context, tenantID uuid.UUID) 
 }
 
 // ticketBelongs says whether Rampart opened this ticket for this finding. No verifier means no.
-func (h *InboundWebhookHandler) ticketBelongs(ctx context.Context, tenantID, findingID uuid.UUID, ref string) bool {
+func (h *InboundWebhookHandler) ticketBelongs(ctx context.Context, tenantID, findingID uuid.UUID, connector, ref string) bool {
 	if h.verifier == nil || ref == "" {
 		return false
 	}
-	ok, err := h.verifier.FindingHasTicket(ctx, tenantID, findingID, ref)
+	ok, err := h.verifier.FindingHasTicket(ctx, tenantID, findingID, connector, ref)
 	return err == nil && ok
 }
 
@@ -557,7 +575,7 @@ func (h *InboundWebhookHandler) handleJira(w http.ResponseWriter, r *http.Reques
 	}
 
 	findingID := extractFindingIDFromLabels(event.Issue.Fields.Labels)
-	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, event.Issue.Key) {
+	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, conn.Name, event.Issue.Key) {
 		// Not a ticket Rampart opened for this finding: a label someone typed proves nothing.
 		reply(w, http.StatusOK, "ignored_unknown_ticket")
 		return
@@ -630,7 +648,7 @@ func (h *InboundWebhookHandler) handleGitHub(w http.ResponseWriter, r *http.Requ
 	}
 	findingID := extractFindingIDFromLabels(labels)
 	ref := fmt.Sprintf("#%d", event.Issue.Number)
-	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, ref) {
+	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, conn.Name, ref) {
 		reply(w, http.StatusOK, "ignored_unknown_ticket")
 		return
 	}

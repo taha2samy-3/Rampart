@@ -379,7 +379,8 @@ func TestAnAnalyzerThatFailsClosesNothingAndSaysSo(t *testing.T) {
 		t.Fatalf("a failing analyzer closed findings: %v", st)
 	}
 	a := e.state(ref)
-	if a.State != domain.AnalysisFailed || !strings.Contains(a.Error, "connection refused") || a.Attempts != 1 {
+	// Not the last attempt: the row stays claimed (pending, with the error) until River retries it (docs/51 step 2.3).
+	if a.State != domain.AnalysisPending || !strings.Contains(a.Error, "connection refused") || a.Attempts != 1 || a.FinishedAt != nil {
 		t.Fatalf("record: %+v", a)
 	}
 	ev := e.lastEvent(ref)
@@ -409,10 +410,16 @@ func TestAnAnalyzerThatTimesOutIsTimedOut(t *testing.T) {
 	if err := e.run(ref, 2); err == nil {
 		t.Fatal("no error")
 	}
-	if a := e.state(ref); a.State != domain.AnalysisTimedOut || a.Attempts != 2 {
+	if a := e.state(ref); a.State != domain.AnalysisPending || a.Attempts != 2 { // River retries it: still claimed
 		t.Fatalf("%+v", a)
 	}
-	if ev := e.lastEvent(ref); !strings.Contains(ev.Message, "did not answer in time on attempt 2 of 5") {
+	if err := e.run(ref, 5); err == nil {
+		t.Fatal("no error")
+	}
+	if a := e.state(ref); a.State != domain.AnalysisTimedOut || a.Attempts != 5 {
+		t.Fatalf("%+v", a)
+	}
+	if ev := e.lastEvent(ref); !strings.Contains(ev.Message, "did not answer in time on attempt 5 of 5") {
 		t.Fatalf("event: %+v", ev)
 	}
 }

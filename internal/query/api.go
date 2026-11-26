@@ -41,25 +41,30 @@ const (
 
 // API provides HTTP handlers for the read path /api/v1 (docs/11, docs/16 D14, D16).
 type API struct {
-	ssrfAllowlist  *domain.PlatformSSRFAllowlist
-	store          store.Store
-	feeds          *enrich.FeedStore
-	feedSync       FeedSyncer
-	pushTokenDir   string       // where a feed plugin's token file may be; empty is domain.FeedPushTokensDir (tests set a temp directory)
-	probeClient    *http.Client // the connection test of the feeds page; nil is the guarded feed client (enrich.NewFeedHTTPClient)
-	authn          *auth.Authenticator
-	hmacKey        []byte
-	objects        objectstore.Store
-	intel          IntelSource
-	logos          logoCache
-	scorer         *scoring.Scorer
-	gw             *ingest.Gateway
-	live           *LiveHub
-	analyzerProbe  AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
-	trackerProbe   TrackerProbe       // how an external tracker container is tested; nil dials it over gRPC
-	analysis       AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
-	maxInFlight    int                // max in-flight analyses across all tenants (docs/39 Slice D)
-	manualCooldown time.Duration      // minimum cooldown between manual analyses of an application (docs/39 Slice D)
+	ssrfAllowlist *domain.PlatformSSRFAllowlist
+	store         store.Store
+	feeds         *enrich.FeedStore
+	feedSync      FeedSyncer
+	pushTokenDir  string       // where a feed plugin's token file may be; empty is domain.FeedPushTokensDir (tests set a temp directory)
+	probeClient   *http.Client // the connection test of the feeds page; nil is the guarded feed client (enrich.NewFeedHTTPClient)
+	authn         *auth.Authenticator
+	hmacKey       []byte
+	objects       objectstore.Store
+	intel         IntelSource
+	logos         logoCache
+	scorer        *scoring.Scorer
+	gw            *ingest.Gateway
+	live          *LiveHub
+	analyzerProbe AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
+	trackerProbe  TrackerProbe       // how an external tracker container is tested; nil dials it over gRPC
+	analysis      AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
+	maxInFlight   int                // max in-flight analyses across all tenants (docs/39 Slice D)
+	// inFlight counts the analyses in flight across every tenant; it must be the system store: on the application role,
+	// row-level security makes the count 0 (docs/51 step 2.1). Nil without database.systemUrl: the cap is then not applied.
+	inFlight interface {
+		CountAnalysesInFlight(context.Context, time.Duration) (int, error)
+	}
+	manualCooldown time.Duration // minimum cooldown between manual analyses of an application (docs/39 Slice D)
 }
 
 // FindingQuerier is implemented by stores that run the filter grammar as SQL (PostgreSQL). Other
@@ -991,4 +996,11 @@ func (a *API) ingestOnlyGuard(pattern string, h http.Handler) http.Handler {
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// SetInFlightCounter gives the API the system store's count of analyses in flight, for the platform cap of docs/39 D.3.
+func (a *API) SetInFlightCounter(c interface {
+	CountAnalysesInFlight(context.Context, time.Duration) (int, error)
+}) {
+	a.inFlight = c
 }

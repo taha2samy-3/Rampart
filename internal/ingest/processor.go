@@ -227,12 +227,13 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 			_ = rc.Close()
 			return Result{}, err
 		}
+		attrs, rawPayload := redactEvidence(raw) // D42: never store a secret, whatever the parser emitted (docs/51 1.1)
 		f.buf = append(f.buf, StagedRecord{
 			ScannerFamily: family, FindingKey: fp.FindingKey, LineageKey: fp.LineageKey, Category: raw.Category, RuleID: raw.RuleID, Title: raw.Title,
 			Description: raw.Description, ToolSeverity: raw.ToolSeverity, Severity: raw.Severity, Location: raw.Location, CWEs: raw.CWEs,
 			VulnID: canonicalVulnID(raw), CVSSVector: raw.CVSSVector, SecretVerified: raw.SecretVerified,
 			ContentHash: normalize.ComputeContentHash(raw.Title, raw.Description, raw.ToolSeverity, raw.CVSSVector, "", raw.Location.PrimaryPath()),
-			SeenAt:      pp.ScanFinished, Attributes: raw.Attributes, RawPayload: raw.RawPayload,
+			SeenAt:      pp.ScanFinished, Attributes: attrs, RawPayload: rawPayload,
 		})
 		if len(f.buf) >= p.batchRows {
 			if err := flush(f); err != nil {
@@ -245,10 +246,11 @@ func (p *Processor) Process(ctx context.Context, pp ProcessParams) (Result, erro
 	if parseErr != nil {
 		return Result{Stats: stats}, &jobs.PermanentError{Code: ErrCodeParse, Err: parseErr}
 	}
-	// A report with no findings has no tool to read: the scope is the named scanner or the parser id,
-	// so a clean rescan can still close what that scope reported before.
+	// A report with no findings has no tool to read: the scope is the named scanner or the parser's name, which is the family
+	// its findings carry (`trivy`, not the id `cluster:trivy`), so a clean rescan closes what that scope reported before
+	// (docs/51 step 2.7: with the id, it closed nothing).
 	if len(order) == 0 {
-		if _, err := getFam(firstNonEmpty(pp.ScannerOverride, parserID)); err != nil {
+		if _, err := getFam(firstNonEmpty(pp.ScannerOverride, parserFamily(parserID))); err != nil {
 			return Result{}, err
 		}
 	}
@@ -432,11 +434,11 @@ func (p *Processor) processSBOM(ctx context.Context, pp ProcessParams) (Result, 
 	if pp.IsEphemeral {
 		return Result{Status: domain.RunCompleted}, nil
 	}
-	n, err := p.saveSBOM(ctx, pp.Run, pp.Parser.Descriptor().ID, reader, pp.Open)
+	n, vex, err := p.saveSBOM(ctx, pp.Run, pp.Parser.Descriptor().ID, reader, pp.Open)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Status: domain.RunCompleted, Components: n}, nil
+	return Result{Status: domain.RunCompleted, Components: n, Stats: domain.IngestStats{VEXApplied: vex.applied, VEXSkipped: vex.skipped}}, nil
 }
 
 // documentReader is an SBOM reader whose spec turns the vulnerabilities a document states into findings
@@ -473,8 +475,11 @@ func (p *Processor) processSBOMWithFindings(ctx context.Context, pp ProcessParam
 			return Result{}, err
 		}
 	}
-	if len(doc.VEXStatements()) > 0 {
-		if err := p.applyVEXStatements(ctx, pp.Run, pp.Parser.Descriptor().ID, doc.VEXStatements()); err != nil {
+	var vex vexOutcome
+	if n := len(doc.VEXStatements()); n > 0 {
+		if pp.IsEphemeral { // a pull request's SBOM never decides the baseline's findings (D10, docs/51 step 1.2)
+			vex.skipped = n
+		} else if vex, err = p.applyVEXStatements(ctx, pp.Run, pp.Parser.Descriptor().ID, doc.VEXStatements()); err != nil {
 			p.logger.Warn("applying VEX statements from SBOM with findings run", "run", pp.Run.ID, "err", err)
 		}
 	}
@@ -486,6 +491,8 @@ func (p *Processor) processSBOMWithFindings(ctx context.Context, pp ProcessParam
 	pp.Open = func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("")), nil }
 	res, err := p.Process(ctx, pp)
 	res.Components = stored
+	res.Stats.VEXApplied += vex.applied
+	res.Stats.VEXSkipped += vex.skipped
 	return res, err
 }
 
@@ -507,18 +514,18 @@ func (d documentFindings) Parse(_ context.Context, _ io.Reader, pc domain.ParseC
 
 // saveSBOM stores the component inventory and dependency graph of an SBOM report. SBOM documents are
 // decoded whole (D15), under a size cap.
-func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserID string, reader sbomReader, open StreamSource) (int, error) {
+func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserID string, reader sbomReader, open StreamSource) (int, vexOutcome, error) {
 	rc, err := open(ctx)
 	if err != nil {
-		return 0, p.openError(err)
+		return 0, vexOutcome{}, p.openError(err)
 	}
 	defer func() { _ = rc.Close() }()
 	data, err := io.ReadAll(scrubNUL(io.LimitReader(rc, p.maxSBOMBytes+1)))
 	if err != nil {
-		return 0, err
+		return 0, vexOutcome{}, err
 	}
 	if int64(len(data)) > p.maxSBOMBytes {
-		return 0, &jobs.PermanentError{Code: ErrCodeSBOMTooLarge, Err: fmt.Errorf("the SBOM is larger than %d bytes", p.maxSBOMBytes)}
+		return 0, vexOutcome{}, &jobs.PermanentError{Code: ErrCodeSBOMTooLarge, Err: fmt.Errorf("the SBOM is larger than %d bytes", p.maxSBOMBytes)}
 	}
 	var sbomDoc *domain.SBOM
 	var components []domain.SBOMComponent
@@ -529,7 +536,7 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 	}); ok {
 		res, err := rr.ParseSBOMResult(ctx, bytes.NewReader(data))
 		if err != nil {
-			return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+			return 0, vexOutcome{}, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
 		}
 		sbomDoc, components = res.SBOM, res.Components
 		vexStmts = res.VEXStatements
@@ -537,36 +544,53 @@ func (p *Processor) saveSBOM(ctx context.Context, run *domain.IngestRun, parserI
 		var err error
 		sbomDoc, components, _, err = reader.ParseSBOM(ctx, bytes.NewReader(data))
 		if err != nil {
-			return 0, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
+			return 0, vexOutcome{}, &jobs.PermanentError{Code: ErrCodeParse, Err: err}
 		}
 	}
 	count := 0
-	isVEXOnly := sbomDoc != nil && strings.EqualFold(sbomDoc.Format, "openvex") && len(components) == 0
+	// A document with VEX statements and no component is a VEX document, whatever its format (an OpenVEX file, a CycloneDX
+	// VEX BOM): it is not the asset's inventory, so it must not become the newest SBOM with zero components (docs/51 1.2).
+	isVEXOnly := len(components) == 0 && len(vexStmts) > 0
 	if !isVEXOnly {
 		var err error
 		count, err = p.storeSBOM(ctx, run, parserID, sbomDoc, components)
 		if err != nil {
-			return 0, err
+			return 0, vexOutcome{}, err
 		}
 	}
+	var vex vexOutcome
 	if len(vexStmts) > 0 {
-		if err := p.applyVEXStatements(ctx, run, parserID, vexStmts); err != nil {
+		var err error
+		if vex, err = p.applyVEXStatements(ctx, run, parserID, vexStmts); err != nil {
 			p.logger.Warn("applying VEX statements from SBOM run", "run", run.ID, "err", err)
 		}
 	}
-	return count, nil
+	return count, vex, nil
 }
 
-func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRun, parserID string, stmts []sbom.VEXStatement) error {
+// vexOutcome counts what the VEX statements of one SBOM did.
+type vexOutcome struct{ applied, skipped int }
+
+// applyVEXStatements decides findings from the VEX statements inside an SBOM, under the rules of /api/v1/vex (docs/51 step 1.2):
+// only when the uploader may decide (the triager role or higher; never an ingest or CI token), only the findings of the uploaded
+// asset, never over a person's later decision, and never over a person's decision at all when the statement carries no time.
+// A finding whose state changes is scored again, as a triage action does.
+func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRun, parserID string, stmts []sbom.VEXStatement) (vexOutcome, error) {
+	var out vexOutcome
+	if run.Context.VEXDecider == "" {
+		out.skipped = len(stmts)
+		p.logger.Info("VEX statements in an SBOM not applied: the uploader may not decide findings", "run", run.ID, "statements", len(stmts))
+		return out, nil
+	}
 	m, ok := p.store.(interface {
 		FindFindingsForVEX(ctx context.Context, tenantID uuid.UUID, vulnIDs, purlBases []string, appID *uuid.UUID) ([]*domain.Finding, error)
 	})
 	if !ok {
-		return nil
+		out.skipped = len(stmts)
+		return out, nil
 	}
-	cleanParser := strings.TrimPrefix(parserID, "cluster:sbom-")
-	cleanParser = strings.TrimPrefix(cleanParser, "cluster:")
-	actor := "vex:" + cleanParser
+	cleanParser := parserFamily(strings.TrimPrefix(parserID, "cluster:sbom-"))
+	actor := "vex:" + cleanParser + " (" + run.Context.VEXDecider + ")"
 
 	// Sort oldest first so that when multiple statements target the same finding, the latest statement wins (D47).
 	sorted := append([]sbom.VEXStatement(nil), stmts...)
@@ -574,6 +598,7 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 
 	for _, st := range sorted {
 		if st.VulnerabilityID == "" || st.Status == "" {
+			out.skipped++
 			continue
 		}
 		vulnIDs := []string{st.VulnerabilityID}
@@ -589,6 +614,7 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 		}
 		// Require a package identifier so a whole-product statement without package PURLs cannot mutate unrelated findings (D47).
 		if len(bases) == 0 {
+			out.skipped++
 			continue
 		}
 		var appID *uuid.UUID
@@ -597,9 +623,14 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 		}
 		cands, err := m.FindFindingsForVEX(ctx, run.TenantID, vulnIDs, bases, appID)
 		if err != nil {
-			return err
+			return out, err
 		}
 		for _, f := range cands {
+			// The statement is about what was uploaded: the asset's findings, not every asset of the application
+			// (with the Unassigned application that would be every unrelated asset; docs/51 step 1.2).
+			if f.AssetID != run.AssetID {
+				continue
+			}
 			if st.Purl != "" {
 				if f.Location.Package == nil {
 					continue
@@ -617,6 +648,7 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 				continue
 			}
 			if p.humanDecisionAfter(ctx, run.TenantID, f.ID, st.Timestamp) {
+				out.skipped++
 				continue
 			}
 			note := fmt.Sprintf("VEX (%s statement) applied from SBOM run %s", st.Status, run.ID)
@@ -629,24 +661,35 @@ func (p *Processor) applyVEXStatements(ctx context.Context, run *domain.IngestRu
 				ImpactStatement: st.Impact,
 				Note:            note,
 			}
+			version := f.Version
 			evs, terr := domain.ApplyTriage(f, patch, actor, time.Now().UTC())
 			if terr != nil {
+				out.skipped++
+				p.logger.Info("VEX statement not applied to a finding", "run", run.ID, "finding", f.ID, "err", terr)
 				continue
 			}
-			if uerr := p.store.UpdateFindingTriage(ctx, run.TenantID, f, f.Version, evs); uerr != nil {
-				p.logger.Warn("updating finding triage from VEX statement", "run", run.ID, "finding", f.ID, "err", uerr)
+			// A decision moves the score and the SLA, as a triage action does (query/triage.go).
+			if sc := p.engine.scorer; sc != nil {
+				if serr := sc.ScoreBatch(ctx, run.TenantID, f.ApplicationID, []*domain.Finding{f}); serr != nil {
+					p.logger.Warn("scoring a finding decided by a VEX statement", "run", run.ID, "finding", f.ID, "err", serr)
+				}
 			}
+			if uerr := p.store.UpdateFindingTriage(ctx, run.TenantID, f, version, evs); uerr != nil {
+				out.skipped++
+				p.logger.Warn("updating finding triage from VEX statement", "run", run.ID, "finding", f.ID, "err", uerr)
+				continue
+			}
+			out.applied++
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // humanDecisionAfter reports whether a human user decided about the finding after t,
 // ensuring an older VEX document from CI never overwrites a newer manual triage (D47).
+//
+// A statement with no time of its own never overrides a person (docs/51 step 1.2): with a zero t, any decision by a person counts.
 func (p *Processor) humanDecisionAfter(ctx context.Context, tenantID, findingID uuid.UUID, t time.Time) bool {
-	if t.IsZero() {
-		return false
-	}
 	eg, ok := p.store.(interface {
 		GetFindingEvents(ctx context.Context, tenantID, findingID uuid.UUID) ([]*domain.FindingEvent, error)
 	})
@@ -982,4 +1025,13 @@ func (p *Processor) processEphemeral(ctx context.Context, pp ProcessParams) (Res
 		status = domain.RunCompletedWithErrors
 	}
 	return Result{Status: status, Stats: stats}, nil
+}
+
+// parserFamily is the scanner family a parser's findings carry when the report names none: the parser's name without the
+// prefix of its id (`cluster:trivy` and `mapping:acme` give `trivy` and `acme`).
+func parserFamily(parserID string) string {
+	if i := strings.Index(parserID, ":"); i >= 0 {
+		return parserID[i+1:]
+	}
+	return parserID
 }

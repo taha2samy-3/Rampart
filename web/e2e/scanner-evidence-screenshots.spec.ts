@@ -25,7 +25,7 @@ test('capture screenshots of dynamic scanner evidence in finding inspector', asy
   await expect(insp).toBeVisible();
 
   // Scroll inspector to reveal Scanner Evidence
-  const scannerEvidence = insp.getByText('Scanner Evidence');
+  const scannerEvidence = insp.getByRole('heading', { name: 'Scanner evidence' });
   await expect(scannerEvidence).toBeVisible({ timeout: 10000 });
   await scannerEvidence.scrollIntoViewIfNeeded();
 
@@ -39,7 +39,7 @@ test('capture screenshots of dynamic scanner evidence in finding inspector', asy
   });
 
   // Expand Raw Scanner Record JSON viewer
-  const rawToggle = insp.getByText('Raw Scanner Record (JSON)');
+  const rawToggle = insp.getByText('Raw scanner record (JSON)');
   await expect(rawToggle).toBeVisible();
   await rawToggle.click();
 

@@ -34,17 +34,20 @@ type ExternalTrackerSpec struct {
 	} `json:"service,omitempty"`
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 	TLS            struct {
-		Insecure    *bool         `json:"insecure,omitempty"`
-		CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
+		Insecure    *bool           `json:"insecure,omitempty"`
+		CASecretRef json.RawMessage `json:"caSecretRef,omitempty"`
 	} `json:"tls,omitempty"`
 	Auth struct {
-		SecretRef *SecretKeyRef `json:"secretRef,omitempty"`
+		SecretRef json.RawMessage `json:"secretRef,omitempty"`
 	} `json:"auth,omitempty"`
 }
 
 // ParseExternalTrackerSpec validates an external tracker CRD spec.
 // When tenantScoped is true (namespaced ExternalTracker), arbitrary endpoints are rejected
-// to prevent SSRF: only an in-cluster Kubernetes Service may be targeted.
+// to prevent SSRF: only an in-cluster Kubernetes Service may be targeted. Which namespace that Service may be in is
+// checked by ParseTenantExternalTrackerSpec, which knows the resource's own namespace.
+// What the server cannot honour is refused with its reason, not stored and ignored (as ParseExternalAnalyzerSpec does):
+// a tls.caSecretRef or auth.secretRef the server does not read would give the owner a connection other than the one asked for.
 func ParseExternalTrackerSpec(raw []byte, tenantScoped bool) (ExternalTrackerSpec, error) {
 	var s ExternalTrackerSpec
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -92,14 +95,42 @@ func ParseExternalTrackerSpec(raw []byte, tenantScoped bool) (ExternalTrackerSpe
 	if s.TimeoutSeconds < 0 || time.Duration(s.TimeoutSeconds)*time.Second > MaxTrackerTimeout {
 		return s, fmt.Errorf("timeoutSeconds %d is outside 0 to %d", s.TimeoutSeconds, int(MaxTrackerTimeout/time.Second))
 	}
+	if len(s.TLS.CASecretRef) > 0 && string(s.TLS.CASecretRef) != "null" {
+		return s, fmt.Errorf("tls.caSecretRef is not supported yet: the server cannot read a Secret, so a private CA cannot be trusted")
+	}
+	if len(s.Auth.SecretRef) > 0 && string(s.Auth.SecretRef) != "null" {
+		return s, fmt.Errorf("auth.secretRef is not supported yet: the server cannot read a Secret, so the tracker would be called without the credential")
+	}
 	return s, nil
+}
+
+// ParseTenantExternalTrackerSpec checks the spec of a namespaced ExternalTracker that lives in namespace: on top of
+// ParseExternalTrackerSpec(raw, true), the Service it names must be in its own namespace (service.namespace empty or equal).
+// A tenant naming another namespace's Service would have the server call, with the tenant's credentials, a container
+// the tenant does not own.
+func ParseTenantExternalTrackerSpec(raw []byte, namespace string) (ExternalTrackerSpec, error) {
+	s, err := ParseExternalTrackerSpec(raw, true)
+	if err != nil {
+		return s, err
+	}
+	return s, serviceInOwnNamespace("ExternalTracker", s.Service.Namespace, namespace)
+}
+
+// serviceInOwnNamespace refuses a namespaced resource whose Service is in another namespace.
+func serviceInOwnNamespace(kind, serviceNamespace, resourceNamespace string) error {
+	if serviceNamespace == "" || serviceNamespace == resourceNamespace {
+		return nil
+	}
+	return fmt.Errorf("service.namespace %q is not this %s's namespace %q: a namespaced %s may name a Service only in its own namespace (use a Cluster%s for another namespace)",
+		serviceNamespace, kind, resourceNamespace, kind, kind)
 }
 
 // IsEnabled is true unless enabled is explicitly false.
 func (s ExternalTrackerSpec) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 
-// UseTLS returns true only when tls.insecure is explicitly false.
-func (s ExternalTrackerSpec) UseTLS() bool { return s.TLS.Insecure != nil && !*s.TLS.Insecure }
+// UseTLS is true unless the spec says tls.insecure: true. The tracker carries the tenant's tracker credentials
+// (a Jira token, a GitHub PAT) in every call, so clear text must be asked for, never the default.
+func (s ExternalTrackerSpec) UseTLS() bool { return s.TLS.Insecure == nil || !*s.TLS.Insecure }
 
 // Timeout returns the configured call timeout or DefaultTrackerTimeout.
 func (s ExternalTrackerSpec) Timeout() time.Duration {

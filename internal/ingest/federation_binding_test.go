@@ -8,7 +8,7 @@ import (
 )
 
 func TestFederationBindings(t *testing.T) {
-	gh := federationBindings("github", "https://token.actions.githubusercontent.com",
+	gh := federationBindings(domain.TrustRule{Provider: "github"}, "https://token.actions.githubusercontent.com",
 		map[string]any{"repository": "acme/shop", "ref": "refs/pull/7/merge", "sha": "ABCDEF1234567"})
 	want := []string{"bind:repo:https://github.com/acme/shop", "bind:ref:refs/pull/7/merge", "bind:sha:abcdef1234567"}
 	if len(gh) != len(want) {
@@ -19,18 +19,18 @@ func TestFederationBindings(t *testing.T) {
 			t.Errorf("github binding %d: %q, want %q", i, gh[i], want[i])
 		}
 	}
-	ghes := federationBindings("github", "https://git.corp.example/_services/token", map[string]any{"repository": "a/b"})
+	ghes := federationBindings(domain.TrustRule{Provider: "github"}, "https://git.corp.example/_services/token", map[string]any{"repository": "a/b"})
 	if ghes[0] != "bind:repo:https://git.corp.example/a/b" {
 		t.Errorf("GitHub Enterprise Server: %v", ghes)
 	}
-	other := federationBindings("github", "https://idp.test", map[string]any{"repository": "a/b"})
+	other := federationBindings(domain.TrustRule{Provider: "github"}, "https://idp.test", map[string]any{"repository": "a/b"})
 	if other[0] != "bind:repo:a/b" {
 		t.Errorf("unknown issuer host: bound by path only: %v", other)
 	}
 	if !sameRepository("https://github.com/A/b.git", "a/b") || sameRepository("https://github.com/a/c", "a/b") {
 		t.Error("path-only binding compares owner/repo")
 	}
-	gl := federationBindings("gitlab", "https://gitlab.example.com/", map[string]any{"project_path": "grp/app", "ref": "v1.2", "ref_type": "tag"})
+	gl := federationBindings(domain.TrustRule{Provider: "gitlab"}, "https://gitlab.example.com/", map[string]any{"project_path": "grp/app", "ref": "v1.2", "ref_type": "tag"})
 	if gl[0] != "bind:repo:https://gitlab.example.com/grp/app" || gl[1] != "bind:ref:refs/tags/v1.2" {
 		t.Errorf("gitlab bindings: %v", gl)
 	}
@@ -63,5 +63,24 @@ func TestBindUploadContext(t *testing.T) {
 	plain := domain.UploadContext{Branch: "main"}
 	if err := BindUploadContext([]string{"ingest", "read"}, &plain); err != nil || plain.Branch != "main" {
 		t.Fatalf("unbound token: %v %+v", err, plain)
+	}
+}
+
+// docs/51 step 1.3: a generic issuer's token is bound to the claims the rule names, so a feature-branch job cannot upload as main.
+func TestFederationBindings_GenericIssuerBindsTheNamedClaims(t *testing.T) {
+	rule := domain.TrustRule{Issuer: "https://sts.example", BoundClaims: map[string]string{"sub": "job"}, RepositoryClaim: "repo", RefClaim: "branch"}
+	got := federationBindings(rule, "https://sts.example", map[string]any{"repo": "acme/pay", "branch": "refs/heads/feature-x"})
+	want := map[string]bool{bindRepoPrefix + "acme/pay": true, bindRefPrefix + "refs/heads/feature-x": true}
+	if len(got) != len(want) {
+		t.Fatalf("bindings %v, want %v", got, want)
+	}
+	for _, b := range got {
+		if !want[b] {
+			t.Fatalf("unexpected binding %q in %v", b, got)
+		}
+	}
+	uctx := domain.UploadContext{Repository: "acme/pay", Branch: "main"}
+	if err := BindUploadContext(got, &uctx); !errors.Is(err, ErrContextMismatch) {
+		t.Fatalf("a token bound to feature-x uploading as main must be refused, got %v", err)
 	}
 }

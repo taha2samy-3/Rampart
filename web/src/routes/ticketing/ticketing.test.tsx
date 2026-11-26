@@ -45,10 +45,33 @@ describe('ticketing route and containerized trackers', () => {
     expect(within(table).queryByText('slack-appsec')).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: '+ New Tracker Binding' }));
-    const catalogue = await screen.findByRole('dialog', { name: 'Integration Catalogue' });
+    const catalogue = await screen.findByRole('dialog', { name: 'Connector catalogue' });
     expect(within(catalogue).getByText('External tracker container')).toBeInTheDocument();
     expect(within(catalogue).queryByText('Slack')).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // docs/50: the server says each connector's kind; a tracker type this page has never heard of is still listed,
+  // and a notifier is not, whatever its type is called.
+  it('lists bindings by the kind the server sends, not by a list of type names', async () => {
+    mockFetch({
+      loggedIn: true, role: 'admin',
+      connectors: [
+        { name: 'boards-sec', type: 'someNewTracker', kind: 'tracker', direction: 'outbound', enabled: true, managed_by: 'resource', status: { conditions: [] } },
+        { name: 'jira-like-notifier', type: 'jira', kind: 'notifier', direction: 'outbound', enabled: true, managed_by: 'resource', status: { conditions: [] } },
+      ],
+    });
+    renderApp('/ticketing?tab=bindings');
+    const table = await screen.findByRole('table', { name: 'Tracker bindings table' });
+    expect(within(table).getByText('boards-sec')).toBeInTheDocument();
+    expect(within(table).queryByText('jira-like-notifier')).toBeNull();
+  });
+
+  it('no longer claims live updates for the ticket queue', async () => {
+    mockFetch({ loggedIn: true, role: 'admin' });
+    renderApp('/ticketing?tab=queue');
+    await screen.findByRole('table', { name: 'Ticket outbox table' });
+    expect(screen.queryByText(/Live updates/)).toBeNull();
   });
 
   it('shows opened tickets and pending outbox items in the Tickets & Outbox tab', async () => {

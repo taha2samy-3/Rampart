@@ -5,8 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { listApplications, qk, toProblem } from '@/api';
 import type { AppSummary } from '@/api/types';
 import { BandMixBar, BandShape, BAND_TEXT_CLASS, EmptyState, ProblemMessage, ScoreBar, Skeleton, Table, TBody, Td, Th, THead, Tr } from '@/components';
-import { openText } from '@/lib/apps';
-import { bandFromScore } from '@/lib/band';
+import { openText, worstBand } from '@/lib/apps';
 import { absoluteDate, shortAge } from '@/lib/format';
 
 /** Applications, the riskiest first (docs/13). A row opens the application page. */
@@ -99,11 +98,12 @@ function AppRow({ app, index, maxOpen, onOpen }: { app: AppSummary; index: numbe
       </Td>
       <Td>
         {(() => {
-          const b = bandFromScore(app.risk_score);
+          // The band is the server's: the worst band among the open findings (docs/51 step 3.1).
+          const b = worstBand(app.open);
           return (
             <span className="flex items-center gap-2">
-              <BandShape band={b} size={11} />
-              <span className={`w-9 text-end text-14 font-semibold tnum ${BAND_TEXT_CLASS[b]}`}>{app.risk_score}</span>
+              {b ? <BandShape band={b} size={11} /> : <span aria-hidden="true" className="inline-block w-[11px]" />}
+              <span className={`w-9 text-end text-14 font-semibold tnum ${b ? BAND_TEXT_CLASS[b] : 'text-ink-2'}`}>{app.risk_score}</span>
               <ScoreBar breakdown={null} score={app.risk_score} band={b} />
             </span>
           );

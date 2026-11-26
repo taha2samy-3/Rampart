@@ -276,14 +276,15 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		return fmt.Sprintf("parser.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
 	case "externalanalyzer", "sbomanalyzer", "externaltracker": // D143: one tenant's analyzer or tracker container
-		kind, parse := domain.AnalyzerKindExternal, func(b []byte) error { _, err := domain.ParseExternalAnalyzerSpec(b, true); return err }
+		namespace := defaultNamespace(header.Metadata.Namespace)
+		// A namespaced analyzer or tracker may name a Service only in its own namespace (docs/51 step 1.4).
+		kind, parse := domain.AnalyzerKindExternal, func(b []byte) error { _, err := domain.ParseTenantExternalAnalyzerSpec(b, namespace); return err }
 		if lk == "sbomanalyzer" {
 			kind, parse = domain.AnalyzerKindSBOM, func(b []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(b); return err }
 		}
 		if lk == "externaltracker" {
-			kind, parse = domain.TrackerKindExternal, func(b []byte) error { _, err := domain.ParseExternalTrackerSpec(b, true); return err }
+			kind, parse = domain.TrackerKindExternal, func(b []byte) error { _, err := domain.ParseTenantExternalTrackerSpec(b, namespace); return err }
 		}
-		namespace := defaultNamespace(header.Metadata.Namespace)
 		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
 		if err != nil || tenant == nil {
 			return "", fmt.Errorf("apply: no tenant owns namespace %q (TenantNotFound)", namespace)
@@ -379,6 +380,7 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 			IngestionPolicy *domain.IngestionPolicy `json:"ingestionPolicy"`
 			TrackedRefs     []string                `json:"trackedRefs"`
 			TrustRules      []domain.TrustRule      `json:"trustRules"`
+			Auth            domain.AuthSpec         `json:"auth"`
 		}
 		_ = json.Unmarshal(header.Spec, &spec)
 
@@ -403,20 +405,29 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 				return "", fmt.Errorf("apply: invalid trustRule: %w", err)
 			}
 		}
+		// The federations become trust rules here as in the operator (docs/51 step 1.3): one mapping, D55.
+		rules := append([]domain.TrustRule(nil), spec.TrustRules...)
+		for _, fed := range spec.Auth.AllFederations() {
+			if err := fed.Validate(); err != nil {
+				return "", fmt.Errorf("apply: invalid auth: %w", err)
+			}
+			rules = append(rules, fed.TrustRule())
+		}
 
 		id, err := a.store.SaveScanSource(ctx, tenant.ID, header.Metadata.Name, spec.ScannerFamily, spec.IngestionPolicy)
 		if err != nil {
 			return "", err
 		}
 
-		if len(spec.TrustRules) > 0 {
-			trSaver, ok := a.store.(interface {
-				SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
-			})
-			if !ok {
-				return "", fmt.Errorf("apply: store does not support trust rules")
-			}
-			if err := trSaver.SaveTrustRules(ctx, tenant.ID, id, spec.TrustRules); err != nil {
+		// Replaced every time, with an empty list too, so a removed rule stops working.
+		trSaver, ok := a.store.(interface {
+			SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
+		})
+		if !ok && len(rules) > 0 {
+			return "", fmt.Errorf("apply: store does not support trust rules")
+		}
+		if ok {
+			if err := trSaver.SaveTrustRules(ctx, tenant.ID, id, rules); err != nil {
 				return "", fmt.Errorf("apply: failed to save trust rules: %w", err)
 			}
 		}

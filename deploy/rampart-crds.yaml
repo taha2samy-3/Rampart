@@ -3202,6 +3202,16 @@ spec:
                           type: object
                           description: "Key-value dictionary of claims required to match in the incoming JWT (e.g. repository_id, account_id)."
                           x-kubernetes-preserve-unknown-fields: true
+                        provider:
+                          type: string
+                          enum: ["github", "gitlab"]
+                          description: "github or gitlab: the token is then bound to the provider's repository and ref claims, and boundClaims must name the immutable ids (repository_id and repository_owner_id, or project_id and namespace_id; D22, D80)."
+                        repositoryClaim:
+                          type: string
+                          description: "For any other issuer: the claim that names the repository the job runs for. Required with refClaim when provider is not set."
+                        refClaim:
+                          type: string
+                          description: "For any other issuer: the claim that names the ref (branch) the job runs on. The upload cannot state another branch (D80)."
                     federations:
                       type: array
                       description: Multiple Universal Workload Identity Federation rules for multi-issuer or multi-repo setups.
@@ -3218,6 +3228,16 @@ spec:
                             type: object
                             description: "Key-value dictionary of claims required to match in the incoming JWT."
                             x-kubernetes-preserve-unknown-fields: true
+                          provider:
+                            type: string
+                            enum: ["github", "gitlab"]
+                            description: "github or gitlab: the token is then bound to the provider's repository and ref claims, and boundClaims must name the immutable ids (repository_id and repository_owner_id, or project_id and namespace_id; D22, D80)."
+                          repositoryClaim:
+                            type: string
+                            description: "For any other issuer: the claim that names the repository the job runs for. Required with refClaim when provider is not set."
+                          refClaim:
+                            type: string
+                            description: "For any other issuer: the claim that names the ref (branch) the job runs on. The upload cannot state another branch (D80)."
                 scannerFamily:
                   type: string
                   description: Legacy scanner family or parser ID; optional when categories is declared.

@@ -2,14 +2,22 @@ package query
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
+	"rampart/internal/auth"
 	"rampart/internal/domain"
 	"rampart/internal/enrich"
 	"rampart/internal/query/grammar"
+	"rampart/internal/telemetry"
 
 	"github.com/google/uuid"
 )
@@ -20,9 +28,11 @@ type VulnerabilitySource interface {
 	Record(ctx context.Context, id string) (*enrich.VulnerabilityRecord, error)
 }
 
-// VulnerabilityRefresher supports triggering a live refresh of a vulnerability's record.
+// VulnerabilityRefresher fetches a vulnerability's record live from the upstream advisory sources: the "Refresh"
+// button, and nothing else (a page view reads the database only). enrich.LiveAdvisory implements it with single
+// flight per id and a cooldown; it returns *enrich.RefreshCooldownError or enrich.ErrLiveFetchOff when it will not fetch.
 type VulnerabilityRefresher interface {
-	FetchAndPersistLiveAdvisory(ctx context.Context, id string) (*enrich.VulnerabilityRecord, error)
+	Refresh(ctx context.Context, id string) (*enrich.VulnerabilityRecord, error)
 }
 
 // vulnIDPattern is what an identifier may hold (CVE-2021-44228, GHSA-xxxx-xxxx-xxxx, PYSEC-2020-1, OSV ids).
@@ -63,10 +73,13 @@ func (a *API) handleGetVulnerability(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleRefreshVulnerability forces an immediate on-demand refresh of a vulnerability from upstream advisory APIs.
+// handleRefreshVulnerability fetches a vulnerability live from the upstream advisory sources (OSV, then NVD) and
+// stores it (docs/44, docs/51 step 1.5). It needs the triager role: the fetch spends the server's upstream quota,
+// which a viewer must not be able to drain. One fetch per id runs at a time and the same id is not fetched again
+// within the cooldown (AGENTS.md section 4): a later click gets 429 with Retry-After. The upstream error is logged
+// with the request id and not echoed: it can carry upstream URLs and answers that are not the caller's to read.
 func (a *API) handleRefreshVulnerability(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.resolveTenant(r); err != nil {
-		problem(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+	if _, _, ok := a.requireRole(w, r, auth.RoleTriager); !ok {
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
@@ -74,21 +87,34 @@ func (a *API) handleRefreshVulnerability(w http.ResponseWriter, r *http.Request)
 		problem(w, http.StatusBadRequest, "validation", "Not a vulnerability identifier")
 		return
 	}
+	ref, ok := a.intel.(VulnerabilityRefresher)
+	if !ok {
+		problem(w, http.StatusNotImplemented, "unsupported", "This server cannot fetch advisories live: it needs PostgreSQL")
+		return
+	}
 	out := VulnerabilityResponse{ID: strings.ToUpper(id), Links: enrich.VulnerabilityLinks(strings.ToUpper(id), false)}
-	if ref, ok := a.intel.(VulnerabilityRefresher); ok {
-		rec, err := ref.FetchAndPersistLiveAdvisory(r.Context(), id)
-		if err != nil {
-			problem(w, http.StatusBadGateway, "upstream_sync_failed", "Failed to sync with upstream advisory sources: "+err.Error())
-			return
+	rec, err := ref.Refresh(r.Context(), id)
+	var cool *enrich.RefreshCooldownError
+	switch {
+	case errors.As(err, &cool):
+		secs := int(math.Ceil(cool.RetryAfter.Seconds()))
+		if secs < 1 {
+			secs = 1
 		}
-		if rec != nil {
-			out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
-		}
-	} else if src, ok := a.intel.(VulnerabilitySource); ok {
-		rec, _ := src.Record(r.Context(), id)
-		if rec != nil {
-			out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
-		}
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		problem(w, http.StatusTooManyRequests, "refresh-cooldown", fmt.Sprintf("This vulnerability was refreshed less than %d minutes ago. Try again in %d seconds.", int(enrich.DefaultRefreshCooldown/time.Minute), secs))
+		return
+	case errors.Is(err, enrich.ErrLiveFetchOff):
+		problem(w, http.StatusConflict, "live-fetch-off", "This server does not fetch advisories live (advisory mode stored): the record is what the feeds hold")
+		return
+	case err != nil:
+		reqID := telemetry.RequestID(r.Context())
+		slog.Warn("vulnerability refresh: the upstream advisory sources failed", "id", id, "request_id", reqID, "error", err)
+		problem(w, http.StatusBadGateway, "upstream_sync_failed", "The upstream advisory sources (OSV, NVD) could not be read; the reason is in the server log under request id "+reqID)
+		return
+	}
+	if rec != nil {
+		out.Known, out.Record, out.ID, out.Links = true, rec, rec.ID, rec.Links
 	}
 	writeJSON(w, http.StatusOK, out)
 }

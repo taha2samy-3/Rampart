@@ -23,6 +23,7 @@ type GrpcTracker struct {
 	publicURL      string
 	tenantSlug     string
 	acceptedFields []string
+	shared         bool // client is kept by a TrackerConnections cache, which closes it
 }
 
 // NewGrpcTracker constructs a GrpcTracker wrapping an already dialed gRPC client.
@@ -71,9 +72,10 @@ func (g *GrpcTracker) SetTenantSlug(s string) { g.tenantSlug = s }
 // SetAcceptedFields caches create screen field IDs learned during CheckDetailed (D87).
 func (g *GrpcTracker) SetAcceptedFields(fields []string) { g.acceptedFields = fields }
 
-// CloseClient closes the underlying gRPC connection.
+// CloseClient closes the underlying gRPC connection, unless it is a connection kept by a TrackerConnections cache
+// (a tracker returned by DefaultTrackerResolver): that one is shared and closed by the cache.
 func (g *GrpcTracker) CloseClient() error {
-	if g.client != nil {
+	if g.client != nil && !g.shared {
 		return g.client.Close()
 	}
 	return nil

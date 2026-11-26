@@ -70,7 +70,7 @@ database:
   # (rampart_app, direct), migrateUrl (rampart_owner) and systemUrl (rampart_system) (D4).
   # Credentials never go through values.
   existingSecret: ""
-  minSchemaVersion: 57
+  minSchemaVersion: 62
 
 objectStorage:
   endpoint: ""   # used only when seaweedfs.enabled=false (any S3 API)
@@ -413,12 +413,13 @@ bootstrap:
   enabled: false
   applications: []
     # - name: payments-api
+    #   namespace: payments         # a namespace a Tenant lists; the release namespace is listed by none (TenantNotFound)
+    #   displayName: Payments API
     #   businessCriticality: high
-    #   lifecycle: production
+    #   type: repo
     #   repository: https://github.com/acme/payments
     #   branch: main
     #   environment: production
-    #   tags: ["tier=1", "app=payments"]
   scanSources: []
     # - name: payments-ci
     #   type: upload
@@ -428,5 +429,7 @@ bootstrap:
     #   auth:
     #     federation:
     #       issuer: https://token.actions.githubusercontent.com
-    #       boundClaims:
-    #         repository: acme/payments
+    #       provider: github            # binds the token to the job's repository and branch (D80)
+    #       boundClaims:                # immutable ids, not the name (D22): a name can be taken over
+    #         repository_id: "123456789"
+    #         repository_owner_id: "987654"

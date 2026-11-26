@@ -247,7 +247,9 @@ func (p *WasmParser) Parse(ctx context.Context, r io.Reader, pc domain.ParseCont
 			}
 
 			// Ensure required default fields if omitted by wasm module
-			if len(rf.RawPayload) == 0 {
+			// The line is the finding as the module wrote it, secret_value included: never the raw payload of a secret finding (D42).
+			// The ingest redacts every payload again before it is stored (internal/ingest/redact.go).
+			if len(rf.RawPayload) == 0 && rf.Category != domain.CategorySecret && rf.SecretValue == "" {
 				rf.RawPayload = bytes.Clone(line)
 			}
 			if rf.Title == "" {

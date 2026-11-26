@@ -86,7 +86,14 @@ func (m *MemoryStore) ClaimSBOMAnalysis(_ context.Context, a domain.SBOMAnalysis
 	if cur, ok := m.sbomAnalyses[key]; ok && !cur.State.Settled() && cur.UpdatedAt.After(now.Add(-staleAfter)) {
 		return false, nil
 	}
-	m.sbomAnalyses[key] = &domain.SBOMAnalysis{TenantID: a.TenantID, SBOMID: a.SBOMID, Analyzer: a.Analyzer, State: domain.AnalysisPending, Trigger: a.Trigger, CreatedAt: now, UpdatedAt: now}
+	rec := &domain.SBOMAnalysis{TenantID: a.TenantID, SBOMID: a.SBOMID, Analyzer: a.Analyzer, State: domain.AnalysisPending, Trigger: a.Trigger, CreatedAt: now, UpdatedAt: now}
+	if cur, ok := m.sbomAnalyses[key]; ok {
+		rec.LastManualAt = cur.LastManualAt
+	}
+	if a.Trigger == domain.TriggerManual {
+		rec.LastManualAt = &now
+	}
+	m.sbomAnalyses[key] = rec
 	return true, nil
 }
 
@@ -103,9 +110,9 @@ func (m *MemoryStore) SaveSBOMAnalysis(_ context.Context, a domain.SBOMAnalysis)
 		cur = &domain.SBOMAnalysis{TenantID: a.TenantID, SBOMID: a.SBOMID, Analyzer: a.Analyzer, CreatedAt: time.Now().UTC()}
 		m.sbomAnalyses[key] = cur
 	}
-	created := cur.CreatedAt
+	created, manual := cur.CreatedAt, cur.LastManualAt
 	*cur = a
-	cur.CreatedAt, cur.UpdatedAt = created, time.Now().UTC()
+	cur.CreatedAt, cur.UpdatedAt, cur.LastManualAt = created, time.Now().UTC(), manual // only a claim moves it, as in PostgreSQL
 	return nil
 }
 

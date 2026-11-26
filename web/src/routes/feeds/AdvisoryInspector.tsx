@@ -74,8 +74,8 @@ export function AdvisoryInspector({
           <h3 className="text-14 font-semibold text-ink">{source.display_name}</h3>
           <span
             className={cn(
-              'inline-flex items-center rounded-full px-2 py-0.5 text-11 font-medium',
-              source.enabled ? 'bg-success/15 text-success' : 'bg-surface-3 text-ink-2'
+              'text-12 font-medium',
+              source.enabled ? 'text-ink' : 'text-ink-2'
             )}
           >
             {source.enabled ? 'Enabled' : 'Disabled'}
@@ -108,7 +108,7 @@ export function AdvisoryInspector({
       {/* Endpoint URL */}
       <section aria-labelledby="adv-source">
         <h4 id="adv-source" className="font-semibold text-ink">API Endpoint URL</h4>
-        <p className="mt-1 break-all font-mono text-12 text-ink-2 bg-layer-2 p-2 rounded border border-rule">
+        <p className="mt-1 break-all font-mono text-12 text-ink-2 bg-chrome p-2 rounded border border-rule">
           {source.url}
         </p>
       </section>
@@ -125,10 +125,10 @@ export function AdvisoryInspector({
         <div className="mt-1.5 flex items-center gap-2">
           <span
             className={cn(
-              'inline-flex items-center rounded px-2 py-0.5 text-11 font-medium',
-              source.token_required && source.token_present && 'bg-success/15 text-success',
-              source.token_required && !source.token_present && 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-              !source.token_required && 'bg-layer-2 text-ink-2 border border-rule'
+              'inline-flex items-center rounded px-2 py-0.5 text-12 font-medium',
+              source.token_required && source.token_present && 'bg-resolved/15 text-resolved',
+              source.token_required && !source.token_present && 'bg-medium/15 text-medium dark:text-medium',
+              !source.token_required && 'bg-chrome text-ink-2 border border-rule'
             )}
           >
             {source.token_required
@@ -138,7 +138,7 @@ export function AdvisoryInspector({
               : 'Token Not Required'}
           </span>
           {source.token_file && (
-            <span className="font-mono text-11 text-ink-3 truncate max-w-xs">{source.token_file}</span>
+            <span className="font-mono text-12 text-ink-2 truncate max-w-xs">{source.token_file}</span>
           )}
         </div>
         <p className="mt-1.5 text-12 text-ink-2">{rateInfo.authDoc}</p>
@@ -152,7 +152,7 @@ export function AdvisoryInspector({
           <span
             className={cn(
               'font-semibold',
-              source.status === 'ready' && 'text-success',
+              source.status === 'ready' && 'text-resolved',
               source.status === 'error' && 'text-critical',
               source.status === 'syncing' && 'text-accent',
               source.status === 'disabled' && 'text-ink-2'
@@ -178,12 +178,12 @@ export function AdvisoryInspector({
           <button
             type="button"
             onClick={() => void copySnippet()}
-            className="text-11 font-medium text-accent hover:underline"
+            className="text-12 font-medium text-accent hover:underline"
           >
-            {copiedSnippet ? 'Copied!' : 'Copy Snippet'}
+            {copiedSnippet ? 'Copied' : 'Copy Snippet'}
           </button>
         </div>
-        <pre className="mt-1.5 rounded bg-layer-2 p-2.5 font-mono text-11 text-ink border border-rule overflow-x-auto">
+        <pre className="mt-1.5 rounded bg-chrome p-2.5 font-mono text-12 text-ink border border-rule overflow-x-auto">
           <code>{sampleSnippet}</code>
         </pre>
       </section>

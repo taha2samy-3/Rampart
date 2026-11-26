@@ -15,9 +15,9 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  name: {{ .name }}
+  {{- /* displayName, not name: the CRD prunes fields it does not list (lifecycle and tags are not in it; docs/51 2.13). */}}
+  displayName: {{ .displayName | default .name | quote }}
   businessCriticality: {{ .businessCriticality | default "medium" | quote }}
-  lifecycle: {{ .lifecycle | default "production" | quote }}
   {{- with .type }}
   type: {{ . | quote }}
   {{- end }}
@@ -29,10 +29,6 @@ spec:
   {{- end }}
   {{- with .environment }}
   environment: {{ . | quote }}
-  {{- end }}
-  {{- with .tags }}
-  tags:
-    {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
 

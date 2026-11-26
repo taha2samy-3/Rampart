@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -431,10 +432,56 @@ func (a *API) handleAnalyzeAsset(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "invalid-request", "The asset id is not a UUID")
 		return
 	}
+	// The same 5-minute cooldown as the application's refresh: a person asking again at once spends the analyzers' quota
+	// (Sonatype) for nothing (AGENTS.md section 4, docs/51 step 2.2).
+	if until := a.manualCooldownUntil(r, tenantID, assetID); until != nil {
+		secs := int(time.Until(*until).Seconds()) + 1
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		problem(w, http.StatusTooManyRequests, "analysis-cooldown", fmt.Sprintf("This asset was analysed on request less than %d minutes ago. Try again in %d seconds.", int(a.cooldown()/time.Minute), secs))
+		return
+	}
 	n, err := a.analysis.DispatchAsset(r.Context(), tenantID, assetID, domain.TriggerManual)
 	if err != nil && n == 0 {
 		problem(w, http.StatusInternalServerError, "internal", "Could not queue the analyses")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, analyzeResponse{Queued: n})
+}
+
+// cooldown is the minimum time between two manual analyses of the same SBOM (docs/39 D.2).
+func (a *API) cooldown() time.Duration {
+	if a.manualCooldown > 0 {
+		return a.manualCooldown
+	}
+	return 5 * time.Minute
+}
+
+// manualCooldownUntil is when the asset's newest SBOM may be analysed on request again, or nil when it may be now.
+func (a *API) manualCooldownUntil(r *http.Request, tenantID, assetID uuid.UUID) *time.Time {
+	st, ok := a.store.(domain.AnalysisStore)
+	if !ok {
+		return nil
+	}
+	s, _, err := a.store.GetSBOM(r.Context(), tenantID, assetID)
+	if err != nil || s == nil {
+		return nil
+	}
+	analyses, err := st.ListSBOMAnalyses(r.Context(), tenantID, s.ID)
+	if err != nil {
+		return nil
+	}
+	var last *time.Time
+	for _, an := range analyses {
+		if an.LastManualAt != nil && (last == nil || an.LastManualAt.After(*last)) {
+			last = an.LastManualAt
+		}
+	}
+	if last == nil {
+		return nil
+	}
+	until := last.Add(a.cooldown())
+	if !time.Now().Before(until) {
+		return nil
+	}
+	return &until
 }

@@ -12,6 +12,8 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
+// Consistent with the server: the score is the highest of the open findings, and none is critical, so under the
+// built-in policy (critical 800, high 600, medium 300) the band is high.
 const mockApp: ApplicationPage = {
   id: 'app_payments',
   name: 'Payments Service',
@@ -19,94 +21,70 @@ const mockApp: ApplicationPage = {
   business_criticality: 'high',
   internet_facing: true,
   risk_score: 742,
-  exposure_count: 5,
-  open: {
-    critical: 2,
-    high: 8,
-    medium: 14,
-    low: 3,
-  },
-  sla: {
-    within: 20,
-    late: 4,
-    breached: 3,
-    adherence: 0.74,
-  },
+  exposure_count: 8,
+  open: { critical: 0, high: 8, medium: 14, low: 3 },
+  sla: { within: 20, late: 4, breached: 3, adherence: 0.74 },
   sla_breached: 3,
   mttr: [],
   coverage: [],
   top_findings: [],
 };
 
+const BUILTIN = { critical: 800, high: 600, medium: 300 };
+
 describe('ApplicationScoreCard', () => {
-  it('renders calibrated posture score and semantic band glyph', () => {
-    const { container } = render(
-      <ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" />,
-    );
-
+  it('shows the score and the band the server gave (the worst open band), not one worked out from the score', () => {
+    render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={BUILTIN} />);
     expect(screen.getByText('742')).toBeInTheDocument();
-    expect(screen.getByText('/ 1000')).toBeInTheDocument();
-    expect(screen.getByText(/High Risk/i)).toBeInTheDocument();
-
-    const progressbar = screen.getByRole('progressbar');
-    expect(progressbar).toHaveAttribute('aria-valuenow', '742');
-    expect(progressbar).toHaveAttribute('aria-valuemin', '0');
-    expect(progressbar).toHaveAttribute('aria-valuemax', '1000');
-    expect(progressbar).toHaveAttribute('aria-valuetext', '742 of 1000, High risk posture');
-
-    // Threshold indicators
-    expect(screen.getByText('Low 100')).toBeInTheDocument();
-    expect(screen.getByText('Med 400')).toBeInTheDocument();
-    expect(screen.getByText('High 600')).toBeInTheDocument();
-    expect(screen.getByText('Crit 800')).toBeInTheDocument();
-
-    // Verify SVG BandShape rendered
-    const svgs = container.querySelectorAll('svg');
-    expect(svgs.length).toBeGreaterThan(0);
+    expect(screen.getByText('High')).toBeInTheDocument();
+    const meter = screen.getByRole('meter');
+    expect(meter).toHaveAttribute('aria-valuenow', '742');
+    expect(meter).toHaveAttribute('aria-valuetext', '742 of 1000, High');
   });
 
-  it('renders operational stats: exposure, findings, and SLA adherence', () => {
-    render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" />);
+  it('draws the markers at the bounds the server sent, whatever they are', () => {
+    const { rerender } = render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={BUILTIN} />);
+    expect(screen.getByTestId('band-marker-medium').style.insetInlineStart).toBe('30%');
+    expect(screen.getByTestId('band-marker-critical').style.insetInlineStart).toBe('80%');
+    expect(screen.getByText(/Medium from 300, high from 600, critical from 800/)).toBeInTheDocument();
 
-    expect(screen.getByText('5')).toBeInTheDocument(); // active exposures
-    expect(screen.getByText('27')).toBeInTheDocument(); // total open findings (2+8+14+3)
-    expect(screen.getByText('74%')).toBeInTheDocument(); // adherence
-    expect(screen.getByText('3 breached')).toBeInTheDocument(); // breached badge
+    rerender(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={{ critical: 900, high: 700, medium: 450 }} />);
+    expect(screen.getByTestId('band-marker-medium').style.insetInlineStart).toBe('45%');
+    expect(screen.getByTestId('band-marker-high').style.insetInlineStart).toBe('70%');
   });
 
-  it('renders severity breakdown links to filtered findings view', () => {
-    render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" />);
-
-    expect(screen.getByRole('link', { name: /2.*Critical/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /8.*High/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /14.*Medium/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /3.*Low/i })).toBeInTheDocument();
+  it('draws no marker and says so when the bounds are not loaded', () => {
+    render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={null} />);
+    expect(screen.queryByTestId('band-marker-medium')).toBeNull();
+    expect(screen.getByText(/band bounds could not be loaded/)).toBeInTheDocument();
   });
 
-  it('handles clean / zero-risk applications gracefully', () => {
-    const cleanApp: ApplicationPage = {
-      ...mockApp,
-      risk_score: 0,
-      exposure_count: 0,
-      open: { critical: 0, high: 0, medium: 0, low: 0 },
-      sla: { adherence: 1.0, within: 10, late: 0, breached: 0 },
-    };
-
-    render(<ApplicationScoreCard app={cleanApp} appQuerySlug="payments-service" />);
-
-    const zeros = screen.getAllByText('0');
-    expect(zeros.length).toBeGreaterThan(0);
-    expect(screen.getByText(/Info Risk/i)).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
+  it('has no KPI tiles, no "% of scale" and no "In policy"', () => {
+    const { container } = render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={BUILTIN} />);
+    expect(container.textContent).not.toMatch(/% of scale|In policy|Exposures|SLA Adherence/);
   });
 
-  it('passes automated accessibility (axe) testing', async () => {
+  it('links each band to the findings it counts', () => {
+    render(<ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={BUILTIN} />);
+    expect(screen.getByRole('link', { name: /8 high/ })).toHaveAttribute('href', expect.stringContaining('risk%3Ahigh'));
+    expect(screen.getByRole('link', { name: /14 medium/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /0 critical/ })).toBeInTheDocument();
+  });
+
+  it('shows no band, and no info band, for an application with nothing open', () => {
+    const cleanApp: ApplicationPage = { ...mockApp, risk_score: 0, exposure_count: 0, open: { critical: 0, high: 0, medium: 0, low: 0 } };
+    const { container } = render(<ApplicationScoreCard app={cleanApp} appQuerySlug="payments-service" thresholds={BUILTIN} />);
+    expect(screen.getByText('No open finding')).toBeInTheDocument();
+    expect(container.querySelector('[data-band="info"]')).toBeNull();
+    expect(container.textContent).not.toMatch(/Info/);
+  });
+
+  it('passes axe', async () => {
     const { container } = render(
       <main>
-        <ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" />
+        <ApplicationScoreCard app={mockApp} appQuerySlug="payments-service" thresholds={BUILTIN} />
       </main>,
     );
-    const results = await axe(container);
-    expect(results).toHaveNoViolations();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

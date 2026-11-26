@@ -125,4 +125,17 @@ describe('compliance', () => {
     renderApp('/compliance');
     expect(await screen.findByText('The framework could not be evaluated.')).toBeInTheDocument();
   });
+
+  // docs/41: a 404 with a reason is the server refusing on purpose. Its sentence is shown, not "could not be evaluated",
+  // and there is no Try again, which would give the same answer.
+  it('shows the server\'s reason when a framework does not apply, with no Try again', async () => {
+    const reason = 'This framework does not apply to that application: it does not list the complianceScope pci';
+    mockFetch({ loggedIn: true, taxonomyStatus: { refused: reason } });
+    const { container } = renderApp('/compliance');
+    const note = await screen.findByTestId('compliance-refusal');
+    expect(within(note).getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText('The framework could not be evaluated.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

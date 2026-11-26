@@ -100,11 +100,12 @@ func (s *PostgresStore) ClaimSBOMAnalysis(ctx context.Context, a domain.SBOMAnal
 	claimed := false
 	err := s.withTenantTx(ctx, a.TenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
-			INSERT INTO sbom_analysis (tenant_id, sbom_id, analyzer_kind, analyzer_scope, analyzer_namespace, analyzer_name, state, trigger)
-			VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)
+			INSERT INTO sbom_analysis (tenant_id, sbom_id, analyzer_kind, analyzer_scope, analyzer_namespace, analyzer_name, state, trigger, last_manual_at)
+			VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, CASE WHEN $7 = 'manual' THEN NOW() END)
 			ON CONFLICT (tenant_id, sbom_id, analyzer_kind, analyzer_scope, analyzer_namespace, analyzer_name) DO UPDATE
 			   SET state = 'pending', trigger = EXCLUDED.trigger, attempts = 0, error = '', components = 0, findings = 0, created = 0, closed = 0,
-			       started_at = NULL, finished_at = NULL, created_at = NOW(), updated_at = NOW()
+			       started_at = NULL, finished_at = NULL, created_at = NOW(), updated_at = NOW(),
+			       last_manual_at = CASE WHEN EXCLUDED.trigger = 'manual' THEN NOW() ELSE sbom_analysis.last_manual_at END
 			 WHERE sbom_analysis.state NOT IN ('pending', 'running')
 			    OR sbom_analysis.updated_at < NOW() - make_interval(secs => $8)`,
 			a.TenantID, a.SBOMID, a.Analyzer.Kind, a.Analyzer.Scope, a.Analyzer.Namespace, a.Analyzer.Name, string(a.Trigger), staleAfter.Seconds())
@@ -162,7 +163,7 @@ func (s *PostgresStore) ListSBOMAnalyses(ctx context.Context, tenantID, sbomID u
 		rows, err := tx.Query(ctx, `
 			SELECT analyzer_kind, analyzer_scope, analyzer_namespace, analyzer_name,
 			       state, trigger, attempts, error, components, findings, created, closed,
-			       started_at, finished_at, created_at, updated_at
+			       started_at, finished_at, created_at, updated_at, last_manual_at
 			  FROM sbom_analysis
 			 WHERE tenant_id = $1 AND sbom_id = $2
 			 ORDER BY analyzer_name ASC`, tenantID, sbomID)
@@ -178,7 +179,7 @@ func (s *PostgresStore) ListSBOMAnalyses(ctx context.Context, tenantID, sbomID u
 			a.TenantID, a.SBOMID = tenantID, sbomID
 			if err := rows.Scan(&a.Analyzer.Kind, &a.Analyzer.Scope, &a.Analyzer.Namespace, &a.Analyzer.Name,
 				&state, &trigger, &a.Attempts, &a.Error, &a.Components, &a.Findings, &a.Created, &a.Closed,
-				&a.StartedAt, &a.FinishedAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+				&a.StartedAt, &a.FinishedAt, &a.CreatedAt, &a.UpdatedAt, &a.LastManualAt); err != nil {
 				return err
 			}
 			a.State, a.Trigger = domain.AnalysisState(state), domain.AnalysisTrigger(trigger)

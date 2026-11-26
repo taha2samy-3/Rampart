@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, ApplicationFreshness, ApplicationScanSource, ApplicationScanSourcesResponse, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate, TrackerContainerItem, TrackerEvent, TrackerRefKey, TrackerTestResult, TicketQueueResponse } from './types';
+import type { AppSummary, ApplicationPage, ApplicationFreshness, ApplicationScanSource, ApplicationScanSourcesResponse, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate, TrackerContainerItem, TrackerEvent, TrackerRefKey, TrackerTestResult, TicketQueueResponse, ConnectorSummary, IntegrationPackageItem } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -329,3 +329,13 @@ export async function listTickets(signal?: AbortSignal): Promise<TicketQueueResp
     configured: Boolean(raw.configured),
   };
 }
+
+/** Connectors as resources (D82), each with the catalogue's kind (docs/50). No fallback list: what is shown exists. */
+export const listConnectors = (signal?: AbortSignal) =>
+  get<{ items?: ConnectorSummary[] | null }>('/api/v1/connectors', { signal }).then((r) => r.items ?? []);
+
+/** Installed packages (D94). An older server wrote Go nil slices as null; they are read as empty lists. */
+export const listIntegrationPackages = (signal?: AbortSignal) =>
+  get<{ items?: IntegrationPackageItem[] | null }>('/api/v1/integration-packages', { signal }).then((r) =>
+    (r.items ?? []).map((p) => ({ ...p, egress: p.egress ?? [], secrets: p.secrets ?? [], config: p.config ?? [], used_by: p.used_by ?? [] })),
+  );

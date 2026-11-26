@@ -27,8 +27,11 @@ func (a *API) SetSSRFAllowlist(al *domain.PlatformSSRFAllowlist) { a.ssrfAllowli
 // ConnectorItem is a connector as the UI lists it: its configuration (secret references only) and the status the
 // operator wrote after its Check (D69).
 type ConnectorItem struct {
-	Name       string                    `json:"name"`
-	Type       domain.ConnectorType      `json:"type"`
+	Name string               `json:"name"`
+	Type domain.ConnectorType `json:"type"`
+	// Kind is the catalogue's kind of the type (tracker, notifier, source): the UI files the connector by it
+	// instead of keeping its own list of types (docs/50). Empty for a type the catalogue does not list.
+	Kind       string                    `json:"kind"`
 	Direction  domain.ConnectorDirection `json:"direction"`
 	Enabled    bool                      `json:"enabled"`
 	ManagedBy  string                    `json:"managed_by"`
@@ -66,7 +69,7 @@ func (a *API) handleListConnectors(w http.ResponseWriter, r *http.Request) {
 	items := make([]ConnectorItem, 0, len(conns))
 	for _, c := range conns {
 		it := ConnectorItem{
-			Name: c.Name, Type: c.Type, Direction: c.Direction(), Enabled: true, ManagedBy: "resource",
+			Name: c.Name, Type: c.Type, Kind: domain.ConnectorKindOf(c.Type), Direction: c.Direction(), Enabled: true, ManagedBy: "resource",
 			Spec: c.Spec, WebhookURL: c.Status.WebhookURL,
 			Status: connectorItemStatus{Conditions: []connectorItemCondition{}, LastCheckTime: c.Status.LastSync, AccountID: c.Status.AccountID},
 		}

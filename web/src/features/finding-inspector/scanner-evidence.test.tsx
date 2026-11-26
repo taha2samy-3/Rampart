@@ -43,7 +43,7 @@ const gitleaksOcc = {
   last_seen: '2026-11-15T00:00:00Z',
 };
 
-describe('Scanner Evidence & Extracted Details', () => {
+describe('Scanner evidence', () => {
   it('renders scanner metadata, dynamic attributes, and raw JSON', async () => {
     mockFetch({
       loggedIn: true,
@@ -54,7 +54,7 @@ describe('Scanner Evidence & Extracted Details', () => {
     renderApp('/findings?sel=f-1');
 
     const insp = await screen.findByRole('complementary', { name: 'Finding details' });
-    const heading = await within(insp).findByRole('heading', { name: 'Scanner Evidence & Extracted Details' });
+    const heading = await within(insp).findByRole('heading', { name: 'Scanner evidence' });
     const section = heading.closest('section')!;
 
     // Scanner metadata
@@ -75,8 +75,8 @@ describe('Scanner Evidence & Extracted Details', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/gitleaks/gitleaks');
 
     // Raw scanner record
-    expect(within(section).getByText('Raw Scanner Record (JSON)')).toBeInTheDocument();
-    expect(within(section).getByRole('button', { name: 'Copy Raw JSON' })).toBeInTheDocument();
+    expect(within(section).getByText('Raw scanner record (JSON)')).toBeInTheDocument();
+    expect(within(section).getByRole('button', { name: 'Copy raw JSON' })).toBeInTheDocument();
   });
 
   it('has no accessibility violations', async () => {

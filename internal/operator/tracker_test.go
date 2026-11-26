@@ -25,9 +25,21 @@ func TestExternalTrackers_ReconciledListedAndIsolated(t *testing.T) {
 		t.Fatalf("expected Ready=True mentioning Ticketing tab, got %+v", r)
 	}
 
+	// A namespaced tracker may name a Service only in its own namespace.
+	stOther, err := op.ReconcileExternalTracker(ctx, &operator.PolicyCR{
+		Metadata: operator.Metadata{Name: "other-ns", Namespace: "acme-ns", Generation: 1},
+		Spec:     svc,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := stOther.GetCondition("Ready"); r == nil || r.Status != "False" || !strings.Contains(r.Message, "own namespace") {
+		t.Fatalf("expected refusal of a Service in another namespace, got %+v", r)
+	}
+
 	stTenant, err := op.ReconcileExternalTracker(ctx, &operator.PolicyCR{
 		Metadata: operator.Metadata{Name: "mine", Namespace: "acme-ns", Generation: 1},
-		Spec:     svc,
+		Spec:     map[string]any{"service": map[string]any{"name": "jira-tracker", "namespace": "acme-ns", "port": 50051}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +64,8 @@ func TestExternalTrackers_ReconciledListedAndIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("expected 3 tracker records (1 cluster + 1 valid tenant + 1 refused tenant), got %d", len(list))
+	if len(list) != 4 {
+		t.Fatalf("expected 4 tracker records (1 cluster + 1 valid tenant + 2 refused tenant), got %d", len(list))
 	}
 
 	other := domain.NewID()

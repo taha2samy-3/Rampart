@@ -243,6 +243,7 @@ func TestProcessSBOM_OpenVEX_AppliesVEXStatements(t *testing.T) {
 	ctx := context.Background()
 	proc, st, _ := sbomProcessor(t)
 	run := sbomRun()
+	run.Context.VEXDecider = "user:triager@acme.example" // uploaded by a triager (docs/51 step 1.2)
 
 	vulnID := "CVE-2023-44487"
 	purl := "pkg:golang/google.golang.org/grpc@v1.58.2"
@@ -376,6 +377,7 @@ func TestProcessSBOM_CycloneDX_EmbeddedVEX_AppliesStatements(t *testing.T) {
 	ctx := context.Background()
 	proc, st, _ := sbomProcessor(t)
 	run := sbomRun()
+	run.Context.VEXDecider = "user:triager@acme.example" // uploaded by a triager (docs/51 step 1.2)
 
 	vulnID := "CVE-2021-44228"
 	purl := "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"
@@ -540,5 +542,58 @@ func TestProcessSBOM_VEX_PreservesNewerHumanDecision(t *testing.T) {
 	}
 	if f.State != domain.StateUnderInvestigation {
 		t.Errorf("newer human decision was overwritten: state = %s, want %s", f.State, domain.StateUnderInvestigation)
+	}
+}
+
+// docs/51 step 1.2: the same OpenVEX document uploaded with an ingest or CI token decides nothing. Before, any token that could
+// upload set findings to not_affected, which the gate and the SLA then ignored. A finding of another asset is never touched.
+func TestProcessSBOM_OpenVEX_FromACITokenDecidesNothing(t *testing.T) {
+	ctx := context.Background()
+	proc, st, _ := sbomProcessor(t)
+	run := sbomRun() // no VEXDecider: the gateway sets it only for the triager role and higher
+
+	vulnID := "CVE-2023-44487"
+	f := &domain.Finding{
+		ID: domain.NewID(), TenantID: run.TenantID, ApplicationID: run.ApplicationID, AssetID: run.AssetID,
+		FindingKey: "finding-grpc-cve", RuleID: vulnID, VulnerabilityID: &vulnID,
+		Location: domain.Location{Package: &domain.PackageLocation{Purl: "pkg:golang/google.golang.org/grpc@v1.58.2",
+			PurlBase: "pkg:golang/google.golang.org/grpc", InstalledVersion: "v1.58.2"}},
+		Severity: domain.SeverityCritical, State: domain.StateOpen, Version: 1,
+	}
+	other := *f
+	other.ID, other.FindingKey, other.AssetID = domain.NewID(), "finding-grpc-other-asset", domain.NewID()
+	if err := st.UpsertFindings(ctx, run.TenantID, []*domain.Finding{f, &other}); err != nil {
+		t.Fatal(err)
+	}
+	parser, err := sbom.NewWasmSBOMParserFromSpec("openvex", []byte("spec:\n  format: openvex\n  options:\n    extractVEX: true\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := func() ingest.Result {
+		res, err := proc.Process(ctx, ingest.ProcessParams{Run: run, Parser: parser, IsSBOM: true, ScanFinished: time.Now().UTC(), Open: openString(sampleOpenVEX)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	res := process()
+	if res.Stats.VEXApplied != 0 || res.Stats.VEXSkipped == 0 {
+		t.Fatalf("an upload without the triager role must apply nothing and say so: %+v", res.Stats)
+	}
+	got, _ := st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-grpc-cve"})
+	if got["finding-grpc-cve"].State != domain.StateOpen {
+		t.Fatalf("SECURITY: a CI token decided a finding: %s", got["finding-grpc-cve"].State)
+	}
+
+	run.Context.VEXDecider = "user:triager@acme.example"
+	if res := process(); res.Stats.VEXApplied != 1 {
+		t.Fatalf("a triager's upload decides the asset's finding, and only it: %+v", res.Stats)
+	}
+	got, _ = st.GetFindingsByKeys(ctx, run.TenantID, []string{"finding-grpc-cve", "finding-grpc-other-asset"})
+	if got["finding-grpc-cve"].State != domain.StateNotAffected {
+		t.Fatalf("the asset's finding: %s", got["finding-grpc-cve"].State)
+	}
+	if got["finding-grpc-other-asset"].State != domain.StateOpen {
+		t.Fatalf("a finding of another asset was decided by this asset's VEX: %s", got["finding-grpc-other-asset"].State)
 	}
 }

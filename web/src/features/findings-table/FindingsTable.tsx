@@ -214,12 +214,12 @@ export function FindingsTable({
                 <Td className={HIDE_NARROWER}>
                   <span
                     className={cn(
-                      'inline-flex items-center rounded px-1.5 py-0.5 text-11 font-medium capitalize',
-                      f.state === 'not_affected' && 'border border-success/30 bg-success/15 text-success',
-                      f.state === 'fixed' && 'bg-success/10 text-success',
-                      f.state === 'under_investigation' && 'bg-warning/10 text-warning',
+                      'inline-flex items-center rounded px-1.5 py-0.5 text-12 font-medium capitalize',
+                      f.state === 'not_affected' && 'border border-resolved/30 bg-resolved/15 text-resolved',
+                      f.state === 'fixed' && 'bg-resolved/10 text-resolved',
+                      f.state === 'under_investigation' && 'bg-medium/10 text-medium',
                       f.state === 'risk_accepted' && 'bg-accent/10 text-accent',
-                      f.state === 'affected' && 'bg-danger/10 text-danger',
+                      f.state === 'affected' && 'bg-critical/10 text-critical',
                       f.state === 'open' && 'text-ink',
                       (f.state === 'out_of_scope' || f.state === 'duplicate') && 'text-ink-2',
                     )}

@@ -108,6 +108,16 @@ func ParseExternalAnalyzerSpec(raw []byte, tenantScoped bool) (ExternalAnalyzerS
 	return s, nil
 }
 
+// ParseTenantExternalAnalyzerSpec checks the spec of a namespaced ExternalAnalyzer that lives in namespace: on top of
+// ParseExternalAnalyzerSpec(raw, true), the Service it names must be in its own namespace (service.namespace empty or equal).
+func ParseTenantExternalAnalyzerSpec(raw []byte, namespace string) (ExternalAnalyzerSpec, error) {
+	s, err := ParseExternalAnalyzerSpec(raw, true)
+	if err != nil {
+		return s, err
+	}
+	return s, serviceInOwnNamespace("ExternalAnalyzer", s.Service.Namespace, namespace)
+}
+
 // IsEnabled is true unless the spec says enabled: false.
 func (s ExternalAnalyzerSpec) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 

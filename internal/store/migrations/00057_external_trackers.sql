@@ -1,5 +1,5 @@
 -- +goose Up
--- Expand-safe migration for ClusterExternalTracker and ExternalTracker container definitions.
+-- expand-safe: widens the kind CHECKs of cluster_policy and policy_object (the old binary never writes the new kind) and adds a new table.
 -- Widens cluster_policy and policy_object kind constraints to allow 'external_tracker' and creates RLS-protected tracker_event.
 ALTER TABLE cluster_policy DROP CONSTRAINT IF EXISTS cluster_policy_kind_check;
 ALTER TABLE cluster_policy ADD CONSTRAINT cluster_policy_kind_check CHECK (kind IN ('risk', 'sla', 'feeds', 'compliance', 'parser', 'external_analyzer', 'sbom_analyzer', 'external_tracker'));

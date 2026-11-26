@@ -4,11 +4,14 @@ import { get, post, qk } from '@/api';
 import { ProblemError } from '@/api/client';
 import { Button, Dialog, DialogContent, Spinner } from '@/components';
 
+/** The kinds the catalogue files a connector type under (internal/domain/connector_catalogue.go). */
+export type ConnectorKind = 'tracker' | 'notifier' | 'source';
+
 /** One connector type, as GET /api/v1/connectors/catalogue describes it (D82). */
 export interface CatalogueEntry {
   type: string;
   name: string;
-  kind: 'tracker' | 'notifier' | 'source';
+  kind: ConnectorKind;
   directions: string[];
   description: string;
   config_key: string;
@@ -35,7 +38,8 @@ export function ConnectorCatalogueDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  kindFilter?: 'tracker' | 'non-tracker';
+  /** Show only the types of this catalogue kind: Ticketing shows trackers, Notifiers shows notifiers. */
+  kindFilter?: ConnectorKind;
 }) {
   const [selected, setSelected] = useState<CatalogueEntry | null>(null);
   const [yaml, setYaml] = useState('');
@@ -78,7 +82,7 @@ export function ConnectorCatalogueDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
-        title={selected ? `Configure ${selected.name}` : 'Integration Catalogue'}
+        title={selected ? `Configure ${selected.name}` : 'Connector catalogue'}
         description={
           selected
             ? selected.description
@@ -95,7 +99,7 @@ export function ConnectorCatalogueDialog({
           ) : (
             <ul className="flex flex-col divide-y divide-rule" aria-label="Connector types">
               {(catalogue.data?.items ?? [])
-                .filter((e) => !kindFilter || (kindFilter === 'tracker' ? e.kind === 'tracker' : e.kind !== 'tracker'))
+                .filter((e) => !kindFilter || e.kind === kindFilter)
                 .map((e) => (
                 <li key={e.type}>
                   <button
@@ -105,7 +109,7 @@ export function ConnectorCatalogueDialog({
                   >
                     <span className="text-13 font-medium text-ink">{e.name}</span>
                     <span className="text-12 text-ink-2">
-                      {e.kind} · {(e.directions ?? []).join(' or ')}
+                      {e.kind}, {(e.directions ?? []).join(' or ')}
                     </span>
                   </button>
                 </li>

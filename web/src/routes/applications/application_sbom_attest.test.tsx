@@ -62,8 +62,8 @@ describe('Application Route: SBOM, Attest & CVE Sections', () => {
     expect(within(table).getByText('log4j-core')).toBeInTheDocument();
     expect(within(table).getByRole('link', { name: /2 open CVEs/i })).toBeInTheDocument();
 
-    // The per-package button re-scores; it does not claim to scan
-    expect(within(table).getByRole('button', { name: /Re-evaluate log4j-core/i })).toBeInTheDocument();
+    // Unimplemented per-package 501 scan button is not rendered
+    expect(within(table).queryByRole('button', { name: /Re-evaluate log4j-core/i })).toBeNull();
     expect(within(table).queryByRole('button', { name: /^Scan /i })).toBeNull();
   });
 

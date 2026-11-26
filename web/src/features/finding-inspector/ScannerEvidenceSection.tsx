@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getFindingOccurrences, qk } from '@/api';
-import type { Finding } from '@/api/types';
-import { Button, MarkdownView, Spinner } from '@/components';
+import { getFinding, qk, toProblem } from '@/api';
+import type { Finding, Occurrence } from '@/api/types';
+import { Button, MarkdownView, ProblemMessage, Spinner } from '@/components';
 import { absoluteDate } from '@/lib/format';
 
 function formatLabel(key: string): string {
@@ -24,22 +24,20 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
     <Button
       variant="secondary"
       onClick={handleCopy}
-      className="h-5 px-1.5 text-11 leading-none"
+      className="h-5 px-1.5 text-12 leading-none"
       title="Copy to clipboard"
     >
-      {copied ? 'Copied!' : label}
+      {copied ? 'Copied' : label}
     </Button>
   );
 }
 
 function AttributeValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <span className="text-ink-3">null</span>;
+  if (value === null || value === undefined) return <span className="text-ink-2">null</span>;
 
   if (typeof value === 'boolean') {
     return (
-      <span className={`inline-block rounded px-1.5 py-0.5 text-11 font-semibold ${value ? 'bg-success/15 text-success' : 'bg-muted/15 text-ink-2'}`}>
-        {value ? 'True' : 'False'}
-      </span>
+      <span className="text-12">{value ? 'Yes' : 'No'}</span>
     );
   }
 
@@ -60,7 +58,7 @@ function AttributeValue({ value }: { value: unknown }) {
           className="inline-flex items-center gap-1 font-mono text-12 text-accent hover:underline [overflow-wrap:anywhere]"
         >
           {trimmed}
-          <span aria-hidden="true" className="text-10">↗</span>
+          <span aria-hidden="true" className="text-12">↗</span>
         </a>
       );
     }
@@ -107,7 +105,7 @@ function AttributeValue({ value }: { value: unknown }) {
     const jsonStr = JSON.stringify(value, null, 2);
     return (
       <div className="mt-1">
-        <pre className="max-h-32 overflow-auto rounded border border-rule bg-chrome p-1.5 font-mono text-11 text-ink-2">
+        <pre className="max-h-32 overflow-auto rounded border border-rule bg-chrome p-1.5 font-mono text-12 text-ink-2">
           {jsonStr}
         </pre>
       </div>
@@ -117,17 +115,31 @@ function AttributeValue({ value }: { value: unknown }) {
   return <span className="text-12">{String(value)}</span>;
 }
 
-export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
+/**
+ * What each scanner reported for a finding. The occurrences come with the finding itself (GET /api/v1/findings/{id}),
+ * so this reads the same query as the finding page (one request, shared through the cache) and takes the
+ * occurrences from it. A caller that already holds them passes `occurrences` and nothing is fetched.
+ */
+export function ScannerEvidenceSection({ finding, occurrences: given }: { finding: Finding; occurrences?: Occurrence[] }) {
   const [selectedIdx, setSelectedIdx] = useState(0);
 
   const q = useQuery({
-    queryKey: [...qk.findings.occurrences(finding.id), finding.version],
-    queryFn: ({ signal }) => getFindingOccurrences(finding.id, signal),
+    queryKey: qk.findings.one(finding.id),
+    queryFn: ({ signal }) => getFinding(finding.id, signal),
+    select: (d) => d.occurrences ?? [],
+    enabled: given === undefined,
     retry: false,
   });
 
-  const occurrences = q.data ?? [];
-  if (q.isPending) {
+  const occurrences = given ?? q.data ?? [];
+  if (given === undefined && q.isError) {
+    return (
+      <div className="mt-4">
+        <ProblemMessage problem={toProblem(q.error)} title="The scanner evidence could not be loaded" onRetry={() => void q.refetch()} />
+      </div>
+    );
+  }
+  if (given === undefined && q.isPending) {
     return (
       <div className="mt-4 flex items-center gap-2 text-12 text-ink-2">
         <Spinner size={14} />
@@ -137,7 +149,7 @@ export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
   }
 
   if (occurrences.length === 0) {
-    return null;
+    return <p className="mt-4 text-12 text-ink-2">No scanner occurrence is stored for this finding.</p>;
   }
 
   const activeOcc = occurrences[selectedIdx] ?? occurrences[0];
@@ -163,7 +175,7 @@ export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
     <section className="mt-5 border-t border-rule pt-4" aria-labelledby="scanner-evidence-title">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 id="scanner-evidence-title" className="text-13 font-semibold text-ink">
-          Scanner Evidence & Extracted Details
+          Scanner evidence
         </h3>
         {occurrences.length > 1 && (
           <div className="flex items-center gap-1">
@@ -171,11 +183,12 @@ export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
               <button
                 key={occ.id || idx}
                 type="button"
+                aria-pressed={idx === selectedIdx}
                 onClick={() => setSelectedIdx(idx)}
-                className={`rounded px-2 py-0.5 text-11 font-medium transition-colors ${
+                className={`rounded-ctl border px-2 py-0.5 text-12 font-medium ${
                   idx === selectedIdx
-                    ? 'bg-accent text-white'
-                    : 'bg-layer-2 text-ink-2 hover:bg-layer-3 hover:text-ink'
+                    ? 'border-accent bg-accent text-accent-contrast'
+                    : 'border-rule bg-surface text-ink-2 hover:bg-chrome hover:text-ink'
                 }`}
               >
                 {occ.scanner_name || occ.scanner_family}
@@ -186,28 +199,24 @@ export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
       </div>
 
       {/* Scanner metadata strip */}
-      <div className="mb-3 rounded border border-rule bg-layer-1 p-2 text-12">
+      <div className="mb-3 border-y border-rule py-2 text-12">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-ink">{activeOcc.scanner_name || activeOcc.scanner_family}</span>
             {activeOcc.scanner_version && (
-              <span className="rounded bg-muted/20 px-1.5 py-0.2 font-mono text-11 text-ink-2">
-                v{activeOcc.scanner_version}
-              </span>
+              <span className="font-mono text-12 text-ink-2">v{activeOcc.scanner_version}</span>
             )}
             {activeOcc.tool_severity && (
-              <span className="rounded border border-rule px-1.5 py-0.2 text-11 font-medium text-ink-2 uppercase">
-                {activeOcc.tool_severity}
-              </span>
+              <span className="text-12 text-ink-2">Scanner severity {activeOcc.tool_severity.toLowerCase()}</span>
             )}
           </div>
-          <div className="text-11 text-ink-2">
+          <div className="text-12 text-ink-2">
             Last seen: {absoluteDate(activeOcc.last_seen || activeOcc.first_seen)}
           </div>
         </div>
 
         {activeOcc.tool_record_id && (
-          <div className="mt-1.5 flex items-center gap-2 border-t border-rule/50 pt-1 text-11 text-ink-2">
+          <div className="mt-1.5 flex items-center gap-2 border-t border-rule/50 pt-1 text-12 text-ink-2">
             <span className="font-medium">Record ID:</span>
             <span className="font-mono text-ink [overflow-wrap:anywhere]">{activeOcc.tool_record_id}</span>
             <CopyButton text={activeOcc.tool_record_id} />
@@ -231,16 +240,16 @@ export function ScannerEvidenceSection({ finding }: { finding: Finding }) {
 
       {/* Collapsible Raw Scanner Payload Viewer */}
       {rawJsonString && rawJsonString !== '{}' && (
-        <details className="group mt-3 rounded border border-rule bg-layer-1">
+        <details className="group mt-3 border border-rule bg-surface">
           <summary className="flex cursor-pointer items-center justify-between px-3 py-1.5 text-12 font-medium text-ink-2 select-none hover:text-ink">
-            <span>Raw Scanner Record (JSON)</span>
-            <span className="text-10 text-ink-3 group-open:rotate-180 transition-transform">▼</span>
+            <span>Raw scanner record (JSON)</span>
+            <span className="text-12 text-ink-2 group-open:rotate-180 transition-transform">▼</span>
           </summary>
           <div className="border-t border-rule p-2">
             <div className="mb-2 flex justify-end">
-              <CopyButton text={rawJsonString} label="Copy Raw JSON" />
+              <CopyButton text={rawJsonString} label="Copy raw JSON" />
             </div>
-            <pre className="m-0 max-h-56 overflow-auto rounded bg-chrome p-2 font-mono text-11 text-ink leading-relaxed">
+            <pre className="m-0 max-h-56 overflow-auto bg-chrome p-2 font-mono text-12 text-ink leading-relaxed">
               {rawJsonString}
             </pre>
           </div>

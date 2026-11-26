@@ -3,7 +3,6 @@ import { locationOf } from '@/lib/location';
 import { classifyLicenseRisk } from '@/lib/license';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useTranslation } from 'react-i18next';
 import { get, listFindings, post, toProblem, ProblemError, qk } from '@/api';
 import { useAccess } from '@/app/useAccess';
 import type { ApplicationPage, FindingRow } from '@/api/types';
@@ -57,7 +56,6 @@ export function ApplicationSBOMSection({
   onSelectFinding?: (f: FindingDetailTarget) => void;
 }) {
   const [search, setSearch] = useState('');
-  const [scanningPurl, setScanningPurl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
   const { can } = useAccess();
@@ -116,34 +114,6 @@ export function ApplicationSBOMSection({
   );
 
   const vulnPackages = packages.filter((p) => p.vulnerabilities > 0);
-
-  const handleScan = async (pkg: AppPackage) => {
-    try {
-      setScanningPurl(pkg.purl);
-      const res = await post<{ status: string; message: string; purl: string }>('/api/v1/inventory/components/scan', {
-        purl: pkg.purl,
-        name: pkg.name,
-        version: pkg.version,
-        asset_id: pkg.asset_id,
-        force: true,
-      });
-      setScanStatus({
-        purl: pkg.purl,
-        message: res.message || `On-demand scan initiated for ${pkg.name}`,
-        ok: true,
-      });
-      void query.refetch();
-    } catch (err) {
-      const p = toProblem(err);
-      setScanStatus({
-        purl: pkg.purl,
-        message: p.detail || `Scan failed to start for ${pkg.name}`,
-        ok: false,
-      });
-    } finally {
-      setScanningPurl(null);
-    }
-  };
 
   // Re-check this application against active vulnerability analyzers.
   const handleRefresh = async () => {
@@ -330,7 +300,6 @@ export function ApplicationSBOMSection({
                   {manyAssets && <Th>Asset / Target</Th>}
                   <Th>License</Th>
                   <Th align="end">CVEs / Status</Th>
-                  <Th align="end">Actions</Th>
                 </tr>
               </THead>
               <TBody>
@@ -347,8 +316,6 @@ export function ApplicationSBOMSection({
                       isExpanded={isExpanded}
                       onToggleExpand={() => toggleExpand(pkgKey)}
                       onSelectFinding={handleSelectFinding}
-                      scanningPurl={scanningPurl}
-                      onScan={handleScan}
                     />
                   );
                 })}
@@ -373,8 +340,6 @@ function PackageRowGroup({
   isExpanded,
   onToggleExpand,
   onSelectFinding,
-  scanningPurl,
-  onScan,
 }: {
   pkgKey: string;
   pkg: AppPackage;
@@ -383,10 +348,7 @@ function PackageRowGroup({
   isExpanded: boolean;
   onToggleExpand: () => void;
   onSelectFinding: (f: FindingDetailTarget) => void;
-  scanningPurl: string | null;
-  onScan: (pkg: AppPackage) => void;
 }) {
-  const { t } = useTranslation();
   return (
     <>
       <Tr className="h-11">
@@ -416,7 +378,7 @@ function PackageRowGroup({
               )}
             </span>
           ) : (
-            <span className="text-12 text-ink-3">Unknown</span>
+            <span className="text-12 text-ink-2">Unknown</span>
           )}
         </Td>
         <Td align="end">
@@ -448,25 +410,11 @@ function PackageRowGroup({
             </span>
           )}
         </Td>
-        <Td align="end">
-          <Button
-            variant="ghost"
-            disabled={scanningPurl !== null}
-            loading={scanningPurl === pkg.purl}
-            onClick={() => void onScan(pkg)}
-            className="h-7 px-2 text-12 text-accent hover:bg-accent/10 hover:text-accent"
-            title={t('inventory.scanNowTooltip', { name: pkg.name })}
-            aria-label={`Re-evaluate ${pkg.name}`}
-          >
-            <IconRefresh className="mr-1 size-3" />
-            <span>{t('inventory.scanNow')}</span>
-          </Button>
-        </Td>
       </Tr>
 
       {isExpanded && (
         <Tr id={`pkg-cves-${pkgKey}`} className="border-b border-rule bg-chrome/40">
-          <Td colSpan={manyAssets ? 7 : 6} className="px-4 py-3">
+          <Td colSpan={manyAssets ? 6 : 5} className="px-4 py-3">
             <PackageCVEsDrawer app={app} pkg={pkg} onSelectFinding={onSelectFinding} />
           </Td>
         </Tr>
@@ -547,7 +495,7 @@ function PackageCVEsDrawer({
                 <th className="py-1 text-right font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-rule/40">
               {findings.map((item: FindingRow) => {
                 const f = item.finding;
                 const cveId = f.vulnerability_id || f.rule_id || f.id;

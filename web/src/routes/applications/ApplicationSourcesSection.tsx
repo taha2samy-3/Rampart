@@ -44,9 +44,9 @@ function SnippetBlock({ code, language = 'yaml' }: SnippetBlockProps) {
 
   return (
     <div className="relative mt-3 rounded-ctl border border-rule bg-surface font-mono text-12">
-      <div className="flex items-center justify-between border-b border-rule bg-chrome/50 px-3 py-1.5 text-11 text-ink-2">
+      <div className="flex items-center justify-between border-b border-rule bg-chrome/50 px-3 py-1.5 text-12 text-ink-2">
         <span>{language.toUpperCase()}</span>
-        <Button variant="ghost" className="h-6 px-2 text-11" onClick={onCopy} aria-label={t('common.copy')}>
+        <Button variant="ghost" className="h-6 px-2 text-12" onClick={onCopy} aria-label={t('common.copy')}>
           {copied ? <IconCheck className="size-3.5 text-accent" /> : <IconCopy className="size-3.5" />}
           <span>{copied ? t('common.copied') : t('common.copy')}</span>
         </Button>
@@ -223,18 +223,12 @@ curl -X POST "https://<rampart-host>/api/v1/ingest" \\
                       <div>
                         <span>{src.name}</span>
                         {src.scanner_family && (
-                          <span className="ms-1.5 text-11 text-ink-2">({src.scanner_family})</span>
+                          <span className="ms-1.5 text-12 text-ink-2">({src.scanner_family})</span>
                         )}
                       </div>
                     </Td>
                     <Td>
-                      <span className="inline-flex items-center gap-1.5 text-12">
-                        <span
-                          className={cn(
-                            'size-2 rounded-full',
-                            src.active ? 'bg-emerald-500' : 'bg-ink-3'
-                          )}
-                        />
+                      <span className="text-12">
                         <span className={src.active ? 'text-ink' : 'text-ink-2'}>
                           {src.active
                             ? t('common.active', { defaultValue: 'Active' })
@@ -243,35 +237,18 @@ curl -X POST "https://<rampart-host>/api/v1/ingest" \\
                       </span>
                     </Td>
                     <Td>
-                      <span className="inline-flex rounded-full bg-chrome px-2 py-0.5 text-11 font-medium text-ink">
-                        {src.type || 'upload'}
-                      </span>
+                      <span className="text-12 text-ink">{src.type || 'upload'}</span>
                     </Td>
                     <Td>
-                      <div className="flex flex-wrap gap-1">
-                        {src.categories.map((cat: string) => (
-                          <span
-                            key={cat}
-                            className="inline-flex rounded bg-chrome px-1.5 py-0.5 text-10 font-medium uppercase text-ink-2"
-                          >
-                            {cat}
-                          </span>
-                        ))}
-                      </div>
+                      <span className="text-12 text-ink-2">{src.categories.join(', ')}</span>
                     </Td>
                     <Td>
                       {isMulti ? (
-                        <span className="inline-flex items-center rounded-full bg-accent/10 px-2 py-0.5 text-11 font-medium text-accent">
-                          Token + OIDC Federation
-                        </span>
+                        <span className="text-12 text-ink">Token and OIDC federation</span>
                       ) : isFed ? (
-                        <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-11 font-medium text-blue-600 dark:text-blue-400">
-                          OIDC Federation
-                        </span>
+                        <span className="text-12 text-ink">OIDC federation</span>
                       ) : (
-                        <span className="inline-flex items-center rounded-full bg-chrome px-2 py-0.5 text-11 font-medium text-ink-2">
-                          Standard Token
-                        </span>
+                        <span className="text-12 text-ink">Token</span>
                       )}
                     </Td>
                     <Td className="font-mono text-12 text-ink-2">

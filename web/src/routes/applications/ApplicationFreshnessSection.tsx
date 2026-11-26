@@ -17,7 +17,7 @@ function AnalyzerStateBadge({ a }: { a: FreshnessAnalyzer }) {
       return (
         <span
           data-testid="analyzer-state-completed"
-          className="inline-flex items-center rounded px-2 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink"
+          className="inline-flex items-center rounded px-2 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink"
           title={`Completed analysis at ${absoluteDateTime(a.last_analysed_at)}`}
         >
           ✓ Completed
@@ -27,10 +27,9 @@ function AnalyzerStateBadge({ a }: { a: FreshnessAnalyzer }) {
       return (
         <span
           data-testid="analyzer-state-running"
-          className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-11 font-medium bg-chrome border border-rule text-accent"
+          className="inline-flex items-center rounded-ctl px-2 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink"
           title={`Running since ${absoluteDateTime(a.in_progress_since)}`}
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
           Running
         </span>
       );
@@ -38,7 +37,7 @@ function AnalyzerStateBadge({ a }: { a: FreshnessAnalyzer }) {
       return (
         <span
           data-testid="analyzer-state-pending"
-          className="inline-flex items-center rounded px-2 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink-2"
+          className="inline-flex items-center rounded px-2 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink-2"
         >
           Queued
         </span>
@@ -48,7 +47,7 @@ function AnalyzerStateBadge({ a }: { a: FreshnessAnalyzer }) {
       return (
         <span
           data-testid="analyzer-state-failed"
-          className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-11 font-medium bg-critical/10 border border-critical/30 text-critical"
+          className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-12 font-medium bg-critical/10 border border-critical/30 text-critical"
           title={a.error || 'Analysis failed'}
         >
           <IconWarning className="size-3 shrink-0" role="img" aria-label="Failed" />
@@ -60,7 +59,7 @@ function AnalyzerStateBadge({ a }: { a: FreshnessAnalyzer }) {
       return (
         <span
           data-testid="analyzer-state-unanalysed"
-          className="inline-flex items-center rounded px-2 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink-3"
+          className="inline-flex items-center rounded px-2 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink-2"
         >
           Not analysed yet
         </span>
@@ -72,32 +71,31 @@ function FeedStatusBadge({ f }: { f: FreshnessFeed }) {
   switch (f.status) {
     case 'success':
       return (
-        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink">
+        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink">
           Synced
         </span>
       );
     case 'syncing':
       return (
-        <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-11 font-medium bg-chrome border border-rule text-accent">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+        <span className="inline-flex items-center rounded-ctl px-1.5 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink">
           Syncing
         </span>
       );
     case 'error':
       return (
-        <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-11 font-medium bg-critical/10 border border-critical/30 text-critical" title={f.error}>
+        <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-12 font-medium bg-critical/10 border border-critical/30 text-critical" title={f.error}>
           Error
         </span>
       );
     case 'disabled':
       return (
-        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink-3">
+        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink-2">
           Disabled
         </span>
       );
     default:
       return (
-        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-11 font-medium bg-chrome border border-rule text-ink-2">
+        <span className="inline-flex items-center rounded px-1.5 py-0.5 text-12 font-medium bg-chrome border border-rule text-ink-2">
           {f.status}
         </span>
       );
@@ -113,7 +111,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
 
   if (query.isPending) {
     return (
-      <div className="rounded-lg border border-rule bg-canvas p-4" role="status" aria-busy="true" aria-label="Loading freshness status">
+      <div className="rounded-lg border border-rule bg-surface p-4" role="status" aria-busy="true" aria-label="Loading freshness status">
         <Skeleton className="h-5 w-48 mb-2" />
         <Skeleton className="h-4 w-72 mb-4" />
         <div className="space-y-2">
@@ -126,7 +124,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
 
   if (query.isError) {
     return (
-      <div className="rounded-lg border border-rule bg-canvas p-4">
+      <div className="rounded-lg border border-rule bg-surface p-4">
         <ProblemMessage problem={toProblem(query.error)} title="Could not load freshness details" onRetry={() => void query.refetch()} />
       </div>
     );
@@ -136,7 +134,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
   if (!data) return null;
 
   return (
-    <section aria-labelledby="app-freshness-heading" className="rounded-lg border border-rule bg-canvas p-4 text-13">
+    <section aria-labelledby="app-freshness-heading" className="rounded-lg border border-rule bg-surface p-4 text-13">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
         <div>
           <h3 id="app-freshness-heading" className="text-14 font-semibold text-ink">
@@ -184,7 +182,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
           Vulnerability Analyzers ({data.analyzers.length})
         </h4>
         {data.analyzers.length === 0 ? (
-          <p className="m-0 text-12 text-ink-3">No analyzers active or recorded for this application.</p>
+          <p className="m-0 text-12 text-ink-2">No analyzers active or recorded for this application.</p>
         ) : (
           <div className="divide-y divide-rule rounded border border-rule">
             {data.analyzers.map((a) => (
@@ -192,7 +190,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-ink font-mono text-12">{a.name}</span>
-                    <span className="text-11 text-ink-3 uppercase">({a.kind})</span>
+                    <span className="text-12 text-ink-2 uppercase">({a.kind})</span>
                     <AnalyzerStateBadge a={a} />
                   </div>
                   {a.error && (
@@ -220,7 +218,7 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
                     <div>
                       <span className="text-ink-2">Findings: </span>
                       <span className="font-semibold text-ink">{a.findings}</span>
-                      <span className="text-ink-3 text-11 ml-1">
+                      <span className="text-ink-2 text-12 ml-1">
                         (+{a.created} new, -{a.closed} closed)
                       </span>
                     </div>
@@ -236,8 +234,8 @@ export function ApplicationFreshnessSection({ appId }: { appId: string }) {
       <details className="mt-4 group">
         <summary className="cursor-pointer text-12 font-medium text-ink-2 hover:text-ink flex items-center justify-between">
           <span>Platform Threat Intelligence Feeds ({data.feeds.length}) — shared platform-wide</span>
-          <span className="text-11 text-ink-3 group-open:hidden">Show feeds ▾</span>
-          <span className="text-11 text-ink-3 hidden group-open:inline">Hide feeds ▴</span>
+          <span className="text-12 text-ink-2 group-open:hidden">Show feeds ▾</span>
+          <span className="text-12 text-ink-2 hidden group-open:inline">Hide feeds ▴</span>
         </summary>
         <p className="m-0 mt-1.5 mb-2 text-12 text-ink-2">
           Global threat feeds sync on a platform schedule (CISA KEV, FIRST EPSS, OSV, NVD). Updated feeds trigger automatic re-scoring of known vulnerabilities across all applications. Package matching occurs when an analyzer runs.

@@ -202,23 +202,13 @@ func TestAPI_Inventory(t *testing.T) {
 		t.Errorf("scan without credentials: want 401, got %d", rec.Code)
 	}
 
-	// Scanning without purl -> 400
-	if rec := postScan(`{}`, true); rec.Code != http.StatusBadRequest {
-		t.Errorf("scan without purl: want 400, got %d", rec.Code)
-	}
-
-	// Scanning with purl in body -> 202
-	if rec := postScan(`{"purl":"pkg:npm/lodash@4.17.20","name":"lodash","version":"4.17.20"}`, true); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"started"`) || !strings.Contains(rec.Body.String(), "pkg:npm/lodash@4.17.20") {
-		t.Errorf("scan with purl body: want 202, got %d %s", rec.Code, rec.Body.String())
-	}
-
-	// Scanning with purl in query param -> 202
-	reqQuery := httptest.NewRequest("POST", "/api/v1/inventory/components/scan?purl=pkg:npm/axios@0.21.1", nil)
-	reqQuery.Header.Set("Authorization", "Bearer "+token)
-	recQuery := httptest.NewRecorder()
-	mux.ServeHTTP(recQuery, reqQuery)
-	if recQuery.Code != http.StatusAccepted || !strings.Contains(recQuery.Body.String(), "pkg:npm/axios@0.21.1") {
-		t.Errorf("scan with purl query: want 202, got %d %s", recQuery.Code, recQuery.Body.String())
+	// docs/51 step 2.12: scanning one component is not built. It used to ignore the purl and re-score the whole tenant;
+	// now it says so with 501 and a detail the screens show, with or without a purl.
+	for _, body := range []string{`{}`, `{"purl":"pkg:npm/lodash@4.17.20","name":"lodash","version":"4.17.20"}`} {
+		rec := postScan(body, true)
+		if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Header().Get("Content-Type"), "application/problem+json") || !strings.Contains(rec.Body.String(), `"detail"`) {
+			t.Errorf("scan %s: want 501 problem with a detail, got %d %s", body, rec.Code, rec.Body.String())
+		}
 	}
 
 	// App components endpoint -> 200 with matching application components

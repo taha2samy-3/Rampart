@@ -61,7 +61,7 @@ func (c *DefaultChecker) checkExternalTrackerDetailed(ctx context.Context, conn 
 	if obj.Error != "" {
 		return CheckInfo{}, fmt.Errorf("external tracker %q refused: %s", cfg.TrackerRef.Name, obj.Error)
 	}
-	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	spec, err := parseStoredTracker(obj)
 	if err != nil {
 		return CheckInfo{}, err
 	}
@@ -88,12 +88,14 @@ func (c *DefaultChecker) checkExternalTrackerDetailed(ctx context.Context, conn 
 	if err != nil {
 		return CheckInfo{}, err
 	}
-	defer func() { _ = cli.Close() }()
 
 	tr, err := NewGrpcTracker(cfg, cli, secrets, "")
 	if err != nil {
+		_ = cli.Close()
 		return CheckInfo{}, err
 	}
+	// A check is rare and asked for by a person: it dials its own connection and closes it when done.
+	defer func() { _ = tr.CloseClient() }()
 	tr.SetConnectorName(conn.Name)
 	return tr.CheckDetailed(ctx)
 }

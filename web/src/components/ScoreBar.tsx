@@ -1,6 +1,6 @@
 import type { ScoreBreakdown } from '@/api/types';
 import { describeScore, scoreSegments, type SegmentKind } from '@/lib/score';
-import { bandFromScore, type Band } from '@/lib/band';
+import type { Band } from '@/lib/band';
 import { cn } from '@/lib/cn';
 
 const FILL: Record<SegmentKind, string> = {
@@ -42,7 +42,6 @@ export function ScoreBar({
   // score's length on the 1000 scale, as one segment, instead of an empty track (D61).
   const parts = scoreSegments(breakdown);
   const segments = parts.length > 0 || score <= 0 ? parts : [{ kind: 'severity' as SegmentKind, fraction: Math.min(1, score / 1000) }];
-  const effectiveBand = band ?? (score > 0 ? bandFromScore(score) : 'info');
 
   return (
     <span
@@ -60,7 +59,8 @@ export function ScoreBar({
           data-segment={s.kind}
           className={cn(
             'block h-full shrink-0 border-e border-e-[var(--surface)] box-border',
-            parts.length > 0 ? FILL[s.kind] : BAND_FILL[effectiveBand],
+            // No breakdown: the band the server gave colours the one segment; without one it stays slate, never a guess.
+            parts.length > 0 ? FILL[s.kind] : band ? BAND_FILL[band] : FILL.severity,
           )}
           style={{ inlineSize: `${(s.fraction * 100).toFixed(2)}%`, minInlineSize: '2px' }}
         />

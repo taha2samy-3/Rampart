@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"rampart/internal/normalize"
@@ -279,6 +280,7 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 		problemJSON(w, http.StatusForbidden, "forbidden", "The upload context does not match the CI token", err.Error())
 		return
 	}
+	req.Context.VEXDecider = vexDecider(caller) // never the client's value
 	if req.SizeBytes <= 0 {
 		problemJSON(w, http.StatusBadRequest, "validation", "sizeBytes is required", "The size is signed into the upload URL, so declare the exact size of the report.")
 		return
@@ -312,7 +314,10 @@ func (g *Gateway) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scanSrc, _ := g.store.GetScanSource(r.Context(), tenantID, sourceID)
+	scanSrc, err := g.store.GetScanSource(r.Context(), tenantID, sourceID)
+	if sourceLookupFailed(w, err) {
+		return
+	}
 	if scanSrc != nil {
 		if scanSrc.ApplicationID != domain.NilID && req.Context.Application != "" && strings.ToLower(req.Context.Application) != "unassigned" {
 			boundApp, _ := g.store.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
@@ -452,7 +457,11 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	// a repository, or an image when the context names one.
 	cat := g.categoryOf(r.Context(), upload)
 	if upload.ScanSourceID != uuid.Nil {
-		if src, err := g.store.GetScanSource(r.Context(), tenantID, upload.ScanSourceID); err == nil && src != nil {
+		src, err := g.store.GetScanSource(r.Context(), tenantID, upload.ScanSourceID)
+		if sourceLookupFailed(w, err) {
+			return
+		}
+		if src != nil {
 			if !src.PermitsCategory(cat) {
 				problemJSON(w, http.StatusForbidden, "forbidden", "Category not permitted for this scan source",
 					fmt.Sprintf("ScanSource %q does not permit security category %q (allowed: %s)", src.Name, cat, strings.Join(src.Categories, ", ")))
@@ -481,7 +490,11 @@ func (g *Gateway) handleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 		var appID uuid.UUID
 		var scanSrc *domain.ScanSource
 		if upload.ScanSourceID != uuid.Nil {
-			scanSrc, _ = st.GetScanSource(r.Context(), tenantID, upload.ScanSourceID)
+			var serr error
+			scanSrc, serr = st.GetScanSource(r.Context(), tenantID, upload.ScanSourceID)
+			if serr != nil && !errors.Is(serr, store.ErrNotFound) {
+				return serr // fail closed (docs/51 step 2.6): the transaction and the upload fail
+			}
 		}
 		if scanSrc != nil && scanSrc.ApplicationID != domain.NilID {
 			boundApp, _ := st.GetApplication(r.Context(), tenantID, scanSrc.ApplicationID)
@@ -638,6 +651,7 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 	scanFinished := parseScanFinished(get("scanFinished"))
 	uploadCtx.ScanFinished = scanFinished
 	// D80: a federated token states the repository, branch and commit; the request may not state others.
+	uploadCtx.VEXDecider = vexDecider(caller) // never the client's value
 	if err := BindUploadContext(caller.Scopes, &uploadCtx); err != nil {
 		problemJSON(w, http.StatusForbidden, "forbidden", "The upload context does not match the CI token", err.Error())
 		return
@@ -666,7 +680,10 @@ func (g *Gateway) processDirectUpload(w http.ResponseWriter, r *http.Request, fo
 		http.Error(w, `{"type":"https://rampart.aspm.dev/problems/forbidden","title":"Token is bound to another scan source"}`, http.StatusForbidden)
 		return
 	}
-	scanSrc, _ := g.store.GetScanSource(r.Context(), tenantID, sourceID)
+	scanSrc, err := g.store.GetScanSource(r.Context(), tenantID, sourceID)
+	if sourceLookupFailed(w, err) {
+		return
+	}
 	track := ""
 
 	if len(data) == 0 {
@@ -1059,4 +1076,28 @@ func (g *Gateway) categoryOf(ctx context.Context, u *domain.Upload) domain.Findi
 		}
 	}
 	return domain.CategorySAST
+}
+
+// vexDecider is who may decide findings through the VEX statements of an upload: a caller with the triager role or higher, as
+// /api/v1/vex requires. An ingest token (a CI job, a federated token, a source's token) decides nothing (docs/51 step 1.2).
+func vexDecider(c *auth.ContextUser) string {
+	if c == nil || c.Role.Rank() < auth.RoleTriager.Rank() || c.ScanSourceID != nil {
+		return ""
+	}
+	who := firstNonEmpty(c.Email, c.Subject)
+	if who == "" {
+		return ""
+	}
+	return "user:" + who
+}
+
+// sourceLookupFailed answers 503 when the scan source could not be read for a reason other than its absence. The source's
+// application binding and categories are checked from it: an upload that went on without them would skip both (docs/51 2.6).
+func sourceLookupFailed(w http.ResponseWriter, err error) bool {
+	if err == nil || errors.Is(err, store.ErrNotFound) {
+		return false
+	}
+	slog.Error("ingest: reading the scan source failed; the upload is refused", "error", err)
+	problemJSON(w, http.StatusServiceUnavailable, "unavailable", "The scan source could not be read", "Try again in a moment.")
+	return true
 }

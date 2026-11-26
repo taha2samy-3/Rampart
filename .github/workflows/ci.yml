@@ -107,7 +107,10 @@ jobs:
           docker logs seaweedfs
           exit 1
       - name: Race detector
-        run: go test -race -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ ./internal/objectstore/ 2>&1 | tee /tmp/store.txt
+        # pipefail: without it the step takes tee's exit code and passes when a test fails (it did, from 2026-11-11 to 2026-11-26; docs/51 step 0.1).
+        run: |
+          set -o pipefail
+          go test -race -timeout 25m -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ ./internal/objectstore/ 2>&1 | tee /tmp/store.txt
       - name: A skipped suite is a failure in CI
         run: "! grep -q -- '--- SKIP' /tmp/store.txt"
       - uses: actions/upload-artifact@v4
@@ -127,7 +130,9 @@ jobs:
           go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
           echo "KUBEBUILDER_ASSETS=$(setup-envtest use -p path)" >> "$GITHUB_ENV"
       - name: Race detector
-        run: go test -race -count=1 -v -coverprofile=coverage-operator.out -covermode=atomic ./internal/operator/ 2>&1 | tee /tmp/operator.txt
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v -coverprofile=coverage-operator.out -covermode=atomic ./internal/operator/ 2>&1 | tee /tmp/operator.txt
       - name: A skipped suite is a failure in CI
         run: "! grep -q -- '--- SKIP' /tmp/operator.txt"
       - uses: actions/upload-artifact@v4

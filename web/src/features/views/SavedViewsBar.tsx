@@ -184,7 +184,7 @@ export function SavedViewsBar({
               <label className="text-12 font-medium text-ink">
                 {t('views.query', { defaultValue: 'Query' })}
               </label>
-              <pre className="overflow-x-auto rounded border border-rule bg-canvas-2 p-2 text-12 text-ink-2 font-mono">
+              <pre className="overflow-x-auto rounded border border-rule bg-chrome p-2 text-12 text-ink-2 font-mono">
                 {q || 'status:open'}
               </pre>
             </div>

@@ -205,6 +205,10 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 			return status, nil
 		}
 		app, err := r.store.FindApplicationByRef(ctx, tenant.ID, cr.Spec.ApplicationRef)
+		if errors.Is(err, domain.ErrAmbiguousApplicationRef) {
+			status.SetCondition("Ready", "False", "AmbiguousApplicationRef", err.Error())
+			return status, nil
+		}
 		if err != nil {
 			status.SetCondition("Ready", "False", "StorageError", err.Error())
 			return status, err
@@ -307,21 +311,20 @@ func (r *ScanSourceReconciler) Reconcile(ctx context.Context, cr *ScanSourceCR) 
 	trustRules := append([]domain.TrustRule(nil), cr.Spec.TrustRules...)
 	for _, fed := range feds {
 		if len(fed.BoundClaims) > 0 {
-			trustRules = append(trustRules, domain.TrustRule{
-				Issuer:      fed.Issuer,
-				BoundClaims: fed.BoundClaims,
-			})
+			trustRules = append(trustRules, fed.TrustRule()) // provider and claim names bind the token (D80, docs/51 1.3)
 		}
 	}
 
-	if len(trustRules) > 0 {
-		trSaver, ok := r.store.(interface {
-			SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
-		})
-		if !ok {
-			status.SetCondition("Ready", "False", "StorageError", "store does not support trust rules")
-			return status, fmt.Errorf("store does not support trust rules")
-		}
+	// The stored rules are replaced every time, with an empty list too: a federation removed from the resource must stop
+	// working (docs/51 step 1.3; before, the old rows stayed and CI could still exchange tokens).
+	trSaver, ok := r.store.(interface {
+		SaveTrustRules(ctx context.Context, tenantID, scanSourceID uuid.UUID, rules []domain.TrustRule) error
+	})
+	if !ok && len(trustRules) > 0 {
+		status.SetCondition("Ready", "False", "StorageError", "store does not support trust rules")
+		return status, fmt.Errorf("store does not support trust rules")
+	}
+	if ok {
 		if err := trSaver.SaveTrustRules(ctx, tenant.ID, sourceID, trustRules); err != nil {
 			status.SetCondition("Ready", "False", "StorageError", fmt.Sprintf("failed to save trust rules: %v", err))
 			return status, err
@@ -391,6 +394,9 @@ type PolicyReconciler struct {
 	parse   func([]byte) error
 	// check, when set, validates instead of parse and also sees the resource's name.
 	check func(name string, spec []byte) error
+	// checkNS, when set, validates instead of check and parse and also sees the resource's namespace (a namespaced
+	// analyzer or tracker may name a Service only in its own namespace, docs/51 step 1.4).
+	checkNS func(namespace, name string, spec []byte) error
 	// shape, when set, is the form the spec is stored in (a ClusterSBOMParser is kept as the whole resource, with its kind).
 	shape func(name string, spec []byte) []byte
 }
@@ -431,7 +437,10 @@ func NewClusterExternalAnalyzerReconciler(store apply.ConfigStore) *PolicyReconc
 // NewExternalAnalyzerReconciler reconciles the namespaced ExternalAnalyzer: the same, for one tenant, which may name a Service and not an address.
 func NewExternalAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
 	return &PolicyReconciler{store: store, kind: domain.AnalyzerKindExternal, label: "ExternalAnalyzer",
-		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalAnalyzerSpec(spec, true); return err }}
+		checkNS: func(ns, _ string, spec []byte) error {
+			_, err := domain.ParseTenantExternalAnalyzerSpec(spec, ns)
+			return err
+		}}
 }
 
 // NewClusterSBOMAnalyzerReconciler reconciles ClusterSBOMAnalyzer resources: the matcher inside the server.
@@ -455,10 +464,16 @@ func NewClusterExternalTrackerReconciler(store apply.ConfigStore) *PolicyReconci
 // NewExternalTrackerReconciler reconciles namespaced ExternalTracker resources for a single tenant.
 func NewExternalTrackerReconciler(store apply.ConfigStore) *PolicyReconciler {
 	return &PolicyReconciler{store: store, kind: domain.TrackerKindExternal, label: "ExternalTracker",
-		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalTrackerSpec(spec, true); return err }}
+		checkNS: func(ns, _ string, spec []byte) error {
+			_, err := domain.ParseTenantExternalTrackerSpec(spec, ns)
+			return err
+		}}
 }
 
-func (r *PolicyReconciler) validate(name string, spec []byte) error {
+func (r *PolicyReconciler) validate(namespace, name string, spec []byte) error {
+	if r.checkNS != nil {
+		return r.checkNS(namespace, name, spec)
+	}
 	if r.check != nil {
 		return r.check(name, spec)
 	}
@@ -510,13 +525,25 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 		return status, nil
 	}
 	obj := apply.PolicyObject{Namespace: cr.Metadata.Namespace, Name: cr.Metadata.Name, Spec: spec, Generation: cr.Metadata.Generation}
-	if perr := r.validate(cr.Metadata.Name, spec); perr != nil {
+	if perr := r.validate(cr.Metadata.Namespace, cr.Metadata.Name, spec); perr != nil {
 		obj.Error = perr.Error()
 	}
 	if r.shape != nil {
 		obj.Spec = r.shape(cr.Metadata.Name, spec)
 	}
 	if r.cluster {
+		if obj.Error == "" && (r.kind == domain.AnalyzerKindExternal || r.kind == domain.AnalyzerKindSBOM) {
+			if as, ok := r.store.(domain.AnalyzerStore); ok {
+				if existing, lerr := as.ListAnalyzers(ctx, uuid.Nil); lerr == nil {
+					for _, a := range existing {
+						if a.Origin == "cluster" && a.Error == "" && a.Name == cr.Metadata.Name && a.Kind != r.kind {
+							obj.Error = fmt.Sprintf("analyzer name %q is already used by %s (both share scanner family analyzer:%s)", cr.Metadata.Name, a.Kind, cr.Metadata.Name)
+							break
+						}
+					}
+				}
+			}
+		}
 		err = r.store.SaveClusterPolicy(ctx, r.kind, obj)
 	} else {
 		tenant, terr := r.store.GetTenantByNamespace(ctx, cr.Metadata.Namespace)
@@ -527,6 +554,18 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 		if tenant == nil {
 			status.SetCondition("Ready", "False", "TenantNotFound", fmt.Sprintf("no tenant lists namespace %q", cr.Metadata.Namespace))
 			return status, nil
+		}
+		if obj.Error == "" && (r.kind == domain.AnalyzerKindExternal || r.kind == domain.AnalyzerKindSBOM) {
+			if as, ok := r.store.(domain.AnalyzerStore); ok {
+				if existing, lerr := as.ListAnalyzers(ctx, tenant.ID); lerr == nil {
+					for _, a := range existing {
+						if a.Origin == "tenant" && a.Namespace == cr.Metadata.Namespace && a.Error == "" && a.Name == cr.Metadata.Name && a.Kind != r.kind {
+							obj.Error = fmt.Sprintf("analyzer name %q is already used by %s (both share scanner family analyzer:%s/%s)", cr.Metadata.Name, a.Kind, cr.Metadata.Namespace, cr.Metadata.Name)
+							break
+						}
+					}
+				}
+			}
 		}
 		err = r.store.SaveTenantPolicy(ctx, tenant.ID, r.kind, obj)
 	}

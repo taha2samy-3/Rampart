@@ -782,10 +782,12 @@ export interface ConnectorCondition {
   last_transition_time?: string;
 }
 
-/** Connector summary for integrations (docs/20, docs/21) */
+/** A connector as GET /api/v1/connectors lists it (docs/20, docs/21). */
 export interface ConnectorSummary {
   name: string;
-  type: string; // jira, github, slack, msteams, dependency-track, webhook, email
+  type: string; // the ConnectorType: jira, github, externalTracker, slack, teams, email, webhook, plugin
+  /** The catalogue's kind of the type (docs/50): Ticketing lists trackers, Notifiers lists notifiers. Empty for a type the catalogue does not list. */
+  kind: 'tracker' | 'notifier' | 'source' | '';
   direction: 'outbound' | 'inbound' | 'bidirectional';
   enabled: boolean;
   /** the resource's spec as the server stores it; for a plugin connector, the package it uses (D94) */
@@ -953,51 +955,6 @@ export interface VulnerabilityRow {
   open_findings: number;
 }
 
-/** Dependency-Track project record (docs/10 §3, §13) */
-/** A Dependency-Track source and its real state (GET /api/v1/sources, D92). */
-export interface SourceStatus {
-  id: string;
-  name: string;
-  connector: string;
-  schedule_seconds: number;
-  webhook_enabled: boolean;
-  trust_upstream_decisions: boolean;
-  last_portfolio_sync_at?: string;
-  last_portfolio_error?: string;
-  projects: number;
-  unmapped: number;
-  pending_decisions: number;
-  last_project_error?: string;
-}
-
-/** What Dependency-Track decided about a finding (D92, docs/23 DT5). */
-export interface UpstreamDecision {
-  finding_id: string;
-  source_id: string;
-  state: string;
-  justification?: string;
-  detail?: string;
-  applied: boolean;
-  seen_at: string;
-}
-
-export interface DTrackProjectRecord {
-  tenant_id: string;
-  source_id: string;
-  project_uuid: string;
-  name: string;
-  version?: string;
-  purl?: string;
-  active: boolean;
-  last_bom_import?: string;
-  application_id?: string;
-  mapping_rule?: string;
-  unmapped_reason?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-
 /** Where an application stands against one framework (GET /applications/{id}/compliance). */
 export interface AppFramework {
   id: string;
@@ -1018,14 +975,6 @@ export interface AppFramework {
   window_days: number;
 }
 export interface AppCompliance { application: string; evaluated_at: string; frameworks: AppFramework[]; not_in_scope: string[] }
-
-/** A Dependency-Track project that belongs to an application, and what put it there. */
-export interface MappedProject extends DTrackProjectRecord {
-  application_name: string;
-  application_slug: string;
-  /** A rule put it there, not a person. mapping_rule says which: defaultApplication, property:..., tag:..., cel:... */
-  by_rule: boolean;
-}
 
 /** A finding in one list of an application's changes (GET /applications/{id}/changes). */
 export interface FindingChange {

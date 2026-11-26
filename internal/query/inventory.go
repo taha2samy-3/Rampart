@@ -1,7 +1,6 @@
 package query
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -163,38 +162,21 @@ type ScanComponentResponse struct {
 	ScannedAt time.Time `json:"scanned_at"`
 }
 
-// handleScanComponent is POST /api/v1/inventory/components/scan. It does NOT scan the package: matching packages to
-// vulnerabilities is Dependency-Track's work, per project (POST /applications/{id}/refresh-vulnerabilities asks for
-// that). What it does is recalculate the risk scores of the tenant's findings against the feeds as they are now, which
-// is why it needs triage rights and says so in its answer (D126).
+// handleScanComponent is POST /api/v1/inventory/components/scan. It is not built (docs/51 step 2.12): it used to
+// ignore its purl and start a full re-score of the tenant in a goroutine per request, while the screens said a scan
+// of that package had started. Scanning one package is not Rampart's work (matching packages to vulnerabilities is
+// the analyzers', per SBOM: POST /assets/{id}/analyze or /applications/{id}/refresh-vulnerabilities), so it answers
+// 501 with the reason instead of pretending. The role check stays first, so a viewer still learns nothing more.
 func (a *API) handleScanComponent(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, _, ok := a.requireAny(w, r, auth.RoleTriager)
-	if !ok {
+	if _, _, _, ok := a.requireAny(w, r, auth.RoleTriager); !ok {
 		return
 	}
-	var req ScanComponentRequest
-	if r.Body != nil {
-		defer func() { _ = r.Body.Close() }()
-		_ = json.NewDecoder(r.Body).Decode(&req)
-	}
-	if req.Purl == "" {
-		req.Purl = r.URL.Query().Get("purl")
-	}
-	if req.Purl == "" {
-		problem(w, http.StatusBadRequest, "validation", "purl is required")
-		return
-	}
-	if a.scorer != nil {
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			_, _ = a.scorer.Rescore(bgCtx, tenantID)
-		}()
-	}
-	writeJSON(w, http.StatusAccepted, ScanComponentResponse{
-		Status:    "started",
-		Purl:      req.Purl,
-		Message:   "Risk scores are being recalculated against the current feeds.",
-		ScannedAt: time.Now().UTC(),
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusNotImplemented)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type":   "https://rampart.aspm.dev/problems/not-implemented",
+		"title":  "Scanning one component is not built",
+		"status": http.StatusNotImplemented,
+		"detail": "Rampart does not scan a single package. Vulnerabilities are matched per SBOM by the analyzers: use \"Analyse again\" on the application (or POST /api/v1/assets/{id}/analyze).",
 	})
 }

@@ -96,7 +96,7 @@ export function ComplianceRoute({ search }: { search?: ComplianceSearch } = {}) 
                 {Array.from({ length: 6 }, (_, i) => <div key={i} className="flex h-[46px] items-center border-b border-rule"><Skeleton className="h-3 flex-1" /></div>)}
               </div>
             )}
-            {status.isError && <ProblemMessage problem={toProblem(status.error)} title={t('compliance.loadFailed')} onRetry={() => void status.refetch()} />}
+            {status.isError && <StatusError problem={toProblem(status.error)} onRetry={() => void status.refetch()} />}
             {st && (
               <Table aria-label={t('compliance.tableLabel')}>
                 <colgroup><col className="w-[100px]" /><col /><col className="w-[300px]" /><col className="w-[230px]" /></colgroup>
@@ -269,4 +269,22 @@ export function AttestDialog({ framework, control, application, onClose }: { fra
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Why there is no reading. A 404 with a reason is the server refusing on purpose (the framework does not apply to
+ * that application, or no reading was kept for that day): its own sentence is shown, as a fact and with no
+ * Try again, since trying again gives the same answer (docs/41). Anything else is a failure.
+ */
+function StatusError({ problem, onRetry }: { problem: ReturnType<typeof toProblem>; onRetry: () => void }) {
+  const { t } = useTranslation();
+  if (problem.status === 404 && problem.detail) {
+    return (
+      <div role="status" data-testid="compliance-refusal" className="border-s-2 border-rule ps-3 text-13">
+        <p className="m-0 font-semibold text-ink">{t('compliance.refusedTitle')}</p>
+        <p className="m-0 mt-0.5 max-w-[80ch] text-ink-2">{problem.detail}</p>
+      </div>
+    );
+  }
+  return <ProblemMessage problem={problem} title={t('compliance.loadFailed')} onRetry={onRetry} />;
 }

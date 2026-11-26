@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { get, qk, toProblem } from '@/api';
+import { listConnectors, qk, toProblem } from '@/api';
 import type { ConnectorSummary } from '@/api/types';
 import { Button, EmptyState, ProblemMessage, Spinner, Table, TBody, Td, Th, THead, Tr } from '@/components';
-import { ConnectorCatalogueDialog } from '@/routes/integrations/ConnectorCatalogueDialog';
+import { ConnectorCatalogueDialog } from '@/features/connectors/ConnectorCatalogueDialog';
 
-function isTrackerConnector(c: Pick<ConnectorSummary, 'type'>): boolean {
-  return c.type === 'externalTracker' || c.type === 'jira' || c.type === 'github';
+/** The server says each connector's kind from its catalogue (docs/50), so a new tracker type appears here unasked. */
+function isTrackerConnector(c: Pick<ConnectorSummary, 'kind'>): boolean {
+  return c.kind === 'tracker';
 }
 
 function bindingTarget(c: ConnectorSummary): string {
@@ -26,7 +27,7 @@ export function TrackerBindingsView() {
 
   const q = useQuery({
     queryKey: qk.connectors.list(),
-    queryFn: async ({ signal }) => (await get<{ items?: ConnectorSummary[] }>('/api/v1/connectors', { signal })).items ?? [],
+    queryFn: ({ signal }) => listConnectors(signal),
   });
 
   if (q.isPending) {

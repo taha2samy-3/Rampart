@@ -64,8 +64,14 @@ export function useLiveEvents(enabled = true) {
     let backoff = 5_000;
     let stopped = false;
 
+    // While the stream is down, poll what it would have told us about: the pages that used to poll on their own
+    // (runs in progress, the overview, the inbox) rely on this instead (docs/51 step 3.3).
     const startPolling = () => {
-      if (!poll) poll = setInterval(() => invalidateTopic(qc, 'findings'), POLL_MS);
+      if (!poll) {
+        poll = setInterval(() => {
+          for (const topic of ['findings', 'ingests', 'operations']) invalidateTopic(qc, topic);
+        }, POLL_MS);
+      }
     };
     const stopPolling = () => {
       if (poll) clearInterval(poll);

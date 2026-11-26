@@ -66,7 +66,7 @@ function Notifications() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const q = useQuery({ queryKey: qk.notifications(), queryFn: ({ signal }) => getNotifications(signal), refetchInterval: 60_000, retry: false });
+  const q = useQuery({ queryKey: qk.notifications(), queryFn: ({ signal }) => getNotifications(signal), retry: false }); // refreshed by the `operations` stream event
   const read = useMutation({ mutationFn: markNotificationsRead, onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifications() }) });
   const unread = q.data?.unread ?? 0;
   const items = q.data?.items ?? [];

@@ -68,11 +68,10 @@ describe('About and Scoring Rules Route', () => {
     expect(screen.getByText('PRODUCTION_ENV')).toBeInTheDocument();
     expect(screen.getByText('HAS_VPN_REDUCTION')).toBeInTheDocument();
 
-    // Badges
-    expect(screen.getByText('Attribute-Aware')).toBeInTheDocument();
-    expect(screen.getByText('Environment')).toBeInTheDocument();
-    expect(screen.getByText('Threat Intel')).toBeInTheDocument();
-    expect(screen.getByText('Mitigation')).toBeInTheDocument();
+    // What each rule reads, in words (no coloured pills: docs/13)
+    expect(screen.getByText('threat intelligence')).toBeInTheDocument();
+    expect(screen.getByText('reads the environment')).toBeInTheDocument();
+    expect(screen.getByText('reads application attributes, lowers the score')).toBeInTheDocument();
 
     // Points display
     expect(screen.getByText('+300')).toBeInTheDocument();

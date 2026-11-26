@@ -32,7 +32,7 @@ const day = (n) => new Date(Date.now() - n * 86_400_000).toISOString();
 const APP_ROWS = [
   { id: 'a0000001-0000-4000-8000-000000000001', slug: 'checkout', name: 'Checkout', business_criticality: 'critical', internet_facing: true, open: bands(3, 6, 4, 2), risk_score: 1000, exposure_count: 9, sla_breached: 4, last_scan: day(0.1) },
   { id: 'a0000001-0000-4000-8000-000000000002', slug: 'billing', name: 'Billing', business_criticality: 'high', internet_facing: false, open: bands(0, 3, 5, 1), risk_score: 650, exposure_count: 3, sla_breached: 1, last_scan: day(2) },
-  { id: 'a0000001-0000-4000-8000-000000000003', slug: 'search', name: 'Search', business_criticality: 'medium', internet_facing: true, open: bands(0, 1, 2, 4), risk_score: 420, exposure_count: 1, sla_breached: 0, last_scan: day(21) },
+  { id: 'a0000001-0000-4000-8000-000000000003', slug: 'search', name: 'Search', business_criticality: 'medium', internet_facing: true, open: bands(0, 1, 2, 4), risk_score: 640, exposure_count: 1, sla_breached: 0, last_scan: day(21) },
   { id: 'a0000001-0000-4000-8000-000000000004', slug: 'ledger', name: 'Ledger', business_criticality: 'high', internet_facing: false, open: bands(0, 0, 0, 0), risk_score: 0, exposure_count: 0, sla_breached: 0 },
 ];
 const TREND = Array.from({ length: 30 }, (_, i) => ({ day: new Date(Date.now() - (29 - i) * 86_400_000).toISOString().slice(0, 10), value: Math.round(70 + Math.sin(i / 4) * 8 + i * 0.6) }));
@@ -180,12 +180,18 @@ const PARSERS = (() => {
     p('cluster:trufflehog', 'trufflehog Parser', 'report', 'wasm', { category: 'secrets' }),
     p('cluster:zap', 'zap Parser', 'report', 'lua', { category: 'dast' }),
     p('mapping:pip-audit', 'pip-audit (Declarative)', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'sca', description: 'Declarative mapping parser for pip-audit.' }),
+    // Like Go (internal/query/parsers.go): a parser package that failed to compile is listed as refused, with its error.
+    p('mapping:acme-dast', 'acme-dast', 'report', 'mapping', { support_level: 'community', origin: 'tenant', category: 'dast', status: 'refused',
+      error: 'records: expression "$.alerts[*]" does not compile: unexpected token "*"' }),
     p('cluster:sbom-cyclonedx', 'cyclonedx SBOM Parser', 'sbom', 'wasm', { version: '1.6', last_run: { id: RUNS[1].id, status: 'completed', at: ago(2) }, last_success: ago(2) }),
     p('cluster:sbom-spdx', 'spdx SBOM Parser', 'sbom', 'wasm', { version: '2.3', status: 'ready' }),
     p('cluster:sbom-syft', 'syft SBOM Parser', 'sbom', 'wasm', { version: '1.0', status: 'ready' }),
     p('cluster:sbom-openvex', 'openvex SBOM Parser', 'sbom', 'wasm', { version: '0.2', status: 'ready' }),
   ];
 })();
+
+// What internal/domain/connector_catalogue.go says each type is.
+const CONNECTOR_KIND = { jira: 'tracker', github: 'tracker', externalTracker: 'tracker', slack: 'notifier', teams: 'notifier', email: 'notifier', webhook: 'notifier', plugin: 'notifier' };
 
 const CONNECTORS = [
   {
@@ -205,16 +211,6 @@ const CONNECTORS = [
     enabled: true,
     status: {
       conditions: [{ type: 'Connected', status: 'True', message: 'App token authenticated with issues:write permission' }],
-      last_check_time: new Date().toISOString(),
-    },
-  },
-  {
-    name: 'dtrack-prod-sync',
-    type: 'dependency-track',
-    direction: 'inbound',
-    enabled: true,
-    status: {
-      conditions: [{ type: 'Connected', status: 'True', message: 'Dependency-Track v4.14 API key valid, 12 projects synced' }],
       last_check_time: new Date().toISOString(),
     },
   },
@@ -240,7 +236,7 @@ const CONNECTORS = [
   },
   {
     name: 'webhook-siem-forwarder',
-    type: 'generic-webhook',
+    type: 'webhook',
     direction: 'outbound',
     enabled: true,
     status: {
@@ -258,12 +254,6 @@ const CONNECTORS = [
       last_check_time: new Date().toISOString(),
     },
   },
-];
-
-const DTRACK_PROJECTS = [
-  { project_uuid: 'dtrack-prj-01', name: 'payment-service', version: '2.14.0', last_bom_import: new Date(Date.now() - 3600000).toISOString() },
-  { project_uuid: 'dtrack-prj-02', name: 'auth-gateway', version: '1.8.2', last_bom_import: new Date(Date.now() - 14400000).toISOString() },
-  { project_uuid: 'dtrack-prj-03', name: 'notification-worker', version: '3.0.1', last_bom_import: new Date(Date.now() - 86400000).toISOString() },
 ];
 
 const HELD_CLOSES = [
@@ -506,6 +496,12 @@ const server = http.createServer((req, res) => {
       return res.end(JSON.stringify({ id: 'at-1', status: 'passed', note: 'ok', attested_by: 'user:sara.ahmed@acme.example', attested_at: new Date().toISOString(), expires_at: new Date(Date.now() + 365 * 86400000).toISOString() }));
     }
     if (p === '/api/v1/taxonomies/acme-secure-coding/status') {
+      // Like Go (handleTaxonomyStatus): a framework with a complianceScope answers 404 with the reason for an
+      // application that does not list that scope. Only Checkout lists "pci" here.
+      const forApp = url.searchParams.get('application');
+      if (forApp && forApp !== APP_ROWS[0].id && forApp !== APP_ROWS[0].slug) {
+        return problem(res, 404, 'not-found', 'This framework does not apply to that application: it does not list the complianceScope pci');
+      }
       const z = { critical: 0, high: 0, medium: 0, low: 0 };
       const ago = (n) => new Date(Date.now() - n * 86400000).toISOString();
       return json(res, { id: 'acme-secure-coding', name: 'ACME secure coding policy', version: '2026.1', source: 'https://wiki.acme.example/secpol', kind: 'custom', origin: 'tenant', scope: 'pci',
@@ -639,8 +635,8 @@ const server = http.createServer((req, res) => {
     if (appSourcesMatch) {
       const a = APP_ROWS.find((x) => x.id === appSourcesMatch[1] || x.slug === appSourcesMatch[1]);
       if (!a) return problem(res, 404, 'Application not found', 'No such application.');
-      return json(res, {
-        items: [
+      // Same shape as Go (internal/query/sources.go): {sources, total}.
+      const sources = [
           {
             id: 'src-1',
             tenant_id: 't-test',
@@ -671,8 +667,8 @@ const server = http.createServer((req, res) => {
             created_at: day(30),
             updated_at: day(1),
           },
-        ],
-      });
+      ];
+      return json(res, { sources, total: sources.length });
     }
     const appChangesMatch = /^\/api\/v1\/applications\/([^/]+)\/changes$/.exec(p);
     if (appChangesMatch) {
@@ -736,7 +732,10 @@ const server = http.createServer((req, res) => {
     }
     const appComplianceMatch = /^\/api\/v1\/applications\/([^/]+)\/compliance$/.exec(p);
     if (appComplianceMatch) {
-      return json(res, {
+      // Like Go: a framework with a complianceScope (acme-secure-coding, scope pci) reads only the applications
+      // that list that scope; here only Checkout does. The others name it under not_in_scope.
+      const inPci = appComplianceMatch[1] === APP_ROWS[0].id || appComplianceMatch[1] === APP_ROWS[0].slug;
+      const body = {
         application: appComplianceMatch[1],
         evaluated_at: new Date().toISOString(),
         frameworks: [
@@ -792,7 +791,12 @@ const server = http.createServer((req, res) => {
           }
         ],
         not_in_scope: []
-      });
+      };
+      if (!inPci) {
+        body.frameworks = body.frameworks.filter((f) => f.id !== 'acme-secure-coding');
+        body.not_in_scope = ['ACME secure coding policy'];
+      }
+      return json(res, body);
     }
     const appCompListMatch = /^\/api\/v1\/applications\/([^/]+)\/components$/.exec(p);
     if (appCompListMatch) {
@@ -1242,12 +1246,16 @@ const server = http.createServer((req, res) => {
         },
       ],
     });
-    if (p === '/api/v1/connectors') return json(res, { items: [...CONNECTORS, { name: 'chat-sec', type: 'plugin', direction: 'outbound', enabled: true, managed_by: 'resource',
+    // Each connector carries the catalogue's kind, as Go does (docs/50); a type the catalogue does not list has none.
+    if (p === '/api/v1/connectors') return json(res, { items: [...CONNECTORS.map((c) => ({ ...c, kind: CONNECTOR_KIND[c.type] ?? '' })), { name: 'chat-sec', type: 'plugin', kind: 'notifier', direction: 'outbound', enabled: true, managed_by: 'resource',
       spec: { plugin: { name: 'google-chat' } }, status: { conditions: [{ type: 'Connected', status: 'Unknown', reason: 'NotProbed', message: 'A declarative notifier has no check request; the first delivery tests it' }] } }] });
     // D94: tools installed as data.
     if (p === '/api/v1/integration-packages') return json(res, { items: [
       { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Posts to a Google Chat space', egress: ['chat.googleapis.com'],
         secrets: ['webhookUrl'], config: [], used_by: ['chat-sec'], updated_at: new Date().toISOString() },
+      { name: 'pip-audit', kind: 'parser', runtime: 'mapping', version: '1.0.0', description: 'Declarative mapping parser for pip-audit.', egress: [], secrets: [], config: [], used_by: [], updated_at: new Date().toISOString() },
+      { name: 'acme-dast', kind: 'parser', runtime: 'mapping', version: '0.2.0', egress: [], secrets: [], config: [], used_by: [],
+        error: 'records: expression "$.alerts[*]" does not compile: unexpected token "*"', updated_at: new Date().toISOString() },
       { name: 'redmine', kind: 'tracker', runtime: 'declarative', version: '0.3.0', egress: [], secrets: [], config: [], used_by: [],
         error: 'kind "tracker": declarative trackers are replaced by gRPC tracker containers; use ClusterExternalTracker or ExternalTracker', updated_at: new Date().toISOString() },
     ] });
@@ -1263,6 +1271,12 @@ const server = http.createServer((req, res) => {
       { type: 'slack', name: 'Slack', kind: 'notifier', directions: ['outbound'], description: 'Posts notifications.',
         config_key: 'slack', config_schema: { type: 'object' }, secrets: [{ field: 'tokenSecretRef', holds: 'bot token', purpose: 'posts messages' }],
         example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
+      { type: 'webhook', name: 'Generic webhook', kind: 'notifier', directions: ['outbound'], description: 'Sends signed JSON (CloudEvents or raw) to an HTTPS endpoint.',
+        config_key: 'webhook', config_schema: { type: 'object' }, secrets: [{ field: 'secretRef', holds: 'the HMAC key', purpose: 'signs each delivery' }],
+        example: 'kind: Connector\nmetadata: {name: siem-webhook}\nspec:\n  type: webhook\n' },
+      { type: 'plugin', name: 'Installed package', kind: 'notifier', directions: ['outbound'], description: 'Any notifier described by an IntegrationPackage installed in this namespace (D94).',
+        config_key: 'plugin', config_schema: { type: 'object' }, secrets: [{ field: 'secrets.<name>', holds: 'each secret the package declares', purpose: 'read by the package templates' }],
+        example: 'kind: Connector\nmetadata: {name: chat-sec}\nspec:\n  type: plugin\n  plugin: {name: google-chat}\n' },
     ] });
     if (p === '/api/v1/connectors/validate' && req.method === 'POST') {
       let body = '';
@@ -1273,7 +1287,6 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
-    // Dependency-Track sources (D92): one source, synced 12 minutes ago, one project unmapped, one decision waiting.
     // GET /api/v1/stream (D91): open, with a heartbeat, so the UI does not fall back to polling in the mock.
     if (p === '/api/v1/stream') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
@@ -1282,13 +1295,6 @@ const server = http.createServer((req, res) => {
       req.on('close', () => clearInterval(beat));
       return;
     }
-    if (p === '/api/v1/sources') return json(res, { sources: [{ id: 'src-dt', name: 'dtrack-portfolio', connector: 'dtrack', schedule_seconds: 1800,
-      webhook_enabled: true, trust_upstream_decisions: false, last_portfolio_sync_at: new Date(Date.now() - 12 * 60_000).toISOString(),
-      projects: 14, unmapped: DTRACK_PROJECTS.length, pending_decisions: 1 }] });
-    if (p === '/api/v1/sources/src-dt/unmapped') return json(res, { projects: DTRACK_PROJECTS, count: DTRACK_PROJECTS.length });
-    if (p === '/api/v1/sources/src-dt/decisions') return json(res, { decisions: [{ finding_id: ALL[0]?.finding.id ?? 'f-1', source_id: 'src-dt',
-      state: 'not_affected', justification: 'code_not_reachable', applied: false, seen_at: new Date(Date.now() - 3 * 3600_000).toISOString() }] });
-    if (p === '/api/v1/sources/src-dt/map' && req.method === 'POST') return json(res, { status: 'mapped', sync_queued: true });
     if (/^\/api\/v1\/groups\/[^/]+\/ticket$/.test(p) && req.method === 'POST') return json(res, { ticket: { status: 'reserved' } }, 202);
     if (p === '/api/v1/held-closes') return json(res, { items: HELD_CLOSES });
     if (p === '/api/v1/groups') return json(res, { groups: GROUPS });
@@ -1301,7 +1307,7 @@ const server = http.createServer((req, res) => {
         customised: true,
         risk: {
           base: { critical: 100, high: 70, medium: 40, low: 10, info: 0 },
-          bands: { critical: 800, high: 500, medium: 200 },
+          bands: { critical: 800, high: 600, medium: 300 },
           factors: [
             {
               name: 'IN_KEV',

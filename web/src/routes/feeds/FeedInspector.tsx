@@ -27,8 +27,8 @@ export function FeedInspector({
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-14 font-semibold">{feed.display_name}</h3>
           <span className={cn(
-            'inline-flex items-center rounded-full px-2 py-0.5 text-11 font-medium',
-            feed.enabled ? 'bg-success/15 text-success' : 'bg-surface-3 text-ink-2',
+            'text-12 font-medium',
+            feed.enabled ? 'text-ink' : 'text-ink-2',
           )}>
             {feed.enabled ? t('feeds.enabled') : t('feeds.disabled')}
           </span>

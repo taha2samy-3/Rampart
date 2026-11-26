@@ -42,10 +42,12 @@ describe('the Feeds page', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Feeds' })).toBeInTheDocument();
   });
 
-  it('Integrations has no Feeds tab', async () => {
+  // docs/50: /integrations was retired. An old link lands on /notifiers, which holds no feed.
+  it('/integrations redirects to /notifiers, which has no Feeds tab', async () => {
     mockFetch({ loggedIn: true, role: 'admin' });
-    renderApp('/integrations');
-    await screen.findByRole('tab', { name: /Connectors/i });
+    const { history } = renderApp('/integrations');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Notifiers' })).toBeInTheDocument();
+    expect(history.location.pathname).toBe('/notifiers');
     expect(screen.queryByRole('tab', { name: /Feeds/i })).toBeNull();
   });
 

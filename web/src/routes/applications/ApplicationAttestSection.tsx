@@ -91,7 +91,7 @@ export function ApplicationAttestSection({ app }: { app: ApplicationPage }) {
                   <Td>
                     <div className="flex flex-col">
                       <span className="font-medium text-ink">{control.name}</span>
-                      <span className="font-mono text-11 text-ink-2">{control.id}</span>
+                      <span className="font-mono text-12 text-ink-2">{control.id}</span>
                     </div>
                   </Td>
                   <Td>
@@ -108,11 +108,11 @@ export function ApplicationAttestSection({ app }: { app: ApplicationPage }) {
                   </Td>
                   <Td align="end">
                     {mayAttest ? (
-                      <Button variant="ghost" onClick={() => setAttesting({ framework: fw.id, control })} className="h-7 px-2.5 text-11 text-accent hover:bg-accent/10 hover:text-accent">
+                      <Button variant="ghost" onClick={() => setAttesting({ framework: fw.id, control })} className="h-7 px-2.5 text-12 text-accent hover:bg-accent/10 hover:text-accent">
                         {control.attestation ? 'Attest again' : 'Attest'}
                       </Button>
                     ) : (
-                      <span className="text-11 text-ink-2" title="Recording an attestation needs the maintainer role on this application">Needs maintainer</span>
+                      <span className="text-12 text-ink-2" title="Recording an attestation needs the maintainer role on this application">Needs maintainer</span>
                     )}
                   </Td>
                 </Tr>
@@ -141,9 +141,9 @@ function TicketCell({ control, mayRetry, busy, onRetry }: { control: ControlStat
   if (t.status === 'reserved') return <span>Opening…</span>;
   return (
     <span className="flex flex-col items-start gap-1">
-      <span className="text-red-700 dark:text-red-400">Could not be opened</span>
-      {t.error && <span className="max-w-[16rem] break-words text-11" title={t.error}>{t.error}</span>}
-      {mayRetry && <Button variant="ghost" disabled={busy} onClick={() => onRetry(a.id)} className="h-6 px-2 text-11 text-accent">Try again</Button>}
+      <span className="text-critical dark:text-critical">Could not be opened</span>
+      {t.error && <span className="max-w-[16rem] break-words text-12" title={t.error}>{t.error}</span>}
+      {mayRetry && <Button variant="ghost" disabled={busy} onClick={() => onRetry(a.id)} className="h-6 px-2 text-12 text-accent">Try again</Button>}
     </span>
   );
 }

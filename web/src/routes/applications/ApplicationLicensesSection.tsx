@@ -301,7 +301,7 @@ export function ApplicationLicensesSection({ app }: { app: ApplicationPage }) {
                         <span className="font-mono text-12 text-ink-2">{pkg.version}</span>
                       </div>
                       {pkg.purl && (
-                        <p className="mt-1 truncate font-mono text-12 text-ink-3" title={pkg.purl}>
+                        <p className="mt-1 truncate font-mono text-12 text-ink-2" title={pkg.purl}>
                           {pkg.purl}
                         </p>
                       )}
@@ -312,7 +312,7 @@ export function ApplicationLicensesSection({ app }: { app: ApplicationPage }) {
                             {pkg.vulnerabilities} CVE{pkg.vulnerabilities === 1 ? '' : 's'}
                           </span>
                         ) : (
-                          <span className="text-ink-3">No known CVEs</span>
+                          <span className="text-ink-2">No known CVEs</span>
                         )}
                       </div>
                     </div>

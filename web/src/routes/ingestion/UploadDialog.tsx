@@ -198,10 +198,10 @@ function UploadForm({ onDone }: { onDone: () => void }) {
           </div>
         )}
         {(appsQuery.isError || parsersQuery.isError) && (
-          <p role="alert" className="mt-1 text-12 text-crimson">{t('ingestion.uploadListFailed')}</p>
+          <p role="alert" className="mt-1 text-12 text-critical">{t('ingestion.uploadListFailed')}</p>
         )}
         {accessibleApps.length === 0 && !appsQuery.isLoading && !appsQuery.isError && (
-          <p className="mt-1 text-12 text-crimson">{t('ingestion.noAccessibleApps')}</p>
+          <p className="mt-1 text-12 text-critical">{t('ingestion.noAccessibleApps')}</p>
         )}
       </div>
 

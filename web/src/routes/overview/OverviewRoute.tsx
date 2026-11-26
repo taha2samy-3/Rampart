@@ -20,7 +20,7 @@ export function OverviewRoute() {
   useEffect(() => {
     document.title = `${t('overview.title')} - Rampart`;
   }, [t]);
-  const ov = useQuery({ queryKey: qk.overview(), queryFn: ({ signal }) => getOverview(signal), refetchInterval: 60_000 });
+  const ov = useQuery({ queryKey: qk.overview(), queryFn: ({ signal }) => getOverview(signal) }); // refreshed by the `findings` and `ingests` stream events
   const trend = useQuery({ queryKey: qk.trend('open', 30), queryFn: ({ signal }) => getTrend('open', 30, signal) });
 
   if (ov.isPending) {

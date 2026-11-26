@@ -4,6 +4,9 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { getFinding, getFindingControls, getFindingEvents, qk, toProblem } from '@/api';
 import {
+  BAND_LABEL,
+  BandShape,
+  BAND_TEXT_CLASS,
   Button,
   EmptyState,
   ProblemMessage,
@@ -19,33 +22,15 @@ import { TriageDialog } from '@/features/triage/TriageDialog';
 import { EditDialog } from '@/features/triage/EditDialog';
 import { useAccess } from '@/app/useAccess';
 import { locationOf, whereText } from '@/lib/location';
-import { absoluteDate, absoluteDateTime, sinceShort } from '@/lib/format';
+import { absoluteDate, absoluteDateTime, dueShort } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { toBand } from '@/lib/band';
 
 interface FindingDetailRouteProps {
   id: string;
 }
 
 type FindingTab = 'evidence' | 'technical' | 'risk' | 'compliance' | 'timeline' | 'raw';
-
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: 'bg-danger/15 text-danger border-danger/30',
-  high: 'bg-warning/15 text-warning border-warning/30',
-  medium: 'bg-accent/15 text-accent border-accent/30',
-  low: 'bg-ink-2/15 text-ink-2 border-ink-2/30',
-  info: 'bg-ink-3/15 text-ink-3 border-ink-3/30',
-};
-
-const STATE_STYLES: Record<string, string> = {
-  open: 'bg-danger/10 text-danger border-danger/20',
-  under_investigation: 'bg-warning/10 text-warning border-warning/20',
-  affected: 'bg-danger/10 text-danger border-danger/20',
-  not_affected: 'bg-success/10 text-success border-success/20',
-  fixed: 'bg-success/10 text-success border-success/20',
-  risk_accepted: 'bg-accent/10 text-accent border-accent/20',
-  out_of_scope: 'bg-ink-2/10 text-ink-2 border-ink-2/20',
-  duplicate: 'bg-ink-2/10 text-ink-2 border-ink-2/20',
-};
 
 export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
   const { t } = useTranslation();
@@ -125,6 +110,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
   }
 
   const sev = (f.severity || 'medium').toLowerCase();
+  const band = toBand(risk?.band ?? f.severity);
   const state = (f.state || 'open').toLowerCase();
   const loc = locationOf(f.location);
   const where = whereText(loc);
@@ -142,38 +128,32 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
         >
           ← {t('nav.findings', { defaultValue: 'Back to Findings' })}
         </Link>
-        <span className="font-mono text-12 text-ink-3">ID: {f.id}</span>
+        <span className="font-mono text-12 text-ink-2">ID: {f.id}</span>
       </div>
 
-      {/* Hero Header */}
-      <div className="rounded-lg border border-rule bg-layer-1 p-6 shadow-xs">
+      {/* Header: the band and score from the server, the state and deadline said in words (docs/13). */}
+      <div className="border-b border-rule pb-6">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              {f.category && (
-                <span className="rounded bg-chrome px-2 py-0.5 text-11 font-medium tracking-wide uppercase text-ink-2">
-                  {f.category}
+            <p data-testid="finding-status-line" className="m-0 mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-13 text-ink-2">
+              {risk ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <BandShape band={band} size={12} />
+                  <span className={cn('font-semibold tnum', BAND_TEXT_CLASS[band])}>{risk.total_score}</span>
+                  <span className="text-ink">{BAND_LABEL[band]}</span>
                 </span>
-              )}
-              <span className={cn('rounded border px-2 py-0.5 text-11 font-semibold uppercase', SEVERITY_STYLES[sev] || SEVERITY_STYLES.medium)}>
-                {f.severity || 'Medium'}
+              ) : null}
+              <span>
+                {[
+                  t(`state.${state}`, { defaultValue: state.replace(/_/g, ' ') }),
+                  `${t('findingDetail.severity')} ${sev}`,
+                  f.category,
+                  row.sla_due_date ? `${t('findingDetail.due')} ${absoluteDate(row.sla_due_date)} (${dueShort(row.sla_due_date).text})` : t('findingDetail.noDeadline'),
+                ].filter(Boolean).join(', ')}.
               </span>
-              <span className={cn('rounded border px-2 py-0.5 text-11 font-medium capitalize', STATE_STYLES[state] || STATE_STYLES.open)}>
-                {t(`state.${state}`, { defaultValue: state.replace(/_/g, ' ') })}
-              </span>
-              {risk && (
-                <span className="rounded bg-accent/10 px-2 py-0.5 text-11 font-semibold text-accent">
-                  Risk Score: {risk.total_score} / 1000
-                </span>
-              )}
-              {row.sla_due_date && (
-                <span className="rounded bg-chrome px-2 py-0.5 text-11 text-ink-2">
-                  SLA: {absoluteDate(row.sla_due_date)} ({sinceShort(row.sla_due_date)})
-                </span>
-              )}
-            </div>
+            </p>
 
-            <h1 className="m-0 text-22 font-bold tracking-tight text-ink md:text-24">
+            <h1 className="m-0 text-20 font-bold tracking-tight text-ink md:text-20">
               {f.title}
             </h1>
 
@@ -205,19 +185,19 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
         {/* Fact Strip */}
         <div className="mt-6 grid grid-cols-2 gap-4 border-t border-rule/60 pt-4 text-12 md:grid-cols-4">
           <div>
-            <span className="text-ink-3">Scanner Family:</span>
+            <span className="text-ink-2">Scanner Family:</span>
             <div className="font-semibold text-ink">{f.rule_scanner_family || 'Generic'}</div>
           </div>
           <div>
-            <span className="text-ink-3">Rule Identifier:</span>
+            <span className="text-ink-2">Rule Identifier:</span>
             <div className="font-mono text-ink">{f.rule_id || 'N/A'}</div>
           </div>
           <div>
-            <span className="text-ink-3">Location:</span>
+            <span className="text-ink-2">Location:</span>
             <div className="font-mono text-ink [overflow-wrap:anywhere]">{where || 'Global'}</div>
           </div>
           <div>
-            <span className="text-ink-3">Detection Window:</span>
+            <span className="text-ink-2">Detection Window:</span>
             <div className="text-ink">
               {absoluteDate(f.first_seen)} → {absoluteDate(f.last_seen)}
             </div>
@@ -226,10 +206,9 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
         {/* VEX Exploitability Statement */}
         {f.state === 'not_affected' && (
-          <div className="mt-5 rounded-md border border-success/30 bg-success/10 p-4">
+          <div className="mt-5 border-s-2 border-resolved ps-4">
             <div className="flex items-center gap-2">
-              <span className="inline-flex size-2.5 rounded-full bg-success" />
-              <h3 className="m-0 text-14 font-semibold text-success">
+              <h3 className="m-0 text-14 font-semibold text-ink">
                 VEX Exploitability Statement: Not Affected
               </h3>
             </div>
@@ -285,7 +264,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
           {/* Tab 1: Scanner Evidence & Occurrences */}
           <TabsContent value="evidence" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <div className="mb-4">
                 <h2 className="m-0 text-16 font-semibold text-ink">
                   Concrete Scanner Occurrences & Dynamic Evidence
@@ -294,13 +273,13 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                   Multi-scanner reports, dynamic key-value attributes (commits, URLs, tags, entropy), and raw tool outputs stored during ingestion.
                 </p>
               </div>
-              <ScannerEvidenceSection finding={f} />
+              <ScannerEvidenceSection finding={f} occurrences={row.occurrences ?? []} />
             </div>
           </TabsContent>
 
           {/* Tab 2: Technical Details & Location */}
           <TabsContent value="technical" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <h2 className="m-0 mb-4 text-16 font-semibold text-ink">
                 Technical Location & Code Context
               </h2>
@@ -363,7 +342,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                           href={`https://cwe.mitre.org/data/definitions/${c}.html`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="rounded border border-rule bg-chrome px-2 py-0.5 font-mono text-12 text-accent hover:underline"
+                          className="rounded-ctl border border-rule bg-chrome px-2 py-0.5 font-mono text-12 text-accent hover:underline"
                         >
                           CWE-{c}
                         </a>
@@ -401,7 +380,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
           {/* Tab 3: Risk & Scoring Breakdown */}
           <TabsContent value="risk" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <h2 className="m-0 mb-2 text-16 font-semibold text-ink">
                 Risk Score Calculation ({risk?.total_score ?? 'N/A'} / 1000)
               </h2>
@@ -423,14 +402,14 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                           <div className="text-12 text-ink-2">{factor.reason}</div>
                         )}
                       </div>
-                      <span className={cn('font-mono font-semibold', factor.points >= 0 ? 'text-danger' : 'text-success')}>
+                      <span className={cn('font-mono font-semibold', factor.points >= 0 ? 'text-ink' : 'text-resolved')}>
                         {factor.points >= 0 ? `+${factor.points}` : factor.points} pts
                       </span>
                     </li>
                   ))}
                   <li className="flex items-center justify-between pt-3 font-bold text-ink">
                     <span>Total Computed Risk Score</span>
-                    <span className="text-16 text-accent">{risk.total_score} pts</span>
+                    <span className={cn('text-16', BAND_TEXT_CLASS[band])}>{risk.total_score} pts</span>
                   </li>
                 </ul>
               ) : (
@@ -441,7 +420,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
           {/* Tab 4: Compliance Controls */}
           <TabsContent value="compliance" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <h2 className="m-0 mb-4 text-16 font-semibold text-ink">
                 Applicable Security & Compliance Controls
               </h2>
@@ -472,7 +451,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                           <td className="py-2.5 pr-4 text-ink-2">{c.control}</td>
                           <td className="py-2.5">
                             {c.due ? (
-                              <span className={cn(c.overdue ? 'text-danger font-semibold' : 'text-ink-2')}>
+                              <span className={cn(c.overdue ? 'text-critical font-semibold' : 'text-ink-2')}>
                                 {absoluteDate(c.due)} {c.overdue ? '(Overdue)' : ''}
                               </span>
                             ) : (
@@ -494,7 +473,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
           {/* Tab 5: Activity Timeline */}
           <TabsContent value="timeline" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <h2 className="m-0 mb-4 text-16 font-semibold text-ink">
                 Finding History & Audit Timeline
               </h2>
@@ -510,7 +489,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                 <ul className="m-0 list-none p-0 divide-y divide-rule/60 text-13">
                   {eventsQuery.data.map((evt) => (
                     <li key={evt.id} className="py-2.5">
-                      <div className="flex items-center justify-between text-12 text-ink-3">
+                      <div className="flex items-center justify-between text-12 text-ink-2">
                         <span className="font-semibold text-ink capitalize">{evt.type.replace(/_/g, ' ')}</span>
                         <span>{absoluteDateTime(evt.at)}</span>
                       </div>
@@ -529,7 +508,7 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
 
           {/* Tab 6: Raw Finding JSON */}
           <TabsContent value="raw" className="pt-4">
-            <div className="rounded-lg border border-rule bg-layer-1 p-6">
+            <div className="py-2">
               <div className="mb-3 flex items-center justify-between">
                 <div>
                   <h2 className="m-0 text-16 font-semibold text-ink">Raw API Payload</h2>
@@ -543,10 +522,10 @@ export function FindingDetailRoute({ id }: FindingDetailRouteProps) {
                     setTimeout(() => setCopiedRaw(false), 2000);
                   }}
                 >
-                  {copiedRaw ? 'Copied!' : 'Copy Finding JSON'}
+                  {copiedRaw ? 'Copied' : 'Copy Finding JSON'}
                 </Button>
               </div>
-              <pre className="m-0 max-h-96 overflow-auto rounded bg-chrome p-3 font-mono text-11 leading-relaxed text-ink">
+              <pre className="m-0 max-h-96 overflow-auto rounded bg-chrome p-3 font-mono text-12 leading-relaxed text-ink">
                 {rawFindingJson}
               </pre>
             </div>

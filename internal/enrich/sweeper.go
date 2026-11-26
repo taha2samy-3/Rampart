@@ -18,6 +18,10 @@ const (
 
 	// DefaultAdvisorySweepInterval is how often the sweeper looks for CVEs due for refresh.
 	DefaultAdvisorySweepInterval = 15 * time.Minute
+
+	// AdvisoryPriorityPending and AdvisoryPriorityStale are the River priorities (1 to 4, 1 first) of the sweep's jobs.
+	AdvisoryPriorityPending = 3
+	AdvisoryPriorityStale   = 4
 )
 
 // AdvisoryEnqueuer abstracts enqueueing into River so tests can mock it easily.
@@ -89,11 +93,13 @@ func (s *AdvisorySweeper) Sweep(ctx context.Context) (int, error) {
 			continue
 		}
 
+		// River priorities are 1 (first) to 4 (last); a value outside is refused at insert. Both are background
+		// work: a CVE waiting on NVD's score goes before a stale one, and both after anything a person asked for.
 		reason := "stale_cache"
-		priority := 0
+		priority := AdvisoryPriorityStale
 		if isPending {
 			reason = "pending_scoring"
-			priority = 10 // Higher priority for CVEs waiting on NIST NVD scoring
+			priority = AdvisoryPriorityPending
 		}
 
 		args := jobs.AdvisoryRefreshArgs{
@@ -115,7 +121,11 @@ func (s *AdvisorySweeper) Sweep(ctx context.Context) (int, error) {
 	return enqueued, rows.Err()
 }
 
-// RunAdvisorySweeper runs the sweeper periodically using a PostgreSQL advisory lock across replicas.
+// RunAdvisorySweeper runs the sweeper periodically using a PostgreSQL advisory lock across replicas. The lock is
+// session-level, so it is taken and released on one acquired connection (as analysis.RunSweeper does): taken through
+// the pool, the unlock could run on another connection, fail, and leave the lock held for ever by an idle connection.
+//
+// It is not started by the server (docs/51 step 1.5: the owner decides whether it is wired or removed).
 func RunAdvisorySweeper(ctx context.Context, sweeper *AdvisorySweeper, pool *pgxpool.Pool, interval time.Duration) {
 	if interval <= 0 {
 		interval = DefaultAdvisorySweepInterval
@@ -131,18 +141,33 @@ func RunAdvisorySweeper(ctx context.Context, sweeper *AdvisorySweeper, pool *pgx
 			if pool == nil {
 				continue
 			}
-
-			// Try to acquire the advisory lock
-			var locked bool
-			err := pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", AdvisorySweeperLockID).Scan(&locked)
-			if err != nil || !locked {
-				continue
-			}
-
-			_, _ = sweeper.Sweep(ctx)
-
-			// Release advisory lock
-			_, _ = pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", AdvisorySweeperLockID)
+			sweepLocked(ctx, sweeper, pool)
 		}
+	}
+}
+
+// sweepLocked runs one sweep while holding the advisory lock on a single connection; another replica holding it skips.
+func sweepLocked(ctx context.Context, sweeper *AdvisorySweeper, pool *pgxpool.Pool) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		sweeper.logger.Warn("advisory sweeper: no database connection", "err", err)
+		return
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", AdvisorySweeperLockID).Scan(&locked); err != nil {
+		sweeper.logger.Warn("advisory sweeper: taking the lock failed", "err", err)
+		return
+	}
+	if !locked {
+		return // another replica sweeps
+	}
+	defer func() {
+		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", AdvisorySweeperLockID); err != nil {
+			sweeper.logger.Warn("advisory sweeper: releasing the lock failed", "err", err)
+		}
+	}()
+	if _, err := sweeper.Sweep(ctx); err != nil {
+		sweeper.logger.Warn("advisory sweeper: sweep failed", "err", err)
 	}
 }

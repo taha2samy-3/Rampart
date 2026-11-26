@@ -29,7 +29,7 @@ export function ApplicationSettingsSection({ app }: { app: ApplicationPage }) {
     const p = factorPoints(scoring.data, names);
     if (p === null) return null;
     return (
-      <span className="ms-2 inline-flex items-center rounded-full bg-chrome border border-rule px-2 py-0.5 text-11 font-medium text-ink-2">
+      <span className="ms-2 text-12 tnum text-ink-2">
         {p > 0 ? `+${p}` : `−${Math.abs(p)}`} {t('appSettings.points', { points: '' }).trim()}
       </span>
     );
@@ -50,7 +50,6 @@ export function ApplicationSettingsSection({ app }: { app: ApplicationPage }) {
         <p className="mt-1 text-13 text-ink-2">{t('appSettings.intro')}</p>
         <div role="note" className="mt-3 rounded-ctl border border-rule/80 bg-surface/70 p-3 text-13">
           <p className="m-0 font-medium text-ink flex items-center gap-2">
-            <span className="size-2 rounded-full bg-accent" />
             {t('appSettings.readOnlyNotice')}
           </p>
         </div>
@@ -63,8 +62,8 @@ export function ApplicationSettingsSection({ app }: { app: ApplicationPage }) {
             {t('appSettings.identityRepo', { branch: initial.branch, repository: initial.repository })}
           </p>
           {initial.managed_by && (
-            <p className="mt-1 text-12 text-ink-3">
-              Managed by: <code className="rounded bg-chrome px-1 py-0.5 font-mono text-11">{initial.managed_by}</code>
+            <p className="mt-1 text-12 text-ink-2">
+              Managed by: <code className="rounded bg-chrome px-1 py-0.5 font-mono text-12">{initial.managed_by}</code>
             </p>
           )}
         </div>
@@ -179,7 +178,7 @@ export function ApplicationSettingsSection({ app }: { app: ApplicationPage }) {
         <div className="rounded-ctl border border-rule bg-surface p-4">
           <h4 className="text-13 font-semibold text-ink">{t('appSettings.customAttributes')}</h4>
           <p className="mt-0.5 text-12 text-ink-2">
-            Arbitrary key-value properties defined in the Application spec evaluated dynamically by custom CEL risk policies using <code className="rounded bg-chrome px-1 text-11">attr(app, 'key', default)</code>.
+            Arbitrary key-value properties defined in the Application spec evaluated dynamically by custom CEL risk policies using <code className="rounded bg-chrome px-1 text-12">attr(app, 'key', default)</code>.
           </p>
           <div className="mt-3">
             {attributeEntries.length > 0 ? (

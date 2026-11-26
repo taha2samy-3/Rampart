@@ -2,7 +2,7 @@ apiVersion: v2
 name: rampart
 description: Rampart Cloud-Native Application Security Posture Management (ASPM) Platform
 type: application
-version: 0.3.26
+version: 0.3.27
 appVersion: "0.3.26"
 home: https://rampart.aspm.dev
 icon: https://raw.githubusercontent.com/taha2samy-3/Rampart/main/web/public/favicon.svg

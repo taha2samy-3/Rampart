@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -115,6 +116,11 @@ type TrustRule struct {
 	NamespaceID       string            `json:"namespaceId,omitempty"`
 	Repository        string            `json:"repository,omitempty"`
 	BoundClaims       map[string]string `json:"boundClaims,omitempty"`
+	// RepositoryClaim and RefClaim name the claims of a generic issuer's token that carry the repository and the ref the CI
+	// job runs on. The token exchanged under the rule is bound to them (D80), so a job cannot upload as another branch.
+	// A rule with a provider (github, gitlab) reads the provider's own claims instead (docs/51 step 1.3).
+	RepositoryClaim string `json:"repositoryClaim,omitempty"`
+	RefClaim        string `json:"refClaim,omitempty"`
 }
 
 // Validate checks that the trust rule contains valid and complete identifiers.
@@ -128,7 +134,7 @@ func (r *TrustRule) Validate() error {
 				return fmt.Errorf("boundClaims cannot contain empty keys or values")
 			}
 		}
-		return nil
+		return r.validateBoundClaims()
 	}
 	if r.Provider != "github" && r.Provider != "gitlab" {
 		return fmt.Errorf("provider must be 'github' or 'gitlab', got %q", r.Provider)
@@ -142,6 +148,30 @@ func (r *TrustRule) Validate() error {
 	return nil
 }
 
+// validateBoundClaims checks that a boundClaims rule binds the job to one repository and one ref (D80), and that it names the
+// repository by an id that cannot be re-registered by someone else (D22). docs/51 step 1.3: before this, a rule with boundClaims
+// skipped both, so a feature branch could upload as main, and a rule naming `repository: acme/payments` trusted whoever owns
+// that name next.
+func (r *TrustRule) validateBoundClaims() error {
+	switch r.Provider {
+	case "github":
+		if r.BoundClaims["repository_id"] == "" || r.BoundClaims["repository_owner_id"] == "" {
+			return fmt.Errorf("a github federation must bind repository_id and repository_owner_id in boundClaims (D22): a repository name can be taken over by someone else")
+		}
+	case "gitlab":
+		if r.BoundClaims["project_id"] == "" || r.BoundClaims["namespace_id"] == "" {
+			return fmt.Errorf("a gitlab federation must bind project_id and namespace_id in boundClaims (D22): a project path can be taken over by someone else")
+		}
+	case "":
+		if strings.TrimSpace(r.RepositoryClaim) == "" || strings.TrimSpace(r.RefClaim) == "" {
+			return fmt.Errorf("a federation must say which claims name the repository and the ref: set provider (github or gitlab), or repositoryClaim and refClaim, so the token is bound to one repository and branch (D80)")
+		}
+	default:
+		return fmt.Errorf("provider must be 'github', 'gitlab' or empty (with repositoryClaim and refClaim), got %q", r.Provider)
+	}
+	return nil
+}
+
 // TrustRuleRecord represents a stored trust rule linked to a ScanSource.
 type TrustRuleRecord struct {
 	ID           uuid.UUID `json:"id"`
@@ -150,6 +180,9 @@ type TrustRuleRecord struct {
 	Rule         TrustRule `json:"rule"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+
+// ErrAmbiguousApplicationRef is returned when an applicationRef matches more than one application (docs/51 step 2.5).
+var ErrAmbiguousApplicationRef = errors.New("applicationRef matches more than one application")
 
 // ApplicationSelector matches applications by labels.
 type ApplicationSelector struct {
@@ -200,6 +233,16 @@ func (s SecretRef) Validate() error {
 type FederationSpec struct {
 	Issuer      string            `json:"issuer"`
 	BoundClaims map[string]string `json:"boundClaims"`
+	// Provider is github or gitlab when the issuer is one of them; its claims then bind the repository and the ref (D80).
+	Provider string `json:"provider,omitempty"`
+	// RepositoryClaim and RefClaim name the claims that bind the repository and the ref for any other issuer.
+	RepositoryClaim string `json:"repositoryClaim,omitempty"`
+	RefClaim        string `json:"refClaim,omitempty"`
+}
+
+// TrustRule is the stored rule this federation becomes.
+func (f FederationSpec) TrustRule() TrustRule {
+	return TrustRule{Issuer: f.Issuer, Provider: f.Provider, BoundClaims: f.BoundClaims, RepositoryClaim: f.RepositoryClaim, RefClaim: f.RefClaim}
 }
 
 // Validate ensures the federation specification is non-empty and well-formed.
@@ -214,6 +257,10 @@ func (f FederationSpec) Validate() error {
 		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
 			return fmt.Errorf("federation.boundClaims cannot contain empty keys or values")
 		}
+	}
+	rule := f.TrustRule()
+	if err := rule.validateBoundClaims(); err != nil {
+		return fmt.Errorf("federation: %w", err)
 	}
 	return nil
 }

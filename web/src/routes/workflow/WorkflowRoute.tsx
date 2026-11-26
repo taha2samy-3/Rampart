@@ -211,7 +211,7 @@ function HeldClosesView({ search, set }: { search: WorkflowSearch; set: (patch: 
                     <span className="block truncate font-mono text-[11px] text-ink-2">{r.ingest_run_id.slice(0, 8)}</span>
                   </Td>
                   <Td>
-                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-12 font-medium capitalize', status === 'pending' ? 'bg-high/10 text-high' : status === 'confirmed' ? 'bg-resolved/10 text-resolved' : 'bg-ink-3/10 text-ink-2')}>
+                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-12 font-medium capitalize', status === 'pending' ? 'bg-high/10 text-high' : status === 'confirmed' ? 'bg-resolved/10 text-resolved' : 'bg-ink-2/10 text-ink-2')}>
                       {status}
                     </span>
                   </Td>

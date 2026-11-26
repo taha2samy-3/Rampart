@@ -151,4 +151,33 @@ describe('the Parsers page', () => {
     expect(within(table).getByText('Ready')).toBeInTheDocument();
     expect(within(table).getByText('Not tested yet')).toBeInTheDocument();
   });
+  // docs/50 step 3: a parser package's runtime, version, error and use are shown in the inspector of its mapping:
+  // row, since /parsers already lists it; a package that failed to compile says why there.
+  it('shows the package behind a mapping parser, with its compile error', async () => {
+    mockFetch({
+      loggedIn: true,
+      parsers: [
+        parser({ id: 'mapping:acme-dast', name: 'acme-dast', runtime: 'mapping', origin: 'tenant', module: undefined, status: 'refused', error: 'records: does not compile' }),
+      ],
+      packages: [
+        { name: 'acme-dast', kind: 'parser', runtime: 'mapping', version: '0.2.0', egress: [], secrets: [], config: [], used_by: [], error: 'records: expression "$.alerts[*]" does not compile', updated_at: '2026-11-16T10:00:00Z' },
+      ],
+    });
+    const { container } = renderApp('/parsers');
+    await userEvent.click(await screen.findByRole('button', { name: /acme-dast/ }));
+    const pkg = await screen.findByTestId('parser-package');
+    expect(await within(pkg).findByText('0.2.0')).toBeInTheDocument();
+    expect(within(pkg).getByText('mapping')).toBeInTheDocument();
+    expect(within(pkg).getByText('Not used')).toBeInTheDocument();
+    expect(within(pkg).getByText('records: expression "$.alerts[*]" does not compile')).toBeInTheDocument();
+    expect(within(pkg).getByText(/Uploads that name acme-dast/)).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('shows no package section for a parser that is not a package', async () => {
+    mockFetch({ loggedIn: true, parsers: PARSERS });
+    renderApp('/parsers');
+    await userEvent.click(await screen.findByRole('button', { name: /sarif Parser/ }));
+    expect(screen.queryByTestId('parser-package')).toBeNull();
+  });
 });

@@ -1,14 +1,15 @@
 package query
 
 import (
-	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"rampart/internal/auth"
 	"rampart/internal/domain"
+	"rampart/internal/telemetry"
 )
 
 // RefreshResponse is the answer of POST /api/v1/applications/{id}/refresh-vulnerabilities.
@@ -44,10 +45,8 @@ func (a *API) handleRefreshVulnerabilities(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 1. In-flight quota check (docs/39 Slice D.3): cap manual work across the platform.
-	if c, ok := a.store.(interface {
-		CountAnalysesInFlight(context.Context, time.Duration) (int, error)
-	}); ok && a.maxInFlight > 0 {
-		if inflight, err := c.CountAnalysesInFlight(r.Context(), time.Hour); err == nil && inflight >= a.maxInFlight {
+	if a.inFlight != nil && a.maxInFlight > 0 {
+		if inflight, err := a.inFlight.CountAnalysesInFlight(r.Context(), analysisStaleAfter); err == nil && inflight >= a.maxInFlight {
 			w.Header().Set("Retry-After", "30")
 			problem(w, http.StatusTooManyRequests, "analysis-queue-full", fmt.Sprintf("Too many analyses are currently running or queued across the platform (%d in flight, limit %d). Try again in 30 seconds.", inflight, a.maxInFlight))
 			return
@@ -107,11 +106,10 @@ func (a *API) handleRefreshVulnerabilities(w http.ResponseWriter, r *http.Reques
 						if an.State == domain.AnalysisPending || an.State == domain.AnalysisRunning {
 							runningCount++
 						}
-						if an.Trigger == domain.TriggerManual && an.FinishedAt != nil {
-							if newestManualFinished == nil || an.FinishedAt.After(*newestManualFinished) {
-								t := *an.FinishedAt
-								newestManualFinished = &t
-							}
+						// The last time a person asked, kept apart from the trigger the next claim overwrites (docs/51 step 2.2).
+						if an.LastManualAt != nil && (newestManualFinished == nil || an.LastManualAt.After(*newestManualFinished)) {
+							t := *an.LastManualAt
+							newestManualFinished = &t
 						}
 					}
 				}
@@ -172,11 +170,19 @@ func (a *API) handleRefreshVulnerabilities(w http.ResponseWriter, r *http.Reques
 
 	// 3. Dispatch to analyzers.
 	totalQueued := 0
+	var dispatchErr error
 	for _, asID := range assetIDs {
 		n, err := a.analysis.DispatchAsset(r.Context(), tenantID, asID, domain.TriggerManual)
-		if err == nil {
-			totalQueued += n
+		totalQueued += n
+		if err != nil {
+			dispatchErr = err
 		}
+	}
+	if dispatchErr != nil && totalQueued == 0 {
+		// Not "already running or up to date": nothing could be queued (docs/51 step 2.2).
+		slog.Error("refresh: could not queue analyses", "application", appID, "request_id", telemetry.RequestID(r.Context()), "error", dispatchErr)
+		problem(w, http.StatusServiceUnavailable, "analysis-unavailable", "The analyses could not be queued. Try again later.")
+		return
 	}
 
 	if totalQueued > 0 {
@@ -203,3 +209,7 @@ func (a *API) handleRefreshVulnerabilities(w http.ResponseWriter, r *http.Reques
 		Message:        "Analysis is already running or up to date",
 	})
 }
+
+// analysisStaleAfter is how old a pending or running analysis may be before it no longer counts as in flight: the claim frees it
+// after the same time (analysis.Config.StaleAfter's default, D144).
+const analysisStaleAfter = time.Hour

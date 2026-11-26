@@ -55,7 +55,7 @@ func (s *Server) GetMetadata(context.Context, *trackerv1.GetMetadataRequest) (*t
 		DeclaredSecrets: []*trackerv1.SecretDeclaration{
 			{Name: "token", Holds: "API token for the upstream issue tracker", Purpose: "authenticates API writes", Required: true},
 		},
-		ExampleYaml: "apiVersion: rampart.aspm.dev/v1alpha1\nkind: ClusterExternalTracker\nmetadata:\n  name: reference-tracker\nspec:\n  protocol: grpc\n  service: {name: external-tracker-svc, namespace: security-tools, port: 50051}\n",
+		ExampleYaml: "apiVersion: rampart.aspm.dev/v1alpha1\nkind: ClusterExternalTracker\nmetadata:\n  name: reference-tracker\nspec:\n  protocol: grpc\n  service: {name: external-tracker-svc, namespace: security-tools, port: 50051}\n  tls: {insecure: true}\n",
 	}, nil
 }
 

@@ -85,6 +85,9 @@ type SBOMAnalysis struct {
 	FinishedAt *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// LastManualAt is when a person last asked for this analysis; a later claim by an upload or the sweep keeps it (the cooldown
+	// of docs/39 D.2 reads it).
+	LastManualAt *time.Time
 }
 
 // AnalysisStore keeps what the analysis of SBOMs needs: the SBOMs by id, and the record of each analysis.
