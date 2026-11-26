@@ -143,11 +143,14 @@ func TestNativeReports_EndToEnd(t *testing.T) {
 	}
 	// Secret occurrences are recorded, with raw payload stripped (D149: secret findings keep no raw payload).
 	var secretOccs, secretWithRaw int
-	if err := h.pool.QueryRow(ctx, `SELECT
-		count(*) FILTER (WHERE f.category = 'secret'),
-		count(*) FILTER (WHERE f.category = 'secret' AND o.raw IS NOT NULL)
-		FROM occurrence o JOIN finding f ON f.tenant_id = o.tenant_id AND f.id = o.finding_id
-		WHERE o.tenant_id = $1`, h.tenant).Scan(&secretOccs, &secretWithRaw); err != nil {
+	if err := h.store.InTenantTx(ctx, h.tenant, func(st store.Store) error {
+		tx := st.(interface{ PgxTx() pgx.Tx }).PgxTx()
+		return tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE f.category = 'secret'),
+			count(*) FILTER (WHERE f.category = 'secret' AND o.raw IS NOT NULL)
+			FROM occurrence o JOIN finding f ON f.tenant_id = o.tenant_id AND f.id = o.finding_id
+			WHERE o.tenant_id = $1`, h.tenant).Scan(&secretOccs, &secretWithRaw)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if secretOccs < 5 || secretWithRaw != 0 {
