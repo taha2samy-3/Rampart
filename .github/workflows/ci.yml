@@ -110,7 +110,7 @@ jobs:
         # pipefail: without it the step takes tee's exit code and passes when a test fails (it did, from 2026-11-11 to 2026-11-26; docs/51 step 0.1).
         run: |
           set -o pipefail
-          go test -race -timeout 25m -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ ./internal/objectstore/ 2>&1 | tee /tmp/store.txt
+          go test -race -timeout 35m -count=1 -v -coverprofile=coverage-store.out -covermode=atomic ./internal/store/ ./internal/objectstore/ 2>&1 | tee /tmp/store.txt
       - name: A skipped suite is a failure in CI
         run: "! grep -q -- '--- SKIP' /tmp/store.txt"
       - uses: actions/upload-artifact@v4

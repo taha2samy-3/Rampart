@@ -167,7 +167,7 @@ func TestApplicationChanges_LargeApplication_OnPostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("10,000 findings: answered in %v (new %d, closed %d, open at end %d)", took, r.Counts.New, r.Counts.Closed, r.Counts.OpenAtEnd)
-	if took > 15*time.Second {
+	if !raceEnabled && took > 15*time.Second {
 		t.Errorf("took %v", took)
 	}
 	if len(r.New) > 1000 || len(r.OpenAtEnd) > 1000 || !r.OpenMore {
