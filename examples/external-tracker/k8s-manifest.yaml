@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-tracker
+  namespace: security-tools
+  labels:
+    app.kubernetes.io/name: external-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: external-tracker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: external-tracker
+    spec:
+      containers:
+        - name: tracker
+          image: ghcr.io/rampart/trackers/reference:latest
+          ports:
+            - containerPort: 50051
+              name: grpc
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-tracker-svc
+  namespace: security-tools
+  labels:
+    app.kubernetes.io/name: external-tracker
+spec:
+  ports:
+    - port: 50051
+      targetPort: 50051
+      name: grpc
+  selector:
+    app.kubernetes.io/name: external-tracker
+---
+apiVersion: rampart.aspm.dev/v1alpha1
+kind: ClusterExternalTracker
+metadata:
+  name: reference-tracker
+spec:
+  enabled: true
+  protocol: grpc
+  service:
+    name: external-tracker-svc
+    namespace: security-tools
+    port: 50051
+  timeoutSeconds: 30

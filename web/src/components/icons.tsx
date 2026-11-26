@@ -92,6 +92,9 @@ export const IconFeeds = (p: P) => (
 export const IconIntegrations = (p: P) => (
   <svg {...base(p)}><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7V8a3.5 3.5 0 0 1-7 0ZM8 11.5v2" /></svg>
 );
+export const IconTicketing = (p: P) => (
+  <svg {...base(p)}><path d="M2.5 4.5h11v2.25a1.25 1.25 0 0 0 0 2.5V11.5h-11V9.25a1.25 1.25 0 0 0 0-2.5Z" /><path d="M6.5 4.5v7M9.5 6.75h2M9.5 9.25h2" /></svg>
+);
 export const IconAdmin = (p: P) => (
   <svg {...base(p)}><circle cx="8" cy="8" r="2.25" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></svg>
 );

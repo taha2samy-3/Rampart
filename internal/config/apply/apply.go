@@ -275,10 +275,13 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("parser.rampart.aspm.dev/%s configured", header.Metadata.Name), nil
 
-	case "externalanalyzer", "sbomanalyzer": // D143: one tenant's analyzer
+	case "externalanalyzer", "sbomanalyzer", "externaltracker": // D143: one tenant's analyzer or tracker container
 		kind, parse := domain.AnalyzerKindExternal, func(b []byte) error { _, err := domain.ParseExternalAnalyzerSpec(b, true); return err }
 		if lk == "sbomanalyzer" {
 			kind, parse = domain.AnalyzerKindSBOM, func(b []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(b); return err }
+		}
+		if lk == "externaltracker" {
+			kind, parse = domain.TrackerKindExternal, func(b []byte) error { _, err := domain.ParseExternalTrackerSpec(b, true); return err }
 		}
 		namespace := defaultNamespace(header.Metadata.Namespace)
 		tenant, err := a.store.GetTenantByNamespace(ctx, namespace)
@@ -297,7 +300,7 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		return fmt.Sprintf("%s.rampart.aspm.dev/%s configured", lk, header.Metadata.Name), nil
 
-	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework", "clusterparser", "clustersbomparser", "clusterexternalanalyzer", "clustersbomanalyzer":
+	case "clusterriskpolicy", "clusterslapolicy", "clusterfeedmirror", "clusterfeed", "clustercomplianceframework", "clusterparser", "clustersbomparser", "clusterexternalanalyzer", "clustersbomanalyzer", "clusterexternaltracker":
 		kind, parse := "risk", func(b []byte) error { _, err := risk.ParseRiskPolicySpec(b); return err }
 		if lk == "clustercomplianceframework" { // D102: a framework every tenant sees
 			name := header.Metadata.Name
@@ -318,6 +321,9 @@ func (a *Applier) ApplyDocument(ctx context.Context, raw []byte) (string, error)
 		}
 		if lk == "clustersbomanalyzer" {
 			kind, parse = domain.AnalyzerKindSBOM, func(b []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(b); return err }
+		}
+		if lk == "clusterexternaltracker" {
+			kind, parse = domain.TrackerKindExternal, func(b []byte) error { _, err := domain.ParseExternalTrackerSpec(b, false); return err }
 		}
 		if lk == "clusterslapolicy" {
 			kind, parse = "sla", func(b []byte) error { _, err := domain.ParseSLAPolicySpec(b); return err }
@@ -777,23 +783,25 @@ type MemoryConfigStore struct {
 	idps               map[string]domain.IdentityProvider
 	connectors         map[string]domain.Connector
 	trustRules         map[uuid.UUID][]domain.TrustRuleRecord
+	trackerEvents      map[string][]domain.TrackerEvent
 }
 
 // NewMemoryConfigStore creates a new in-memory config store.
 func NewMemoryConfigStore() *MemoryConfigStore {
 	return &MemoryConfigStore{
-		tenants:      make(map[string]domain.Tenant),
-		applications: make(map[string]domain.Application),
-		scanSources:  make(map[string]uuid.UUID),
-		namespaces:   make(map[string]uuid.UUID),
-		policies:     make(map[string]PolicyObject),
-		idps:         make(map[string]domain.IdentityProvider),
-		connectors:   make(map[string]domain.Connector),
-		trustRules:   make(map[uuid.UUID][]domain.TrustRuleRecord),
-		orphaned:     make(map[string]bool),
-		disabled:     make(map[string]bool),
-		withData:     make(map[uuid.UUID]bool),
-		purged:       make(map[uuid.UUID]bool),
+		tenants:       make(map[string]domain.Tenant),
+		applications:  make(map[string]domain.Application),
+		scanSources:   make(map[string]uuid.UUID),
+		namespaces:    make(map[string]uuid.UUID),
+		policies:      make(map[string]PolicyObject),
+		idps:          make(map[string]domain.IdentityProvider),
+		connectors:    make(map[string]domain.Connector),
+		trustRules:    make(map[uuid.UUID][]domain.TrustRuleRecord),
+		trackerEvents: make(map[string][]domain.TrackerEvent),
+		orphaned:      make(map[string]bool),
+		disabled:      make(map[string]bool),
+		withData:      make(map[uuid.UUID]bool),
+		purged:        make(map[uuid.UUID]bool),
 	}
 }
 
@@ -1076,6 +1084,81 @@ func (m *MemoryConfigStore) ListAnalyzers(ctx context.Context, tenantID uuid.UUI
 		}
 		return a.Name < b.Name
 	})
+	return out, nil
+}
+
+// ListTrackers returns cluster and tenant external tracker container definitions visible to tenantID.
+func (m *MemoryConfigStore) ListTrackers(ctx context.Context, tenantID uuid.UUID) ([]domain.StoredTrackerObject, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.StoredTrackerObject
+	for k, p := range m.policies {
+		switch {
+		case strings.HasPrefix(k, "cluster:"+domain.TrackerKindExternal+":"):
+			out = append(out, domain.StoredTrackerObject{Kind: domain.TrackerKindExternal, Origin: "cluster", Name: p.Name, Spec: p.Spec, Error: p.Error})
+		case strings.HasPrefix(k, domain.TrackerKindExternal+":"+tenantID.String()+":"):
+			out = append(out, domain.StoredTrackerObject{Kind: domain.TrackerKindExternal, Origin: "tenant", Namespace: p.Namespace, Name: p.Name, Spec: p.Spec, Error: p.Error})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Origin != b.Origin {
+			return a.Origin < b.Origin
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
+	return out, nil
+}
+
+// GetTracker looks up a cluster or tenant external tracker definition.
+func (m *MemoryConfigStore) GetTracker(ctx context.Context, tenantID uuid.UUID, scope, namespace, name string) (domain.StoredTrackerObject, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if scope == "tenant" {
+		if p, ok := m.policies[domain.TrackerKindExternal+":"+tenantID.String()+":"+namespace+":"+name]; ok {
+			return domain.StoredTrackerObject{Kind: domain.TrackerKindExternal, Origin: "tenant", Namespace: p.Namespace, Name: p.Name, Spec: p.Spec, Error: p.Error}, true, nil
+		}
+		return domain.StoredTrackerObject{}, false, nil
+	}
+	if p, ok := m.policies["cluster:"+domain.TrackerKindExternal+":"+name]; ok {
+		return domain.StoredTrackerObject{Kind: domain.TrackerKindExternal, Origin: "cluster", Name: p.Name, Spec: p.Spec, Error: p.Error}, true, nil
+	}
+	return domain.StoredTrackerObject{}, false, nil
+}
+
+// RecordTrackerEvent records a tracker health/check event in memory (keeping up to 200 per tracker).
+func (m *MemoryConfigStore) RecordTrackerEvent(_ context.Context, tenantID uuid.UUID, ev domain.TrackerEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ev.ID == uuid.Nil {
+		ev.ID = domain.NewID()
+	}
+	k := tenantID.String() + ":" + ev.Scope + ":" + ev.Namespace + ":" + ev.Name
+	list := append([]domain.TrackerEvent{ev}, m.trackerEvents[k]...)
+	if len(list) > 200 {
+		list = list[:200]
+	}
+	m.trackerEvents[k] = list
+	return nil
+}
+
+// ListTrackerEvents returns recent events for a tracker container in memory, newest first.
+func (m *MemoryConfigStore) ListTrackerEvents(_ context.Context, tenantID uuid.UUID, scope, namespace, name string, limit int) ([]domain.TrackerEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	k := tenantID.String() + ":" + scope + ":" + namespace + ":" + name
+	list := m.trackerEvents[k]
+	if len(list) > limit {
+		list = list[:limit]
+	}
+	out := make([]domain.TrackerEvent, len(list))
+	copy(out, list)
 	return out, nil
 }
 

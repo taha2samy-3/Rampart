@@ -1,0 +1,211 @@
+syntax = "proto3";
+
+package rampart.tracker.v1;
+
+option go_package = "rampart/pkg/api/tracker/v1;trackerv1";
+
+// TrackerService defines the canonical gRPC contract implemented by external
+// containerized ticketing microservices (Jira, GitHub Issues, GitLab Issues,
+// ServiceNow, Linear, or custom internal trackers).
+//
+// All state, rate limiting, retries, outbox durability, RBAC, and workflow approvals
+// remain in Rampart core (docs/49-containerized-ticketing-architecture.md).
+service TrackerService {
+  // HealthCheck verifies container liveness and serving readiness.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // GetMetadata returns provider identity, capabilities, config JSON Schema, and required secrets.
+  rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+
+  // Check verifies tenant credentials and config against the upstream tracker API (D87).
+  rpc Check(CheckRequest) returns (CheckResponse);
+
+  // CreateIssue creates a new ticket in the upstream tracker.
+  rpc CreateIssue(CreateIssueRequest) returns (CreateIssueResponse);
+
+  // FindIssueByLabel finds an existing ticket by its Rampart idempotency label (D70 B2).
+  rpc FindIssueByLabel(FindIssueByLabelRequest) returns (FindIssueByLabelResponse);
+
+  // Comment posts an update comment to an existing ticket.
+  rpc Comment(CommentRequest) returns (CommentResponse);
+
+  // Close closes an existing ticket in the upstream tracker.
+  rpc Close(CloseRequest) returns (CloseResponse);
+
+  // ParseWebhook verifies vendor webhook signatures and normalizes inbound payloads.
+  rpc ParseWebhook(ParseWebhookRequest) returns (ParseWebhookResponse);
+
+  // PollStates fetches current ticket states for trackers that poll instead of using webhooks.
+  rpc PollStates(PollStatesRequest) returns (PollStatesResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+  string message = 2;
+}
+
+message SecretDeclaration {
+  string name = 1;
+  string holds = 2;
+  string purpose = 3;
+  bool required = 4;
+}
+
+message GetMetadataRequest {}
+
+message GetMetadataResponse {
+  string provider = 1;
+  string display_name = 2;
+  string version = 3;
+  string description = 4;
+  repeated string capabilities = 5;
+  string config_schema_json = 6;
+  repeated SecretDeclaration declared_secrets = 7;
+  string example_yaml = 8;
+}
+
+message TargetContext {
+  string binding_name = 1;
+  bytes config_json = 2;
+  map<string, string> secrets = 3;
+  string tenant_slug = 4;
+  string public_url = 5;
+  string account_id = 6;
+  repeated string accepted_fields = 7;
+}
+
+message TrackerCallError {
+  int32 http_status = 1;
+  bool fatal = 2;
+  string message = 3;
+  string code = 4;
+}
+
+message CheckRequest {
+  TargetContext target = 1;
+}
+
+message CheckResponse {
+  bool ok = 1;
+  string account_id = 2;
+  repeated string accepted_fields = 3;
+  TrackerCallError error = 4;
+}
+
+message CustomFieldValue {
+  string name = 1;
+  string kind = 2; // "string" | "number" | "bool"
+  string string_value = 3;
+  double number_value = 4;
+  bool bool_value = 5;
+}
+
+message IssuePayload {
+  string id = 1;
+  string kind = 2; // "finding" | "group" | "attestation"
+  string title = 3;
+  string description = 4;
+  string severity = 5;
+  double risk_score = 6;
+  string risk_band = 7;
+  string rule_id = 8;
+  string scanner_family = 9;
+  string vulnerability_id = 10;
+  string notice = 11;
+  string location_path = 12;
+  string purl = 13;
+  string app_name = 14;
+  string project = 15;
+  string finding_url = 16;
+  string idempotency_label = 17;
+  repeated CustomFieldValue custom_fields = 18;
+  int32 occurrence_count = 19;
+}
+
+message CreateIssueRequest {
+  TargetContext target = 1;
+  IssuePayload issue = 2;
+}
+
+message CreateIssueResponse {
+  string ticket_id = 1;
+  string ticket_url = 2;
+  TrackerCallError error = 3;
+}
+
+message FindIssueByLabelRequest {
+  TargetContext target = 1;
+  string label = 2;
+}
+
+message FindIssueByLabelResponse {
+  bool found = 1;
+  string ticket_id = 2;
+  string ticket_url = 3;
+  TrackerCallError error = 4;
+}
+
+message CommentRequest {
+  TargetContext target = 1;
+  string ticket_ref = 2;
+  string body = 3;
+}
+
+message CommentResponse {
+  TrackerCallError error = 1;
+}
+
+message CloseRequest {
+  TargetContext target = 1;
+  string ticket_ref = 2;
+  string reason = 3;
+}
+
+message CloseResponse {
+  TrackerCallError error = 1;
+}
+
+message ParseWebhookRequest {
+  TargetContext target = 1;
+  map<string, string> headers = 2; // lowercase header keys
+  bytes body = 3;
+  string webhook_secret = 4;
+}
+
+message ParseWebhookResponse {
+  bool verified = 1;
+  string reject_reason = 2;
+  string delivery_id = 3;
+  string external_ref = 4;
+  string actor_id = 5;
+  string event_action = 6; // "ignored" | "closed" | "reopened" | "risk_accept_requested" | "commented"
+  string resolution = 7;
+  string comment = 8;
+  string target_state = 9;
+  string justification = 10;
+}
+
+message PollStatesRequest {
+  TargetContext target = 1;
+  repeated string ticket_refs = 2;
+}
+
+message PolledTicketState {
+  string ticket_ref = 1;
+  string external_status = 2;
+  bool closed = 3;
+  string resolution = 4;
+  string updated_at_rfc3339 = 5;
+}
+
+message PollStatesResponse {
+  repeated PolledTicketState states = 1;
+  TrackerCallError error = 2;
+}

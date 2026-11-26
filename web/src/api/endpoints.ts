@@ -1,5 +1,5 @@
 import { del, get, patch, post, ProblemError, setCsrfToken } from './client';
-import type { AppSummary, ApplicationPage, ApplicationFreshness, ApplicationScanSource, ApplicationScanSourcesResponse, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate } from './types';
+import type { AppSummary, ApplicationPage, ApplicationFreshness, ApplicationScanSource, ApplicationScanSourcesResponse, AcceptanceBody, AcceptanceOutcome, AcceptanceStatus, AccessBinding, AppNotification, Attestation, ControlStatus, Taxonomy, TaxonomyStatus, MyAccess, Role, AuditEntry, AuditFilter, CorrelatedRef, FindingEvent, FindingSources, HeldClose, NotificationList, FindingRow, FindingDetail, Occurrence, Page, Permissions, RunRow, Reporter, RiskAcceptance, Session, TenantRef, TenantSettings, TrendPoint, TriageBody, BulkBody, BulkResult, Proof, UiConfig, Overview, SavedView, FindingGroup, FindingGroupDetail, ParserDescriptor, AnalyzerItem, AnalyzerEvent, AnalyzerRef, AnalyzerTestResult, AnalyzeResponse, AppTrendPoint, AgeBuckets, PackageEvidence, VulnerabilityDetail, VulnerabilityImpact, AppCompliance, ApplicationChanges, FindingControl, ScoringResponse, ApplicationContextUpdate, TrackerContainerItem, TrackerEvent, TrackerRefKey, TrackerTestResult, TicketQueueResponse } from './types';
 
 export const getUiConfig = () => get<UiConfig>('/api/v1/ui-config');
 
@@ -303,3 +303,29 @@ export const getScoring = (signal?: AbortSignal) => get<ScoringResponse>('/api/v
 /** Changes what the score knows about an application; 409 when an Application resource owns it. */
 export const updateApplicationContext = (id: string, body: ApplicationContextUpdate) =>
   patch<unknown>(`/api/v1/applications/${encodeURIComponent(id)}`, body);
+
+// --- External Ticketing Containers & Queue (docs/49) ---
+export async function listTrackers(signal?: AbortSignal): Promise<TrackerContainerItem[]> {
+  const raw = await get<{ items?: TrackerContainerItem[] | null }>('/api/v1/trackers', { signal });
+  return raw.items ?? [];
+}
+
+export async function listTrackerEvents(ref: TrackerRefKey, signal?: AbortSignal): Promise<TrackerEvent[]> {
+  const raw = await get<{ events?: TrackerEvent[] | null }>('/api/v1/trackers/events', {
+    query: { scope: ref.scope, namespace: ref.namespace ?? '', name: ref.name, limit: 20 },
+    signal,
+  });
+  return raw.events ?? [];
+}
+
+export const testTracker = (ref: TrackerRefKey) =>
+  post<TrackerTestResult>('/api/v1/trackers/test', { scope: ref.scope, namespace: ref.namespace ?? '', name: ref.name });
+
+export async function listTickets(signal?: AbortSignal): Promise<TicketQueueResponse> {
+  const raw = await get<Partial<TicketQueueResponse>>('/api/v1/tickets', { signal });
+  return {
+    tickets: raw.tickets ?? [],
+    outbox: raw.outbox ?? [],
+    configured: Boolean(raw.configured),
+  };
+}

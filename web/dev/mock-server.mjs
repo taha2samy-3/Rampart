@@ -1047,6 +1047,68 @@ const server = http.createServer((req, res) => {
         return;
       }
     }
+    // Ticketing containers & queue (docs/49): external gRPC trackers, probe events, opened tickets + outbox.
+    if (p.startsWith('/api/v1/trackers')) {
+      const ago = (m) => new Date(Date.now() - m * 60_000).toISOString();
+      const key = (x) => [x.scope, x.namespace ?? '', x.name].join('/');
+      globalThis.__trackers ??= {
+        items: [
+          { scope: 'cluster', name: 'jira-tracker', enabled: true, state: 'ready', protocol: 'grpc', target: 'jira-tracker.rampart-system.svc.cluster.local:50051', tls: 'off', timeout_seconds: 30, bound_connectors: 1, updated_at: ago(1800) },
+          { scope: 'tenant', namespace: 'acme', name: 'linear-tracker', enabled: true, state: 'refused', reason: 'a namespaced ExternalTracker may name a service, not an endpoint', protocol: 'grpc', tls: 'off', timeout_seconds: 30, bound_connectors: 0, updated_at: ago(45) },
+        ],
+        events: {},
+      };
+      const st = globalThis.__trackers;
+      const withLast = (x) => ({ ...x, last_event: st.events[key(x)]?.[0] });
+      if (p === '/api/v1/trackers' && req.method === 'GET') return json(res, { items: st.items.map(withLast), total: st.items.length });
+      if (p === '/api/v1/trackers/events' && req.method === 'GET') {
+        const ref = { scope: url.searchParams.get('scope'), namespace: url.searchParams.get('namespace') ?? '', name: url.searchParams.get('name') };
+        return json(res, { events: st.events[key(ref)] ?? [], total: (st.events[key(ref)] ?? []).length });
+      }
+      if (p === '/api/v1/trackers/test' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const ref = JSON.parse(body || '{}');
+          const found = st.items.find((i) => key(i) === key(ref));
+          if (!found) return problem(res, 404, 'No such external tracker', undefined);
+          const ok = found.state !== 'refused';
+          const ev = {
+            id: 'tev-' + Math.random().toString(36).slice(2, 8),
+            event: 'test',
+            outcome: ok ? 'succeeded' : 'failed',
+            message: ok ? 'Serving: Reference Jira Container 1.0.0 (create_issue, find_by_label, comment, close, two_way_webhook)' : `The tracker spec was refused: ${found.reason}`,
+            latency_ms: ok ? 7 : 1,
+            actor: 'user:admin',
+            at: new Date().toISOString(),
+            detail: { target: found.target ?? '', capabilities: 'create_issue,find_by_label,comment,close,two_way_webhook' },
+          };
+          (st.events[key(found)] ??= []).unshift(ev);
+          json(res, {
+            ok,
+            outcome: ev.outcome,
+            message: ev.message,
+            latency_ms: ev.latency_ms,
+            provider: 'jira',
+            display_name: 'Reference Jira Container',
+            version: '1.0.0',
+            capabilities: ['create_issue', 'find_by_label', 'comment', 'close', 'two_way_webhook'],
+            declared_secrets: [{ name: 'token', holds: 'Jira email:apiToken', required: true }],
+            event: ev,
+          });
+        });
+        return;
+      }
+    }
+    if (p === '/api/v1/tickets' && req.method === 'GET') {
+      return json(res, {
+        configured: true,
+        tickets: [
+          { id: 't-1', connector: 'jira-container-binding', external_ref: 'SEC-104', url: 'https://jira.example.com/browse/SEC-104', state: 'open', finding_count: 1, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        ],
+        outbox: [],
+      });
+    }
     // Analyzers (internal/query/analyzers.go): a service, the built-in matcher, one refused resource; Test and Analyze add events.
     if (p.startsWith('/api/v1/analyzers')) {
       const ago = (m) => new Date(Date.now() - m * 60_000).toISOString();
@@ -1187,14 +1249,20 @@ const server = http.createServer((req, res) => {
       { name: 'google-chat', kind: 'notifier', runtime: 'declarative', version: '1.0.0', description: 'Posts to a Google Chat space', egress: ['chat.googleapis.com'],
         secrets: ['webhookUrl'], config: [], used_by: ['chat-sec'], updated_at: new Date().toISOString() },
       { name: 'redmine', kind: 'tracker', runtime: 'declarative', version: '0.3.0', egress: [], secrets: [], config: [], used_by: [],
-        error: 'kind "tracker": declarative trackers are not built yet; use a built-in tracker (Jira, GitHub)', updated_at: new Date().toISOString() },
+        error: 'kind "tracker": declarative trackers are replaced by gRPC tracker containers; use ClusterExternalTracker or ExternalTracker', updated_at: new Date().toISOString() },
     ] });
     // D82: the catalogue and the dry run. The real server builds the catalogue from the Go types and validates with
     // the operator's own rules; the mock answers enough for the page to be exercised.
     if (p === '/api/v1/connectors/catalogue') return json(res, { items: [
+      { type: 'externalTracker', name: 'External tracker container', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Delegates ticketing to an external gRPC TrackerService container.',
+        config_key: 'externalTracker', config_schema: { type: 'object' }, secrets: [{ field: 'secrets.<name>', holds: 'tracker API token', purpose: 'calls upstream tracker API' }],
+        example: 'apiVersion: rampart.aspm.dev/v1alpha1\nkind: Connector\nmetadata: {name: jira-container-binding, namespace: <tenant-namespace>}\nspec:\n  type: externalTracker\n  externalTracker:\n    trackerRef: {scope: cluster, name: jira-tracker}\n    defaultProject: SEC\n' },
       { type: 'jira', name: 'Jira Cloud', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Opens Jira Cloud issues for findings.',
         config_key: 'jira', config_schema: { type: 'object' }, secrets: [{ field: 'credentialsSecretRef', holds: 'email:apiToken', purpose: 'calls the Jira API' }],
         example: 'apiVersion: rampart.aspm.dev/v1alpha1\nkind: Connector\nmetadata: {name: jira-sec, namespace: <tenant-namespace>}\nspec:\n  type: jira\n  jira:\n    url: https://example.atlassian.net\n    credentialsSecretRef: {name: jira-sec-creds, key: token}\n    defaultProject: SEC\n' },
+      { type: 'slack', name: 'Slack', kind: 'notifier', directions: ['outbound'], description: 'Posts notifications.',
+        config_key: 'slack', config_schema: { type: 'object' }, secrets: [{ field: 'tokenSecretRef', holds: 'bot token', purpose: 'posts messages' }],
+        example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
     ] });
     if (p === '/api/v1/connectors/validate' && req.method === 'POST') {
       let body = '';

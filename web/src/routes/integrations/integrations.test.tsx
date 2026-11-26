@@ -17,9 +17,10 @@ describe('integrations route and connector catalogue', () => {
     const { container } = renderApp('/integrations');
 
     const table = await screen.findByRole('table', { name: 'Connectors table' });
-    expect(within(table).getByText('jira-sec')).toBeInTheDocument();
-    expect(within(table).getByText('Connected')).toBeInTheDocument();
-    // A connector the operator has not checked yet is not shown as connected or as failing.
+    expect(within(table).getByText('slack-appsec')).toBeInTheDocument();
+    expect(within(table).queryByText('jira-sec')).toBeNull();
+    expect(within(table).queryByText('jira-container-binding')).toBeNull();
+    // Connectors the operator has not checked yet are shown as Not checked yet, never invented as Connected.
     expect(within(table).getAllByText('Not checked yet').length).toBe(2);
     expect(within(table).queryByRole('button', { name: 'Check' })).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
@@ -31,19 +32,19 @@ describe('integrations route and connector catalogue', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: '+ New Connector' }));
     const catalogue = await screen.findByRole('dialog', { name: 'Integration Catalogue' });
-    await userEvent.click(await within(catalogue).findByText('Jira Cloud'));
+    expect(within(catalogue).queryByText('Jira Cloud')).toBeNull();
+    await userEvent.click(await within(catalogue).findByText('Slack'));
 
-    const dialog = await screen.findByRole('dialog', { name: 'Configure Jira Cloud' });
+    const dialog = await screen.findByRole('dialog', { name: 'Configure Slack' });
     const yaml = within(dialog).getByLabelText('Connector resource (YAML)');
     expect((yaml as HTMLTextAreaElement).value).toContain('kind: Connector');
     expect(within(dialog).queryByLabelText(/token|password|secret/i)).toBeNull();
     expect(within(dialog).queryByRole('button', { name: /save/i })).toBeNull();
 
-    // The example as given lacks defaultProject in this fixture: the server says so.
     await userEvent.click(within(dialog).getByRole('button', { name: 'Validate' }));
-    expect(await within(dialog).findByText(/Not accepted \(InvalidSpec\).*defaultProject/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Not accepted \(InvalidSpec\)/)).toBeInTheDocument();
 
-    await userEvent.type(yaml, '  jira: {{defaultProject: SEC}');
+    await userEvent.type(yaml, '  slack: {{defaultProject: SEC}');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Validate' }));
     expect(await within(dialog).findByText(/The server accepts this resource/)).toBeInTheDocument();
 

@@ -90,4 +90,14 @@ export const qk = {
     events: (ref: { kind: string; scope: string; namespace?: string; name: string }) =>
       ['analyzers', 'events', ref.kind, ref.scope, ref.namespace ?? '', ref.name] as const,
   },
+  trackers: {
+    all: () => ['trackers'] as const,
+    list: () => ['trackers', 'list'] as const,
+    events: (ref: { scope: string; namespace?: string; name: string }) =>
+      ['trackers', 'events', ref.scope, ref.namespace ?? '', ref.name] as const,
+  },
+  tickets: {
+    all: () => ['tickets'] as const,
+    list: () => ['tickets', 'list'] as const,
+  },
 };

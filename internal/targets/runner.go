@@ -333,6 +333,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	if pgStore != nil { // a ticket is tied to its finding by the outbox, which only PostgreSQL has
 		inboundHandler.WithTicketVerifier(pgStore).WithNotifier(connectors.StoreTenantNotifier{S: pgStore})
 	}
+	if ts, ok := storeBackend.(domain.TrackerStore); ok {
+		inboundHandler.WithTrackerStore(ts)
+	}
 	// The ticket sweeper reads the pending tickets of every tenant, which row-level security allows only the system
 	// role. Without it the application role would see no rows at all and every ticket would wait for ever, so it is
 	// not started, and the log says why. The advisory lock the sweeper takes needs the system pool as well: without
@@ -853,6 +856,9 @@ func (r *Runner) startOperator(ctx context.Context, st store.Store, sys *store.P
 		Allowlist:     allowlist,
 		AllowLoopback: allowlist != nil && allowlist.AllowLoopback,
 	}), allowlist)
+	if ts, ok := configStore.(domain.TrackerStore); ok {
+		checker.SetTrackerStore(ts)
+	}
 	if em, eerr := operator.NewEventEmitter(rc, ns, r.logger); eerr == nil {
 		r.kubeEvents = em.Emit
 	} else {

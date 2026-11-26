@@ -31,10 +31,14 @@ export function invalidateTopic(qc: QueryClient, topic: string) {
       inv(qk.groups.all());
       inv(qk.feeds.all());
       inv(qk.applications.all());
+      inv(qk.trackers.all());
+      inv(qk.tickets.all());
       break;
     case 'analysis':
       inv(qk.feeds.all());
       inv(qk.applications.all());
+      inv(qk.trackers.all());
+      inv(qk.tickets.all());
       break;
     default: // reset: the stream could not say what changed
       void qc.invalidateQueries();

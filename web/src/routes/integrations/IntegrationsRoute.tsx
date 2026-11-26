@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { get, qk } from '@/api';
@@ -36,7 +37,10 @@ export function IntegrationsRoute() {
       (await get<{ items?: ConnectorSummary[] }>('/api/v1/connectors', { signal })).items ?? [],
   });
 
-  const connectors = connectorsQuery.data ?? [];
+  const rawConnectors = connectorsQuery.data ?? [];
+  const connectors = rawConnectors.filter(
+    (c) => c.type !== 'jira' && c.type !== 'github' && c.type !== 'externalTracker',
+  );
   const packagesQuery = useQuery({
     queryKey: qk.connectors.packages(),
     queryFn: async ({ signal }): Promise<IntegrationPackageItem[]> =>
@@ -51,14 +55,16 @@ export function IntegrationsRoute() {
           {t('nav.integrations', { defaultValue: 'Integrations & External Systems' })}
         </h1>
         <p className="text-13 text-ink-2">
-          {t('integrations.subtitle', { defaultValue: 'Manage bidirectional issue trackers, upstream telemetry sources, and programmatic API tokens.' })}
+          {t('integrations.subtitle', { defaultValue: 'Notification channels, upstream telemetry sources, installed packages, and API tokens.' })}{' '}
+          External ticketing containers and bindings live in{' '}
+          <Link to="/ticketing" className="text-accent hover:underline">Ticketing</Link>.
         </p>
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'connectors' | 'tokens')} className="flex flex-col gap-4">
         <TabsList label="Integrations Tabs">
           <TabsTrigger value="connectors">
-            {t('integrations.connectorsTab', { defaultValue: 'Connectors & Trackers' })}
+            {t('integrations.connectorsTab', { defaultValue: 'Connectors' })}
           </TabsTrigger>
           <TabsTrigger value="tokens">
             {t('integrations.tokensTab', { defaultValue: 'API Tokens' })}
@@ -68,7 +74,7 @@ export function IntegrationsRoute() {
         <TabsContent value="connectors" className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <span className="text-13 text-ink-2">
-              Configured connectors synchronise tickets, alerts, and SBOM data with external services.
+              Configured notifiers and telemetry sources synchronise alerts and SBOM data with external services.
             </span>
             <Button variant="primary" onClick={() => setCatalogueOpen(true)}>
               + New Connector
@@ -180,6 +186,7 @@ export function IntegrationsRoute() {
           </section>
           {/* Connector Catalogue Modal */}
           <ConnectorCatalogueDialog
+            kindFilter="non-tracker"
             open={catalogueOpen}
             onOpenChange={setCatalogueOpen}
           />

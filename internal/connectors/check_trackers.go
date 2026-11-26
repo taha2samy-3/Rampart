@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"rampart/internal/domain"
+	trackerclient "rampart/internal/tracker/client"
 )
 
 // CheckInfo is what a Check learns besides "it works" (D87); defined in domain so the operator can read it.
@@ -31,9 +32,70 @@ func (c *DefaultChecker) CheckDetailed(ctx context.Context, conn domain.Connecto
 		return s.checkJiraDetailed(ctx, conn, secret)
 	case domain.ConnectorTypeGitHub:
 		return CheckInfo{}, s.checkGitHub(ctx, conn, secret)
+	case domain.ConnectorTypeExternalTracker:
+		return s.checkExternalTrackerDetailed(ctx, conn, secret)
 	default:
 		return CheckInfo{}, s.check(ctx, conn, secret)
 	}
+}
+
+func (c *DefaultChecker) checkExternalTrackerDetailed(ctx context.Context, conn domain.Connector, secret []byte) (CheckInfo, error) {
+	if conn.Spec.ExternalTracker == nil {
+		return CheckInfo{}, errors.New("externalTracker config is nil")
+	}
+	if c.trackerStore == nil {
+		return CheckInfo{}, errors.New("externalTracker check requires tracker store wiring")
+	}
+	cfg := *conn.Spec.ExternalTracker
+	scope := strings.ToLower(strings.TrimSpace(cfg.TrackerRef.Scope))
+	if scope == "" {
+		scope = "cluster"
+	}
+	obj, found, err := c.trackerStore.GetTracker(ctx, conn.TenantID, scope, cfg.TrackerRef.Namespace, cfg.TrackerRef.Name)
+	if err != nil {
+		return CheckInfo{}, err
+	}
+	if !found {
+		return CheckInfo{}, fmt.Errorf("referenced external tracker %q (%s) not found", cfg.TrackerRef.Name, scope)
+	}
+	if obj.Error != "" {
+		return CheckInfo{}, fmt.Errorf("external tracker %q refused: %s", cfg.TrackerRef.Name, obj.Error)
+	}
+	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	if err != nil {
+		return CheckInfo{}, err
+	}
+	if !spec.IsEnabled() {
+		return CheckInfo{}, fmt.Errorf("external tracker %q is disabled", cfg.TrackerRef.Name)
+	}
+
+	secrets := map[string]string{}
+	if len(secret) > 0 {
+		// Support either JSON map of named secrets or single default "token" key.
+		if err := json.Unmarshal(secret, &secrets); err != nil {
+			secrets = map[string]string{"token": strings.TrimSpace(string(secret))}
+		}
+	}
+	dialFn := c.dialTracker
+	if dialFn == nil {
+		dialFn = trackerclient.Dial
+	}
+	cli, err := dialFn(trackerclient.DialConfig{
+		Target:  spec.Target(obj.Namespace),
+		Secure:  spec.UseTLS(),
+		Timeout: spec.Timeout(),
+	})
+	if err != nil {
+		return CheckInfo{}, err
+	}
+	defer func() { _ = cli.Close() }()
+
+	tr, err := NewGrpcTracker(cfg, cli, secrets, "")
+	if err != nil {
+		return CheckInfo{}, err
+	}
+	tr.SetConnectorName(conn.Name)
+	return tr.CheckDetailed(ctx)
 }
 
 // jiraAuthHeader is the header the tracker sends: Basic for "email:apiToken", Bearer for a personal access token.

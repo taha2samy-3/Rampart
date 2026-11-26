@@ -38,6 +38,8 @@ rules:
       - clustersbomanalyzers
       - externalanalyzers
       - clusterexternalanalyzers
+      - externaltrackers
+      - clusterexternaltrackers
       - connectors/status
       - integrationpackages/status
       - parsers/status
@@ -48,6 +50,8 @@ rules:
       - clustersbomanalyzers/status
       - externalanalyzers/status
       - clusterexternalanalyzers/status
+      - externaltrackers/status
+      - clusterexternaltrackers/status
       - complianceframeworks
       - complianceframeworks/status
       - clustercomplianceframeworks
@@ -70,6 +74,8 @@ rules:
       - clustersbomanalyzers/finalizers
       - externalanalyzers/finalizers
       - clusterexternalanalyzers/finalizers
+      - externaltrackers/finalizers
+      - clusterexternaltrackers/finalizers
       - complianceframeworks/finalizers
       - clustercomplianceframeworks/finalizers
     verbs:

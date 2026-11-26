@@ -61,6 +61,8 @@ var (
 	gvkClusterExternalAnalyzer = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterExternalAnalyzer"}
 	gvkSBOMAnalyzer            = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "SBOMAnalyzer"}
 	gvkClusterSBOMAnalyzer     = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterSBOMAnalyzer"}
+	gvkExternalTracker         = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ExternalTracker"}
+	gvkClusterExternalTracker  = schema.GroupVersionKind{Group: Group, Version: Version, Kind: "ClusterExternalTracker"}
 )
 
 // ManagerConfig configures the operator process (D1, D3, D6 operator.*).
@@ -182,6 +184,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	clusterExternalAnalyzers := policyCR(gvkClusterExternalAnalyzer, NewClusterExternalAnalyzerReconciler(cfg.Store))
 	sbomAnalyzers := policyCR(gvkSBOMAnalyzer, NewSBOMAnalyzerReconciler(cfg.Store))
 	clusterSBOMAnalyzers := policyCR(gvkClusterSBOMAnalyzer, NewClusterSBOMAnalyzerReconciler(cfg.Store))
+	externalTrackers := policyCR(gvkExternalTracker, NewExternalTrackerReconciler(cfg.Store))
+	clusterExternalTrackers := policyCR(gvkClusterExternalTracker, NewClusterExternalTrackerReconciler(cfg.Store))
 	pkgR := NewIntegrationPackageReconciler(cfg.Store)
 	packages := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkIntegrationPackage, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
 	parsers := &cr[PolicyCR, PolicyStatus]{k: k, gvk: gvkParser, reconcile: pkgR.Reconcile, status: func(c *PolicyCR) *PolicyStatus { return &c.Status }, finalize: pkgR.Finalize}
@@ -194,7 +198,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 	}{"clusterriskpolicy": {gvkClusterRiskPolicy, clusterRisk}, "clusterslapolicy": {gvkClusterSLAPolicy, clusterSLA},
 		"clusterfeed": {gvkClusterFeed, clusterFeed}, "clustercomplianceframework": {gvkClusterComplianceFramework, clusterFrameworks},
 		"clusterparser": {gvkClusterParser, clusterParsers}, "clustersbomparser": {gvkClusterSBOMParser, clusterSBOMs},
-		"clusterexternalanalyzer": {gvkClusterExternalAnalyzer, clusterExternalAnalyzers}, "clustersbomanalyzer": {gvkClusterSBOMAnalyzer, clusterSBOMAnalyzers}} {
+		"clusterexternalanalyzer": {gvkClusterExternalAnalyzer, clusterExternalAnalyzers}, "clustersbomanalyzer": {gvkClusterSBOMAnalyzer, clusterSBOMAnalyzers},
+		"clusterexternaltracker": {gvkClusterExternalTracker, clusterExternalTrackers}} {
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(c.gvk), gen).Complete(c.r); err != nil {
 			return nil, err
 		}
@@ -209,7 +214,8 @@ func NewManager(cfg ManagerConfig) (manager.Manager, error) {
 		r   reconcile.Reconciler
 	}{"application": {gvkApplication, apps}, "scansource": {gvkScanSource, sources}, "slapolicy": {gvkSLAPolicy, slaPolicies}, "riskpolicy": {gvkRiskPolicy, riskPolicies}, "connector": {gvkConnector, connectors}, "integrationpackage": {gvkIntegrationPackage, packages},
 		"complianceframework": {gvkComplianceFramework, frameworks}, "parser": {gvkParser, parsers},
-		"externalanalyzer": {gvkExternalAnalyzer, externalAnalyzers}, "sbomanalyzer": {gvkSBOMAnalyzer, sbomAnalyzers}} {
+		"externalanalyzer": {gvkExternalAnalyzer, externalAnalyzers}, "sbomanalyzer": {gvkSBOMAnalyzer, sbomAnalyzers},
+		"externaltracker": {gvkExternalTracker, externalTrackers}} {
 		gvk := c.gvk
 		if err := ctrl.NewControllerManagedBy(mgr).Named(name).For(newObj(gvk), gen).
 			Watches(newObj(gvkTenant), handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {

@@ -19,7 +19,9 @@ import (
 	"github.com/google/uuid"
 	"rampart/internal/domain"
 	"rampart/internal/ratelimit"
+	trackerclient "rampart/internal/tracker/client"
 	"rampart/internal/workflow"
+	trackerv1 "rampart/pkg/api/tracker/v1"
 )
 
 // MaxInboundBody is the largest inbound webhook accepted (docs/16 D69).
@@ -95,6 +97,8 @@ func (c *deliveryCache) seen(key string, now time.Time) bool {
 // InboundWebhookHandler processes signed inbound webhooks from trackers (D27, D69, D70).
 type InboundWebhookHandler struct {
 	store          InboundConnectorStore
+	trackerStore   domain.TrackerStore
+	dialTracker    func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)
 	workflow       WorkflowService
 	secretResolver SecretResolver
 	verifier       TicketVerifier
@@ -157,6 +161,18 @@ func (h *InboundWebhookHandler) WithLogger(l *slog.Logger) *InboundWebhookHandle
 	if l != nil {
 		h.logger = l
 	}
+	return h
+}
+
+// WithTrackerStore configures where ClusterExternalTracker and ExternalTracker definitions are resolved for container webhooks.
+func (h *InboundWebhookHandler) WithTrackerStore(s domain.TrackerStore) *InboundWebhookHandler {
+	h.trackerStore = s
+	return h
+}
+
+// WithTrackerDialer overrides the gRPC dialer for external tracker containers (used in tests).
+func (h *InboundWebhookHandler) WithTrackerDialer(fn func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)) *InboundWebhookHandler {
+	h.dialTracker = fn
 	return h
 }
 
@@ -230,6 +246,7 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var deliveryID string
+	var parsedExternal *trackerv1.ParseWebhookResponse
 	switch conn.Type {
 	case domain.ConnectorTypeJira:
 		if !VerifyJiraSignature(secret, body, r.Header.Get("X-Hub-Signature")) {
@@ -243,6 +260,14 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 			return
 		}
 		deliveryID = r.Header.Get("X-GitHub-Delivery")
+	case domain.ConnectorTypeExternalTracker:
+		resp, statusCode, msg := h.parseExternalWebhook(r, tenantID, conn, body, string(secret))
+		if statusCode != 0 {
+			http.Error(w, msg, statusCode)
+			return
+		}
+		parsedExternal = resp
+		deliveryID = resp.GetDeliveryId()
 	default:
 		http.Error(w, "inbound webhook is not supported for this connector type", http.StatusBadRequest)
 		return
@@ -271,6 +296,125 @@ func (h *InboundWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		h.handleJira(w, r, tenantID, conn, body)
 	case domain.ConnectorTypeGitHub:
 		h.handleGitHub(w, r, tenantID, conn, body)
+	case domain.ConnectorTypeExternalTracker:
+		h.handleExternalTracker(w, r, tenantID, conn, parsedExternal)
+	default:
+		reply(w, http.StatusOK, "ok")
+	}
+}
+
+func (h *InboundWebhookHandler) parseExternalWebhook(r *http.Request, tenantID uuid.UUID, conn *domain.Connector, body []byte, webhookSecret string) (*trackerv1.ParseWebhookResponse, int, string) {
+	if conn.Spec.ExternalTracker == nil {
+		return nil, http.StatusBadRequest, "externalTracker config is missing"
+	}
+	if h.trackerStore == nil {
+		return nil, http.StatusServiceUnavailable, "external tracker store not configured"
+	}
+	cfg := *conn.Spec.ExternalTracker
+	scope := strings.ToLower(strings.TrimSpace(cfg.TrackerRef.Scope))
+	if scope == "" {
+		scope = "cluster"
+	}
+	obj, found, err := h.trackerStore.GetTracker(r.Context(), tenantID, scope, cfg.TrackerRef.Namespace, cfg.TrackerRef.Name)
+	if err != nil || !found || obj.Error != "" {
+		return nil, http.StatusServiceUnavailable, "referenced external tracker is unavailable"
+	}
+	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	if err != nil || !spec.IsEnabled() {
+		return nil, http.StatusServiceUnavailable, "referenced external tracker is disabled or invalid"
+	}
+	dialFn := h.dialTracker
+	if dialFn == nil {
+		dialFn = trackerclient.Dial
+	}
+	cli, err := dialFn(trackerclient.DialConfig{
+		Target:  spec.Target(obj.Namespace),
+		Secure:  spec.UseTLS(),
+		Timeout: spec.Timeout(),
+	})
+	if err != nil {
+		return nil, http.StatusBadGateway, "failed to dial external tracker container"
+	}
+	defer func() { _ = cli.Close() }()
+
+	tr, err := NewGrpcTracker(cfg, cli, nil, "")
+	if err != nil {
+		return nil, http.StatusBadGateway, "failed to initialize external tracker adapter"
+	}
+	tr.SetConnectorName(conn.Name)
+
+	lowerHeaders := make(map[string]string, len(r.Header))
+	for k, vals := range r.Header {
+		if len(vals) > 0 {
+			lowerHeaders[strings.ToLower(k)] = vals[0]
+		}
+	}
+	resp, err := tr.ParseWebhook(r.Context(), lowerHeaders, body, webhookSecret)
+	if err != nil {
+		return nil, http.StatusBadGateway, "tracker container rejected ParseWebhook call"
+	}
+	if !resp.GetVerified() {
+		reason := resp.GetRejectReason()
+		if reason == "" {
+			reason = "invalid or missing signature"
+		}
+		return nil, http.StatusUnauthorized, reason
+	}
+	return resp, 0, ""
+}
+
+func (h *InboundWebhookHandler) handleExternalTracker(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, conn *domain.Connector, resp *trackerv1.ParseWebhookResponse) {
+	if resp == nil || resp.GetEventAction() == "" || resp.GetEventAction() == "ignored" {
+		reply(w, http.StatusOK, "ignored_event")
+		return
+	}
+	ownAccountID := conn.Status.AccountID
+	if ownAccountID == "" && conn.Spec.ExternalTracker != nil {
+		ownAccountID = conn.Spec.ExternalTracker.AccountID
+	}
+	if ownAccountID != "" && resp.GetActorId() != "" && resp.GetActorId() == ownAccountID {
+		reply(w, http.StatusOK, "ignored_own_change")
+		return
+	}
+	ref := strings.TrimSpace(resp.GetExternalRef())
+	if ref == "" {
+		reply(w, http.StatusOK, "ignored_unknown_ticket")
+		return
+	}
+	var findingID uuid.UUID
+	if finder, ok := h.verifier.(interface {
+		FindFindingByTicketRef(ctx context.Context, tenantID uuid.UUID, connector, ticketRef string) (uuid.UUID, bool, error)
+	}); ok {
+		if id, found, err := finder.FindFindingByTicketRef(r.Context(), tenantID, conn.Name, ref); err == nil && found {
+			findingID = id
+		}
+	}
+	if findingID == uuid.Nil || !h.ticketBelongs(r.Context(), tenantID, findingID, ref) {
+		reply(w, http.StatusOK, "ignored_unknown_ticket")
+		return
+	}
+	actor := firstNonEmptyConn(resp.GetActorId(), "an external tracker user")
+	switch resp.GetEventAction() {
+	case "reopened":
+		if h.notifier != nil {
+			_ = h.notifier.NotifyTenant(r.Context(), tenantID, "Ticket reopened in external tracker",
+				fmt.Sprintf("Ticket %s was reopened by %s. Review finding risk acceptance if active.", ref, truncateString(actor, 80)),
+				"/findings?sel="+findingID.String())
+		}
+		reply(w, http.StatusOK, "ticket_reopened")
+	case "risk_accept_requested":
+		mapped := firstNonEmptyConn(resp.GetTargetState(), "risk_accepted")
+		h.decide(r.Context(), w, tenantID, conn, findingID, ref, firstNonEmptyConn(resp.GetResolution(), mapped), mapped, actor)
+	case "closed":
+		mapped := resp.GetTargetState()
+		if mapped == "" && conn.Spec.ExternalTracker != nil && conn.Spec.ExternalTracker.StatusMapping.ResolutionToState != nil {
+			mapped = conn.Spec.ExternalTracker.StatusMapping.ResolutionToState[resp.GetResolution()]
+		}
+		if mapped != "" {
+			h.decide(r.Context(), w, tenantID, conn, findingID, ref, firstNonEmptyConn(resp.GetResolution(), mapped), mapped, actor)
+			return
+		}
+		reply(w, http.StatusOK, "ok")
 	default:
 		reply(w, http.StatusOK, "ok")
 	}

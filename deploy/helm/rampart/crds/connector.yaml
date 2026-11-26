@@ -45,6 +45,7 @@ spec:
                     - email
                     - webhook
                     - dependencyTrack
+                    - externalTracker
                     - plugin
                 direction:
                   type: string
@@ -260,6 +261,67 @@ spec:
                           type: string
                         key:
                           type: string
+                externalTracker:
+                  type: object
+                  description: Binds this tenant connector to a ClusterExternalTracker or ExternalTracker gRPC microservice.
+                  required: [trackerRef]
+                  properties:
+                    trackerRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        scope:
+                          type: string
+                          enum: [cluster, tenant]
+                          default: cluster
+                        namespace:
+                          type: string
+                        name:
+                          type: string
+                    provider:
+                      type: string
+                    defaultProject:
+                      type: string
+                    accountId:
+                      type: string
+                    config:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    secrets:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        required: [name, key]
+                        properties:
+                          name:
+                            type: string
+                          key:
+                            type: string
+                    twoWaySync:
+                      type: boolean
+                    webhookSecretRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                    statusMapping:
+                      type: object
+                      properties:
+                        closedStatuses:
+                          type: array
+                          items:
+                            type: string
+                        resolutionToState:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    customFields:
+                      type: object
+                      additionalProperties:
+                        type: string
             status:
               type: object
               properties:

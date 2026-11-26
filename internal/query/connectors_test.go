@@ -51,7 +51,7 @@ func TestConnectorsAPI_ReadDescribeValidate(t *testing.T) {
 	}
 
 	code, cat := call(http.MethodGet, "/api/v1/connectors/catalogue", "")
-	if entries, _ := cat["items"].([]any); code != http.StatusOK || len(entries) != 7 {
+	if entries, _ := cat["items"].([]any); code != http.StatusOK || len(entries) != len(domain.ConnectorCatalogue()) {
 		t.Fatalf("catalogue: %d %v", code, cat)
 	}
 

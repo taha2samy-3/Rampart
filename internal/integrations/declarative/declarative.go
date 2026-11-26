@@ -89,7 +89,7 @@ var MessageFields = []string{"title", "summary", "severity", "url", "appName", "
 
 // notBuilt names what doc 19 describes and this version refuses, with what to do instead.
 var notBuilt = map[string]string{
-	"tracker":     "declarative trackers are not built yet; use a built-in tracker (Jira, GitHub)",
+	"tracker":     "declarative trackers are replaced by gRPC tracker containers; use ClusterExternalTracker or ExternalTracker with a Connector of type externalTracker",
 	"source":      "declarative sources are not built yet",
 	"wasm":        "code runtimes (wasm) are tier 2 and need a ClusterIntegrationPackage, which is not built",
 	"grpc":        "code runtimes (grpc) are tier 2 and need a ClusterIntegrationPackage, which is not built",

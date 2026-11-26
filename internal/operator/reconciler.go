@@ -446,6 +446,18 @@ func NewSBOMAnalyzerReconciler(store apply.ConfigStore) *PolicyReconciler {
 		check: func(_ string, spec []byte) error { _, err := domain.ParseSBOMAnalyzerSpec(spec); return err }}
 }
 
+// NewClusterExternalTrackerReconciler reconciles ClusterExternalTracker resources: cluster-wide ticketing containers.
+func NewClusterExternalTrackerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.TrackerKindExternal, cluster: true, label: "ClusterExternalTracker",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalTrackerSpec(spec, false); return err }}
+}
+
+// NewExternalTrackerReconciler reconciles namespaced ExternalTracker resources for a single tenant.
+func NewExternalTrackerReconciler(store apply.ConfigStore) *PolicyReconciler {
+	return &PolicyReconciler{store: store, kind: domain.TrackerKindExternal, label: "ExternalTracker",
+		check: func(_ string, spec []byte) error { _, err := domain.ParseExternalTrackerSpec(spec, true); return err }}
+}
+
 func (r *PolicyReconciler) validate(name string, spec []byte) error {
 	if r.check != nil {
 		return r.check(name, spec)
@@ -536,6 +548,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, cr *PolicyCR) (*Policy
 	}
 	if r.kind == domain.AnalyzerKindExternal || r.kind == domain.AnalyzerKindSBOM {
 		msg = r.label + " reconciled; the Analyzers tab lists it and can test it"
+	}
+	if r.kind == domain.TrackerKindExternal {
+		msg = r.label + " reconciled; the Ticketing tab lists it and can test it"
 	}
 	if r.kind == "parser" {
 		msg = r.label + " reconciled; the ingestion pipeline reads it"
@@ -817,6 +832,30 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, cr *ConnectorCR) (*
 
 	// Secret synchronization (D69: Secrets read from secret_material, synced from K8s secrets)
 	var secretBytes []byte
+	if cr.Spec.Type == domain.ConnectorTypeExternalTracker && cr.Spec.ExternalTracker != nil && r.secrets != nil && r.secretStore != nil {
+		secretMap := make(map[string]string, len(cr.Spec.ExternalTracker.Secrets))
+		for secName, ref := range cr.Spec.ExternalTracker.Secrets {
+			secKey := ref.Key
+			if secKey == "" {
+				secKey = secName
+			}
+			rawBytes, serr := r.secrets.GetSecret(ctx, cr.Metadata.Namespace, ref.Name, secKey)
+			if serr != nil {
+				status.SetCondition("Connected", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s (%s): %v", ref.Name, secKey, secName, serr))
+				status.SetCondition("Ready", "False", "SecretNotFound", fmt.Sprintf("failed to resolve secret %s/%s (%s): %v", ref.Name, secKey, secName, serr))
+				return status, nil
+			}
+			if err := r.secretStore.SaveSecretMaterial(ctx, tenant.ID, domain.ConnectorSecretStorageKey(cr.Metadata.Name, secName), rawBytes); err != nil {
+				status.SetCondition("Connected", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material %q: %v", secName, err))
+				status.SetCondition("Ready", "False", "SecretSyncFailed", fmt.Sprintf("failed to sync secret material %q: %v", secName, err))
+				return status, err
+			}
+			secretMap[secName] = string(rawBytes)
+		}
+		if len(secretMap) > 0 {
+			secretBytes, _ = json.Marshal(secretMap)
+		}
+	}
 	secRef := extractConnectorSecretRef(&cr.Spec)
 	if secRef != nil && secRef.Name != "" && r.secrets != nil && r.secretStore != nil {
 		if cr.Spec.Type == domain.ConnectorTypeEmail {

@@ -105,6 +105,9 @@ const (
 	// ConnectorTypePlugin uses an IntegrationPackage installed in the tenant (docs/19 §7, docs/16 D94): the tool is
 	// described as data, so adding one needs no release.
 	ConnectorTypePlugin ConnectorType = "plugin"
+	// ConnectorTypeExternalTracker delegates ticketing operations over gRPC to a containerized tracker microservice
+	// declared by ClusterExternalTracker or ExternalTracker (docs/49).
+	ConnectorTypeExternalTracker ConnectorType = "externalTracker"
 
 	// Deferred post-Phase 3 connector types
 	ConnectorTypeGitLab      ConnectorType = "gitlab"
@@ -211,17 +214,18 @@ type WebhookConnectorConfig struct {
 
 // ConnectorSpec represents the configuration of a Connector resource.
 type ConnectorSpec struct {
-	Type      ConnectorType             `json:"type"`
-	Direction ConnectorDirection        `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
-	Ticketing *ConnectorTicketingPolicy `json:"ticketing,omitempty"` // Automated ticketing policy (D70 B3)
-	Routing   *NotificationRoutingRule  `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
-	Jira      *JiraConnectorConfig      `json:"jira,omitempty"`
-	GitHub    *GitHubConnectorConfig    `json:"github,omitempty"`
-	Slack     *SlackConnectorConfig     `json:"slack,omitempty"`
-	Teams     *TeamsConnectorConfig     `json:"teams,omitempty"`
-	Email     *EmailConnectorConfig     `json:"email,omitempty"`
-	Webhook   *WebhookConnectorConfig   `json:"webhook,omitempty"`
-	Plugin    *PluginConnectorConfig    `json:"plugin,omitempty"`
+	Type            ConnectorType                   `json:"type"`
+	Direction       ConnectorDirection              `json:"direction,omitempty"` // "outbound" | "inbound" | "bidirectional"
+	Ticketing       *ConnectorTicketingPolicy       `json:"ticketing,omitempty"` // Automated ticketing policy (D70 B3)
+	Routing         *NotificationRoutingRule        `json:"routing,omitempty"`   // Routing filters (D25/D69 noise reduction)
+	Jira            *JiraConnectorConfig            `json:"jira,omitempty"`
+	GitHub          *GitHubConnectorConfig          `json:"github,omitempty"`
+	Slack           *SlackConnectorConfig           `json:"slack,omitempty"`
+	Teams           *TeamsConnectorConfig           `json:"teams,omitempty"`
+	Email           *EmailConnectorConfig           `json:"email,omitempty"`
+	Webhook         *WebhookConnectorConfig         `json:"webhook,omitempty"`
+	Plugin          *PluginConnectorConfig          `json:"plugin,omitempty"`
+	ExternalTracker *ExternalTrackerConnectorConfig `json:"externalTracker,omitempty"`
 }
 
 // PluginConnectorConfig names the IntegrationPackage, the config validated against its configSchema, and the
@@ -289,6 +293,11 @@ func (c *Connector) Direction() ConnectorDirection {
 			return DirectionBidirectional
 		}
 		return DirectionOutbound
+	case ConnectorTypeExternalTracker:
+		if c.Spec.ExternalTracker != nil && c.Spec.ExternalTracker.TwoWaySync {
+			return DirectionBidirectional
+		}
+		return DirectionOutbound
 	default:
 		return DirectionOutbound
 	}
@@ -317,7 +326,7 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 			if c.Spec.Direction != DirectionOutbound {
 				return fmt.Errorf("%w: connector type %q only supports outbound direction, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
 			}
-		case ConnectorTypeJira, ConnectorTypeGitHub:
+		case ConnectorTypeJira, ConnectorTypeGitHub, ConnectorTypeExternalTracker:
 			if c.Spec.Direction != DirectionOutbound && c.Spec.Direction != DirectionBidirectional {
 				return fmt.Errorf("%w: tracker connector %q must be outbound or bidirectional, got %q", ErrConnectorInvalid, c.Type, c.Spec.Direction)
 			}
@@ -425,13 +434,28 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 		if c.Spec.Direction != "" && c.Spec.Direction != DirectionOutbound {
 			return fmt.Errorf("%w: a plugin connector is outbound in this version", ErrConnectorInvalid)
 		}
+	case ConnectorTypeExternalTracker:
+		if c.Spec.ExternalTracker == nil || strings.TrimSpace(c.Spec.ExternalTracker.TrackerRef.Name) == "" {
+			return fmt.Errorf("%w: externalTracker.trackerRef.name is required", ErrConnectorInvalid)
+		}
+		if s := c.Spec.ExternalTracker.TrackerRef.Scope; s != "" && s != "cluster" && s != "tenant" {
+			return fmt.Errorf("%w: externalTracker.trackerRef.scope must be \"cluster\" or \"tenant\", got %q", ErrConnectorInvalid, s)
+		}
+		for name, ref := range c.Spec.ExternalTracker.Secrets {
+			if strings.TrimSpace(ref.Name) == "" || strings.TrimSpace(ref.Key) == "" {
+				return fmt.Errorf("%w: externalTracker.secrets.%s needs a secretRef name and key", ErrConnectorInvalid, name)
+			}
+		}
+		if (c.Spec.ExternalTracker.TwoWaySync || c.Direction() == DirectionBidirectional) && strings.TrimSpace(c.Spec.ExternalTracker.WebhookSecretRef.Name) == "" {
+			return fmt.Errorf("%w: externalTracker.webhookSecretRef is required when twoWaySync is on: an unsigned webhook is never accepted", ErrConnectorInvalid)
+		}
 	default:
 		return fmt.Errorf("%w: unrecognized connector type %q", ErrConnectorInvalid, c.Type)
 	}
 
 	if c.Spec.Ticketing != nil {
-		if c.Type != ConnectorTypeJira && c.Type != ConnectorTypeGitHub {
-			return fmt.Errorf("%w: ticketing policy only supported on tracker connectors (jira, github)", ErrConnectorInvalid)
+		if c.Type != ConnectorTypeJira && c.Type != ConnectorTypeGitHub && c.Type != ConnectorTypeExternalTracker {
+			return fmt.Errorf("%w: ticketing policy only supported on tracker connectors (jira, github, externalTracker)", ErrConnectorInvalid)
 		}
 		if c.Spec.Ticketing.MaxPerHour < 0 {
 			return fmt.Errorf("%w: ticketing maxPerHour cannot be negative", ErrConnectorInvalid)
@@ -442,14 +466,14 @@ func (c *Connector) ValidateWithAllowlist(allowlist *PlatformSSRFAllowlist) erro
 }
 
 // InboundWebhookPath is the path a connector receives callbacks on, /hooks/{type}/{connectorId}, or "" when it
-// receives none: only Jira and GitHub with two-way sync are called back (D78). The tenant is not in the path; the
+// receives none: only Jira, GitHub and externalTracker with two-way sync are called back (D78). The tenant is not in the path; the
 // handler reads it from the connector.
 func InboundWebhookPath(c Connector) string {
 	if c.ID == uuid.Nil {
 		return ""
 	}
 	switch c.Type {
-	case ConnectorTypeJira, ConnectorTypeGitHub:
+	case ConnectorTypeJira, ConnectorTypeGitHub, ConnectorTypeExternalTracker:
 		if c.Direction() == DirectionBidirectional {
 			return fmt.Sprintf("/hooks/%s/%s", c.Type, c.ID)
 		}
@@ -532,6 +556,10 @@ func (c *Connector) WebhookSecret() *SecretKeyRef {
 	case ConnectorTypeGitHub:
 		if c.Spec.GitHub != nil && c.Spec.GitHub.WebhookSecretRef.Name != "" {
 			return &c.Spec.GitHub.WebhookSecretRef
+		}
+	case ConnectorTypeExternalTracker:
+		if c.Spec.ExternalTracker != nil && c.Spec.ExternalTracker.WebhookSecretRef.Name != "" {
+			return &c.Spec.ExternalTracker.WebhookSecretRef
 		}
 	case ConnectorTypeWebhook:
 		if c.Spec.Webhook != nil && c.Spec.Webhook.SecretRef.Name != "" {

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 )
@@ -219,6 +220,35 @@ stringData:
   url: <https://chat.googleapis.com/v1/spaces/...>
 `,
 	}, PluginConnectorConfig{}},
+	{ConnectorCatalogueEntry{
+		Type: ConnectorTypeExternalTracker, Name: "External tracker container", Kind: "tracker", ConfigKey: "externalTracker",
+		Directions:  []ConnectorDirection{DirectionOutbound, DirectionBidirectional},
+		Description: "Delegates ticket creation, comments, closing, and webhook parsing to an external gRPC TrackerService container referenced by ClusterExternalTracker or ExternalTracker.",
+		Secrets: []CatalogueSecret{
+			{Field: "secrets.<name>", Holds: "credentials required by the tracker container (for example apiToken)", Purpose: "forwarded in TargetContext.secrets on gRPC calls"},
+			{Field: "webhookSecretRef", Holds: "webhook signing secret required when twoWaySync is true", Purpose: "passed to ParseWebhook for HMAC verification"},
+		},
+		Example: `apiVersion: rampart.aspm.dev/v1alpha1
+kind: Connector
+metadata: {name: jira-container-binding, namespace: <tenant-namespace>}
+spec:
+  type: externalTracker
+  externalTracker:
+    trackerRef: {scope: cluster, name: jira-tracker}
+    defaultProject: SEC
+    secrets:
+      token: {name: jira-tracker-creds, key: apiToken}
+    twoWaySync: true
+    webhookSecretRef: {name: jira-tracker-creds, key: webhook}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: jira-tracker-creds, namespace: <tenant-namespace>}
+stringData:
+  apiToken: <tracker-token>
+  webhook: <random-webhook-secret>
+`,
+	}, ExternalTrackerConnectorConfig{}},
 }
 
 // ConnectorCatalogue lists the connector types this build supports, with their schemas (D82).
@@ -236,6 +266,9 @@ func ConnectorCatalogue() []ConnectorCatalogueEntry {
 // a description for forms; the server's validation (Connector.Validate, run by the dry-run endpoint and the
 // operator) is the authority.
 func jsonSchemaOf(t reflect.Type) map[string]any {
+	if t == reflect.TypeOf(json.RawMessage{}) {
+		return map[string]any{"type": "object"}
+	}
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}

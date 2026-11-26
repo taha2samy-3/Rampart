@@ -789,7 +789,10 @@ export interface ConnectorSummary {
   direction: 'outbound' | 'inbound' | 'bidirectional';
   enabled: boolean;
   /** the resource's spec as the server stores it; for a plugin connector, the package it uses (D94) */
-  spec?: { plugin?: { name: string } };
+  spec?: {
+    plugin?: { name: string };
+    externalTracker?: { trackerRef?: { scope?: string; namespace?: string; name?: string }; defaultProject?: string };
+  };
   status: {
     conditions?: ConnectorCondition[];
     last_check_time?: string;
@@ -1065,4 +1068,88 @@ export interface FindingControl {
   control: string;
   due?: string;
   overdue: boolean;
+}
+
+export interface TrackerRefKey {
+  scope: string;
+  namespace?: string;
+  name: string;
+}
+
+export interface TrackerEvent {
+  id: string;
+  event: 'test' | 'check' | string;
+  outcome: 'succeeded' | 'failed' | string;
+  message: string;
+  detail?: Record<string, string>;
+  latency_ms: number;
+  actor?: string;
+  at: string;
+}
+
+export interface TrackerContainerItem {
+  scope: 'cluster' | 'tenant' | string;
+  namespace?: string;
+  name: string;
+  enabled: boolean;
+  state: 'ready' | 'disabled' | 'refused' | string;
+  reason?: string;
+  protocol: string;
+  target?: string;
+  tls: 'off' | 'tls' | string;
+  timeout_seconds: number;
+  bound_connectors: number;
+  last_event?: TrackerEvent;
+  updated_at?: string;
+}
+
+export interface TrackerDeclaredSecret {
+  name: string;
+  holds?: string;
+  purpose?: string;
+  required: boolean;
+}
+
+export interface TrackerTestResult {
+  ok: boolean;
+  outcome: string;
+  message: string;
+  latency_ms: number;
+  provider?: string;
+  display_name?: string;
+  version?: string;
+  capabilities?: string[];
+  config_schema?: Record<string, unknown>;
+  declared_secrets?: TrackerDeclaredSecret[];
+  example_yaml?: string;
+  detail?: Record<string, string>;
+  event?: TrackerEvent;
+}
+
+export interface TicketSummary {
+  id: string;
+  connector: string;
+  external_ref: string;
+  url?: string;
+  state: string;
+  finding_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TicketOutboxItem {
+  finding_id: string;
+  finding_title?: string;
+  severity?: string;
+  status: string;
+  attempts: number;
+  next_attempt_at: string;
+  last_error?: string;
+  updated_at: string;
+}
+
+export interface TicketQueueResponse {
+  tickets: TicketSummary[];
+  outbox: TicketOutboxItem[];
+  configured: boolean;
 }

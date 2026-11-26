@@ -28,7 +28,15 @@ interface ValidateResult {
  * against the server's own validation, then the user applies it with kubectl, GitOps or `rampart apply -f`.
  * It never creates a connector and never asks for a secret value: those go in the Secret, applied the same way.
  */
-export function ConnectorCatalogueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ConnectorCatalogueDialog({
+  open,
+  onOpenChange,
+  kindFilter,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  kindFilter?: 'tracker' | 'non-tracker';
+}) {
   const [selected, setSelected] = useState<CatalogueEntry | null>(null);
   const [yaml, setYaml] = useState('');
   const [result, setResult] = useState<ValidateResult | null>(null);
@@ -86,7 +94,9 @@ export function ConnectorCatalogueDialog({ open, onOpenChange }: { open: boolean
             </p>
           ) : (
             <ul className="flex flex-col divide-y divide-rule" aria-label="Connector types">
-              {(catalogue.data?.items ?? []).map((e) => (
+              {(catalogue.data?.items ?? [])
+                .filter((e) => !kindFilter || (kindFilter === 'tracker' ? e.kind === 'tracker' : e.kind !== 'tracker'))
+                .map((e) => (
                 <li key={e.type}>
                   <button
                     type="button"

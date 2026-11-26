@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"rampart/internal/domain"
+	trackerclient "rampart/internal/tracker/client"
 )
 
 // Limits of the trackers' fields, so a long finding title or description cannot make the whole request fail.
@@ -869,6 +870,7 @@ type DefaultTrackerResolver struct {
 	secretResolver SecretResolver
 	client         *SafeClient
 	publicURL      string
+	dialTracker    func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)
 }
 
 type domainConnectorStore interface {
@@ -885,6 +887,14 @@ func NewDefaultTrackerResolver(st domainConnectorStore, secretResolver SecretRes
 		secretResolver: secretResolver,
 		client:         client,
 		publicURL:      publicURL,
+		dialTracker:    trackerclient.Dial,
+	}
+}
+
+// SetTrackerDialer overrides the gRPC dialer used when resolving externalTracker containers (for tests).
+func (r *DefaultTrackerResolver) SetTrackerDialer(fn func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)) {
+	if fn != nil {
+		r.dialTracker = fn
 	}
 }
 
@@ -922,7 +932,7 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 	var candidatesCount int
 	for i := range connectors {
 		conn := &connectors[i]
-		if conn.Type != domain.ConnectorTypeJira && conn.Type != domain.ConnectorTypeGitHub {
+		if conn.Type != domain.ConnectorTypeJira && conn.Type != domain.ConnectorTypeGitHub && conn.Type != domain.ConnectorTypeExternalTracker {
 			continue
 		}
 		if c := conn.GetCondition("Connected"); c != nil && c.Status == "False" {
@@ -985,9 +995,81 @@ func (r *DefaultTrackerResolver) ResolveTracker(ctx context.Context, tenantID uu
 			t.SetTicketingPolicy(*conn.Spec.Ticketing)
 		}
 		return t, nil
+
+	case domain.ConnectorTypeExternalTracker:
+		return r.resolveExternalTracker(ctx, tenantID, slug, conn)
 	}
 
 	return nil, nil
+}
+
+func (r *DefaultTrackerResolver) resolveExternalTracker(ctx context.Context, tenantID uuid.UUID, slug string, conn domain.Connector) (Tracker, error) {
+	if conn.Spec.ExternalTracker == nil {
+		return nil, errors.New("externalTracker config is nil")
+	}
+	cfg := *conn.Spec.ExternalTracker
+	ts, ok := r.store.(domain.TrackerStore)
+	if !ok {
+		return nil, fmt.Errorf("connector %q: store does not support external tracker lookup", conn.Name)
+	}
+	scope := strings.ToLower(strings.TrimSpace(cfg.TrackerRef.Scope))
+	if scope == "" {
+		scope = "cluster"
+	}
+	obj, found, err := ts.GetTracker(ctx, tenantID, scope, cfg.TrackerRef.Namespace, cfg.TrackerRef.Name)
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: lookup external tracker %q: %w", conn.Name, cfg.TrackerRef.Name, err)
+	}
+	if !found {
+		return nil, fmt.Errorf("connector %q: referenced external tracker %q (%s) not found", conn.Name, cfg.TrackerRef.Name, scope)
+	}
+	if obj.Error != "" {
+		return nil, fmt.Errorf("connector %q: external tracker %q was refused: %s", conn.Name, cfg.TrackerRef.Name, obj.Error)
+	}
+	spec, err := domain.ParseExternalTrackerSpec(obj.Spec, obj.Origin == "tenant")
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: invalid external tracker spec %q: %w", conn.Name, cfg.TrackerRef.Name, err)
+	}
+	if !spec.IsEnabled() {
+		return nil, fmt.Errorf("connector %q: external tracker %q is disabled", conn.Name, cfg.TrackerRef.Name)
+	}
+
+	secrets := make(map[string]string, len(cfg.Secrets))
+	for secName, ref := range cfg.Secrets {
+		if r.secretResolver == nil {
+			return nil, fmt.Errorf("connector %q: no secret resolver for secret %q", conn.Name, secName)
+		}
+		b, serr := r.secretResolver.GetSecretMaterial(ctx, tenantID, domain.ConnectorSecretStorageKey(conn.Name, secName))
+		if serr != nil || len(b) == 0 {
+			return nil, fmt.Errorf("connector %q: secret %q (%s) could not be read", conn.Name, secName, ref.Name)
+		}
+		secrets[secName] = string(b)
+	}
+
+	dialFn := r.dialTracker
+	if dialFn == nil {
+		dialFn = trackerclient.Dial
+	}
+	cli, err := dialFn(trackerclient.DialConfig{
+		Target:  spec.Target(obj.Namespace),
+		Secure:  spec.UseTLS(),
+		Timeout: spec.Timeout(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: dial external tracker %q: %w", conn.Name, cfg.TrackerRef.Name, err)
+	}
+	t, err := NewGrpcTracker(cfg, cli, secrets, r.publicURL)
+	if err != nil {
+		_ = cli.Close()
+		return nil, err
+	}
+	t.SetTenantSlug(slug)
+	t.SetConnectorName(conn.Name)
+	t.SetAcceptedFields(conn.Status.AcceptedFields)
+	if conn.Spec.Ticketing != nil {
+		t.SetTicketingPolicy(*conn.Spec.Ticketing)
+	}
+	return t, nil
 }
 
 // codeSpan writes s as a markdown code span that s itself cannot end.

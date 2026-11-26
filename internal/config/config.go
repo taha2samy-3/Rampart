@@ -229,7 +229,8 @@ type SSRFAllowlistConfig struct {
 // scopeableConnectorTypes are the connector types that make outbound calls and may be named in the scope.
 var scopeableConnectorTypes = map[string]bool{
 	string(domain.ConnectorTypeJira): true, string(domain.ConnectorTypeGitHub): true,
-	string(domain.ConnectorTypeSlack): true, string(domain.ConnectorTypeTeams): true,
+	string(domain.ConnectorTypeExternalTracker): true,
+	string(domain.ConnectorTypeSlack):           true, string(domain.ConnectorTypeTeams): true,
 	string(domain.ConnectorTypeEmail): true, string(domain.ConnectorTypeWebhook): true,
 }
 

@@ -400,6 +400,9 @@ export function mockFetch(sc: Scenario): Calls {
     // Connectors are resources (D82): listed, described and validated, never created here.
     if (path === '/api/v1/connectors') {
       return json({ items: [
+        { name: 'jira-container-binding', type: 'externalTracker', direction: 'bidirectional', enabled: true, managed_by: 'resource',
+          spec: { externalTracker: { trackerRef: { scope: 'cluster', name: 'jira-tracker' }, defaultProject: 'SEC' } },
+          status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connected to jira-tracker' }] } },
         { name: 'jira-sec', type: 'jira', direction: 'bidirectional', enabled: true, managed_by: 'resource',
           status: { conditions: [{ type: 'Connected', status: 'True', reason: 'AuthOK', message: 'Connector verified successfully' }] } },
         { name: 'slack-appsec', type: 'slack', direction: 'outbound', enabled: true, managed_by: 'resource',
@@ -421,6 +424,10 @@ export function mockFetch(sc: Scenario): Calls {
     }
     if (path === '/api/v1/connectors/catalogue') {
       return json({ items: [
+        { type: 'externalTracker', name: 'External tracker container', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Delegates ticketing to a gRPC TrackerService container.',
+          config_key: 'externalTracker', config_schema: { type: 'object' },
+          secrets: [{ field: 'secrets.token', holds: 'API token', purpose: 'calls tracker API' }],
+          example: 'apiVersion: rampart.aspm.dev/v1alpha1\nkind: Connector\nmetadata: {name: jira-container-binding}\nspec:\n  type: externalTracker\n  externalTracker:\n    trackerRef: {scope: cluster, name: jira-tracker}\n    defaultProject: SEC\n' },
         { type: 'jira', name: 'Jira Cloud', kind: 'tracker', directions: ['outbound', 'bidirectional'], description: 'Opens Jira Cloud issues.',
           config_key: 'jira', config_schema: { type: 'object' },
           secrets: [{ field: 'credentialsSecretRef', holds: 'email:apiToken', purpose: 'calls the Jira API' }],
@@ -430,6 +437,29 @@ export function mockFetch(sc: Scenario): Calls {
           secrets: [{ field: 'tokenSecretRef', holds: 'a bot token', purpose: 'posts messages' }],
           example: 'kind: Connector\nmetadata: {name: slack-appsec}\nspec:\n  type: slack\n' },
       ] });
+    }
+    if (path === '/api/v1/trackers') {
+      return json({ items: [
+        { scope: 'cluster', name: 'jira-tracker', enabled: true, state: 'ready', protocol: 'grpc', target: 'jira-tracker.tools.svc.cluster.local:50051', tls: 'off', timeout_seconds: 30, bound_connectors: 1 },
+      ], total: 1 });
+    }
+    if (path.startsWith('/api/v1/trackers/events')) {
+      return json({ events: [], total: 0 });
+    }
+    if (path === '/api/v1/trackers/test' && init?.method === 'POST') {
+      return json({
+        ok: true, outcome: 'succeeded', message: 'Serving: Jira Container 1.0.0', latency_ms: 4,
+        provider: 'jira', display_name: 'Jira Container', version: '1.0.0',
+        capabilities: ['create_issue', 'two_way_webhook'],
+        declared_secrets: [{ name: 'token', holds: 'API token', required: true }],
+      });
+    }
+    if (path === '/api/v1/tickets') {
+      return json({
+        configured: true,
+        tickets: [{ id: 't-1', connector: 'jira-container-binding', external_ref: 'SEC-104', url: 'https://jira.example.com/browse/SEC-104', state: 'open', finding_count: 1, created_at: '2026-11-20T10:00:00Z', updated_at: '2026-11-20T10:00:00Z' }],
+        outbox: [{ finding_id: 'f-1', finding_title: 'SQL Injection in /checkout', severity: 'critical', status: 'reserved', attempts: 1, next_attempt_at: '2026-11-20T10:05:00Z', updated_at: '2026-11-20T10:00:00Z' }],
+      });
     }
     if (path.startsWith('/api/v1/feeds/sync')) {
       const feedParam = new URL(path, 'http://localhost').searchParams.get('feed') || 'all';

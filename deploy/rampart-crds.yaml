@@ -754,6 +754,95 @@ spec:
       subresources:
         status: {}
 ---
+# deploy/crds/clusterexternaltracker.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusterexternaltrackers.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ClusterExternalTracker
+    listKind: ClusterExternalTrackerList
+    plural: clusterexternaltrackers
+    singular: clusterexternaltracker
+    shortNames:
+      - clusterexttracker
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Protocol, type: string, jsonPath: .spec.protocol}
+        - {name: Service, type: string, jsonPath: .spec.service.name}
+        - {name: Port, type: integer, jsonPath: .spec.service.port}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: ClusterExternalTracker configures a cluster-wide external ticketing microservice over gRPC.
+              properties:
+                enabled:
+                  type: boolean
+                  default: true
+                protocol:
+                  type: string
+                  enum: [grpc, http]
+                  default: grpc
+                endpoint:
+                  type: string
+                  description: Direct gRPC target host:port if not using a Kubernetes Service.
+                service:
+                  type: object
+                  description: Kubernetes Service reference inside the cluster.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    port:
+                      type: integer
+                timeoutSeconds:
+                  type: integer
+                  default: 30
+                tls:
+                  type: object
+                  properties:
+                    insecure:
+                      type: boolean
+                    caSecretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                auth:
+                  type: object
+                  properties:
+                    secretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
 # deploy/crds/clusterfeed.yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -1818,6 +1907,7 @@ spec:
                     - email
                     - webhook
                     - dependencyTrack
+                    - externalTracker
                     - plugin
                 direction:
                   type: string
@@ -2033,6 +2123,67 @@ spec:
                           type: string
                         key:
                           type: string
+                externalTracker:
+                  type: object
+                  description: Binds this tenant connector to a ClusterExternalTracker or ExternalTracker gRPC microservice.
+                  required: [trackerRef]
+                  properties:
+                    trackerRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        scope:
+                          type: string
+                          enum: [cluster, tenant]
+                          default: cluster
+                        namespace:
+                          type: string
+                        name:
+                          type: string
+                    provider:
+                      type: string
+                    defaultProject:
+                      type: string
+                    accountId:
+                      type: string
+                    config:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    secrets:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        required: [name, key]
+                        properties:
+                          name:
+                            type: string
+                          key:
+                            type: string
+                    twoWaySync:
+                      type: boolean
+                    webhookSecretRef:
+                      type: object
+                      required: [name]
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                    statusMapping:
+                      type: object
+                      properties:
+                        closedStatuses:
+                          type: array
+                          items:
+                            type: string
+                        resolutionToState:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    customFields:
+                      type: object
+                      additionalProperties:
+                        type: string
             status:
               type: object
               properties:
@@ -2126,6 +2277,95 @@ spec:
                 timeoutSeconds:
                   type: integer
                   default: 60
+                tls:
+                  type: object
+                  properties:
+                    insecure:
+                      type: boolean
+                    caSecretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                auth:
+                  type: object
+                  properties:
+                    secretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
+# deploy/crds/externaltracker.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: externaltrackers.rampart.aspm.dev
+spec:
+  group: rampart.aspm.dev
+  names:
+    kind: ExternalTracker
+    listKind: ExternalTrackerList
+    plural: externaltrackers
+    singular: externaltracker
+    shortNames:
+      - exttracker
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Protocol, type: string, jsonPath: .spec.protocol}
+        - {name: Service, type: string, jsonPath: .spec.service.name}
+        - {name: Port, type: integer, jsonPath: .spec.service.port}
+        - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: ExternalTracker configures a tenant-scoped external ticketing microservice over gRPC.
+              properties:
+                enabled:
+                  type: boolean
+                  default: true
+                protocol:
+                  type: string
+                  enum: [grpc, http]
+                  default: grpc
+                endpoint:
+                  type: string
+                  description: Rejected in tenant scope; use service instead to preserve SSRF isolation.
+                service:
+                  type: object
+                  description: Kubernetes Service reference inside the tenant namespace or cluster.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    port:
+                      type: integer
+                timeoutSeconds:
+                  type: integer
+                  default: 30
                 tls:
                   type: object
                   properties:

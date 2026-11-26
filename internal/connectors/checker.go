@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rampart/internal/domain"
+	trackerclient "rampart/internal/tracker/client"
 )
 
 // Checker verifies credentials and connectivity of a connector without side effects (docs/04, docs/20 Milestone 3.1).
@@ -28,6 +29,16 @@ type DefaultChecker struct {
 	allowlist    *domain.PlatformSSRFAllowlist
 	slackAuthURL string
 	githubAPI    string
+	trackerStore domain.TrackerStore
+	dialTracker  func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)
+}
+
+// SetTrackerStore configures the lookup store for external tracker containers during connection checks.
+func (c *DefaultChecker) SetTrackerStore(s domain.TrackerStore) { c.trackerStore = s }
+
+// SetTrackerDialer overrides the gRPC dialer for external tracker checks (for testing).
+func (c *DefaultChecker) SetTrackerDialer(fn func(cfg trackerclient.DialConfig) (*trackerclient.Client, error)) {
+	c.dialTracker = fn
 }
 
 // NewDefaultChecker creates a new DefaultChecker.
@@ -78,6 +89,9 @@ func (c *DefaultChecker) check(ctx context.Context, conn domain.Connector, secre
 		return err
 	case domain.ConnectorTypeGitHub:
 		return c.checkGitHub(ctx, conn, secret)
+	case domain.ConnectorTypeExternalTracker:
+		_, err := c.checkExternalTrackerDetailed(ctx, conn, secret)
+		return err
 	default:
 		return fmt.Errorf("unsupported connector type for check: %s", conn.Type)
 	}

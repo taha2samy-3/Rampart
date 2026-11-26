@@ -26,6 +26,8 @@ type Operator struct {
 	clusterExtAn   *PolicyReconciler
 	sbomAnalyzers  *PolicyReconciler
 	clusterSBOMAn  *PolicyReconciler
+	extTrackers    *PolicyReconciler
+	clusterExtTr   *PolicyReconciler
 }
 
 // NewOperator creates a new Rampart operator instance.
@@ -54,6 +56,8 @@ func NewOperatorWithAllowlist(store apply.ConfigStore, secrets SecretProvider, s
 		clusterExtAn:   NewClusterExternalAnalyzerReconciler(store),
 		sbomAnalyzers:  NewSBOMAnalyzerReconciler(store),
 		clusterSBOMAn:  NewClusterSBOMAnalyzerReconciler(store),
+		extTrackers:    NewExternalTrackerReconciler(store),
+		clusterExtTr:   NewClusterExternalTrackerReconciler(store),
 	}
 }
 
@@ -192,4 +196,16 @@ func (op *Operator) ReconcileSBOMAnalyzer(ctx context.Context, cr *PolicyCR) (*P
 func (op *Operator) ReconcileClusterSBOMAnalyzer(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
 	op.logger.Debug("reconciling cluster SBOM analyzer", "name", cr.Metadata.Name)
 	return op.clusterSBOMAn.Reconcile(ctx, cr)
+}
+
+// ReconcileExternalTracker installs an ExternalTracker CR (tenant-scoped).
+func (op *Operator) ReconcileExternalTracker(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling external tracker", "name", cr.Metadata.Name, "namespace", cr.Metadata.Namespace)
+	return op.extTrackers.Reconcile(ctx, cr)
+}
+
+// ReconcileClusterExternalTracker installs a ClusterExternalTracker CR.
+func (op *Operator) ReconcileClusterExternalTracker(ctx context.Context, cr *PolicyCR) (*PolicyStatus, error) {
+	op.logger.Debug("reconciling cluster external tracker", "name", cr.Metadata.Name)
+	return op.clusterExtTr.Reconcile(ctx, cr)
 }

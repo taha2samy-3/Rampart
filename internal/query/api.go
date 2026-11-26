@@ -56,6 +56,7 @@ type API struct {
 	gw             *ingest.Gateway
 	live           *LiveHub
 	analyzerProbe  AnalyzerProbe      // how an external analyzer is tested; nil dials it over gRPC
+	trackerProbe   TrackerProbe       // how an external tracker container is tested; nil dials it over gRPC
 	analysis       AnalysisDispatcher // queues the analysis of SBOMs; nil when analysis is switched off
 	maxInFlight    int                // max in-flight analyses across all tenants (docs/39 Slice D)
 	manualCooldown time.Duration      // minimum cooldown between manual analyses of an application (docs/39 Slice D)
@@ -242,6 +243,12 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	routes.HandleFunc("POST /api/v1/analyzers/test", a.handleTestAnalyzer)
 	routes.HandleFunc("POST /api/v1/analyzers/analyze", a.handleAnalyzeWithAnalyzer)
 	routes.HandleFunc("POST /api/v1/assets/{id}/analyze", a.handleAnalyzeAsset)
+
+	// External ticketing containers & ticket queue (docs/49)
+	routes.HandleFunc("GET /api/v1/trackers", a.handleListTrackers)
+	routes.HandleFunc("GET /api/v1/trackers/events", a.handleTrackerEvents)
+	routes.HandleFunc("POST /api/v1/trackers/test", a.handleTestTracker)
+	routes.HandleFunc("GET /api/v1/tickets", a.handleListTickets)
 
 	// Connectors are resources (D82): listed, described and validated here, never created.
 	routes.HandleFunc("GET /api/v1/connectors", a.handleListConnectors)

@@ -264,3 +264,106 @@ func (s *PostgresStore) FindingHasTicket(ctx context.Context, tenantID, findingI
 	})
 	return ok, err
 }
+
+// FindFindingByTicketRef resolves the finding linked to (tenantID, connector, externalRef) so container webhooks do not depend on mutable issue labels.
+func (s *PostgresStore) FindFindingByTicketRef(ctx context.Context, tenantID uuid.UUID, connector, ticketRef string) (uuid.UUID, bool, error) {
+	if ticketRef == "" {
+		return uuid.Nil, false, nil
+	}
+	var findingID uuid.UUID
+	var found bool
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+			SELECT tf.finding_id
+			  FROM ticket_finding tf
+			  JOIN ticket t ON t.tenant_id = tf.tenant_id AND t.id = tf.ticket_id
+			 WHERE tf.tenant_id = $1 AND t.external_ref = $2 AND ($3 = '' OR t.connector = $3)
+			 ORDER BY t.created_at DESC LIMIT 1`,
+			tenantID, ticketRef, connector).Scan(&findingID)
+		if err == nil {
+			found = true
+			return nil
+		}
+		if err != pgx.ErrNoRows {
+			return err
+		}
+		err = tx.QueryRow(ctx, `
+			SELECT finding_id
+			  FROM action_ledger
+			 WHERE tenant_id = $1 AND action = $2 AND status = 'done' AND result->>'ticket_id' = $3
+			 ORDER BY updated_at DESC LIMIT 1`,
+			tenantID, ticketAction, ticketRef).Scan(&findingID)
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	return findingID, found, err
+}
+
+// ListTickets lists recently opened external tickets for the Ticketing queue view.
+func (s *PostgresStore) ListTickets(ctx context.Context, tenantID uuid.UUID, limit int) ([]domain.TicketSummary, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var out []domain.TicketSummary
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT t.id, t.connector, t.external_ref, COALESCE(t.url, ''), t.state,
+			       COUNT(tf.finding_id)::int AS finding_count, t.created_at, t.updated_at
+			  FROM ticket t
+			  LEFT JOIN ticket_finding tf ON tf.tenant_id = t.tenant_id AND tf.ticket_id = t.id
+			 WHERE t.tenant_id = $1
+			 GROUP BY t.id, t.connector, t.external_ref, t.url, t.state, t.created_at, t.updated_at
+			 ORDER BY t.updated_at DESC, t.created_at DESC
+			 LIMIT $2`, tenantID, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var it domain.TicketSummary
+			if err := rows.Scan(&it.ID, &it.Connector, &it.ExternalRef, &it.URL, &it.State, &it.FindingCount, &it.CreatedAt, &it.UpdatedAt); err != nil {
+				return err
+			}
+			out = append(out, it)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// ListTicketOutbox returns reserved or failed ticket creation jobs from action_ledger for the Ticketing queue view.
+func (s *PostgresStore) ListTicketOutbox(ctx context.Context, tenantID uuid.UUID, limit int) ([]domain.TicketOutboxItem, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var out []domain.TicketOutboxItem
+	err := s.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT a.finding_id, COALESCE(f.title, ''), COALESCE(f.severity, ''), a.status,
+			       a.attempts, a.next_attempt_at, COALESCE(a.last_error, ''), a.updated_at
+			  FROM action_ledger a
+			  LEFT JOIN finding f ON f.tenant_id = a.tenant_id AND f.id = a.finding_id
+			 WHERE a.tenant_id = $1 AND a.action = $2 AND a.status IN ('reserved', 'failed')
+			 ORDER BY a.updated_at DESC
+			 LIMIT $3`, tenantID, ticketAction, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var it domain.TicketOutboxItem
+			if err := rows.Scan(&it.FindingID, &it.FindingTitle, &it.Severity, &it.Status, &it.Attempts, &it.NextAttemptAt, &it.LastError, &it.UpdatedAt); err != nil {
+				return err
+			}
+			out = append(out, it)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
